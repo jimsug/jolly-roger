@@ -263,6 +263,7 @@ export async function ensureHuntFolderPermission(
 }
 
 export async function ensureDocument(
+  userId: string,
   puzzle: {
     _id: string;
     title: string;
@@ -290,6 +291,7 @@ export async function ensureDocument(
           folderId,
         );
         const newDoc = {
+          createdBy: userId,
           hunt: puzzle.hunt,
           puzzle: puzzle._id,
           provider: "google" as const,
