@@ -50,6 +50,10 @@ defineMethod(addPuzzleTag, {
       },
     );
 
+    if (tagName.indexOf("meta-for:") === 0) {
+      addPuzzleTag.call({puzzleId: puzzleId, tagName:tagName.replace('meta-for:', 'group:')});
+    }
+
     await GlobalHooks.runTagAddedHooks(puzzleId, tagId, this.userId);
   },
 });
