@@ -1,1 +1,1 @@
-web: node main.js
+web: node .meteor/heroku_build/main.js
