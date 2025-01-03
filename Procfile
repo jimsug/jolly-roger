@@ -1,1 +1,1 @@
-web: node $COMPILE_DIR/main.js
+web: node main.js
