@@ -1,5 +1,5 @@
 import { Meteor } from "meteor/meteor";
-import { useTracker } from "meteor/react-meteor-data";
+import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
@@ -56,6 +56,10 @@ import PuzzleModalForm from "./PuzzleModalForm";
 import RelatedPuzzleGroup, { PuzzleGroupDiv } from "./RelatedPuzzleGroup";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import { mediaBreakpointDown } from "./styling/responsive";
+import { Subscribers } from "../subscribers";
+import Peers from "../../lib/models/mediasoup/Peers";
+import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
+import indexedDisplayNames from "../indexedDisplayNames";
 
 const ViewControls = styled.div<{ $canAdd?: boolean }>`
   display: grid;
@@ -390,11 +394,63 @@ const PuzzleListView = ({
     }
   });
 
+  const subscribersLoading = useSubscribe("subscribers.fetchAll", huntId);
+  const callMembersLoading = useSubscribe("mediasoup:metadataAll", huntId);
+
+  const displayNamesLoading = useSubscribeDisplayNames(huntId);
+  const displayNames = indexedDisplayNames();
+
+  const subscriptionsLoading =
+    subscribersLoading() || callMembersLoading() || displayNamesLoading();
+
+  const puzzleSubscribers = useTracker(() => {
+    if (subscriptionsLoading) {
+      return {"none":{"none":[]}};
+      }
+
+    let puzzleSubs = {};
+
+    Peers.find({}).fetch().forEach((s) => {
+      let puzzle = s.call;
+      let user = displayNames.get(s.createdBy);
+      if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
+        puzzleSubs[puzzle] = {
+          viewers: [],
+          callers: [],
+        };
+      }
+      if (
+        !puzzleSubs[puzzle].callers.includes(user)
+      ) {
+        puzzleSubs[puzzle].callers.push(user);
+      }
+    });
+
+    Subscribers.find({}).forEach((s) => {
+      let puzzle = s.name.replace(/^puzzle:/, '');
+      let user = displayNames.get(s.user);
+      if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
+        puzzleSubs[puzzle] = {
+          viewers: [],
+          callers: [],
+        };
+      }
+      if (
+        !puzzleSubs[puzzle].callers.includes(user) &&
+        !puzzleSubs[puzzle].viewers.includes(user)
+      ) {
+        puzzleSubs[puzzle].viewers.push(user);
+      }
+    });
+    return puzzleSubs;
+  }, [subscriptionsLoading]);
+
   const renderList = useCallback(
     (
       retainedPuzzles: PuzzleType[],
       solvedOverConstrains: boolean,
       allPuzzlesCount: number,
+      puzzleSubscribers: Record <string, Record <string, string[]>>,
     ) => {
       const maybeMatchWarning = solvedOverConstrains && (
         <Alert variant="info">
@@ -440,6 +496,7 @@ const PuzzleListView = ({
                 suppressedTagIds={suppressedTagIds}
                 trackPersistentExpand={searchString === ""}
                 showSolvers={showSolvers}
+                subscribers={puzzleSubscribers}
               />
             );
           });
@@ -469,6 +526,7 @@ const PuzzleListView = ({
               allTags={allTags}
               canUpdate={canUpdate}
               showSolvers={showSolvers}
+              subscribers={puzzleSubscribers}
             />
           );
           listControls = null;
@@ -493,6 +551,8 @@ const PuzzleListView = ({
                 allTags={allTags}
                 canUpdate={canUpdate}
                 suppressedTagIds={[]}
+                showSolvers={showSolvers}
+                subscribers={puzzleSubscribers}
               />
             </PuzzleGroupDiv>
           )}
@@ -509,6 +569,8 @@ const PuzzleListView = ({
               canUpdate={canUpdate}
               suppressedTagIds={[]}
               trackPersistentExpand={searchString !== ""}
+              subscribers={puzzleSubscribers}
+              showSolvers={showSolvers}
             />
           )}
         </div>
@@ -525,6 +587,7 @@ const PuzzleListView = ({
       canExpandAllGroups,
       expandAllGroups,
       bookmarked,
+      puzzleSubscribers,
     ],
   );
 
@@ -686,7 +749,7 @@ const PuzzleListView = ({
           </InputGroup>
         </SearchFormGroup>
       </ViewControls>
-      {renderList(retainedPuzzles, solvedOverConstrains, allPuzzles.length)}
+      {renderList(retainedPuzzles, solvedOverConstrains, allPuzzles.length, puzzleSubscribers)}
     </div>
   );
 };
