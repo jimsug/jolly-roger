@@ -1,5 +1,5 @@
 import { Meteor } from "meteor/meteor";
-import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { useFind, useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
@@ -60,6 +60,21 @@ import { Subscribers } from "../subscribers";
 import Peers from "../../lib/models/mediasoup/Peers";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import indexedDisplayNames from "../indexedDisplayNames";
+import pinnedMessagesForPuzzleList from "../../lib/publications/pinnedMessagesForPuzzleList";
+import ChatMessages, { ChatMessageType } from "../../lib/models/ChatMessages";
+
+const FilteredChatFields = [
+  "_id",
+  "puzzle",
+  "content",
+  "sender",
+  "timestamp",
+  "pinTs",
+] as const;
+type FilteredChatMessageType = Pick<
+  ChatMessageType,
+  (typeof FilteredChatFields)[number]
+>;
 
 const ViewControls = styled.div<{ $canAdd?: boolean }>`
   display: grid;
@@ -445,6 +460,22 @@ const PuzzleListView = ({
     return puzzleSubs;
   }, [subscriptionsLoading]);
 
+  const subscribeMsgs = useTypedSubscribe(pinnedMessagesForPuzzleList, {
+    huntId,
+  });
+
+  const msgsLoading = subscribeMsgs();
+
+  const pinnedMessages = useTracker ( () => {
+    let pinMsgs: Record< string, ChatMessageType> = {};
+    ChatMessages.find({}, {sort:{ pinTs: -1 }}).fetch().forEach( (msg) => {
+      if (!Object.prototype.hasOwnProperty.call(pinMsgs, msg.puzzle)) {
+        pinMsgs[msg.puzzle] = msg;
+      }
+    });
+    return pinMsgs;
+  }, [msgsLoading]);
+
   const renderList = useCallback(
     (
       retainedPuzzles: PuzzleType[],
@@ -497,6 +528,7 @@ const PuzzleListView = ({
                 trackPersistentExpand={searchString === ""}
                 showSolvers={showSolvers}
                 subscribers={puzzleSubscribers}
+                pinnedMessages={pinnedMessages}
               />
             );
           });
@@ -527,6 +559,7 @@ const PuzzleListView = ({
               canUpdate={canUpdate}
               showSolvers={showSolvers}
               subscribers={puzzleSubscribers}
+              pinnedMessages={pinnedMessages}
             />
           );
           listControls = null;
@@ -571,6 +604,7 @@ const PuzzleListView = ({
               trackPersistentExpand={searchString !== ""}
               subscribers={puzzleSubscribers}
               showSolvers={showSolvers}
+              pinnedMessages={pinnedMessages}
             />
           )}
         </div>
@@ -588,6 +622,7 @@ const PuzzleListView = ({
       expandAllGroups,
       bookmarked,
       puzzleSubscribers,
+      pinnedMessages,
     ],
   );
 
