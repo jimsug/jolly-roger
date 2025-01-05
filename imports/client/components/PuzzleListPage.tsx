@@ -391,22 +391,86 @@ const PuzzleListView = ({
     }
   }, []);
 
-  const navigate = useNavigate()
+  const navigate = useNavigate();
+
+  const bookmarkTitle = searchParams.get("title") ?? "";
+  const bookmarkURL = searchParams.get("url") ?? "";
 
   useEffect(() => {
-    const url = new URL(window.location.href);
-    const urlParams = new URLSearchParams(url.hash.slice(1));
-    const hashTitle = urlParams.get("title");
-    const hashUrl = urlParams.get("url");
-
-    const existingPuzzle = Puzzles.findOne({url: {$regex: `^${hashUrl}`}})
-
-    if (existingPuzzle) {
-      navigate(`./${existingPuzzle._id}`);
-    } else if ( hashTitle && hashUrl && addModalRef) {
-      addModalRef?.current?.show();
-      addModalRef?.current?.populateForm({title:hashTitle, url:hashUrl})
+    if (bookmarkURL) {
+      const existingPuzzle = Puzzles.findOne({
+        url: { $regex: `^${bookmarkURL}` },
+      });
+      if (existingPuzzle) {
+        navigate(`./${existingPuzzle._id}`);
+      } else if (addModalRef) {
+        addModalRef.current?.show();
+        addModalRef.current?.populateForm({
+          title: bookmarkTitle,
+          url: bookmarkURL,
+        });
+        setSearchParams((prev: URLSearchParams) => {
+          prev.delete("url");
+          prev.delete("title");
+          return prev;
+        });
+      }
     }
+  }, [bookmarkTitle, bookmarkURL]);
+
+  const subscribersLoading = useSubscribe("subscribers.fetchAll", huntId);
+  const callMembersLoading = useSubscribe("mediasoup:metadataAll", huntId);
+
+  const displayNamesLoading = useSubscribeDisplayNames(huntId);
+  const displayNames = indexedDisplayNames();
+
+  const subscriptionsLoading =
+    subscribersLoading() || callMembersLoading() || displayNamesLoading();
+
+  const puzzleSubscribers = useTracker(() => {
+    if (subscriptionsLoading) {
+      return { none: { none: [] } };
+    }
+
+    let puzzleSubs = {};
+
+    Peers.find({})
+      .fetch()
+      .forEach((s) => {
+        let puzzle = s.call;
+        let user = displayNames.get(s.createdBy);
+        if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
+          puzzleSubs[puzzle] = {
+            viewers: [],
+            callers: [],
+          };
+        }
+        if (!puzzleSubs[puzzle].callers.includes(user)) {
+          puzzleSubs[puzzle].callers.push(user);
+        }
+      });
+
+    Subscribers.find({}).forEach((s) => {
+      let puzzle = s.name.replace(/^puzzle:/, "");
+      let user = displayNames.get(s.user);
+      if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
+        puzzleSubs[puzzle] = {
+          viewers: [],
+          callers: [],
+        };
+      }
+      if (
+        !puzzleSubs[puzzle].callers.includes(user) &&
+        !puzzleSubs[puzzle].viewers.includes(user)
+      ) {
+        puzzleSubs[puzzle].viewers.push(user);
+      }
+    });
+    return puzzleSubs;
+  }, [subscriptionsLoading]);
+
+  const subscribeMsgs = useTypedSubscribe(pinnedMessagesForPuzzleList, {
+    huntId,
   });
 
   const subscribersLoading = useSubscribe("subscribers.fetchAll", huntId);
@@ -420,29 +484,29 @@ const PuzzleListView = ({
 
   const puzzleSubscribers = useTracker(() => {
     if (subscriptionsLoading) {
-      return {"none":{"none":[]}};
-      }
+      return { none: { none: [] } };
+    }
 
     let puzzleSubs = {};
 
-    Peers.find({}).fetch().forEach((s) => {
-      let puzzle = s.call;
-      let user = displayNames.get(s.createdBy);
-      if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
-        puzzleSubs[puzzle] = {
-          viewers: [],
-          callers: [],
-        };
-      }
-      if (
-        !puzzleSubs[puzzle].callers.includes(user)
-      ) {
-        puzzleSubs[puzzle].callers.push(user);
-      }
-    });
+    Peers.find({})
+      .fetch()
+      .forEach((s) => {
+        let puzzle = s.call;
+        let user = displayNames.get(s.createdBy);
+        if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
+          puzzleSubs[puzzle] = {
+            viewers: [],
+            callers: [],
+          };
+        }
+        if (!puzzleSubs[puzzle].callers.includes(user)) {
+          puzzleSubs[puzzle].callers.push(user);
+        }
+      });
 
     Subscribers.find({}).forEach((s) => {
-      let puzzle = s.name.replace(/^puzzle:/, '');
+      let puzzle = s.name.replace(/^puzzle:/, "");
       let user = displayNames.get(s.user);
       if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
         puzzleSubs[puzzle] = {
@@ -466,13 +530,15 @@ const PuzzleListView = ({
 
   const msgsLoading = subscribeMsgs();
 
-  const pinnedMessages = useTracker ( () => {
-    let pinMsgs: Record< string, ChatMessageType> = {};
-    ChatMessages.find({}, {sort:{ pinTs: -1 }}).fetch().forEach( (msg) => {
-      if (!Object.prototype.hasOwnProperty.call(pinMsgs, msg.puzzle)) {
-        pinMsgs[msg.puzzle] = msg;
-      }
-    });
+  const pinnedMessages = useTracker(() => {
+    let pinMsgs: Record<string, ChatMessageType> = {};
+    ChatMessages.find({}, { sort: { pinTs: -1 } })
+      .fetch()
+      .forEach((msg) => {
+        if (!Object.prototype.hasOwnProperty.call(pinMsgs, msg.puzzle)) {
+          pinMsgs[msg.puzzle] = msg;
+        }
+      });
     return pinMsgs;
   }, [msgsLoading]);
 
@@ -481,7 +547,7 @@ const PuzzleListView = ({
       retainedPuzzles: PuzzleType[],
       solvedOverConstrains: boolean,
       allPuzzlesCount: number,
-      puzzleSubscribers: Record <string, Record <string, string[]>>,
+      puzzleSubscribers: Record<string, Record<string, string[]>>,
     ) => {
       const maybeMatchWarning = solvedOverConstrains && (
         <Alert variant="info">
@@ -784,7 +850,12 @@ const PuzzleListView = ({
           </InputGroup>
         </SearchFormGroup>
       </ViewControls>
-      {renderList(retainedPuzzles, solvedOverConstrains, allPuzzles.length, puzzleSubscribers)}
+      {renderList(
+        retainedPuzzles,
+        solvedOverConstrains,
+        allPuzzles.length,
+        puzzleSubscribers,
+      )}
     </div>
   );
 };

@@ -101,7 +101,8 @@ const StyledButton: FC<ComponentPropsWithRef<typeof Button>> = styled(Button)`
   && {
     /* Resize button to fit in one line-height */
     display: block;
-    height: 24px;  pinnedMessages: ChatMessageType[] | null;
+    height: 24px;
+    pinnedmessages: ChatMessageType[] | null;
 
     width: 24px;
     padding: 0;
@@ -210,7 +211,7 @@ const Puzzle = React.memo(
     suppressTags,
     segmentAnswers,
     subscribers,
-    pinnedMessage
+    pinnedMessage,
   }: {
     puzzle: PuzzleType;
     bookmarked: boolean;
@@ -220,10 +221,9 @@ const Puzzle = React.memo(
     showSolvers: boolean;
     suppressTags?: string[];
     segmentAnswers?: boolean;
-    subscribers: Record <string, string[]> | null;
+    subscribers: Record<string, string[]> | null;
     pinnedMessage: ChatMessageType | null;
   }) => {
-
     const puzzleId = puzzle._id;
     const huntId = puzzle.hunt;
 
@@ -235,10 +235,8 @@ const Puzzle = React.memo(
     );
 
     // add a list of people viewing a puzzle to activity
-    const viewers = (subscribers?.viewers ?? [])
-    .filter(Boolean);
-    const rtcViewers = (subscribers?.callers ?? [])
-    .filter(Boolean);
+    const viewers = (subscribers?.viewers ?? []).filter(Boolean);
+    const rtcViewers = (subscribers?.callers ?? []).filter(Boolean);
     const showEdit = canUpdate && !operatorActionsHidden;
 
     // Generating the edit modals for all puzzles is expensive, so we do it
@@ -307,19 +305,33 @@ const Puzzle = React.memo(
     const linkTarget = `/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`;
     const tagIndex = indexedById(allTags);
 
-    const isMeta = puzzle.tags.some(tagId => tagIndex.get(tagId)?.name === 'is:meta');
-    const isMetameta = puzzle.tags.some(tagId => tagIndex.get(tagId)?.name === 'is:metameta');
-    const isHighPriority = puzzle.tags.some(tagId => tagIndex.get(tagId)?.name === 'priority:high');
-    const isLowPriority = puzzle.tags.some(tagId => tagIndex.get(tagId)?.name === 'priority:low');
-    const isStuck = puzzle.tags.some(tagId => tagIndex.get(tagId)?.name === 'stuck' || tagIndex.get(tagId)?.name === 'is:stuck');
+    const isMeta = puzzle.tags.some(
+      (tagId) => tagIndex.get(tagId)?.name === "is:meta",
+    );
+    const isMetameta = puzzle.tags.some(
+      (tagId) => tagIndex.get(tagId)?.name === "is:metameta",
+    );
+    const isHighPriority = puzzle.tags.some(
+      (tagId) => tagIndex.get(tagId)?.name === "priority:high",
+    );
+    const isLowPriority = puzzle.tags.some(
+      (tagId) => tagIndex.get(tagId)?.name === "priority:low",
+    );
+    const isStuck = puzzle.tags.some(
+      (tagId) =>
+        tagIndex.get(tagId)?.name === "stuck" ||
+        tagIndex.get(tagId)?.name === "is:stuck",
+    );
     // const statusEmoji = isHighPriority ? "🚨" : isLowPriority ? "🔽" : isStuck ? "🤷" : null;
     const statusEmoji = isHighPriority ? "🚨" : isLowPriority ? "🔽" : null;
     // const statusTooltipText = isHighPriority ? 'High priority' : isLowPriority ? 'Low priority' : isStuck ? 'Stuck' : null;
-    const statusTooltipText = isHighPriority ? 'High priority' : isLowPriority ? 'Low priority' : null;
+    const statusTooltipText = isHighPriority
+      ? "High priority"
+      : isLowPriority
+        ? "Low priority"
+        : null;
     const statusTooltip = statusEmoji ? (
-      <Tooltip
-      id={`puzzle-status-tooltip-${puzzleId}`}
-      >
+      <Tooltip id={`puzzle-status-tooltip-${puzzleId}`}>
         <span>{statusTooltipText}</span>
       </Tooltip>
     ) : null;
@@ -328,22 +340,27 @@ const Puzzle = React.memo(
     // but only the ones that are displayed
     const emojified_tags: String[] = [];
     if (isMetameta) {
-      emojified_tags.push('is:metameta');
+      emojified_tags.push("is:metameta");
     } else if (isMeta) {
-      emojified_tags.push('is:meta');
+      emojified_tags.push("is:meta");
     }
 
     if (isHighPriority) {
-      emojified_tags.push('priority:high');
+      emojified_tags.push("priority:high");
     } else if (isLowPriority) {
-      emojified_tags.push('priority:low');
+      emojified_tags.push("priority:low");
     }
     if (isStuck) {
-      emojified_tags.push('is:stuck', 'stuck');
+      emojified_tags.push("is:stuck", "stuck");
     }
-    const extra_suppress = allTags.filter((t) => emojified_tags.includes(t.name)).map((t) => t._id);
+    const extra_suppress = allTags
+      .filter((t) => emojified_tags.includes(t.name))
+      .map((t) => t._id);
 
-    const shownTags = difference(puzzle.tags, suppressTags?.concat(extra_suppress) ?? []);
+    const shownTags = difference(
+      puzzle.tags,
+      suppressTags?.concat(extra_suppress) ?? [],
+    );
     const ownTags = shownTags
       .map((tagId) => {
         return tagIndex.get(tagId);
@@ -364,11 +381,10 @@ const Puzzle = React.memo(
       );
     });
 
-
     const selfUser = useTracker(() => Meteor.user()!, []);
     const selfUserId = selfUser._id;
 
-    const {noteTooltip, ttRelTime} = useTracker(() => {
+    const { noteTooltip, ttRelTime } = useTracker(() => {
       if (!pinnedMessage) {
         return {
           noteTooltip: null,
@@ -378,7 +394,13 @@ const Puzzle = React.memo(
       const noteTT = (
         <Tooltip
           id={`puzzle-note-update-${puzzleId}`}
-          style={{maxHeight: "9.55rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "... (truncated)", borderRadius: "5px"}}
+          style={{
+            maxHeight: "9.55rem",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "... (truncated)",
+            borderRadius: "5px",
+          }}
         >
           <ChatMessage
             message={pinnedMessage.content}
@@ -389,12 +411,14 @@ const Puzzle = React.memo(
         </Tooltip>
       );
 
-      const relTime = (<RelativeTime
-        date={pinnedMessage?.pinTs}
-        terse
-        minimumUnit="minute"
-        maxElements={1}
-      />);
+      const relTime = (
+        <RelativeTime
+          date={pinnedMessage?.pinTs}
+          terse
+          minimumUnit="minute"
+          maxElements={1}
+        />
+      );
       return {
         noteTooltip: noteTT,
         ttRelTime: relTime,
@@ -430,47 +454,59 @@ const Puzzle = React.memo(
         </PuzzleControlButtonsColumn>
         <PuzzleTitleColumn>
           <Link to={linkTarget}>{puzzle.title}</Link>
-          {
-            pinnedMessage ? (
-              <OverlayTrigger placement="top" overlay={noteTooltip}>
+          {pinnedMessage && noteTooltip ? (
+            <OverlayTrigger placement="top" overlay={noteTooltip}>
               <PuzzleNote>
                 <FontAwesomeIcon icon={faNoteSticky} />
                 {ttRelTime}
               </PuzzleNote>
-              </OverlayTrigger>
-            ): null
-          }
+            </OverlayTrigger>
+          ) : null}
         </PuzzleTitleColumn>
         <PuzzlePriorityColumn>
-          {
-            statusEmoji ? (
-              <OverlayTrigger placement="top" overlay={statusTooltip}>
-                <span>{statusEmoji}</span>
-              </OverlayTrigger>
-            ) : null
-          }
-          {
-            isStuck ? (<OverlayTrigger placement="top" overlay={<Tooltip id={`$stuck-tt-{puzzleId}`}>Stuck</Tooltip>}>
+          {statusEmoji && statusTooltip ? (
+            <OverlayTrigger placement="top" overlay={statusTooltip}>
+              <span>{statusEmoji}</span>
+            </OverlayTrigger>
+          ) : null}
+          {isStuck ? (
+            <OverlayTrigger
+              placement="top"
+              overlay={<Tooltip id={`$stuck-tt-{puzzleId}`}>Stuck</Tooltip>}
+            >
               <span>🤷</span>
-            </OverlayTrigger>) : null
-
-          }
+            </OverlayTrigger>
+          ) : null}
         </PuzzlePriorityColumn>
         <PuzzleMetaColumn>
-          {
-            isMetameta ? (<Badge pill bg='secondary'>Metameta</Badge>) : isMeta ? <Badge pill bg='secondary'>Meta</Badge> : null
-          }
+          {isMetameta ? (
+            <Badge pill bg="secondary">
+              Metameta
+            </Badge>
+          ) : isMeta ? (
+            <Badge pill bg="secondary">
+              Meta
+            </Badge>
+          ) : null}
         </PuzzleMetaColumn>
         <SolversColumn>
-        { showSolvers && solvedness  === 'unsolved' ? (
-          <div>
-          {rtcViewers.length > 0 ? (<span><FontAwesomeIcon icon={faPhone}/> </span>) : null}
-          {rtcViewers.map((viewer)=>(viewer)).join(', ')}
-          {rtcViewers.length > 0 && viewers.length > 0 ? <br/> : null}
-          {viewers.length > 0 ? (<span><FontAwesomeIcon icon={faEye}/> </span>) : null}
-          {viewers.map((viewer)=>(viewer)).join(', ')}
-          </div>
-        ) : null }
+          {showSolvers && solvedness === "unsolved" ? (
+            <div>
+              {rtcViewers.length > 0 ? (
+                <span>
+                  <FontAwesomeIcon icon={faPhone} />{" "}
+                </span>
+              ) : null}
+              {rtcViewers.map((viewer) => viewer).join(", ")}
+              {rtcViewers.length > 0 && viewers.length > 0 ? <br /> : null}
+              {viewers.length > 0 ? (
+                <span>
+                  <FontAwesomeIcon icon={faEye} />{" "}
+                </span>
+              ) : null}
+              {viewers.map((viewer) => viewer).join(", ")}
+            </div>
+          ) : null}
         </SolversColumn>
         <PuzzleActivityColumn>
           {solvedness === "unsolved" && (

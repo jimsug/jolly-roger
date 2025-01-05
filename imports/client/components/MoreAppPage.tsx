@@ -1,18 +1,23 @@
 import React, { useMemo } from "react";
 import { useParams } from "react-router-dom";
 import styled from "styled-components";
-import { shortCalendarTimeFormat } from "../../lib/calendarTimeFormat";
 import type { ChatMessageType } from "../../lib/models/ChatMessages";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import nodeIsMention from "../../lib/nodeIsMention";
 import FixedLayout from "./styling/FixedLayout";
 import { Alert } from "react-bootstrap";
 import { useBreadcrumb } from "../hooks/breadcrumb";
+<<<<<<< HEAD
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
 import { useTracker } from "meteor/react-meteor-data";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
+=======
+import Markdown from "./Markdown";
+import { useTracker } from "meteor/react-meteor-data";
+import Hunts from "../../lib/models/Hunts";
+>>>>>>> 7a2c5c561ea7d7e0f3e1701a66a14134af9f1e39
 
 const FirehosePageLayout = styled.div`
   padding: 8px 15px;
@@ -54,53 +59,6 @@ function asFlatString(
     .join(" ");
 }
 
-const Message = React.memo(({ msg, displayNames, puzzle }: MessageProps) => {
-  const ts = shortCalendarTimeFormat(msg.timestamp);
-  const displayName = msg.sender
-    ? (displayNames.get(msg.sender) ?? "???")
-    : "jolly-roger";
-  const messageText = asFlatString(msg, displayNames);
-  const hasNewline = messageText.includes("\n");
-  return (
-    <div>
-      <span>
-        [{ts}] [
-        {puzzle !== undefined ? (
-          <>
-            <span>{`${puzzle.deleted ? "deleted: " : ""}`}</span>
-            <a
-              href={`/hunts/${msg.hunt}/puzzles/${msg.puzzle}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {puzzle.title}
-            </a>
-          </>
-        ) : (
-          <span>deleted: no data</span>
-        )}
-        {"] "}
-        {displayName}
-        {": "}
-      </span>
-      {hasNewline ? (
-        <PreWrapSpan>{messageText}</PreWrapSpan>
-      ) : (
-        <span>{messageText}</span>
-      )}
-    </div>
-  );
-});
-
-const MessagesPane = styled.div`
-  overflow-y: scroll;
-  flex: 1;
-
-  &.live {
-    border-bottom: 1px solid black;
-  }
-`;
-
 const MoreAppPage = () => {
   const huntId = useParams<"huntId">().huntId!;
 
@@ -127,20 +85,30 @@ const MoreAppPage = () => {
     return Puzzles.find({ hunt: huntId, tags: administriviaTag._id }).fetch();
   }, [huntId, loading, administriviaTag]);
 
-  const jr_hostname = window.location.hostname;
+  const jr_host = window.location.host;
+  const protocol = window.location.protocol;
   const bookmarklet = useMemo(() => {
     const code = `
       (function() {
-        window.location.href = "https://${jr_hostname}/hunts/${huntId}/puzzles#title=" + document.title + "&url=" + window.location.href;
+        var title = encodeURIComponent(document.title)
+        var url = encodeURIComponent(window.location.href)
+        window.location.href = "${protocol}//${jr_host}/hunts/${huntId}/puzzles?title=" + title + "&url=" + url;
       })();
     `;
     return `javascript:${encodeURIComponent(code)}`;
   }, [huntId]);
 
+  const hunt = useTracker(
+    () => (huntId ? Hunts.findOne(huntId) : null),
+    [huntId],
+  );
+
   return (
     <FixedLayout>
       <FirehosePageLayout>
         <h1>More resources</h1>
+        {hunt && <Markdown text={hunt.moreInfo ?? ""} />}
+
         {administriviaPuzzles?.length > 0 && (
           <>
             <h2>Administrivia</h2>
@@ -175,7 +143,7 @@ const MoreAppPage = () => {
         <p>Drag this bookmarklet to your bookmarks bar!</p>
 
         <p>
-          <a href={bookmarklet}>Add to Jolly Roger</a>
+          <a href={bookmarklet}>➡ Jolly Roger</a>
         </p>
 
         <Alert variant="warning">
