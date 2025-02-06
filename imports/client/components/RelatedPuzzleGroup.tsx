@@ -1,5 +1,6 @@
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faCaretRight } from "@fortawesome/free-solid-svg-icons/faCaretRight";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import styled from "styled-components";
@@ -8,7 +9,17 @@ import type { PuzzleGroup } from "../../lib/puzzle-sort-and-group";
 import { useHuntPuzzleListCollapseGroup } from "../hooks/persisted-state";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import Tag from "./Tag";
-import { ChatMessageType } from "../../lib/models/ChatMessages";
+
+const AddButton = styled.div`
+  display: inline;
+  align-items: center;
+  margin: 2px 4px 2px 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #666;
+  background-color: #fff;
+  border: 1px solid #ccc;
+`;
 
 export const PuzzleGroupDiv = styled.div`
   &:not(:last-child) {
@@ -53,7 +64,7 @@ const RelatedPuzzleGroup = ({
   trackPersistentExpand,
   showSolvers,
   subscribers,
-  pinnedMessages,
+  addPuzzleCallback,
 }: {
   huntId: string;
   group: PuzzleGroup;
@@ -66,9 +77,18 @@ const RelatedPuzzleGroup = ({
   suppressedTagIds: string[];
   trackPersistentExpand: boolean;
   showSolvers: boolean;
-  subscribers: Record <string, Record <string, string[]>>;
-  pinnedMessages: ChatMessageType[] | null;
+  subscribers: Record<string, Record<string, string[]>>;
+  addPuzzleCallback: (initialTags: string[]) => void;
 }) => {
+  const openAddPuzzleModalWithTags = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      const initialTags = suppressedTagIds;
+      addPuzzleCallback(initialTags);
+    },
+    [addPuzzleCallback, suppressedTagIds],
+  );
+
   const [persistentCollapsed, setPersistentCollapsed] =
     useHuntPuzzleListCollapseGroup(
       huntId,
@@ -113,7 +133,12 @@ const RelatedPuzzleGroup = ({
           icon={collapsed ? faCaretRight : faCaretDown}
         />
         {sharedTag ? (
-          <Tag tag={sharedTag} linkToSearch={false} popoverRelated={false} />
+          <>
+            <Tag tag={sharedTag} linkToSearch={false} popoverRelated={false} />
+            <AddButton onClick={openAddPuzzleModalWithTags}>
+              <FontAwesomeIcon icon={faPlus} /> add puzzle here
+            </AddButton>
+          </>
         ) : (
           <NoSharedTagLabel>{noSharedTagLabel}</NoSharedTagLabel>
         )}
@@ -130,7 +155,6 @@ const RelatedPuzzleGroup = ({
             suppressedTagIds={allSuppressedTagIds}
             showSolvers={showSolvers}
             subscribers={subscribers}
-            pinnedMessages={pinnedMessages}
           />
           {group.subgroups.map((subgroup) => {
             const subgroupSuppressedTagIds = [...allSuppressedTagIds];
@@ -150,7 +174,8 @@ const RelatedPuzzleGroup = ({
                 suppressedTagIds={subgroupSuppressedTagIds}
                 trackPersistentExpand={trackPersistentExpand}
                 showSolvers={showSolvers}
-                pinnedMessages={pinnedMessages}
+                subscribers={subscribers}
+                addPuzzleCallback={addPuzzleCallback}
               />
             );
           })}

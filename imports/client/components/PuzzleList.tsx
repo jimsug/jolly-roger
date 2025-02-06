@@ -1,8 +1,8 @@
 import React from "react";
+import type { ChatMessageType } from "../../lib/models/ChatMessages";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import Puzzle from "./Puzzle";
-import { ChatMessageType } from "../../lib/models/ChatMessages";
 
 const PuzzleList = React.memo(
   ({
@@ -25,8 +25,8 @@ const PuzzleList = React.memo(
     showSolvers: boolean;
     suppressTags?: string[];
     segmentAnswers?: boolean;
-    subscribers: Record <string, Record <string, string[]>>;
-    pinnedMessages: ChatMessageType[] | null;
+    subscribers?: Record<string, Record<string, string[]>>;
+    pinnedMessages?: ChatMessageType[] | null;
   }) => {
     // This component just renders the puzzles provided, in order.
     // Adjusting order based on tags, tag groups, etc. is to be done at
@@ -34,7 +34,7 @@ const PuzzleList = React.memo(
     return (
       <div className="puzzle-list">
         {puzzles.map((puzzle) => {
-          let puzzleId = puzzle._id;
+          const puzzleId = puzzle._id;
           return (
             <Puzzle
               key={puzzle._id}
@@ -45,8 +45,11 @@ const PuzzleList = React.memo(
               suppressTags={suppressTags}
               segmentAnswers={segmentAnswers}
               showSolvers={showSolvers}
-              subscribers={subscribers && puzzleId in subscribers ? subscribers[puzzleId] : null}
-              pinnedMessage={pinnedMessages && puzzleId in pinnedMessages ? pinnedMessages[puzzleId] : null}
+              subscribers={
+                subscribers && puzzleId in subscribers
+                  ? subscribers[puzzleId]
+                  : null
+              }
             />
           );
         })}

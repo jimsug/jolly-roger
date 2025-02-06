@@ -1,3 +1,4 @@
+import { Meteor } from "meteor/meteor";
 import React, {
   Suspense,
   useCallback,
@@ -9,6 +10,7 @@ import React, {
 } from "react";
 import Alert from "react-bootstrap/Alert";
 import Col from "react-bootstrap/Col";
+import FormCheck from "react-bootstrap/FormCheck";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
@@ -39,6 +41,7 @@ export interface PuzzleModalFormSubmitPayload {
   tags: string[];
   docType?: GdriveMimeTypesType;
   expectedAnswerCount: number;
+  allowDuplicateUrls?: boolean;
 }
 
 enum PuzzleModalFormSubmitState {
@@ -49,8 +52,12 @@ enum PuzzleModalFormSubmitState {
 
 export type PuzzleModalFormHandle = {
   show: () => void;
-  populateForm: (data: { title: string; url: string }) => void; // Add this line
-  submitForm: () => void; // Add this line
+  populateForm: (data: {
+    title: string;
+    url: string;
+    tagIds: string[] | null;
+  }) => void;
+  submitForm: () => void;
 };
 
 const PuzzleModalForm = React.forwardRef(
@@ -90,23 +97,32 @@ const PuzzleModalForm = React.forwardRef(
     const [tags, setTags] = useState<string[]>(
       puzzle ? tagNamesForIds(puzzle.tags) : [],
     );
+    const [functionTags, setFunctionTags] = useState<string[]>(
+      puzzle ? tags.filter((x) => x.includes(":")) : [],
+    );
+    const [contentTags, setContentTags] = useState<string[]>(
+      puzzle ? tags.filter((x) => !x.includes(":")) : [],
+    );
     const [docType, setDocType] = useState<GdriveMimeTypesType | undefined>(
       puzzle ? undefined : "spreadsheet",
     );
     const [expectedAnswerCount, setExpectedAnswerCount] = useState<number>(
       puzzle ? puzzle.expectedAnswerCount : 1,
     );
+    const [allowDuplicateUrls, setAllowDuplicateUrls] = useState<
+      boolean | undefined
+    >(puzzle ? undefined : false);
     const [submitState, setSubmitState] = useState<PuzzleModalFormSubmitState>(
       PuzzleModalFormSubmitState.IDLE,
     );
     const [errorMessage, setErrorMessage] = useState<string>("");
     const [titleDirty, setTitleDirty] = useState<boolean>(false);
-    const [lastAutoPopulatedTitle, setLastAutoPopulatedTitle] = useState<string>("");
+    const [lastAutoPopulatedTitle, setLastAutoPopulatedTitle] =
+      useState<string>("");
     const [urlDirty, setUrlDirty] = useState<boolean>(false);
     const [tagsDirty, setTagsDirty] = useState<boolean>(false);
     const [expectedAnswerCountDirty, setExpectedAnswerCountDirty] =
       useState<boolean>(false);
-
 
     const formRef = useRef<ModalFormHandle>(null);
 
@@ -124,7 +140,35 @@ const PuzzleModalForm = React.forwardRef(
       [],
     );
 
-    const onTagsChange = useCallback(
+    const onFunctionTagsChange = useCallback(
+      (
+        value: readonly TagSelectOption[],
+        action: ActionMeta<TagSelectOption>,
+      ) => {
+        let newTags: string[] = [];
+        switch (action.action) {
+          case "clear":
+          case "deselect-option":
+          case "pop-value":
+          case "remove-value":
+          case "select-option":
+            newTags = value.map((v) => v.value);
+            break;
+          case "create-option":
+            newTags = value.map((v) => v.label);
+            break;
+          default:
+            return;
+        }
+
+        setFunctionTags(newTags);
+        setTags(contentTags.concat(newTags));
+        setTagsDirty(true);
+      },
+      [contentTags],
+    );
+
+    const onContentTagsChange = useCallback(
       (
         value: readonly TagSelectOption[],
         action: ActionMeta<TagSelectOption>,
@@ -132,21 +176,24 @@ const PuzzleModalForm = React.forwardRef(
         let newTags = [];
         switch (action.action) {
           case "clear":
-          case "create-option":
           case "deselect-option":
           case "pop-value":
           case "remove-value":
           case "select-option":
             newTags = value.map((v) => v.value);
             break;
+          case "create-option":
+            newTags = value.map((v) => v.label);
+            break;
           default:
             return;
         }
 
-        setTags(newTags);
+        setContentTags(newTags);
+        setTags(functionTags.concat(newTags));
         setTagsDirty(true);
       },
-      [],
+      [functionTags],
     );
 
     const onDocTypeChange = useCallback((newValue: string) => {
@@ -162,6 +209,13 @@ const PuzzleModalForm = React.forwardRef(
       setExpectedAnswerCountDirty(true);
     }, []);
 
+    const onAllowDuplicateUrlsChange = useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        setAllowDuplicateUrls(event.currentTarget.checked);
+      },
+      [],
+    );
+
     const onFormSubmit = useCallback(
       (callback: () => void) => {
         setSubmitState(PuzzleModalFormSubmitState.SUBMITTING);
@@ -175,9 +229,24 @@ const PuzzleModalForm = React.forwardRef(
         if (docType) {
           payload.docType = docType;
         }
+        if (allowDuplicateUrls) {
+          payload.allowDuplicateUrls = allowDuplicateUrls;
+        }
         onSubmit(payload, (error) => {
           if (error) {
-            setErrorMessage(error.message);
+            if (
+              error instanceof Meteor.Error &&
+              typeof error.error === "number" &&
+              error.error === 409
+            ) {
+              setErrorMessage(
+                "A puzzle already exists with this URL - did someone else already add this" +
+                  ' puzzle? To force creation anyway, check the "Allow puzzles with identical' +
+                  ' URLs" box above and try again.',
+              );
+            } else {
+              setErrorMessage(error.message);
+            }
             setSubmitState(PuzzleModalFormSubmitState.FAILED);
           } else {
             setSubmitState(PuzzleModalFormSubmitState.IDLE);
@@ -187,11 +256,21 @@ const PuzzleModalForm = React.forwardRef(
             setTagsDirty(false);
             setExpectedAnswerCountDirty(false);
             window.location.hash = "";
+            setAllowDuplicateUrls(false);
             callback();
           }
         });
       },
-      [onSubmit, huntId, title, url, tags, expectedAnswerCount, docType],
+      [
+        onSubmit,
+        huntId,
+        title,
+        url,
+        tags,
+        expectedAnswerCount,
+        docType,
+        allowDuplicateUrls,
+      ],
     );
 
     const show = useCallback(() => {
@@ -237,10 +316,19 @@ const PuzzleModalForm = React.forwardRef(
 
     useImperativeHandle(forwardedRef, () => ({
       show,
-      // Add this populateForm method:
-      populateForm: (data: { title: string; url: string }) => {
+      populateForm: (data: {
+        title: string;
+        url: string;
+        tagIds: string[] | null;
+      }) => {
         setTitle(data.title);
         setUrl(data.url);
+        if (data.tagIds) {
+          const preTags = tagNamesForIds([...new Set(data.tagIds)]);
+          setTags(preTags);
+          setContentTags(preTags.filter((x) => !x.includes(":")));
+          setFunctionTags(preTags.filter((x) => x.includes(":")));
+        }
       },
       submitForm: () => {
         if (formRef.current) {
@@ -264,7 +352,19 @@ const PuzzleModalForm = React.forwardRef(
       .filter(Boolean)
       .map((t) => {
         return { value: t, label: t };
+      })
+      .sort((a, b) => {
+        const aLower = a.label.toLowerCase();
+        const bLower = b.label.toLowerCase();
+        return aLower.localeCompare(bLower);
       });
+
+    const functionSelectOptions: TagSelectOption[] = selectOptions.filter((x) =>
+      x.label.includes(":"),
+    );
+    const contentSelectOptions: TagSelectOption[] = selectOptions.filter(
+      (x) => !x.label.includes(":"),
+    );
 
     const docTypeSelector =
       !puzzle && docType ? (
@@ -287,38 +387,56 @@ const PuzzleModalForm = React.forwardRef(
                 },
               ]}
               initialValue={docType}
-              help="This can't be changed once a puzzle has been created. Unless you're absolutely sure, use a spreadsheet. We only expect to use documents for administrivia."
+              help=""
               onChange={onDocTypeChange}
             />
+            <FormText>
+              Can't be changed. Almost always choose <code>spreadsheet</code>.
+            </FormText>
           </Col>
         </FormGroup>
       ) : null;
 
-      useEffect(() => {
-        // This tries to guess the puzzle title based on the URL entered
-        // To keep things simple, we only populate the title if the title
-        // is currently blank,
-        try {
-          const urlObject = new URL(url);
-          const pathname = urlObject.pathname.replace(/^\/|\/$/g, '');
-          if (!pathname) return;
-          const pathParts = pathname.split("/");
-          const lastPart = pathParts[pathParts.length - 1];
-          const decodedLastPart = decodeURI(lastPart);
-          const formattedTitle = decodedLastPart
-            .replace(/-/g, " ")
-            .replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+    useEffect(() => {
+      // This tries to guess the puzzle title based on the URL entered
+      // To keep things simple, we only populate the title if the title
+      // is currently blank,
+      try {
+        const urlObject = new URL(url);
+        const pathname = urlObject.pathname.replace(/^\/|\/$/g, "");
+        if (!pathname) return;
+        const pathParts = pathname.split("/");
+        const lastPart = pathParts[pathParts.length - 1] ?? "";
+        const decodedLastPart = decodeURI(lastPart);
+        const formattedTitle = (
+          decodedLastPart.includes("_")
+            ? decodedLastPart.replace(/_/g, " ")
+            : decodedLastPart.replace(/-/g, " ")
+        ).replace(
+          /\w\S*/g,
+          (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase(),
+        );
 
-            if (title === lastAutoPopulatedTitle || title === '') {
-              setTitle(formattedTitle);
-              setTitleDirty(false);
-          }
-          setLastAutoPopulatedTitle(formattedTitle);
-        } catch (error) {
-          // console.debug("Invalid URL, probably there's no URL:", error);
+        if (title === lastAutoPopulatedTitle || title === "") {
+          setTitle(formattedTitle);
+          setTitleDirty(false);
         }
-      }, [url]);
+        setLastAutoPopulatedTitle(formattedTitle);
+      } catch (error) {
+        // console.debug("Invalid URL, probably there's no URL:", error);
+      }
+    }, [url]);
 
+    const allowDuplicateUrlsCheckbox =
+      !puzzle && typeof allowDuplicateUrls === "boolean" ? (
+        <FormCheck
+          label="Allow puzzles with identical URLs"
+          type="checkbox"
+          disabled={disableForm}
+          onChange={onAllowDuplicateUrlsChange}
+          className="mt-1"
+        />
+      ) : null;
 
     return (
       <Suspense
@@ -362,26 +480,59 @@ const PuzzleModalForm = React.forwardRef(
                 onChange={onUrlChange}
                 value={currentUrl}
               />
+              {allowDuplicateUrlsCheckbox}
             </Col>
           </FormGroup>
-
+          <hr />
           <FormGroup as={Row} className="mb-3">
-            <FormLabel column xs={3} htmlFor="jr-new-puzzle-tags">
-              Tags
+            <FormLabel column xs={3} htmlFor="jr-new-puzzle-tags-function">
+              Functional Tags
             </FormLabel>
             <Col xs={9}>
               <Creatable
                 id="jr-new-puzzle-tags"
-                options={selectOptions}
+                options={functionSelectOptions}
                 isMulti
+                placeholder="Type to search/create"
                 isDisabled={disableForm}
-                onChange={onTagsChange}
-                value={currentTags.map((t) => {
+                onChange={onFunctionTagsChange}
+                value={functionTags.map((t) => {
                   return { label: t, value: t };
                 })}
               />
+              <FormText>
+                Tags with a prefix, like <code>group:</code>,{" "}
+                <code>meta-for:</code>, <code>priority:</code>, or{" "}
+                <code>where:</code> (e.g. <code>priority:high</code>;{" "}
+                <code>where:Sydney</code>)
+              </FormText>
             </Col>
           </FormGroup>
+
+          <FormGroup as={Row} className="mb-3">
+            <FormLabel column xs={3} htmlFor="jr-new-puzzle-tags-content">
+              Content Tags
+            </FormLabel>
+            <Col xs={9}>
+              <Creatable
+                id="jr-new-puzzle-tags"
+                options={contentSelectOptions}
+                isMulti
+                placeholder="Type to search/create"
+                isDisabled={disableForm}
+                onChange={onContentTagsChange}
+                value={contentTags.map((t) => {
+                  return { label: t, value: t };
+                })}
+              />
+              <FormText>
+                Tags that describe the mechanics, content, or skills (e.g.{" "}
+                <code>cryptic</code>; <code>Pokémon</code>;{" "}
+                <code>writing stuff</code>)
+              </FormText>
+            </Col>
+          </FormGroup>
+          <hr />
 
           {docTypeSelector}
 
@@ -404,8 +555,8 @@ const PuzzleModalForm = React.forwardRef(
                 step={1}
               />
               <FormText>
-                For non-puzzle items, set this to <kbd>0</kbd>.<br/>
-                For puzzles with an unknown number of answers, set this to <kbd>-1</kbd>.
+                For non-puzzle items, set to <code>0</code>. If answer count is
+                unknown, set to <code>-1</code>.
               </FormText>
             </Col>
           </FormGroup>

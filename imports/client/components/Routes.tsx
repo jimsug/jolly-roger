@@ -18,6 +18,7 @@ import JoinHunt from "./JoinHunt";
 import Loading from "./Loading";
 import LoginForm from "./LoginForm";
 import MoreAppPage from "./MoreAppPage";
+import NotesPage from "./NotesPage";
 import PasswordResetForm from "./PasswordResetForm";
 import ProfilePage from "./ProfilePage";
 import PuzzleListPage from "./PuzzleListPage";
@@ -30,10 +31,22 @@ import TagManagerApp from "./TagManagerApp";
 import TagManagerPage from "./TagManagerPage";
 import TagEditPage from "./TagEditPage";
 import TagBulkEditPage from "./TagBulkEditPage";
+import { useTracker } from "meteor/react-meteor-data";
+import { Meteor } from "meteor/meteor";
 
 const HuntEditPage = React.lazy(() => import("./HuntEditPage"));
 const SetupPage = React.lazy(() => import("./SetupPage"));
 const RTCDebugPage = React.lazy(() => import("./RTCDebugPage"));
+const HuntPurgePage = React.lazy(() => import("./HuntPurgePage"));
+
+const ProfileRedirect = () => {
+  const userId = useTracker(() => Meteor.userId(), []);
+  if (userId) {
+    return <Navigate to={`/users/${userId}`} replace />;
+  } else {
+    return <Navigate to="/login" replace />;
+  }
+};
 
 /* Authenticated routes - if user not logged in, get redirected to /login */
 export const AuthenticatedRouteList: RouteObject[] = [
@@ -58,17 +71,27 @@ export const AuthenticatedRouteList: RouteObject[] = [
             ],
           },
           { path: "puzzles/:puzzleId", element: <PuzzlePage /> },
-          { path: "tags", element: <TagBulkEditPage />},
-          { path: "tags2", element: <TagManagerPage />},
+          { path: "tags", element: <TagBulkEditPage /> },
+          { path: "tags2", element: <TagManagerPage /> },
           { path: "puzzles", element: <PuzzleListPage /> },
           { path: "edit", element: <HuntEditPage /> },
           { path: "more", element: <MoreAppPage /> },
+          { path: "notes", element: <NotesPage /> },
           { path: "", element: <Navigate to="puzzles" replace /> },
+          { path: "purge", element: <HuntPurgePage /> },
         ],
       },
       { path: "new", element: <HuntEditPage /> },
       { path: "", element: <HuntListPage /> },
     ],
+  },
+  {
+    path: "/profile",
+    element: (
+      <AuthenticatedPage>
+        <ProfileRedirect />
+      </AuthenticatedPage>
+    ),
   },
   {
     path: "/users",

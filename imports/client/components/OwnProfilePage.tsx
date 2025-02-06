@@ -12,10 +12,13 @@ import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
 import FormText from "react-bootstrap/FormText";
+import InputGroup from "react-bootstrap/InputGroup";
+import CopyToClipboard from "react-copy-to-clipboard";
 import Flags from "../../Flags";
 import { formatDiscordName } from "../../lib/discord";
 import linkUserDiscordAccount from "../../methods/linkUserDiscordAccount";
 import linkUserGoogleAccount from "../../methods/linkUserGoogleAccount";
+import rollAPIKey from "../../methods/rollAPIKey";
 import unlinkUserDiscordAccount from "../../methods/unlinkUserDiscordAccount";
 import unlinkUserGoogleAccount from "../../methods/unlinkUserGoogleAccount";
 import updateProfile from "../../methods/updateProfile";
@@ -24,6 +27,8 @@ import { requestDiscordCredential } from "../discord";
 import ActionButtonRow from "./ActionButtonRow";
 import AudioConfig from "./AudioConfig";
 import Avatar from "./Avatar";
+import { Form } from "react-bootstrap";
+import LabelledRadioGroup from "./LabelledRadioGroup";
 
 enum GoogleLinkBlockLinkState {
   IDLE = "idle",
@@ -292,7 +297,13 @@ enum OwnProfilePageSubmitState {
   ERROR = "error",
 }
 
-const OwnProfilePage = ({ initialUser }: { initialUser: Meteor.User }) => {
+const OwnProfilePage = ({
+  initialUser,
+  initialAPIKey,
+}: {
+  initialUser: Meteor.User;
+  initialAPIKey?: string;
+}) => {
   const [displayName, setDisplayName] = useState<string>(
     initialUser.displayName ?? "",
   );
@@ -302,10 +313,16 @@ const OwnProfilePage = ({ initialUser }: { initialUser: Meteor.User }) => {
   const [dingwordsFlat, setDingwordsFlat] = useState<string>(
     initialUser.dingwords ? initialUser.dingwords.join(",") : "",
   );
+  const [dingwordsOpenMatch, setDingwordsOpenMatch] = useState<boolean>(
+    initialUser.dingwordsOpenMatch ?? false,
+  );
   const [submitState, setSubmitState] = useState<OwnProfilePageSubmitState>(
     OwnProfilePageSubmitState.IDLE,
   );
   const [submitError, setSubmitError] = useState<string>("");
+  const [showAPIKey, setShowAPIKey] = useState<boolean>(false);
+  const [regeneratingAPIKey, setRegeneratingAPIKey] = useState<boolean>(false);
+  const [APIKeyError, setAPIKeyError] = useState<string>();
 
   const handleDisplayNameFieldChange: NonNullable<
     FormControlProps["onChange"]
@@ -323,6 +340,10 @@ const OwnProfilePage = ({ initialUser }: { initialUser: Meteor.User }) => {
     useCallback((e) => {
       setDingwordsFlat(e.currentTarget.value);
     }, []);
+
+  const handleDingwordsModeChange = useCallback((newMode: string) => {
+    setDingwordsOpenMatch(newMode === "open");
+  }, []);
 
   const handleSaveForm = useCallback(() => {
     const trimmedDisplayName = displayName.trim();
@@ -343,6 +364,7 @@ const OwnProfilePage = ({ initialUser }: { initialUser: Meteor.User }) => {
       displayName: trimmedDisplayName,
       phoneNumber: phoneNumber !== "" ? phoneNumber : undefined,
       dingwords,
+      dingwordsOpenMatch,
     };
     updateProfile.call(newProfile, (error) => {
       if (error) {
@@ -352,15 +374,58 @@ const OwnProfilePage = ({ initialUser }: { initialUser: Meteor.User }) => {
         setSubmitState(OwnProfilePageSubmitState.SUCCESS);
       }
     });
-  }, [dingwordsFlat, displayName, phoneNumber]);
+  }, [dingwordsFlat, dingwordsOpenMatch, displayName, phoneNumber]);
 
   const dismissAlert = useCallback(() => {
     setSubmitState(OwnProfilePageSubmitState.IDLE);
   }, []);
 
+  const toggleShowAPIKey = useCallback(() => {
+    setShowAPIKey(!showAPIKey);
+  }, [showAPIKey]);
+
+  const regenerateAPIKey = useCallback(() => {
+    setRegeneratingAPIKey(true);
+    setAPIKeyError("");
+    rollAPIKey.call({}, (error) => {
+      if (error) {
+        setAPIKeyError(error.message);
+      } else {
+        setAPIKeyError("");
+      }
+      setRegeneratingAPIKey(false);
+    });
+  }, []);
+
+  const dismissAPIKeyAlert = useCallback(() => {
+    setAPIKeyError("");
+  }, []);
+
   const shouldDisableForm = submitState === "submitting";
+
+  const linkGoogleAlert = !initialUser.googleAccount ? (
+    <Alert variant="danger">
+      Please link your Google account below for full functionality.
+    </Alert>
+  ) : null;
+
+  const discordConfig = useTracker(
+    () => ServiceConfiguration.configurations.findOne({ service: "discord" }),
+    [],
+  );
+  const discordDisabled = useTracker(() => Flags.active("disable.discord"), []);
+
+  const linkDiscordAlert =
+    discordConfig && !discordDisabled && !initialUser.discordAccount ? (
+      <Alert variant="danger">
+        Please link your Discord account below for full functionality.
+      </Alert>
+    ) : null;
+
   return (
     <Container>
+      {linkGoogleAlert}
+      {linkDiscordAlert}
       <h1>Account information</h1>
       <Avatar {...initialUser} size={64} />
       <FormGroup className="mb-3">
@@ -420,7 +485,7 @@ const OwnProfilePage = ({ initialUser }: { initialUser: Meteor.User }) => {
 
       <FormGroup className="mb-3">
         <FormLabel htmlFor="jr-profile-edit-dingwords">
-          Dingwords (experimental)
+          Dingwords (comma-separated)
         </FormLabel>
         <FormControl
           id="jr-profile-edit-dingwords"
@@ -428,14 +493,49 @@ const OwnProfilePage = ({ initialUser }: { initialUser: Meteor.User }) => {
           value={dingwordsFlat}
           disabled={shouldDisableForm}
           onChange={handleDingwordsChange}
-          placeholder="cryptic,biology,chemistry"
+          placeholder="e.g. cryptic, akari, REO Speedwagon lyrics"
         />
         <FormText>
-          Get an in-app notification if anyone sends a chat message containing
-          one of your comma-separated, case-insensitive dingwords as a
-          substring. This feature is experimental and may be disabled without
-          notice.
+          If anyone sends a chat message, or adds a tag, that contains one of
+          your dingwords, you&apos;ll get a notification. Separate dingwords by
+          commas. Spaces are allowed.
         </FormText>
+      </FormGroup>
+
+      <FormGroup className="mb-3">
+        <FormLabel htmlFor="jr-profile-dingwords-open">
+          Dingwords matching mode
+        </FormLabel>
+        <LabelledRadioGroup
+          header=""
+          name="jr-new-puzzle-doc-type"
+          options={[
+            {
+              value: "exact",
+              label: (
+                <>
+                  <strong>Match precisely:</strong> dingwords and -phrases must
+                  match the typed text <em>exactly</em> in order to trigger an
+                  alert.
+                </>
+              ),
+            },
+            {
+              value: "open",
+              label: (
+                <>
+                  <strong>Match start:</strong> dingwords and -phrases only need
+                  to match the <em>start</em> of a typed word or phrase. For
+                  example, the dingword <code>logic</code> would match "logic",
+                  "logician", and "logical", but not "illogical".
+                </>
+              ),
+            },
+          ]}
+          initialValue={dingwordsOpenMatch ? "open" : "exact"}
+          help=""
+          onChange={handleDingwordsModeChange}
+        />
       </FormGroup>
 
       <ActionButtonRow>
@@ -452,6 +552,51 @@ const OwnProfilePage = ({ initialUser }: { initialUser: Meteor.User }) => {
       </ActionButtonRow>
 
       <AudioConfig />
+
+      <section className="advanced-section mt-3">
+        <h2>Advanced</h2>
+        <FormGroup className="mb-3">
+          <FormLabel htmlFor="jr-profile-api-key">API key</FormLabel>
+          <InputGroup>
+            <FormControl
+              id="jr-profile-api-key"
+              type={showAPIKey ? "text" : "password"}
+              readOnly
+              disabled
+              value={initialAPIKey}
+            />
+            <CopyToClipboard text={initialAPIKey ?? ""}>
+              <Button variant="outline-secondary" disabled={regeneratingAPIKey}>
+                Copy
+              </Button>
+            </CopyToClipboard>
+            <Button
+              variant="outline-secondary"
+              onClick={toggleShowAPIKey}
+              disabled={regeneratingAPIKey}
+            >
+              {showAPIKey ? "Hide" : "Show"}
+            </Button>
+            <Button
+              variant="outline-secondary"
+              onClick={regenerateAPIKey}
+              disabled={regeneratingAPIKey}
+            >
+              {regeneratingAPIKey || (initialAPIKey?.length ?? 0) > 0
+                ? "Regenerate"
+                : "Generate"}
+            </Button>
+          </InputGroup>
+          <FormText>
+            Authorization credential used to make API calls. Keep this secret!
+          </FormText>
+          {APIKeyError ? (
+            <Alert variant="danger" dismissible onClose={dismissAPIKeyAlert}>
+              Key generation failed: {APIKeyError}
+            </Alert>
+          ) : null}
+        </FormGroup>
+      </section>
     </Container>
   );
 };

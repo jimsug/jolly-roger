@@ -1,8 +1,17 @@
 import { Meteor } from "meteor/meteor";
-import { useFind, useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
+import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
+import { faClock } from "@fortawesome/free-regular-svg-icons/faClock";
+import { faCircle } from "@fortawesome/free-regular-svg-icons/faCircle";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faEyeSlash } from "@fortawesome/free-regular-svg-icons/faEyeSlash";
+import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
+import { faPencilAlt } from "@fortawesome/free-solid-svg-icons/faPencilAlt";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, {
   type ComponentPropsWithRef,
@@ -23,12 +32,14 @@ import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import styled, { css } from "styled-components";
+import isAdmin from "../../lib/isAdmin";
 import { sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import Hunts from "../../lib/models/Hunts";
 import Puzzles from "../../lib/models/Puzzles";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
+import Peers from "../../lib/models/mediasoup/Peers";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
@@ -45,7 +56,10 @@ import {
   useHuntPuzzleListShowSolvers,
   useOperatorActionsHiddenForHunt,
 } from "../hooks/persisted-state";
+import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
+import indexedDisplayNames from "../indexedDisplayNames";
+import { Subscribers } from "../subscribers";
 import HuntNav from "./HuntNav";
 import PuzzleList from "./PuzzleList";
 import type {
@@ -56,25 +70,6 @@ import PuzzleModalForm from "./PuzzleModalForm";
 import RelatedPuzzleGroup, { PuzzleGroupDiv } from "./RelatedPuzzleGroup";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import { mediaBreakpointDown } from "./styling/responsive";
-import { Subscribers } from "../subscribers";
-import Peers from "../../lib/models/mediasoup/Peers";
-import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
-import indexedDisplayNames from "../indexedDisplayNames";
-import pinnedMessagesForPuzzleList from "../../lib/publications/pinnedMessagesForPuzzleList";
-import ChatMessages, { ChatMessageType } from "../../lib/models/ChatMessages";
-
-const FilteredChatFields = [
-  "_id",
-  "puzzle",
-  "content",
-  "sender",
-  "timestamp",
-  "pinTs",
-] as const;
-type FilteredChatMessageType = Pick<
-  ChatMessageType,
-  (typeof FilteredChatFields)[number]
->;
 
 const ViewControls = styled.div<{ $canAdd?: boolean }>`
   display: grid;
@@ -206,10 +201,10 @@ const PuzzleListView = ({
 
   const deletedPuzzles = useTracker(
     () =>
-      !canUpdate || loading
+      !isAdmin || loading
         ? undefined
         : Puzzles.findDeleted({ hunt: huntId }).fetch(),
-    [canUpdate, huntId, loading],
+    [huntId, loading],
   );
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -388,8 +383,27 @@ const PuzzleListView = ({
   const showAddModal = useCallback(() => {
     if (addModalRef.current) {
       addModalRef.current.show();
+      addModalRef.current.populateForm({
+        title: "",
+        url: "",
+        tagIds: [],
+      });
     }
   }, []);
+
+  const showAddModalWithTags = useCallback(
+    (initialTags: string[]) => {
+      if (addModalRef.current) {
+        addModalRef.current.show();
+        addModalRef.current.populateForm({
+          title: "",
+          url: "",
+          tagIds: initialTags,
+        });
+      }
+    },
+    [addModalRef],
+  );
 
   const navigate = useNavigate();
 
@@ -416,29 +430,30 @@ const PuzzleListView = ({
         });
       }
     }
-  }, [bookmarkTitle, bookmarkURL]);
+  }, [bookmarkTitle, bookmarkURL, navigate, setSearchParams]);
 
   const subscribersLoading = useSubscribe("subscribers.fetchAll", huntId);
   const callMembersLoading = useSubscribe("mediasoup:metadataAll", huntId);
 
   const displayNamesLoading = useSubscribeDisplayNames(huntId);
-  const displayNames = indexedDisplayNames();
 
   const subscriptionsLoading =
     subscribersLoading() || callMembersLoading() || displayNamesLoading();
 
   const puzzleSubscribers = useTracker(() => {
+    const displayNames = indexedDisplayNames();
+
     if (subscriptionsLoading) {
       return { none: { none: [] } };
     }
 
-    let puzzleSubs = {};
+    const puzzleSubs = {};
 
     Peers.find({})
       .fetch()
       .forEach((s) => {
-        let puzzle = s.call;
-        let user = displayNames.get(s.createdBy);
+        const puzzle = s.call;
+        const user = displayNames.get(s.createdBy);
         if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
           puzzleSubs[puzzle] = {
             viewers: [],
@@ -451,8 +466,8 @@ const PuzzleListView = ({
       });
 
     Subscribers.find({}).forEach((s) => {
-      let puzzle = s.name.replace(/^puzzle:/, "");
-      let user = displayNames.get(s.user);
+      const puzzle = s.name.replace(/^puzzle:/, "");
+      const user = displayNames.get(s.user);
       if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
         puzzleSubs[puzzle] = {
           viewers: [],
@@ -468,86 +483,12 @@ const PuzzleListView = ({
     });
     return puzzleSubs;
   }, [subscriptionsLoading]);
-
-  const subscribeMsgs = useTypedSubscribe(pinnedMessagesForPuzzleList, {
-    huntId,
-  });
-
-  const subscribersLoading = useSubscribe("subscribers.fetchAll", huntId);
-  const callMembersLoading = useSubscribe("mediasoup:metadataAll", huntId);
-
-  const displayNamesLoading = useSubscribeDisplayNames(huntId);
-  const displayNames = indexedDisplayNames();
-
-  const subscriptionsLoading =
-    subscribersLoading() || callMembersLoading() || displayNamesLoading();
-
-  const puzzleSubscribers = useTracker(() => {
-    if (subscriptionsLoading) {
-      return { none: { none: [] } };
-    }
-
-    let puzzleSubs = {};
-
-    Peers.find({})
-      .fetch()
-      .forEach((s) => {
-        let puzzle = s.call;
-        let user = displayNames.get(s.createdBy);
-        if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
-          puzzleSubs[puzzle] = {
-            viewers: [],
-            callers: [],
-          };
-        }
-        if (!puzzleSubs[puzzle].callers.includes(user)) {
-          puzzleSubs[puzzle].callers.push(user);
-        }
-      });
-
-    Subscribers.find({}).forEach((s) => {
-      let puzzle = s.name.replace(/^puzzle:/, "");
-      let user = displayNames.get(s.user);
-      if (!Object.prototype.hasOwnProperty.call(puzzleSubs, puzzle)) {
-        puzzleSubs[puzzle] = {
-          viewers: [],
-          callers: [],
-        };
-      }
-      if (
-        !puzzleSubs[puzzle].callers.includes(user) &&
-        !puzzleSubs[puzzle].viewers.includes(user)
-      ) {
-        puzzleSubs[puzzle].viewers.push(user);
-      }
-    });
-    return puzzleSubs;
-  }, [subscriptionsLoading]);
-
-  const subscribeMsgs = useTypedSubscribe(pinnedMessagesForPuzzleList, {
-    huntId,
-  });
-
-  const msgsLoading = subscribeMsgs();
-
-  const pinnedMessages = useTracker(() => {
-    let pinMsgs: Record<string, ChatMessageType> = {};
-    ChatMessages.find({}, { sort: { pinTs: -1 } })
-      .fetch()
-      .forEach((msg) => {
-        if (!Object.prototype.hasOwnProperty.call(pinMsgs, msg.puzzle)) {
-          pinMsgs[msg.puzzle] = msg;
-        }
-      });
-    return pinMsgs;
-  }, [msgsLoading]);
 
   const renderList = useCallback(
     (
       retainedPuzzles: PuzzleType[],
       solvedOverConstrains: boolean,
       allPuzzlesCount: number,
-      puzzleSubscribers: Record<string, Record<string, string[]>>,
     ) => {
       const maybeMatchWarning = solvedOverConstrains && (
         <Alert variant="info">
@@ -556,7 +497,7 @@ const PuzzleListView = ({
         </Alert>
       );
       const retainedIds = new Set(retainedPuzzles.map((puzzle) => puzzle._id));
-      const filterMessage = `Showing ${retainedPuzzles.length} of ${allPuzzlesCount} items`;
+      const filterMessage = `Showing ${retainedPuzzles.length} of ${allPuzzlesCount} rows`;
 
       const bookmarkedPuzzles = retainedPuzzles.filter((puzzle) =>
         bookmarked.has(puzzle._id),
@@ -594,7 +535,7 @@ const PuzzleListView = ({
                 trackPersistentExpand={searchString === ""}
                 showSolvers={showSolvers}
                 subscribers={puzzleSubscribers}
-                pinnedMessages={pinnedMessages}
+                addPuzzleCallback={showAddModalWithTags}
               />
             );
           });
@@ -625,7 +566,6 @@ const PuzzleListView = ({
               canUpdate={canUpdate}
               showSolvers={showSolvers}
               subscribers={puzzleSubscribers}
-              pinnedMessages={pinnedMessages}
             />
           );
           listControls = null;
@@ -638,6 +578,12 @@ const PuzzleListView = ({
           <PuzzleListToolbar>
             <div>{listControls}</div>
             <div>{filterMessage}</div>
+            <div>
+              <FontAwesomeIcon icon={faFolderOpen} key="legend-group" /> =
+              group; <FontAwesomeIcon icon={faStar} key="legend-meta" /> = meta
+              for; <FontAwesomeIcon icon={faMapPin} key="legend-where" /> =
+              where
+            </div>
           </PuzzleListToolbar>
           {bookmarkedPuzzles.length > 0 && (
             <PuzzleGroupDiv>
@@ -670,25 +616,26 @@ const PuzzleListView = ({
               trackPersistentExpand={searchString !== ""}
               subscribers={puzzleSubscribers}
               showSolvers={showSolvers}
-              pinnedMessages={pinnedMessages}
+              addPuzzleCallback={showAddModalWithTags}
             />
           )}
         </div>
       );
     },
     [
-      huntId,
       displayMode,
-      allPuzzles,
-      deletedPuzzles,
+      bookmarked,
       allTags,
       canUpdate,
+      showSolvers,
+      puzzleSubscribers,
+      deletedPuzzles,
+      huntId,
       searchString,
+      allPuzzles,
       canExpandAllGroups,
       expandAllGroups,
-      bookmarked,
-      puzzleSubscribers,
-      pinnedMessages,
+      showAddModalWithTags,
     ],
   );
 
@@ -701,7 +648,7 @@ const PuzzleListView = ({
         onSubmit={onAdd}
       />
       <OperatorActionsFormGroup>
-        <FormLabel>Operator Interface</FormLabel>
+        <FormLabel>View</FormLabel>
         <ButtonToolbar>
           <StyledToggleButtonGroup
             type="radio"
@@ -715,21 +662,21 @@ const PuzzleListView = ({
               variant="outline-info"
               value="hide"
             >
-              Off
+              <FontAwesomeIcon icon={faPencilAlt} key="view-solver" /> Solver
             </ToggleButton>
             <ToggleButton
               id="operator-actions-show-button"
               variant="outline-info"
               value="show"
             >
-              On
+              <FontAwesomeIcon icon={faStar} key="view-operator" /> Deputy
             </ToggleButton>
           </StyledToggleButtonGroup>
         </ButtonToolbar>
       </OperatorActionsFormGroup>
       <AddPuzzleFormGroup>
         <StyledButton variant="primary" onClick={showAddModal}>
-          <FontAwesomeIcon icon={faPlus} /> Add a puzzle
+          <FontAwesomeIcon icon={faPlus} key="add-a-puzzle" /> Add a puzzle
         </StyledButton>
       </AddPuzzleFormGroup>
     </>
@@ -751,7 +698,7 @@ const PuzzleListView = ({
     <div>
       <ViewControls $canAdd={canAdd}>
         <FormGroup>
-          <FormLabel>Organize by</FormLabel>
+          <FormLabel>Sort by</FormLabel>
           <ButtonToolbar>
             <StyledToggleButtonGroup
               type="radio"
@@ -765,20 +712,21 @@ const PuzzleListView = ({
                 variant="outline-info"
                 value="group"
               >
-                Group
+                <FontAwesomeIcon icon={faFolderOpen} key="sort-group" /> Group
               </ToggleButton>
               <ToggleButton
                 id="view-unlock-button"
                 variant="outline-info"
                 value="unlock"
               >
-                Unlock
+                <FontAwesomeIcon icon={faClock} key="sort-when-added" /> When
+                added
               </ToggleButton>
             </StyledToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
         <FormGroup>
-          <FormLabel>Solved puzzles</FormLabel>
+          <FormLabel>Puzzles</FormLabel>
           <ButtonToolbar>
             <StyledToggleButtonGroup
               type="radio"
@@ -792,20 +740,21 @@ const PuzzleListView = ({
                 variant="outline-info"
                 value="hide"
               >
-                Hidden
+                <FontAwesomeIcon icon={faCircle} key="puzzles-unsolved" />{" "}
+                Unsolved
               </ToggleButton>
               <ToggleButton
                 id="solved-show-button"
                 variant="outline-info"
                 value="show"
               >
-                Shown
+                <FontAwesomeIcon icon={faGlobe} key="puzzles-all" /> All
               </ToggleButton>
             </StyledToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
         <FormGroup>
-          <FormLabel>Current viewers</FormLabel>
+          <FormLabel>Hunters</FormLabel>
           <ButtonToolbar>
             <StyledToggleButtonGroup
               type="radio"
@@ -819,14 +768,14 @@ const PuzzleListView = ({
                 variant="outline-info"
                 value="hide"
               >
-                Hidden
+                <FontAwesomeIcon icon={faEyeSlash} key="hunters-hide" /> Hide
               </ToggleButton>
               <ToggleButton
                 id="solvers-show-button"
                 variant="outline-info"
                 value="show"
               >
-                Shown
+                <FontAwesomeIcon icon={faEye} key="hunters-show" /> Show
               </ToggleButton>
             </StyledToggleButtonGroup>
           </ButtonToolbar>
@@ -845,7 +794,7 @@ const PuzzleListView = ({
               onChange={onSearchStringChange}
             />
             <Button variant="secondary" onClick={clearSearch}>
-              <FontAwesomeIcon icon={faEraser} />
+              <FontAwesomeIcon icon={faEraser} content="erase-filter" />
             </Button>
           </InputGroup>
         </SearchFormGroup>
@@ -874,7 +823,7 @@ const PuzzleListPage = () => {
 
   const puzzlesLoading = useTypedSubscribe(puzzlesForPuzzleList, {
     huntId,
-    includeDeleted: canUpdate,
+    includeDeleted: isAdmin,
   });
   const loading = puzzlesLoading();
 
