@@ -7,17 +7,10 @@ import nodeIsMention from "../../lib/nodeIsMention";
 import FixedLayout from "./styling/FixedLayout";
 import { Alert } from "react-bootstrap";
 import { useBreadcrumb } from "../hooks/breadcrumb";
-<<<<<<< HEAD
-import useTypedSubscribe from "../hooks/useTypedSubscribe";
-import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
-import { useTracker } from "meteor/react-meteor-data";
-import Puzzles from "../../lib/models/Puzzles";
-import Tags from "../../lib/models/Tags";
-=======
 import Markdown from "./Markdown";
 import { useTracker } from "meteor/react-meteor-data";
+import { Link } from "react-router-dom";
 import Hunts from "../../lib/models/Hunts";
->>>>>>> 7a2c5c561ea7d7e0f3e1701a66a14134af9f1e39
 
 const FirehosePageLayout = styled.div`
   padding: 8px 15px;
@@ -106,49 +99,71 @@ const MoreAppPage = () => {
   return (
     <FixedLayout>
       <FirehosePageLayout>
-        <h1>More resources</h1>
+        <h1>More Resources</h1>
         {hunt && <Markdown text={hunt.moreInfo ?? ""} />}
-
-        {administriviaPuzzles?.length > 0 && (
-          <>
-            <h2>Administrivia</h2>
-            <ul>
-              {administriviaPuzzles
-                .sort((a, b) => (a.title > b.title ? 1 : -1))
-                .map((p) => {
-                  return (
-                    <li key={p._id}>
-                      <a href={`/hunts/${huntId}/puzzles/${p._id}`}>
-                        {p.title}
-                      </a>
-                    </li>
-                  );
-                })}
-            </ul>
-          </>
-        )}
+        <hr />
         <h2>Bookmarklet</h2>
 
-        <p>This bookmarklet will:</p>
+        <p>
+          <strong>Drag this bookmarklet 👇 to your bookmarks bar!</strong>
+        </p>
+
+        <p>
+          <a
+            style={{
+              border: "1px solid #ccc",
+              borderRadius: "6px",
+              padding: ".5rem .8rem",
+              fontSize: "1.2rem",
+              boxShadow: "1px",
+              background: "#eee",
+            }}
+            href={bookmarklet}
+          >
+            ➡ Jolly Roger
+          </a>
+        </p>
+        <p>
+          When a new puzzle gets unlocked, navigate to the puzzle page (on the
+          hunt site) and click this bookmarklet in your bookmarks bar. Then:{" "}
+        </p>
         <ul>
           <li>
-            If the puzzle exists in Jolly Roger, take you to the puzzle page, or
+            If the puzzle doesn't exist in Jolly Roger, you'll get sent to Add
+            Puzzle screen with the title and URL prepopulated, or
           </li>
           <li>
-            If the puzzle doesn't yet exist in Jolly Roger, take you to the list
-            of puzzles with the title and URL prepopulated.
+            If the puzzle <em>does</em> exist in Jolly Roger, you'll get sent to
+            the puzzle's page in JR.
           </li>
         </ul>
 
-        <p>Drag this bookmarklet to your bookmarks bar!</p>
-
-        <p>
-          <a href={bookmarklet}>➡ Jolly Roger</a>
-        </p>
-
+        {/*
         <Alert variant="warning">
-          Note: You'll need a new/different version of this for each hunt.
+        Note: You'll need a new/different version of this for each hunt.
         </Alert>
+        */}
+
+        <hr />
+        <h2>Notes</h2>
+        <p>
+          <a
+            style={{
+              border: "1px solid #ccc",
+              borderRadius: "6px",
+              padding: ".5rem .8rem",
+              fontSize: "1.2rem",
+              boxShadow: "1px",
+              background: "#eee",
+            }}
+            href={`/hunts/${huntId}/notes`}
+          >
+            🗒️ Notes page
+          </a>
+          <br />
+          <br />
+          Visit this page to view a list of all puzzles and their notes.
+        </p>
       </FirehosePageLayout>
     </FixedLayout>
   );

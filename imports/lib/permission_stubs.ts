@@ -3,11 +3,21 @@ import isAdmin, { GLOBAL_SCOPE } from "./isAdmin";
 import type { HuntType } from "./models/Hunts";
 import MeteorUsers from "./models/MeteorUsers";
 
+function huntHasDefaultRole(
+  hunt: Pick<HuntType, "defaultRoles">,
+  role: string,
+): boolean {
+  return hunt.defaultRoles?.includes(role) ?? false;
+}
+
 function isOperatorForHunt(
   user: Pick<Meteor.User, "roles">,
-  hunt: Pick<HuntType, "_id">,
+  hunt: HuntType,
 ): boolean {
-  return user.roles?.[hunt._id]?.includes("operator") ?? false;
+  return (
+    huntHasDefaultRole(hunt, "operator") ||
+    (user.roles?.[hunt._id]?.includes("operator") ?? false)
+  );
 }
 
 export function listAllRolesForHunt(
@@ -66,10 +76,6 @@ export function userMayAddUsersToHunt(
     return true;
   }
 
-  if (isOperatorForHunt(user, hunt)) {
-    return true;
-  }
-
   // You can only add users to a hunt if you're already a member of said hunt.
   const joinedHunts = user.hunts;
   if (!joinedHunts) {
@@ -92,10 +98,6 @@ export function userMayUpdateHuntInvitationCode(
   }
 
   if (isAdmin(user)) {
-    return true;
-  }
-
-  if (isOperatorForHunt(user, hunt)) {
     return true;
   }
 

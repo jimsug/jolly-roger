@@ -166,3 +166,13 @@
     border-color: transparent;
   }
 }
+
+.toast-body {
+  max-height: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+}

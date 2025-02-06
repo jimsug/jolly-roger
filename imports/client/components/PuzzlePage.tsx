@@ -143,7 +143,7 @@ type FilteredChatMessageType = Pick<
 // It doesn't need to be, but this is consistent with the 576px transition used in other pages' css
 const MinimumSidebarWidth = 176;
 const MinimumDocumentWidth = 400;
-const DefaultSidebarWidth = 300;
+const DefaultSidebarWidth = 200;
 
 const MinimumDesktopWidth = MinimumSidebarWidth + MinimumDocumentWidth;
 
@@ -711,10 +711,10 @@ const PinnedMessage = React.forwardRef(
             $isHighlighted={false}
             $isPinned={false}
           >
-            <span>No pinned message. To add one, send a message starting with /pin</span>
+            <span>Prefix with <code>/pin</code> to add a pinned message.</span>
           </ChatMessageDiv>
         ) : undefined}
-        {pinnedMessage.map((msg, index, messages) => {
+        {pinnedMessage.map((msg) => {
           return (
             <ChatHistoryMessage
               key={msg._id}
@@ -1366,23 +1366,6 @@ const GuessRow = styled.div<{ $state: GuessType["state"] }>`
   }
 `;
 
-const GuessSliderContainer = styled.div`
-  display: flex;
-  align-items: center;
-  flex-grow: 1;
-`;
-const GuessSliderLeftLabel = styled.div`
-  width: 1.5em;
-  text-align: right;
-`;
-const GuessSliderRightLabel = styled.div`
-  width: 2.5em;
-  text-align: left;
-`;
-const GuessSlider = styled.input`
-  width: 1px;
-  flex-grow: 1;
-`;
 
 const GuessCell = styled.div`
   display: flex;
@@ -1482,10 +1465,10 @@ const PuzzleGuessModal = React.forwardRef(
     forwardedRef: React.Ref<PuzzleGuessModalHandle>,
   ) => {
     const [guessInput, setGuessInput] = useState<string>("");
-    const [directionInput, setDirectionInput] = useState<number>(0);
-    const [haveSetDirection, setHaveSetDirection] = useState<boolean>(false);
-    const [confidenceInput, setConfidenceInput] = useState<number | null>(null);
-    const [haveSetConfidence, setHaveSetConfidence] = useState<boolean>(false);
+    const [directionInput, setDirectionInput] = useState<number>(10);
+    const [haveSetDirection, setHaveSetDirection] = useState<boolean>(true);
+    const [confidenceInput, setConfidenceInput] = useState<number>(100);
+    const [haveSetConfidence, setHaveSetConfidence] = useState<boolean>(true);
     const [confirmingSubmit, setConfirmingSubmit] = useState<boolean>(false);
     const [confirmationMessage, setConfirmationMessage] = useState<string>("");
     const [submitState, setSubmitState] = useState<PuzzleGuessSubmitState>(
@@ -1558,14 +1541,15 @@ const PuzzleGuessModal = React.forwardRef(
               setSubmitError(error.message);
               setSubmitState(PuzzleGuessSubmitState.FAILED);
             } else {
-              // Clear the input box.  Don't dismiss the dialog.
+              // Clear the input box.
               setGuessInput("");
-              setHaveSetConfidence(false);
-              setConfidenceInput(50);
-              setHaveSetDirection(false);
-              setDirectionInput(0);
+              setHaveSetConfidence(true);
+              setConfidenceInput(100);
+              setHaveSetDirection(true);
+              setDirectionInput(10);
               setSubmitError("");
               setSubmitState(PuzzleGuessSubmitState.IDLE);
+              formRef.current.hide();
             }
             setConfirmingSubmit(false);
           },
@@ -1583,16 +1567,6 @@ const PuzzleGuessModal = React.forwardRef(
       haveSetConfidence,
     ]);
 
-    const directionTooltip = (
-      <Tooltip id="jr-puzzle-guess-direction-tooltip">
-        <strong>Solve direction:</strong> {formatGuessDirection(directionInput)}
-      </Tooltip>
-    );
-    const confidenceTooltip = (
-      <Tooltip id="jr-puzzle-guess-confidence-tooltip">
-        <strong>Confidence:</strong> {formatConfidence(confidenceInput)}
-      </Tooltip>
-    );
     const copyTooltip = (
       <Tooltip id="jr-puzzle-guess-copy-tooltip">Copy to clipboard</Tooltip>
     );
@@ -1606,6 +1580,8 @@ const PuzzleGuessModal = React.forwardRef(
       solved: `Guess history for ${puzzle.title}`,
       noAnswers: `Guess history for ${puzzle.title}`,
     }[solvedness];
+
+    const huntId = useParams<"huntId">().huntId!;
 
     return (
       <ModalForm
@@ -1639,7 +1615,7 @@ const PuzzleGuessModal = React.forwardRef(
           <Col xs={9}>
 
             <ValidatedSliderContainer>
-              <ToggleButtonGroup name='solve-dir' onChange={onDirectionInputChange}>
+              <ToggleButtonGroup name='solve-dir' onChange={onDirectionInputChange} defaultValue={10}>
                 <ToggleButton variant="outline-primary" value={-10} id='guess-direction-back' checked={directionInput===-10}>
                   Backsolve
                 </ToggleButton>
@@ -1656,11 +1632,11 @@ const PuzzleGuessModal = React.forwardRef(
                   Forwardsolve
                 </ToggleButton>
               </ToggleButtonGroup>
-              <FontAwesomeIcon
+              {/* <FontAwesomeIcon
                 icon={faCheck}
                 color={haveSetDirection ? "green" : "transparent"}
                 fixedWidth
-              />
+              /> */}
             </ValidatedSliderContainer>
             <FormText>
               Select the direction of your solve.
@@ -1670,11 +1646,11 @@ const PuzzleGuessModal = React.forwardRef(
 
         <FormGroup as={Row} className="mb-3">
           <FormLabel column xs={3} htmlFor="jr-puzzle-guess-confidence">
-            Confidence
+            Confidence {haveSetConfidence}
           </FormLabel>
           <Col xs={9}>
             <ValidatedSliderContainer>
-              <ToggleButtonGroup name='guess-confidence' onChange={onConfidenceInputChange}>
+              <ToggleButtonGroup name='guess-confidence' onChange={onConfidenceInputChange} defaultValue={100}>
                 <ToggleButton variant="outline-danger" value={0} id='guess-confidence-low' checked={confidenceInput===0}>
                   Low
                 </ToggleButton>
@@ -1685,11 +1661,11 @@ const PuzzleGuessModal = React.forwardRef(
                   High
                 </ToggleButton>
               </ToggleButtonGroup>
-              <FontAwesomeIcon
+              {/* <FontAwesomeIcon
                 icon={faCheck}
                 color={haveSetConfidence ? "green" : "transparent"}
                 fixedWidth
-              />
+              /> */}
             </ValidatedSliderContainer>
             <FormText>
               Tell us how confident you are about your guess.
@@ -1701,7 +1677,7 @@ const PuzzleGuessModal = React.forwardRef(
           <div>No previous submissions.</div>
         ) : (
           [
-            <div key="label">Previous submissions:</div>,
+            <div key="label">Previous submissions</div>,
             <GuessTable key="table">
               {sortedBy(guesses, (g) => g.createdAt)
                 .reverse()
@@ -1795,7 +1771,10 @@ const PuzzleGuessModal = React.forwardRef(
                   );
                 })}
             </GuessTable>,
-          ]
+            <br />,
+            <Alert variant="info">
+              To mark answers correct or incorrect, you must have the <Link to={`/hunts/${huntId}`}>Deputy View</Link> toggled on. As Deputy, alerts will popup for all pending submissions. To view alerts you've dismissed, just reload the site.
+            </Alert>
         )}
         {confirmingSubmit ? (
           <Alert variant="warning">{confirmationMessage}</Alert>
