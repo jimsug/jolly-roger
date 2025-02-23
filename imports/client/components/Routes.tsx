@@ -1,3 +1,5 @@
+import { Meteor } from "meteor/meteor";
+import { useTracker } from "meteor/react-meteor-data";
 import React, { Suspense } from "react";
 import type { RouteObject } from "react-router-dom";
 import { Navigate, useRoutes } from "react-router-dom";
@@ -14,6 +16,7 @@ import HuntListApp from "./HuntListApp";
 import HuntListPage from "./HuntListPage";
 import HuntProfileListPage from "./HuntProfileListPage";
 import HuntersApp from "./HuntersApp";
+import InvitedUserListPage from "./InvitedUserListPage";
 import JoinHunt from "./JoinHunt";
 import Loading from "./Loading";
 import LoginForm from "./LoginForm";
@@ -24,15 +27,11 @@ import ProfilePage from "./ProfilePage";
 import PuzzleListPage from "./PuzzleListPage";
 import PuzzlePage from "./PuzzlePage";
 import RootRedirector from "./RootRedirector";
+import TagBulkEditPage from "./TagBulkEditPage";
+import TagManagerPage from "./TagManagerPage";
 import UserInvitePage from "./UserInvitePage";
 import UsersApp from "./UsersApp";
 import { AuthenticatedPage, UnauthenticatedPage } from "./authentication";
-import TagManagerApp from "./TagManagerApp";
-import TagManagerPage from "./TagManagerPage";
-import TagEditPage from "./TagEditPage";
-import TagBulkEditPage from "./TagBulkEditPage";
-import { useTracker } from "meteor/react-meteor-data";
-import { Meteor } from "meteor/meteor";
 
 const HuntEditPage = React.lazy(() => import("./HuntEditPage"));
 const SetupPage = React.lazy(() => import("./SetupPage"));
@@ -99,6 +98,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
     children: [
       { path: ":userId", element: <ProfilePage /> },
       { path: "", element: <AllProfileListPage /> },
+      { path: "invited", element: <InvitedUserListPage /> },
     ],
   },
   { path: "/setup", element: <SetupPage /> },
