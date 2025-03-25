@@ -14,6 +14,10 @@ import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { ComponentPropsWithRef, FC, MouseEvent } from "react";
+import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
+import { faReplyAll } from "@fortawesome/free-solid-svg-icons/faReplyAll";
+import Popover from "react-bootstrap/Popover";
+import Overlay from "react-bootstrap/Overlay";
 import React, {
   useCallback,
   useEffect,
@@ -134,6 +138,7 @@ const FilteredChatFields = [
   "pinned",
   "timestamp",
   "pinTs",
+  "parentId",
 ] as const;
 type FilteredChatMessageType = Pick<
   ChatMessageType,
@@ -211,12 +216,62 @@ const ChatHistoryDiv = styled.div`
   overflow-x: hidden;
 `;
 
+const ReplyIcon = styled(FontAwesomeIcon)`
+  cursor: pointer;
+  margin-right: 4px;
+  color: #666;
+`;
+
+const ReplyPopoverBody = styled(Popover.Body)`
+  padding: 8px;
+`;
+
+const ReplyPopoverContent = styled.div`
+  max-width: 400px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 0px;
+  margin: 0px;
+`;
+
+const ReplyPopoverMessage = styled.div`
+  padding: 0px;
+  margin: 0px;
+  border-bottom: 1px solid #eee;
+  &:last-child {
+    border-bottom: none;
+  }
+`;
+
+const ReplyPopoverMore = styled.div`
+  padding: 0px; /* Reduced padding */
+  cursor: pointer;
+  color: blue;
+  text-decoration: underline;
+`;
+
+const ReplyPopoverSender = styled.div`
+  font-weight: bold;
+  margin-bottom: 2px;
+`;
+
+const ReplyButton = styled(FontAwesomeIcon)`
+  cursor: pointer;
+  color: #666;
+  margin-left: 4px;
+  &:hover {
+    color: #000;
+  }
+`;
+
 const PUZZLE_PAGE_PADDING = 8;
 
 const ChatMessageDiv = styled.div<{
   $isSystemMessage: boolean;
   $isHighlighted: boolean;
   $isPinned: boolean;
+  $isPulsing: boolean;
+  $isHovered: boolean;
 }>`
   padding: 0 ${PUZZLE_PAGE_PADDING}px 2px;
   word-wrap: break-word;
@@ -240,6 +295,28 @@ const ChatMessageDiv = styled.div<{
     css`
       background-color: #fff2cc;
     `}
+    ${({ $isPulsing }) =>
+    $isPulsing &&
+    css`
+      animation: pulse 1s ease-in-out;
+    `}
+
+  @keyframes pulse {
+    0% {
+      background-color: #ffff70;
+    }
+    50% {
+      background-color: #ffff6d;
+    }
+    100% {
+      background-color: #ffff70;
+    }
+  }
+
+  &:hover {
+    background-color: #f0f0f0;
+  }
+
 `;
 
 const ChatInputRow = styled.div`
@@ -248,6 +325,22 @@ const ChatInputRow = styled.div`
     env(safe-area-inset-bottom, 0px),
     ${PUZZLE_PAGE_PADDING}px
   );
+  position: relative;
+`;
+
+const ReplyingTo = styled.div`
+  background-color: #eee;
+  padding: 4px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+`;
+
+const ReplyingToCancel = styled(FontAwesomeIcon)`
+  cursor: pointer;
+  margin-left: auto;
 `;
 
 const ChatMessageTimestamp = styled.span`
@@ -374,6 +467,11 @@ const ChatHistoryMessage = React.memo(
     isPinned,
     suppressSender,
     selfUserId,
+    scrollToMessage,
+    parentId,
+    messageRef,
+    isPulsing,
+    setReplyingTo,
   }: {
     message: FilteredChatMessageType;
     displayNames: Map<string, string>;
@@ -382,21 +480,165 @@ const ChatHistoryMessage = React.memo(
     isPinned: boolean;
     suppressSender: boolean;
     selfUserId: string;
+    scrollToMessage: (messageId: string, callback?: () => void) => void;
+    parentId?: string;
+    messageRef: (el: HTMLDivElement | null) => void;
+    isPulsing: boolean;
+    setReplyingTo: (messageId: string | null) => void;
   }) => {
     const ts = shortCalendarTimeFormat(message.timestamp) : null;
 
     const senderDisplayName =
-      message.sender !== undefined
-        ? ((isPinned ? '📌 ' : '') + (displayNames.get(message.sender) ?? "???"))
-        : "jolly-roger";
+    message.sender !== undefined
+    ? ((isPinned ? '📌 ' : '') + (displayNames.get(message.sender) ?? "???"))
+    : "jolly-roger";
+
+    const [parentMessages, setParentMessages] = useState<FilteredChatMessageType[]>([]);
+    const [hasMoreParents, setHasMoreParents] = useState<boolean>(false);
+    const [nextParentId, setNextParentId] = useState<string | undefined>(undefined);
+    const [showPopover, setShowPopover] = useState<boolean>(false);
+    const [isMouseOverIcon, setIsMouseOverIcon] = useState<boolean>(false);
+    const [isMouseOverPopover, setIsMouseOverPopover] = useState<boolean>(false);
+    const popoverTimeout = useRef<NodeJS.Timeout | null>(null);
+    const target = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      if (parentId) {
+        const fetchParentMessages = async () => {
+          const parents: FilteredChatMessageType[] = [];
+          let currentParentId = parentId;
+          let depth = 0;
+          let nextParent = undefined;
+          while (currentParentId && depth < 3) {
+            const parentMessage = ChatMessages.findOne(currentParentId);
+            if (parentMessage) {
+              parents.push(parentMessage);
+              nextParent = parentMessage.parentId;
+              currentParentId = parentMessage.parentId;
+            } else {
+              currentParentId = undefined;
+            }
+            depth++;
+          }
+          setHasMoreParents(!!currentParentId);
+          setNextParentId(nextParent);
+          setParentMessages(parents.reverse());
+        };
+        fetchParentMessages();
+      } else {
+        setParentMessages([]);
+        setHasMoreParents(false);
+        setNextParentId(undefined);
+      }
+    }, [parentId]);
+
+    const handlePopoverMouseEnter = () => {
+      setIsMouseOverPopover(true);
+    };
+
+    const handlePopoverMouseLeave = () => {
+      setIsMouseOverPopover(false);
+    };
+
+    const handleIconMouseEnter = () => {
+      setIsMouseOverIcon(true);
+      setShowPopover(true);
+    };
+
+    const handleIconMouseLeave = () => {
+      setIsMouseOverIcon(false);
+    };
+
+    useEffect(() => {
+      if (popoverTimeout.current) {
+        clearTimeout(popoverTimeout.current);
+        popoverTimeout.current = null;
+      }
+
+      if (!isMouseOverIcon && !isMouseOverPopover && showPopover) {
+        popoverTimeout.current = setTimeout(() => {
+          setShowPopover(false);
+        }, 300);
+      }
+    }, [isMouseOverIcon, isMouseOverPopover, showPopover]);
+
+
+    const replyPopover = (
+      <Popover
+        id={`reply-popover-${message._id}`}
+        onMouseEnter={handlePopoverMouseEnter}
+        onMouseLeave={handlePopoverMouseLeave}
+      >
+        <Popover.Header as="h3">Replying to:</Popover.Header>
+        <ReplyPopoverBody>
+          <ReplyPopoverContent>
+            {hasMoreParents && (
+              <ReplyPopoverMore onClick={() => scrollToMessage(nextParentId!)}>
+                More ...
+              </ReplyPopoverMore>
+            )}
+            {parentMessages.map((parent) => (
+              <ReplyPopoverMessage key={parent._id}>
+                <ReplyPopoverSender>
+                  {displayNames.get(parent.sender) ?? "???"}
+                </ReplyPopoverSender>
+                <ChatMessage
+                  message={parent.content}
+                  displayNames={displayNames}
+                  selfUserId={selfUserId}
+                />
+              </ReplyPopoverMessage>
+            ))}
+          </ReplyPopoverContent>
+        </ReplyPopoverBody>
+      </Popover>
+    );
+
+    const [isHovered, setIsHovered] = useState<boolean>(false);
+
     return (
       <ChatMessageDiv
         $isSystemMessage={isSystemMessage}
         $isHighlighted={isHighlighted && !isSystemMessage && !isPinned}
         $isPinned={isPinned}
+        ref={messageRef}
+        $isPulsing={isPulsing}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
       >
         {!suppressSender && <ChatMessageTimestamp>{ts}</ChatMessageTimestamp>}
-        {!suppressSender && <strong>{senderDisplayName}</strong>}
+        {!suppressSender && (
+          <span style={{ display: "flex", alignItems: "center" }}>
+            {parentId && (
+              <div
+              ref={target}
+              onMouseEnter={handleIconMouseEnter}
+              onMouseLeave={handleIconMouseLeave}
+              >
+                <Overlay
+                  target={target.current}
+                  show={showPopover}
+                  placement="top"
+                  >
+                  {replyPopover}
+                </Overlay>
+                <ReplyIcon
+                  icon={faReply}
+                  onClick={() => scrollToMessage(parentId)}
+                />
+              </div>
+            )}
+            <strong style={{ marginLeft: parentId ? "4px" : "0" }}>
+              {senderDisplayName}
+            </strong>
+            {!isPinned && isHovered && (
+              <ReplyButton
+                icon={faReplyAll}
+                onClick={() => setReplyingTo(message._id)}
+              />
+            )}
+          </span>
+        )}
         <ChatMessage
           message={message.content}
           displayNames={displayNames}
@@ -404,13 +646,16 @@ const ChatHistoryMessage = React.memo(
         />
       </ChatMessageDiv>
     );
+
   },
 );
+
 
 type ChatHistoryHandle = {
   saveScrollBottomTarget: () => void;
   snapToBottom: () => void;
   scrollToTarget: () => void;
+  scrollToMessage: (messageId: string, callback?: () => void) => void;
 };
 
 const ChatHistory = React.forwardRef(
@@ -419,10 +664,16 @@ const ChatHistory = React.forwardRef(
       puzzleId,
       displayNames,
       selfUser,
+      pulsingMessageId,
+      setPulsingMessageId,
+      setReplyingTo,
     }: {
       puzzleId: string;
       displayNames: Map<string, string>;
       selfUser: Meteor.User;
+      pulsingMessageId: string | null;
+      setPulsingMessageId: (messageId: string | null) => void;
+      setReplyingTo: (messageId: string | null) => void;
     },
     forwardedRef: React.Ref<ChatHistoryHandle>,
   ) => {
@@ -505,11 +756,40 @@ const ChatHistory = React.forwardRef(
       scrollToTarget();
     }, [scrollToTarget]);
 
+    const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+    const scrollToMessageInternal = useCallback((messageId: string, callback?: () => void) => {
+      const messageElement = messageRefs.current.get(messageId);
+      if (messageElement) {
+        messageElement.scrollIntoView({ behavior: "smooth" });
+        if (callback) {
+          callback();
+        }
+      }
+    }, []);
+
     useImperativeHandle(forwardedRef, () => ({
       saveScrollBottomTarget,
       snapToBottom,
       scrollToTarget,
+      scrollToMessage: scrollToMessageInternal,
     }));
+
+    const highlightMessage = useCallback(
+      (messageId: string) => {
+        setPulsingMessageId(messageId);
+      },
+      [setPulsingMessageId],
+    );
+
+    useEffect(() => {
+      if (pulsingMessageId) {
+        const timeout = setTimeout(() => {
+          setPulsingMessageId(null);
+        }, 1000);
+        return () => clearTimeout(timeout);
+      }
+    }, [pulsingMessageId, setPulsingMessageId]);
 
     useLayoutEffect(() => {
       // Scroll to end of chat on initial mount.
@@ -580,6 +860,15 @@ const ChatHistory = React.forwardRef(
               isHighlighted={isHighlighted}
               suppressSender={suppressSender}
               selfUserId={selfUser._id}
+              scrollToMessage={(messageId: string) => {
+                scrollToMessageInternal(messageId, () => {
+                  highlightMessage(messageId);
+                });
+              }}
+              parentId={msg.parentId}
+              messageRef={(el) => messageRefs.current.set(msg._id, el!)}
+              isPulsing={pulsingMessageId === msg._id}
+              setReplyingTo={setReplyingTo}
             />
           );
         })}
@@ -594,10 +883,16 @@ const PinnedMessage = React.forwardRef(
       puzzleId,
       displayNames,
       selfUser,
+      scrollToMessage,
+      pulsingMessageId,
+      setReplyingTo,
     }: {
       puzzleId: string;
       displayNames: Map<string, string>;
       selfUser: Meteor.User;
+      scrollToMessage: (messageId: string, callback?: () => void) => void;
+      pulsingMessageId: string | null;
+      setReplyingTo: (messageId: string | null) => void;
     },
     forwardedRef: React.Ref<ChatHistoryHandle>,
   ) => {
@@ -680,10 +975,17 @@ const PinnedMessage = React.forwardRef(
       scrollToTarget();
     }, [scrollToTarget]);
 
+    const scrollToMessageInternal = useCallback((messageId: string, callback?: () => void) => {
+      if (scrollToMessage) {
+        scrollToMessage(messageId, callback);
+      }
+    }, [scrollToMessage]);
+
     useImperativeHandle(forwardedRef, () => ({
       saveScrollBottomTarget,
       snapToBottom,
       scrollToTarget,
+      scrollToMessage: scrollToMessageInternal,
     }));
 
     useLayoutEffect(() => {
@@ -725,6 +1027,10 @@ const PinnedMessage = React.forwardRef(
               isHighlighted={false}
               suppressSender={false}
               selfUserId={selfUser._id}
+              scrollToMessage={scrollToMessageInternal}
+              messageRef={() => {}}
+              isPulsing={pulsingMessageId === msg._id}
+              setReplyingTo={setReplyingTo}
             />
           );
         })}
@@ -770,12 +1076,20 @@ const ChatInput = React.memo(
     huntId,
     puzzleId,
     disabled,
+    replyingTo,
+    setReplyingTo,
+    displayNames,
+    scrollToMessage,
   }: {
     onHeightChange: () => void;
     onMessageSent: () => void;
     huntId: string;
     puzzleId: string;
     disabled: boolean;
+    replyingTo: string | null;
+    setReplyingTo: (messageId: string | null) => void;
+    displayNames: Map<string, string>;
+    scrollToMessage: (messageId: string, callback?: () => void) => void;
   }) => {
     // We want to have hunt profile data around so we can autocomplete from multiple fields.
     const profilesLoadingFunc = useSubscribe("huntProfiles", huntId);
@@ -853,14 +1167,16 @@ const ChatInput = React.memo(
         sendChatMessage.call({
           puzzleId,
           content: JSON.stringify(cleanedMessage),
+          parentId: replyingTo,
         });
         setContent(initialValue);
         fancyEditorRef.current?.clearInput();
         if (onMessageSent) {
           onMessageSent();
         }
+        setReplyingTo(null);
       }
-    }, [hasNonTrivialContent, content, puzzleId, onMessageSent]);
+    }, [hasNonTrivialContent, content, puzzleId, onMessageSent, replyingTo]);
 
     useBlockUpdate(
       hasNonTrivialContent
@@ -868,8 +1184,34 @@ const ChatInput = React.memo(
         : undefined,
     );
 
+    const parentMessage = useTracker(() => {
+      if (replyingTo) {
+        return ChatMessages.findOne(replyingTo);
+      }
+      return undefined;
+    }, [replyingTo]);
+
+    const parentSenderName = useTracker(() => {
+      if (parentMessage) {
+        return displayNames.get(parentMessage.sender);
+      }
+      return undefined;
+    }, [parentMessage, displayNames]);
+
     return (
       <ChatInputRow>
+      {replyingTo && parentSenderName && ( // Add this block
+        <ReplyingTo onClick={() => scrollToMessage(replyingTo)}>
+          Replying to {parentSenderName}
+          <ReplyingToCancel
+            icon={faTimes}
+            onClick={(e) => {
+              e.stopPropagation();
+              setReplyingTo(null);
+            }}
+          />
+        </ReplyingTo>
+      )}
         <InputGroup>
           <StyledFancyEditor
             ref={fancyEditorRef}
@@ -897,6 +1239,7 @@ const ChatInput = React.memo(
 
 interface ChatSectionHandle {
   scrollHistoryToTarget: () => void;
+  scrollToMessage: (messageId: string, callback?: () => void) => void;
 }
 
 const ChatSection = React.forwardRef(
@@ -910,6 +1253,10 @@ const ChatSection = React.forwardRef(
       callState,
       callDispatch,
       selfUser,
+      pulsingMessageId,
+      setPulsingMessageId,
+      replyingTo,
+      setReplyingTo,
     }: {
       chatDataLoading: boolean;
       disabled: boolean;
@@ -919,6 +1266,10 @@ const ChatSection = React.forwardRef(
       callState: CallState;
       callDispatch: React.Dispatch<Action>;
       selfUser: Meteor.User;
+      pulsingMessageId: string | null;
+      setPulsingMessageId: (messageId: string | null) => void;
+      replyingTo: string | null;
+      setReplyingTo: (messageId: string | null) => void;
     },
     forwardedRef: React.Ref<ChatSectionHandle>,
   ) => {
@@ -949,8 +1300,22 @@ const ChatSection = React.forwardRef(
       }
     }, []);
 
+    const scrollToMessage = useCallback((messageId: string, callback?: () => void) => {
+      if (historyRef.current) {
+        historyRef.current.scrollToMessage(messageId, callback);
+      }
+    }, []);
+
+    const highlightMessage = useCallback((messageId: string) => {
+      if (historyRef.current) {
+        historyRef.current.highlightMessage(messageId);
+      }
+    }, []);
+
     useImperativeHandle(forwardedRef, () => ({
       scrollHistoryToTarget,
+      scrollToMessage,
+      highlightMessage,
     }));
 
     useLayoutEffect(() => {
@@ -984,12 +1349,19 @@ const ChatSection = React.forwardRef(
           puzzleId={puzzleId}
           displayNames={displayNames}
           selfUser={selfUser}
+          scrollToMessage={scrollToMessage}
+          pulsingMessageId={pulsingMessageId}
+          setReplyingTo={setReplyingTo}
         />
         <ChatHistoryMemo
           ref={historyRef}
           puzzleId={puzzleId}
           displayNames={displayNames}
           selfUser={selfUser}
+          scrollToMessage={scrollToMessage}
+          pulsingMessageId={pulsingMessageId}
+          setPulsingMessageId={setPulsingMessageId}
+          setReplyingTo={setReplyingTo}
         />
         <ChatInput
           huntId={huntId}
@@ -997,6 +1369,9 @@ const ChatSection = React.forwardRef(
           disabled={disabled}
           onHeightChange={scrollHistoryToTarget}
           onMessageSent={onMessageSent}
+          replyingTo={replyingTo}
+          setReplyingTo={setReplyingTo}
+          displayNames={displayNames}
         />
       </ChatSectionDiv>
     );
@@ -2004,6 +2379,7 @@ const PuzzlePage = React.memo(() => {
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
 
   const huntId = useParams<"huntId">().huntId!;
   const puzzleId = useParams<"puzzleId">().puzzleId!;
@@ -2103,11 +2479,13 @@ const PuzzlePage = React.memo(() => {
     if (chatSectionRef.current) {
       chatSectionRef.current.scrollHistoryToTarget();
     }
-  }, []);
+  }, [puzzleId]);
 
   const onCommitSideBarSize = useCallback((newSidebarWidth: number) => {
     setSidebarWidth(newSidebarWidth);
   }, []);
+
+  const [pulsingMessageId, setPulsingMessageId] = useState<string | null>(null);
 
   const onChangeSideBarSize = useCallback(() => {
     trace("PuzzlePage onChangeSideBarSize", {
@@ -2186,6 +2564,10 @@ const PuzzlePage = React.memo(() => {
       callState={callState}
       callDispatch={dispatch}
       selfUser={selfUser}
+      pulsingMessageId={pulsingMessageId}
+      setPulsingMessageId={setPulsingMessageId}
+      replyingTo={replyingTo}
+      setReplyingTo={setReplyingTo}
     />
   );
   const deletedModal = activePuzzle.deleted && (
