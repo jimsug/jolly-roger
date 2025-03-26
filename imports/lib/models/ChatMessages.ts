@@ -43,7 +43,7 @@ const ChatMessage = withCommon(
     // The date this message was sent.  Used for ordering chats in the log.
     timestamp: z.date(),
     pinTs: z.date().nullable().optional(),
-    parentId: foreignKey.optional(),
+    parentId: foreignKey.nullable().optional(),
     // Not really a foreign key, since this is always another message when present
   }),
 );

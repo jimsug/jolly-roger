@@ -222,6 +222,11 @@ const ReplyIcon = styled(FontAwesomeIcon)`
   color: #666;
 `;
 
+const ReplyPopover = styled(Popover)`
+  box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2);
+  max-width: 600px;
+`;
+
 const ReplyPopoverBody = styled(Popover.Body)`
   padding: 8px;
 `;
@@ -272,6 +277,7 @@ const ChatMessageDiv = styled.div<{
   $isPinned: boolean;
   $isPulsing: boolean;
   $isHovered: boolean;
+  $isReplyingTo: boolean;
 }>`
   padding: 0 ${PUZZLE_PAGE_PADDING}px 2px;
   word-wrap: break-word;
@@ -317,6 +323,11 @@ const ChatMessageDiv = styled.div<{
     background-color: #f0f0f0;
   }
 
+  ${({ $isReplyingTo }) =>
+    $isReplyingTo &&
+    css`
+      background-color: #e0f0ff; /* Muted light blue */
+    `}
 `;
 
 const ChatInputRow = styled.div`
@@ -472,6 +483,7 @@ const ChatHistoryMessage = React.memo(
     messageRef,
     isPulsing,
     setReplyingTo,
+    isReplyingTo,
   }: {
     message: FilteredChatMessageType;
     displayNames: Map<string, string>;
@@ -485,6 +497,7 @@ const ChatHistoryMessage = React.memo(
     messageRef: (el: HTMLDivElement | null) => void;
     isPulsing: boolean;
     setReplyingTo: (messageId: string | null) => void;
+    isReplyingTo: boolean;
   }) => {
     const ts = shortCalendarTimeFormat(message.timestamp) : null;
 
@@ -564,7 +577,7 @@ const ChatHistoryMessage = React.memo(
 
 
     const replyPopover = (
-      <Popover
+      <ReplyPopover
         id={`reply-popover-${message._id}`}
         onMouseEnter={handlePopoverMouseEnter}
         onMouseLeave={handlePopoverMouseLeave}
@@ -591,7 +604,7 @@ const ChatHistoryMessage = React.memo(
             ))}
           </ReplyPopoverContent>
         </ReplyPopoverBody>
-      </Popover>
+      </ReplyPopover>
     );
 
     const [isHovered, setIsHovered] = useState<boolean>(false);
@@ -605,6 +618,7 @@ const ChatHistoryMessage = React.memo(
         $isPulsing={isPulsing}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        $isReplyingTo={isReplyingTo}
       >
         {!suppressSender && <ChatMessageTimestamp>{ts}</ChatMessageTimestamp>}
         {!suppressSender && (
@@ -667,6 +681,7 @@ const ChatHistory = React.forwardRef(
       pulsingMessageId,
       setPulsingMessageId,
       setReplyingTo,
+      replyingTo,
     }: {
       puzzleId: string;
       displayNames: Map<string, string>;
@@ -674,6 +689,7 @@ const ChatHistory = React.forwardRef(
       pulsingMessageId: string | null;
       setPulsingMessageId: (messageId: string | null) => void;
       setReplyingTo: (messageId: string | null) => void;
+      replyingTo: string | null;
     },
     forwardedRef: React.Ref<ChatHistoryHandle>,
   ) => {
@@ -869,6 +885,7 @@ const ChatHistory = React.forwardRef(
               messageRef={(el) => messageRefs.current.set(msg._id, el!)}
               isPulsing={pulsingMessageId === msg._id}
               setReplyingTo={setReplyingTo}
+              isReplyingTo={replyingTo === msg._id}
             />
           );
         })}
@@ -1119,6 +1136,13 @@ const ChatInput = React.memo(
 
     const [content, setContent] = useState<Descendant[]>(initialValue);
     const fancyEditorRef = useRef<FancyEditorHandle | null>(null);
+
+    useEffect(() => { // Add this useEffect
+      if (replyingTo && fancyEditorRef.current && typeof fancyEditorRef.current.focus === 'function') {
+        fancyEditorRef.current.focus();
+      }
+    }, [replyingTo]);
+
     const onContentChange = useCallback(
       (newContent: Descendant[]) => {
         setContent(newContent);
@@ -1362,6 +1386,7 @@ const ChatSection = React.forwardRef(
           pulsingMessageId={pulsingMessageId}
           setPulsingMessageId={setPulsingMessageId}
           setReplyingTo={setReplyingTo}
+          replyingTo={replyingTo}
         />
         <ChatInput
           huntId={huntId}
@@ -1372,6 +1397,7 @@ const ChatSection = React.forwardRef(
           replyingTo={replyingTo}
           setReplyingTo={setReplyingTo}
           displayNames={displayNames}
+          scrollToMessage={scrollToMessage}
         />
       </ChatSectionDiv>
     );
