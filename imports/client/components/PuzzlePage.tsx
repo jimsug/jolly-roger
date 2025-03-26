@@ -1,6 +1,8 @@
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { useFind, useSubscribe, useTracker } from "meteor/react-meteor-data";
+import EmojiPicker from "emoji-picker-react";
+import { faSmile } from "@fortawesome/free-solid-svg-icons/faSmile";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
 import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
@@ -124,6 +126,7 @@ import {
 } from "./styling/constants";
 import { mediaBreakpointDown } from "./styling/responsive";
 import { ToggleButton, ToggleButtonGroup } from "react-bootstrap";
+import removeChatMessage from "../../methods/removeChatMessage";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -469,6 +472,59 @@ const AnswerFormControl = styled(FormControl)`
   font-weight: 400;
 `;
 
+const ReactionPill = styled.span<{ $userHasReacted: boolean }>`
+  background-color: ${({ $userHasReacted }) =>
+    $userHasReacted ? "#cce5ff" : "#f0f0f0"};
+  padding: 4px 8px;
+  margin: 4px;
+  border-radius: 16px;
+  cursor: pointer;
+  border: ${({ $userHasReacted }) =>
+    $userHasReacted ? "1px solid #007bff" : "none"};
+`;
+
+
+const ReactionContainer = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+`;
+
+const isReaction = (message: ChatMessageType | FilteredChatMessageType): boolean => {
+  try {
+    const parsedContent = message.content;
+    if (
+      parsedContent &&
+      parsedContent.children &&
+      parsedContent.children.length === 1 &&
+      parsedContent.children[0].text &&
+      parsedContent.children[0].text.length > 0 &&
+      parsedContent.children[0].text.length <= 2 &&
+      /^\p{Extended_Pictographic}$/u.test(parsedContent.children[0].text)
+    ) {
+      return true;
+    }
+  } catch (e) {
+    return false;
+  }
+  return false;
+};
+
+const AddReactionButton = styled(FontAwesomeIcon)`
+  cursor: pointer;
+  color: #666;
+  margin-left: 4px;
+  &:hover {
+    color: #000;
+  }
+`;
+
+const EmojiPickerContainer = styled.div`
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 100;
+`;
+
 const ChatHistoryMessage = React.memo(
   ({
     message,
@@ -609,6 +665,42 @@ const ChatHistoryMessage = React.memo(
 
     const [isHovered, setIsHovered] = useState<boolean>(false);
 
+    const reactions: ChatMessageType[] = useTracker(() => {
+      return ChatMessages.find({ parentId: message._id }).fetch().filter(isReaction);
+    }, [message._id]);
+
+    const reactionCounts = useMemo(() => {
+      const counts = new Map<string, number>();
+      reactions.forEach((reaction) => {
+        const emoji = reaction.content.children[0].text;
+        counts.set(emoji, (counts.get(emoji) || 0) + 1);
+      });
+      return counts;
+    }, [reactions]);
+
+    const userReactions = useMemo(() => {
+      return reactions.filter((reaction) => reaction.sender === selfUserId);
+    }, [reactions, selfUserId]);
+
+    const handleReactionClick = (emoji: string) => {
+      const existingReaction = userReactions.find((reaction) => {
+        return reaction.content.children[0].text === emoji;
+      });
+
+      if (existingReaction) {
+        removeChatMessage.call({ id: existingReaction._id });
+      } else {
+        sendChatMessage.call({
+          puzzleId: message.puzzle,
+          content: JSON.stringify({
+            type: "message",
+            children: [{ text: emoji }],
+          }),
+          parentId: message._id,
+        });
+      }
+    };
+
     return (
       <ChatMessageDiv
         $isSystemMessage={isSystemMessage}
@@ -645,11 +737,13 @@ const ChatHistoryMessage = React.memo(
             <strong style={{ marginLeft: parentId ? "4px" : "0" }}>
               {senderDisplayName}
             </strong>
-            {!isPinned && isHovered && (
-              <ReplyButton
-                icon={faReplyAll}
-                onClick={() => setReplyingTo(message._id)}
-              />
+            {isHovered && (
+              <>
+                <ReplyButton
+                  icon={faReplyAll}
+                  onClick={() => setReplyingTo(message._id)}
+                />
+              </>
             )}
           </span>
         )}
@@ -658,6 +752,22 @@ const ChatHistoryMessage = React.memo(
           displayNames={displayNames}
           selfUserId={selfUserId}
         />
+        <ReactionContainer>
+          {Array.from(reactionCounts.entries()).map(([emoji, count]) => {
+            const userHasReacted = userReactions.some(
+              (reaction) => reaction.content.children[0].text === emoji
+            );
+            return (
+              <ReactionPill
+                key={emoji}
+                $userHasReacted={userHasReacted}
+                onClick={() => handleReactionClick(emoji)}
+              >
+                {emoji} {count > 1 ? `(${count})` : null}
+              </ReactionPill>
+            );
+          })}
+        </ReactionContainer>
       </ChatMessageDiv>
     );
 
@@ -859,6 +969,9 @@ const ChatHistory = React.forwardRef(
           // * this message was sent by the same person as the previous message
           // * this message was sent within 60 seconds (60000 milliseconds) of the previous message
           // * the message is not pinned
+          if (isReaction(msg)) {
+            return null;
+          }
           const lastMessage = index > 0 ? messages[index - 1] : undefined;
           const suppressSender =
             !!lastMessage &&
@@ -1137,7 +1250,7 @@ const ChatInput = React.memo(
     const [content, setContent] = useState<Descendant[]>(initialValue);
     const fancyEditorRef = useRef<FancyEditorHandle | null>(null);
 
-    useEffect(() => { // Add this useEffect
+    useEffect(() => {
       if (replyingTo && fancyEditorRef.current && typeof fancyEditorRef.current.focus === 'function') {
         fancyEditorRef.current.focus();
       }
@@ -1188,11 +1301,18 @@ const ChatInput = React.memo(
         };
 
         // Send chat message.
+        if (replyingTo){
         sendChatMessage.call({
           puzzleId,
           content: JSON.stringify(cleanedMessage),
           parentId: replyingTo,
         });
+       } else {
+        sendChatMessage.call({
+          puzzleId,
+          content: JSON.stringify(cleanedMessage),
+        });
+       }
         setContent(initialValue);
         fancyEditorRef.current?.clearInput();
         if (onMessageSent) {
@@ -1224,7 +1344,7 @@ const ChatInput = React.memo(
 
     return (
       <ChatInputRow>
-      {replyingTo && parentSenderName && ( // Add this block
+      {replyingTo && parentSenderName && (
         <ReplyingTo onClick={() => scrollToMessage(replyingTo)}>
           Replying to {parentSenderName}
           <ReplyingToCancel
