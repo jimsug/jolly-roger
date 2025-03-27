@@ -42,6 +42,7 @@
     "discord.js": "^12.5.3",
     "dompurify": "^3.1.7",
     "element-resize-detector": "^1.2.4",
+    "emoji-picker-react": "^4.12.2",
     "express": "^4.21.1",
     "form-data": "^4.0.1",
     "gaxios": "^6.7.1",

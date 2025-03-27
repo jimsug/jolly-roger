@@ -2,7 +2,8 @@ import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { useFind, useSubscribe, useTracker } from "meteor/react-meteor-data";
 import EmojiPicker from "emoji-picker-react";
-import { faSmile } from "@fortawesome/free-solid-svg-icons/faSmile";
+import { EmojiStyle } from "emoji-picker-react";
+import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
 import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
@@ -272,6 +273,16 @@ const ReplyButton = styled(FontAwesomeIcon)`
   }
 `;
 
+const ReplyButtonPill = styled.span`
+background-color: #d3d3d3;
+padding: 4px 8px;
+margin: 4px;
+border-radius: 16px;
+cursor: pointer;
+color: #666;
+`;
+
+
 const PUZZLE_PAGE_PADDING = 8;
 
 const ChatMessageDiv = styled.div<{
@@ -474,7 +485,7 @@ const AnswerFormControl = styled(FormControl)`
 
 const ReactionPill = styled.span<{ $userHasReacted: boolean }>`
   background-color: ${({ $userHasReacted }) =>
-    $userHasReacted ? "#cce5ff" : "#f0f0f0"};
+    $userHasReacted ? "#cce5ff" : "#d3d3d3"};
   padding: 4px 8px;
   margin: 4px;
   border-radius: 16px;
@@ -483,10 +494,17 @@ const ReactionPill = styled.span<{ $userHasReacted: boolean }>`
     $userHasReacted ? "1px solid #007bff" : "none"};
 `;
 
+const ReactionUserList = styled.ul`
+  list-style: none;
+  padding: 0;
+  margin: 0;
+`;
 
 const ReactionContainer = styled.div`
   display: flex;
   flex-wrap: wrap;
+  position: relative;
+  z-index: 100;
 `;
 
 const isReaction = (message: ChatMessageType | FilteredChatMessageType): boolean => {
@@ -498,8 +516,7 @@ const isReaction = (message: ChatMessageType | FilteredChatMessageType): boolean
       parsedContent.children.length === 1 &&
       parsedContent.children[0].text &&
       parsedContent.children[0].text.length > 0 &&
-      parsedContent.children[0].text.length <= 2 &&
-      /^\p{Extended_Pictographic}$/u.test(parsedContent.children[0].text)
+      /^\p{Extended_Pictographic}/u.test(parsedContent.children[0].text)
     ) {
       return true;
     }
@@ -508,6 +525,7 @@ const isReaction = (message: ChatMessageType | FilteredChatMessageType): boolean
   }
   return false;
 };
+
 
 const AddReactionButton = styled(FontAwesomeIcon)`
   cursor: pointer;
@@ -518,11 +536,23 @@ const AddReactionButton = styled(FontAwesomeIcon)`
   }
 `;
 
+
+const AddReactionPill = styled.span`
+background-color: #d3d3d3;
+padding: 4px 8px;
+margin: 4px;
+border-radius: 16px;
+cursor: pointer;
+color: #666;
+`;
+
 const EmojiPickerContainer = styled.div`
   position: absolute;
   bottom: 100%;
   left: 0;
-  z-index: 100;
+  z-index: 1000;
+  transform: scale(0.7);
+  transform-origin: bottom left;
 `;
 
 const ChatHistoryMessage = React.memo(
@@ -671,12 +701,31 @@ const ChatHistoryMessage = React.memo(
 
     const reactionCounts = useMemo(() => {
       const counts = new Map<string, number>();
+      const userEmojiMap = new Map<string, Set<string>>(); // Map of emoji to set of userIds
+
       reactions.forEach((reaction) => {
         const emoji = reaction.content.children[0].text;
-        counts.set(emoji, (counts.get(emoji) || 0) + 1);
+        const userId = reaction.sender;
+
+        if (!userEmojiMap.has(emoji)) {
+          userEmojiMap.set(emoji, new Set());
+        }
+
+        if (!userEmojiMap.get(emoji)!.has(userId)) {
+          userEmojiMap.get(emoji)!.add(userId);
+          counts.set(emoji, (counts.get(emoji) || 0) + 1);
+        }
       });
       return counts;
     }, [reactions]);
+
+    const reactionUsers = useMemo(() => {
+      const users = new Map<string, Set<string>>();
+      reactions.forEach((reaction) => {
+        users.set(reaction.content.children[0].text, (users.get(reaction.content.children[0].text) || new Set()).add(displayNames.get(reaction.sender) ?? "???"));
+      });
+      return users;
+    }, [reactions, displayNames]);
 
     const userReactions = useMemo(() => {
       return reactions.filter((reaction) => reaction.sender === selfUserId);
@@ -700,6 +749,42 @@ const ChatHistoryMessage = React.memo(
         });
       }
     };
+
+    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+    const emojiPickerButtonRef = useRef<HTMLSpanElement>(null);
+
+    const handleAddReactionClick = () => {
+      setShowEmojiPicker(!showEmojiPicker);
+    };
+
+    const handleEmojiClick = (emojiData: { emoji: string }) => {
+      handleReactionClick(emojiData.emoji);
+      setShowEmojiPicker(false);
+    };
+
+    const emojiPicker = showEmojiPicker && emojiPickerButtonRef.current ? (
+      createPortal(
+        <EmojiPickerContainer
+          style={{
+            bottom: `${
+              window.innerHeight -
+              emojiPickerButtonRef.current.getBoundingClientRect().top
+            }px`,
+            left: `${emojiPickerButtonRef.current.getBoundingClientRect().left}px`,
+          }}
+        >
+          <EmojiPicker
+            onEmojiClick={handleEmojiClick}
+            autoFocusSearch={false}
+            emojiStyle={EmojiStyle.NATIVE}
+            skinTonesDisabled={true}
+            reactionsDefaultOpen={true}
+            reactions={["2705","274e","2757","2753","2194-fe0f"]}
+          />
+        </EmojiPickerContainer>,
+        document.body,
+      )
+    ) : null;
 
     return (
       <ChatMessageDiv
@@ -737,14 +822,6 @@ const ChatHistoryMessage = React.memo(
             <strong style={{ marginLeft: parentId ? "4px" : "0" }}>
               {senderDisplayName}
             </strong>
-            {isHovered && (
-              <>
-                <ReplyButton
-                  icon={faReplyAll}
-                  onClick={() => setReplyingTo(message._id)}
-                />
-              </>
-            )}
           </span>
         )}
         <ChatMessage
@@ -757,17 +834,45 @@ const ChatHistoryMessage = React.memo(
             const userHasReacted = userReactions.some(
               (reaction) => reaction.content.children[0].text === emoji
             );
+            const users = Array.from(reactionUsers.get(emoji) ?? []).sort();
             return (
               <ReactionPill
+              title={
+                  users.length > 0
+                    ? users.join("\n")
+                    : undefined
+                }
                 key={emoji}
                 $userHasReacted={userHasReacted}
                 onClick={() => handleReactionClick(emoji)}
               >
-                {emoji} {count > 1 ? `(${count})` : null}
+                {emoji} {count > 1 ? `${count}` : null}
               </ReactionPill>
             );
           })}
+          {isHovered && (
+            <>
+              <AddReactionPill
+              onClick={handleAddReactionClick}
+              ref={emojiPickerButtonRef}
+              title={"React"}
+              >
+                <AddReactionButton
+                  icon={faFaceSmile}
+                />
+              </AddReactionPill>
+              <ReplyButtonPill
+                title={"Reply"}
+                onClick={() => setReplyingTo(message._id)}
+                >
+                <ReplyButton
+                    icon={faReplyAll}
+                  />
+              </ReplyButtonPill>
+            </>
+          )}
         </ReactionContainer>
+        {emojiPicker}
       </ChatMessageDiv>
     );
 
