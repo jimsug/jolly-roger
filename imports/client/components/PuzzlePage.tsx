@@ -79,6 +79,7 @@ import addPuzzleTag from "../../methods/addPuzzleTag";
 import createGuess from "../../methods/createGuess";
 import ensurePuzzleDocument from "../../methods/ensurePuzzleDocument";
 import type { Sheet } from "../../methods/listDocumentSheets";
+import isS3Configured from "../../methods/isS3Configured";
 import listDocumentSheets from "../../methods/listDocumentSheets";
 import removePuzzleAnswer from "../../methods/removePuzzleAnswer";
 import removePuzzleTag from "../../methods/removePuzzleTag";
@@ -128,6 +129,8 @@ import {
 import { mediaBreakpointDown } from "./styling/responsive";
 import { ToggleButton, ToggleButtonGroup } from "react-bootstrap";
 import removeChatMessage from "../../methods/removeChatMessage";
+import createDocumentImageUpload from "../../methods/createDocumentImageUpload";
+import Settings from "../../lib/models/Settings";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -342,6 +345,22 @@ const ChatMessageDiv = styled.div<{
     css`
       background-color: #e0f0ff; /* Muted light blue */
     `}
+`;
+
+const ImagePlaceholder = styled.div`
+  width: 100px;
+  height: 100px;
+  background-color: #eee;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 4px;
+`;
+
+const ImagePreview = styled.img`
+  max-width: 100%;
+  max-height: 100px;
+  margin-bottom: 4px;
 `;
 
 const ChatInputRow = styled.div`
@@ -1354,6 +1373,14 @@ const ChatInput = React.memo(
 
     const [content, setContent] = useState<Descendant[]>(initialValue);
     const fancyEditorRef = useRef<FancyEditorHandle | null>(null);
+    const [uploadingImages, setUploadingImages] = useState<File[]>([]);
+    const [uploadedImageUrls, setUploadedImageUrls] = useState<string[]>([]);
+    const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+
+    const s3Configured = useTracker(() => {
+      return isS3Configured.call([]);
+    }, []);
+
 
     useEffect(() => {
       if (replyingTo && fancyEditorRef.current && typeof fancyEditorRef.current.focus === 'function') {
@@ -1381,7 +1408,7 @@ const ChatInput = React.memo(
       );
     }, [content]);
 
-    const sendContentMessage = useCallback(() => {
+    const sendContentMessage = useCallback( async () => {
       if (hasNonTrivialContent) {
         // Prepare to send message to server.
 
@@ -1405,17 +1432,59 @@ const ChatInput = React.memo(
           }),
         };
 
+        let imageUrlsString = "";
+        // Upload images if any
+        if (uploadingImages.length > 0 && s3Configured) {
+          const imageUploadPromises = uploadingImages.map(async (file) => {
+            const upload = await createDocumentImageUpload.callPromise({
+              documentId: puzzleId,
+              filename: file.name,
+              mimeType: file.type,
+            });
+
+            if (!upload) {
+              throw new Error("S3 not configured");
+            }
+
+            const { publicUrl, uploadUrl, fields } = upload;
+            const formData = new FormData();
+            for (const [key, value] of Object.entries(fields)) {
+              formData.append(key, value);
+            }
+            formData.append("file", file);
+            await fetch(uploadUrl, {
+              method: "POST",
+              mode: "no-cors",
+              body: formData,
+            });
+            return publicUrl;
+          });
+
+          const uploadedUrls = await Promise.all(imageUploadPromises);
+          setUploadedImageUrls(uploadedUrls);
+          imageUrlsString = uploadedUrls.map((url) => `\n${url}`).join("");
+        }
+
+        const newMessageContent = {
+          ...cleanedMessage,
+          children: [
+            ...cleanedMessage.children,
+            { text: imageUrlsString },
+          ],
+        };
+
+
         // Send chat message.
         if (replyingTo){
         sendChatMessage.call({
           puzzleId,
-          content: JSON.stringify(cleanedMessage),
+          content: JSON.stringify(newMessageContent),
           parentId: replyingTo,
         });
        } else {
         sendChatMessage.call({
           puzzleId,
-          content: JSON.stringify(cleanedMessage),
+          content: JSON.stringify(newMessageContent),
         });
        }
         setContent(initialValue);
@@ -1424,13 +1493,60 @@ const ChatInput = React.memo(
           onMessageSent();
         }
         setReplyingTo(null);
+        setUploadingImages([]);
+        setImagePreviews([]);
       }
-    }, [hasNonTrivialContent, content, puzzleId, onMessageSent, replyingTo]);
+    }, [hasNonTrivialContent, content, puzzleId, onMessageSent, replyingTo, uploadingImages, s3Configured]);
 
     useBlockUpdate(
       hasNonTrivialContent
         ? "You're in the middle of typing a message."
         : undefined,
+    );
+
+    // Handle image pasting
+    const handlePaste = useCallback(
+      (event: React.ClipboardEvent<HTMLDivElement>) => {
+        if (!s3Configured) return;
+        const items = (event.clipboardData || (window as any).clipboardData)
+          .items;
+        for (let index in items) {
+          const item = items[index];
+          if (item.kind === "file") {
+            const blob = item.getAsFile();
+            if (blob) {
+              event.preventDefault();
+              setUploadingImages((prev) => [...prev, blob]);
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                setImagePreviews((prev) => [...prev, reader.result as string]);
+              };
+              reader.readAsDataURL(blob);
+            }
+          }
+        }
+      },
+      [s3Configured],
+    );
+
+    // Handle image selection
+    const handleImageSelect = useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        if (!s3Configured) return;
+        const files = event.target.files;
+        if (files) {
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            setUploadingImages((prev) => [...prev, file]);
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              setImagePreviews((prev) => [...prev, reader.result as string]);
+            };
+            reader.readAsDataURL(file);
+          }
+        }
+      },
+      [s3Configured],
     );
 
     const parentMessage = useTracker(() => {
@@ -1461,6 +1577,16 @@ const ChatInput = React.memo(
           />
         </ReplyingTo>
       )}
+      {imagePreviews.map((preview, index) => (
+          <ImagePreview key={index} src={preview} alt="Preview" />
+        ))}
+        {uploadingImages.length > 0 && !s3Configured && (
+          <ImagePlaceholder>
+            <FontAwesomeIcon icon={faImage} />
+            <br />
+            Image upload not configured
+          </ImagePlaceholder>
+        )}
         <InputGroup>
           <StyledFancyEditor
             ref={fancyEditorRef}
@@ -1480,6 +1606,23 @@ const ChatInput = React.memo(
           >
             <FontAwesomeIcon icon={faPaperPlane} />
           </Button>
+          {s3Configured && (
+            <FormGroup>
+              <FormControl
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={handleImageSelect}
+                style={{ display: "none" }}
+                id="image-upload-input"
+              />
+              <FormLabel htmlFor="image-upload-input">
+                <Button variant="secondary">
+                  <FontAwesomeIcon icon={faImage} />
+                </Button>
+              </FormLabel>
+            </FormGroup>
+          )}
         </InputGroup>
       </ChatInputRow>
     );
