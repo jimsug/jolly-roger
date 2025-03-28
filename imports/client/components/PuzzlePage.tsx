@@ -285,7 +285,7 @@ const ChatMessageDiv = styled.div<{
 }>`
   padding: 0 ${PUZZLE_PAGE_PADDING}px 2px;
   word-wrap: break-word;
-  font-size: 14px;
+  font-size: 1rem;
   position: relative;
   ${({ $isSystemMessage, $isHighlighted, $isPinned }) =>
     $isHighlighted &&
