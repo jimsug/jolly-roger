@@ -530,6 +530,7 @@ const FancyEditor = React.forwardRef(
     const [completionSearchString, setCompletionSearchString] = useState("");
 
     const usersById = useMemo(() => indexedById(users), [users]);
+    const editableRef = useRef<React.ElementRef<typeof Editable>>(null);
 
     const clearInput = useCallback(() => {
       // Reset the document by removing all nodes under the root editor node.
@@ -559,6 +560,11 @@ const FancyEditor = React.forwardRef(
     }, [editor]);
     useImperativeHandle(forwardedRef, () => ({
       clearInput,
+      focus: () => {
+        if (editableRef.current) {
+          ReactEditor.focus(editor);
+        }
+      },
     }));
 
     const renderElement = useCallback(
@@ -788,6 +794,7 @@ const FancyEditor = React.forwardRef(
           </Portal>
         )}
         <Editable
+          ref={editableRef}
           className={className}
           placeholder={placeholder}
           decorate={decorate}
