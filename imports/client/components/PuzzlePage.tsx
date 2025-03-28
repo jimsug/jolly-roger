@@ -273,16 +273,6 @@ const ReplyButton = styled(FontAwesomeIcon)`
   }
 `;
 
-const ReplyButtonPill = styled.span`
-background-color: #d3d3d3;
-padding: 4px 8px;
-margin: 4px;
-border-radius: 16px;
-cursor: pointer;
-color: #666;
-`;
-
-
 const PUZZLE_PAGE_PADDING = 8;
 
 const ChatMessageDiv = styled.div<{
@@ -296,6 +286,7 @@ const ChatMessageDiv = styled.div<{
   padding: 0 ${PUZZLE_PAGE_PADDING}px 2px;
   word-wrap: break-word;
   font-size: 14px;
+  position: relative;
   ${({ $isSystemMessage, $isHighlighted, $isPinned }) =>
     $isHighlighted &&
     !$isSystemMessage &&
@@ -342,6 +333,51 @@ const ChatMessageDiv = styled.div<{
     css`
       background-color: #e0f0ff; /* Muted light blue */
     `}
+`;
+
+
+const ChatMessageActions = styled.div`
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  opacity: 0;
+  z-index: 10;
+  transition: opacity 0.2s ease-in-out;
+  ${ChatMessageDiv}:hover & {
+    opacity: 1;
+  }
+  & > * {
+    margin-left: 0;
+  }
+`;
+
+const SplitPill = styled.div`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #d3d3d3;
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+  color: #666;
+  margin: 4px;
+  &:hover {
+    color: #000;
+  }
+`;
+
+const PillSection = styled.div`
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  &:first-child {
+    border-right: 1px solid #bbb;
+  }
+  &:hover {
+    background-color: #c0c0c0;
+  }
 `;
 
 const ChatInputRow = styled.div`
@@ -530,7 +566,8 @@ const isReaction = (message: ChatMessageType | FilteredChatMessageType): boolean
 const AddReactionButton = styled(FontAwesomeIcon)`
   cursor: pointer;
   color: #666;
-  margin-left: 4px;
+  align-items: center;
+  justify-content: center;
   &:hover {
     color: #000;
   }
@@ -541,6 +578,8 @@ const AddReactionPill = styled.span`
 background-color: #d3d3d3;
 padding: 4px 8px;
 margin: 4px;
+align-items: center;
+justify-content: center;
 border-radius: 16px;
 cursor: pointer;
 color: #666;
@@ -554,6 +593,42 @@ const EmojiPickerContainer = styled.div`
   transform: scale(0.7);
   transform-origin: bottom left;
 `;
+
+// Global state to manage the visibility of the emoji picker
+let globalEmojiPickerVisible = false;
+let globalSetEmojiPickerVisible: React.Dispatch<React.SetStateAction<boolean>> | null = null;
+
+const useGlobalEmojiPickerVisibility = () => {
+  const [emojiPickerVisible, setEmojiPickerVisible] = useState(false);
+
+  useEffect(() => {
+    globalSetEmojiPickerVisible = setEmojiPickerVisible;
+    return () => {
+      globalSetEmojiPickerVisible = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    globalEmojiPickerVisible = emojiPickerVisible;
+  }, [emojiPickerVisible]);
+
+  return [emojiPickerVisible, setEmojiPickerVisible] as const;
+};
+
+const useOutsideClick = (ref: React.RefObject<HTMLElement>, callback: () => void) => {
+  const handleClick = useCallback((event: MouseEvent) => {
+    if (ref.current && !ref.current.contains(event.target as Node)) {
+      callback();
+    }
+  }, [ref, callback]);
+
+  useEffect(() => {
+    document.addEventListener('click', handleClick);
+    return () => {
+      document.removeEventListener('click', handleClick);
+    };
+  }, [handleClick]);
+};
 
 const ChatHistoryMessage = React.memo(
   ({
@@ -750,10 +825,16 @@ const ChatHistoryMessage = React.memo(
       }
     };
 
-    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+    const [showEmojiPicker, setShowEmojiPicker] = useGlobalEmojiPickerVisibility();
     const emojiPickerButtonRef = useRef<HTMLSpanElement>(null);
+    const emojiPickerRef = useRef<HTMLDivElement>(null);
+
 
     const handleAddReactionClick = () => {
+      // Close any open emoji pickers before opening a new one
+      if (globalSetEmojiPickerVisible) {
+        globalSetEmojiPickerVisible(false);
+      }
       setShowEmojiPicker(!showEmojiPicker);
     };
 
@@ -762,9 +843,16 @@ const ChatHistoryMessage = React.memo(
       setShowEmojiPicker(false);
     };
 
+    // useOutsideClick(emojiPickerRef, () => {
+    //   if (showEmojiPicker){
+    //     setShowEmojiPicker(false);
+    //   }
+    // });
+
     const emojiPicker = showEmojiPicker && emojiPickerButtonRef.current ? (
       createPortal(
         <EmojiPickerContainer
+          ref={emojiPickerRef}
           style={{
             bottom: `${
               window.innerHeight -
@@ -778,8 +866,10 @@ const ChatHistoryMessage = React.memo(
             autoFocusSearch={false}
             emojiStyle={EmojiStyle.NATIVE}
             skinTonesDisabled={true}
+            lazyLoadEmojis={true}
             reactionsDefaultOpen={true}
             reactions={["2705","274e","2757","2753","2194-fe0f"]}
+            previewConfig={{showPreview:false}}
           />
         </EmojiPickerContainer>,
         document.body,
@@ -797,6 +887,23 @@ const ChatHistoryMessage = React.memo(
         onMouseLeave={() => setIsHovered(false)}
         $isReplyingTo={isReplyingTo}
       >
+        <ChatMessageActions>
+          <SplitPill>
+            <PillSection
+              onClick={handleAddReactionClick}
+              ref={emojiPickerButtonRef}
+              title={"React"}
+            >
+              <AddReactionButton icon={faFaceSmile} />
+            </PillSection>
+            <PillSection
+              title={"Reply"}
+              onClick={() => setReplyingTo(message._id)}
+            >
+              <ReplyButton icon={faReplyAll} />
+            </PillSection>
+          </SplitPill>
+        </ChatMessageActions>
         {!suppressSender && <ChatMessageTimestamp>{ts}</ChatMessageTimestamp>}
         {!suppressSender && (
           <span style={{ display: "flex", alignItems: "center" }}>
@@ -850,7 +957,7 @@ const ChatHistoryMessage = React.memo(
               </ReactionPill>
             );
           })}
-          {isHovered && (
+          {(reactionCounts.size > 0) && (
             <>
               <AddReactionPill
               onClick={handleAddReactionClick}
@@ -861,14 +968,6 @@ const ChatHistoryMessage = React.memo(
                   icon={faFaceSmile}
                 />
               </AddReactionPill>
-              <ReplyButtonPill
-                title={"Reply"}
-                onClick={() => setReplyingTo(message._id)}
-                >
-                <ReplyButton
-                    icon={faReplyAll}
-                  />
-              </ReplyButtonPill>
             </>
           )}
         </ReactionContainer>
