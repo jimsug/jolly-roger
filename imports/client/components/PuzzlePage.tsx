@@ -568,6 +568,12 @@ const AddReactionButton = styled(FontAwesomeIcon)`
   color: #666;
   align-items: center;
   justify-content: center;
+<<<<<<< HEAD
+  align-items: center;
+  justify-content: center;
+=======
+  margin-left: 4px;
+>>>>>>> main
   &:hover {
     color: #000;
   }
