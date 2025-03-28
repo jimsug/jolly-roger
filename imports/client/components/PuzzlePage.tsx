@@ -594,42 +594,6 @@ const EmojiPickerContainer = styled.div`
   transform-origin: bottom left;
 `;
 
-// Global state to manage the visibility of the emoji picker
-let globalEmojiPickerVisible = false;
-let globalSetEmojiPickerVisible: React.Dispatch<React.SetStateAction<boolean>> | null = null;
-
-const useGlobalEmojiPickerVisibility = () => {
-  const [emojiPickerVisible, setEmojiPickerVisible] = useState(false);
-
-  useEffect(() => {
-    globalSetEmojiPickerVisible = setEmojiPickerVisible;
-    return () => {
-      globalSetEmojiPickerVisible = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    globalEmojiPickerVisible = emojiPickerVisible;
-  }, [emojiPickerVisible]);
-
-  return [emojiPickerVisible, setEmojiPickerVisible] as const;
-};
-
-const useOutsideClick = (ref: React.RefObject<HTMLElement>, callback: () => void) => {
-  const handleClick = useCallback((event: MouseEvent) => {
-    if (ref.current && !ref.current.contains(event.target as Node)) {
-      callback();
-    }
-  }, [ref, callback]);
-
-  useEffect(() => {
-    document.addEventListener('click', handleClick);
-    return () => {
-      document.removeEventListener('click', handleClick);
-    };
-  }, [handleClick]);
-};
-
 const ChatHistoryMessage = React.memo(
   ({
     message,
@@ -645,6 +609,8 @@ const ChatHistoryMessage = React.memo(
     isPulsing,
     setReplyingTo,
     isReplyingTo,
+    shownEmojiPicker,
+    setShownEmojiPicker,
   }: {
     message: FilteredChatMessageType;
     displayNames: Map<string, string>;
@@ -659,6 +625,8 @@ const ChatHistoryMessage = React.memo(
     isPulsing: boolean;
     setReplyingTo: (messageId: string | null) => void;
     isReplyingTo: boolean;
+    shownEmojiPicker: string | null;
+    setShownEmojiPicker: (messageId: string | null) => void;
   }) => {
     const ts = shortCalendarTimeFormat(message.timestamp) : null;
 
@@ -825,31 +793,19 @@ const ChatHistoryMessage = React.memo(
       }
     };
 
-    const [showEmojiPicker, setShowEmojiPicker] = useGlobalEmojiPickerVisibility();
     const emojiPickerButtonRef = useRef<HTMLSpanElement>(null);
     const emojiPickerRef = useRef<HTMLDivElement>(null);
 
-
     const handleAddReactionClick = () => {
-      // Close any open emoji pickers before opening a new one
-      if (globalSetEmojiPickerVisible) {
-        globalSetEmojiPickerVisible(false);
-      }
-      setShowEmojiPicker(!showEmojiPicker);
+      setShownEmojiPicker(shownEmojiPicker === message._id ? null : message._id);
     };
 
     const handleEmojiClick = (emojiData: { emoji: string }) => {
       handleReactionClick(emojiData.emoji);
-      setShowEmojiPicker(false);
+      setShownEmojiPicker(null);
     };
 
-    // useOutsideClick(emojiPickerRef, () => {
-    //   if (showEmojiPicker){
-    //     setShowEmojiPicker(false);
-    //   }
-    // });
-
-    const emojiPicker = showEmojiPicker && emojiPickerButtonRef.current ? (
+    const emojiPicker = shownEmojiPicker === message._id && emojiPickerButtonRef.current ? (
       createPortal(
         <EmojiPickerContainer
           ref={emojiPickerRef}
@@ -1155,6 +1111,8 @@ const ChatHistory = React.forwardRef(
       }
     }, [chatMessages.length, saveScrollBottomTarget, snapToBottom]);
 
+    const [shownEmojiPicker, setShownEmojiPicker] = useState<string | null>(null);
+
     trace("ChatHistory render", { messageCount: chatMessages.length });
     return (
       <ChatHistoryDiv ref={ref} onScroll={onScrollObserved}>
@@ -1203,6 +1161,8 @@ const ChatHistory = React.forwardRef(
               isPulsing={pulsingMessageId === msg._id}
               setReplyingTo={setReplyingTo}
               isReplyingTo={replyingTo === msg._id}
+              shownEmojiPicker={shownEmojiPicker}
+              setShownEmojiPicker={setShownEmojiPicker}
             />
           );
         })}
