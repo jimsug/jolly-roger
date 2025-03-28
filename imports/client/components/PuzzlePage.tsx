@@ -628,7 +628,7 @@ const ChatHistoryMessage = React.memo(
     shownEmojiPicker: string | null;
     setShownEmojiPicker: (messageId: string | null) => void;
   }) => {
-    const ts = shortCalendarTimeFormat(message.timestamp) : null;
+    const ts = shortCalendarTimeFormat(message.timestamp);
 
     const senderDisplayName =
     message.sender !== undefined
@@ -648,7 +648,7 @@ const ChatHistoryMessage = React.memo(
       if (parentId) {
         const fetchParentMessages = async () => {
           const parents: FilteredChatMessageType[] = [];
-          let currentParentId = parentId;
+          let currentParentId: string | undefined = parentId;
           let depth = 0;
           let nextParent = undefined;
           while (currentParentId && depth < 3) {
@@ -799,6 +799,25 @@ const ChatHistoryMessage = React.memo(
     const handleAddReactionClick = () => {
       setShownEmojiPicker(shownEmojiPicker === message._id ? null : message._id);
     };
+
+    const handleClickOutsideEmojiPicker = (event: MouseEvent) => {
+      if (
+        emojiPickerRef.current &&
+        !emojiPickerRef.current.contains(event.target as Node) &&
+        emojiPickerButtonRef.current &&
+        !emojiPickerButtonRef.current.contains(event.target as Node)
+      ) {
+        setShownEmojiPicker(null);
+      }
+    };
+
+    useEffect(() => {
+    document.addEventListener("mousedown", handleClickOutsideEmojiPicker);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutsideEmojiPicker);
+    };
+    }, [shownEmojiPicker])
+
 
     const handleEmojiClick = (emojiData: { emoji: string }) => {
       handleReactionClick(emojiData.emoji);
