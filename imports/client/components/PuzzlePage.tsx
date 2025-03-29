@@ -1957,6 +1957,10 @@ const PuzzlePageMetadata = ({
     </Button>
   ) : null;
 
+  const canEmbedPuzzle = useTracker(() => {
+    return hunt?.allowPuzzleEmbed ?? false;
+  }, [hunt])
+
   const handleShowButtonClick = () => {
     if (!hasIframeBeenLoaded) {
       setHasIframeBeenLoaded(true);
@@ -1964,9 +1968,16 @@ const PuzzlePageMetadata = ({
     setShowDocument(!showDocument);
   };
 
-  const togglePuzzleInset = puzzle.url && isDesktop ? (
+  const handleShowButtonHover = () => {
+    if (!hasIframeBeenLoaded) {
+      setHasIframeBeenLoaded(true);
+    }
+  }
+
+  const togglePuzzleInset = (puzzle.url && isDesktop && canEmbedPuzzle) || !showDocument ? (
     <Button
     onClick={handleShowButtonClick}
+    onMouseEnter={handleShowButtonHover}
     variant="secondary"
     size="sm"
     title={showDocument ? "View Puzzle" : "Hide Puzzle"}
@@ -2783,6 +2794,13 @@ const PuzzlePage = React.memo(() => {
   const huntId = useParams<"huntId">().huntId!;
   const puzzleId = useParams<"puzzleId">().puzzleId!;
 
+
+  const hunt = useTracker(() => {return Hunts.findOne(huntId)}, [huntId]);
+
+  const showPuzzleDocument = useTracker(() => {
+    return (hunt?.allowPuzzleEmbed ?? false) ? true : showDocument;
+  }, [hunt, showDocument]);
+
   // Add the current user to the collection of people viewing this puzzle.
   const subscribersTopic = `puzzle:${puzzleId}`;
   useSubscribe("subscribers.inc", subscribersTopic, {
@@ -3039,7 +3057,7 @@ const PuzzlePage = React.memo(() => {
             {chat}
             <PuzzleContent>
               {metadata}
-              <PuzzlePageMultiplayerDocument document={doc} isShown={showDocument} showDocument={showDocument}/>
+              <PuzzlePageMultiplayerDocument document={doc} showDocument={showPuzzleDocument}/>
               {
                 activePuzzle.url && hasIframeBeenLoaded ?
                   (
