@@ -128,6 +128,7 @@ import {
 import { mediaBreakpointDown } from "./styling/responsive";
 import { ToggleButton, ToggleButtonGroup } from "react-bootstrap";
 import removeChatMessage from "../../methods/removeChatMessage";
+import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -440,6 +441,8 @@ const PuzzleMetadata = styled.div`
   flex: none;
   padding: ${PUZZLE_PAGE_PADDING - 2}px 8px;
   border-bottom: 1px solid #dadce0;
+  z-index: 10;
+  background-color: white;
 `;
 
 const PuzzleMetadataAnswer = styled.span`
@@ -568,12 +571,8 @@ const AddReactionButton = styled(FontAwesomeIcon)`
   color: #666;
   align-items: center;
   justify-content: center;
-<<<<<<< HEAD
   align-items: center;
   justify-content: center;
-=======
-  margin-left: 4px;
->>>>>>> main
   &:hover {
     color: #000;
   }
@@ -1806,12 +1805,20 @@ const PuzzlePageMetadata = ({
   displayNames,
   document,
   isDesktop,
+  showDocument,
+  setShowDocument,
+  hasIframeBeenLoaded,
+  setHasIframeBeenLoaded,
 }: {
   puzzle: PuzzleType;
   bookmarked: boolean;
   displayNames: Map<string, string>;
   document?: DocumentType;
   isDesktop: boolean;
+  showDocument: boolean;
+  setShowDocument: (showDocument: boolean) => void;
+  hasIframeBeenLoaded: boolean;
+  setHasIframeBeenLoaded: (hasIframeBeenLoaded: boolean) => void;
 }) => {
   const huntId = puzzle.hunt;
   const puzzleId = puzzle._id;
@@ -1921,8 +1928,9 @@ const PuzzlePageMetadata = ({
       href={puzzle.url}
       target="_blank"
       rel="noreferrer noopener"
+      title="Open puzzle page"
     >
-      <FontAwesomeIcon fixedWidth icon={faPuzzlePiece} /> <span>Puzzle</span>
+      <FontAwesomeIcon fixedWidth icon={faPuzzlePiece} /> <span>Puzzle</span> <FontAwesomeIcon fixedWidth icon={faExternalLinkAlt} />
     </PuzzleMetadataExternalLink>
   ) : null;
 
@@ -1946,6 +1954,35 @@ const PuzzlePageMetadata = ({
       title="Edit puzzle..."
     >
       <FontAwesomeIcon icon={faEdit} /> Edit
+    </Button>
+  ) : null;
+
+  const canEmbedPuzzle = useTracker(() => {
+    return hunt?.allowPuzzleEmbed ?? false;
+  }, [hunt])
+
+  const handleShowButtonClick = () => {
+    if (!hasIframeBeenLoaded) {
+      setHasIframeBeenLoaded(true);
+    }
+    setShowDocument(!showDocument);
+  };
+
+  const handleShowButtonHover = () => {
+    if (!hasIframeBeenLoaded) {
+      setHasIframeBeenLoaded(true);
+    }
+  }
+
+  const togglePuzzleInset = (puzzle.url && isDesktop && canEmbedPuzzle) || !showDocument ? (
+    <Button
+    onClick={handleShowButtonClick}
+    onMouseEnter={handleShowButtonHover}
+    variant="secondary"
+    size="sm"
+    title={showDocument ? "View Puzzle" : "Hide Puzzle"}
+    >
+      {showDocument ? "View Puzzle" : "Hide Puzzle"}
     </Button>
   ) : null;
 
@@ -2000,6 +2037,7 @@ const PuzzlePageMetadata = ({
         {puzzleLink}
         {documentLink}
         <PuzzleMetadataButtons>
+          {togglePuzzleInset}
           {editButton}
           {imageInsert}
           {guessButton}
@@ -2619,15 +2657,49 @@ const PuzzleDocumentDiv = styled.div`
   position: relative;
 `;
 
+const StyledIframe = styled.iframe`
+  /* Workaround for unusual sizing behavior of iframes in iOS Safari:
+   * Width and height need to be specified in absolute values then adjusted by min and max */
+  width: 0;
+  height: 0;
+  min-width: 100%;
+  max-width: 100%;
+  min-height: 100%;
+  max-height: 100%;
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  background-color: #f1f3f4;
+`;
+
+const IframeTab = styled.div`
+  background-color: #f0f0f0;
+  border: 1px solid #a2a2a2;
+  border-right: none;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+  z-index: 101;
+  user-select: none;
+`;
+
 const PuzzlePageMultiplayerDocument = React.memo(
-  ({ document }: { document?: DocumentType }) => {
+  ({
+    document,
+    showDocument,
+   }: {
+    document?: DocumentType;
+    showDocument: boolean;
+  }) => {
     let inner = (
       <DocumentMessage>
         Attempting to load collaborative document...
       </DocumentMessage>
     );
     if (document) {
-      inner = <DocumentDisplay document={document} displayMode="embed" />;
+      inner = <DocumentDisplay document={document} displayMode="embed" isShown={showDocument}/>;
     }
 
     return <PuzzleDocumentDiv>{inner}</PuzzleDocumentDiv>;
@@ -2714,10 +2786,21 @@ const PuzzlePage = React.memo(() => {
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
+  const [hasIframeBeenLoaded, setHasIframeBeenLoaded] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [showDocument, setShowDocument] = useState<boolean>(true);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const docRef = useRef<DocumentType | undefined>(undefined);
 
   const huntId = useParams<"huntId">().huntId!;
   const puzzleId = useParams<"puzzleId">().puzzleId!;
+
+
+  const hunt = useTracker(() => {return Hunts.findOne(huntId)}, [huntId]);
+
+  const showPuzzleDocument = useTracker(() => {
+    return (hunt?.allowPuzzleEmbed ?? false) ? true : showDocument;
+  }, [hunt, showDocument]);
 
   // Add the current user to the collection of people viewing this puzzle.
   const subscribersTopic = `puzzle:${puzzleId}`;
@@ -2863,6 +2946,17 @@ const PuzzlePage = React.memo(() => {
     }
   }, [activePuzzle]);
 
+  useEffect(() => {
+    if (activePuzzle?.url && !hasIframeBeenLoaded) {
+      const iframe = new Image();
+      iframe.onload = () => setHasIframeBeenLoaded(true);
+      iframe.src = activePuzzle?.url;
+    }
+    if (doc && !docRef.current) {
+      docRef.current = doc;
+    }
+  }, [activePuzzle?.url, hasIframeBeenLoaded, doc]);
+
   trace("PuzzlePage render", { puzzleDataLoading, chatDataLoading });
 
   if (puzzleDataLoading) {
@@ -2886,6 +2980,10 @@ const PuzzlePage = React.memo(() => {
       document={doc}
       displayNames={displayNames}
       isDesktop={isDesktop}
+      showDocument={showDocument}
+      setShowDocument={setShowDocument}
+      hasIframeBeenLoaded={hasIframeBeenLoaded}
+      setHasIframeBeenLoaded={setHasIframeBeenLoaded}
     />
   );
   const chat = (
@@ -2971,7 +3069,21 @@ const PuzzlePage = React.memo(() => {
             {chat}
             <PuzzleContent>
               {metadata}
-              <PuzzlePageMultiplayerDocument document={doc} />
+              {(activePuzzle.url && hasIframeBeenLoaded && !showDocument) ? (
+                <PuzzleDocumentDiv>
+                  <StyledIframe
+                    ref={iframeRef} // Assign ref to iframe
+                    style={{ display: !showDocument ? "block" : "none" }} // Control visibility with style
+                    src={activePuzzle.url}
+                  />
+                </PuzzleDocumentDiv>
+              ) : (
+                <PuzzlePageMultiplayerDocument
+                  document={docRef.current} // Use ref to access document
+                  showDocument={showDocument}
+                  style={{ display: showDocument ? "block" : "none" }} // Control visibility with style
+                />
+                )}
               {debugPane}
             </PuzzleContent>
           </SplitPanePlus>
