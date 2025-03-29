@@ -2657,7 +2657,7 @@ const PuzzleDocumentDiv = styled.div`
   position: relative;
 `;
 
-const StyledIframe = styled.iframe<{ $isShown: boolean }>`
+const StyledIframe = styled.iframe`
   /* Workaround for unusual sizing behavior of iframes in iOS Safari:
    * Width and height need to be specified in absolute values then adjusted by min and max */
   width: 0;
@@ -2671,7 +2671,6 @@ const StyledIframe = styled.iframe<{ $isShown: boolean }>`
   border: 0;
   padding-bottom: env(safe-area-inset-bottom, 0);
   background-color: #f1f3f4;
-  z-index: ${({ $isShown }) => $isShown ? 1 : -1};
 `;
 
 const IframeTab = styled.div`
@@ -2790,6 +2789,8 @@ const PuzzlePage = React.memo(() => {
   const [hasIframeBeenLoaded, setHasIframeBeenLoaded] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [showDocument, setShowDocument] = useState<boolean>(true);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const docRef = useRef<DocumentType | undefined>(undefined);
 
   const huntId = useParams<"huntId">().huntId!;
   const puzzleId = useParams<"puzzleId">().puzzleId!;
@@ -2945,6 +2946,17 @@ const PuzzlePage = React.memo(() => {
     }
   }, [activePuzzle]);
 
+  useEffect(() => {
+    if (activePuzzle?.url && !hasIframeBeenLoaded) {
+      const iframe = new Image();
+      iframe.onload = () => setHasIframeBeenLoaded(true);
+      iframe.src = activePuzzle?.url;
+    }
+    if (doc && !docRef.current) {
+      docRef.current = doc;
+    }
+  }, [activePuzzle?.url, hasIframeBeenLoaded, doc]);
+
   trace("PuzzlePage render", { puzzleDataLoading, chatDataLoading });
 
   if (puzzleDataLoading) {
@@ -3057,13 +3069,21 @@ const PuzzlePage = React.memo(() => {
             {chat}
             <PuzzleContent>
               {metadata}
-              <PuzzlePageMultiplayerDocument document={doc} showDocument={showPuzzleDocument}/>
-              {
-                activePuzzle.url && hasIframeBeenLoaded ?
-                  (
-                    <StyledIframe $isShown={!showDocument} src={activePuzzle.url}/>
-                  ) : null
-              }
+              {(activePuzzle.url && hasIframeBeenLoaded && !showDocument) ? (
+                <PuzzleDocumentDiv>
+                  <StyledIframe
+                    ref={iframeRef} // Assign ref to iframe
+                    style={{ display: !showDocument ? "block" : "none" }} // Control visibility with style
+                    src={activePuzzle.url}
+                  />
+                </PuzzleDocumentDiv>
+              ) : (
+                <PuzzlePageMultiplayerDocument
+                  document={docRef.current} // Use ref to access document
+                  showDocument={showDocument}
+                  style={{ display: showDocument ? "block" : "none" }} // Control visibility with style
+                />
+                )}
               {debugPane}
             </PuzzleContent>
           </SplitPanePlus>
