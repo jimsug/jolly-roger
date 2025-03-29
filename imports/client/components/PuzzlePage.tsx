@@ -1807,6 +1807,8 @@ const PuzzlePageMetadata = ({
   isDesktop,
   showDocument,
   setShowDocument,
+  hasIframeBeenLoaded,
+  setHasIframeBeenLoaded,
 }: {
   puzzle: PuzzleType;
   bookmarked: boolean;
@@ -1815,6 +1817,8 @@ const PuzzlePageMetadata = ({
   isDesktop: boolean;
   showDocument: boolean;
   setShowDocument: (showDocument: boolean) => void;
+  hasIframeBeenLoaded: boolean;
+  setHasIframeBeenLoaded: (hasIframeBeenLoaded: boolean) => void;
 }) => {
   const huntId = puzzle.hunt;
   const puzzleId = puzzle._id;
@@ -1954,6 +1958,9 @@ const PuzzlePageMetadata = ({
   ) : null;
 
   const handleShowButtonClick = () => {
+    if (!hasIframeBeenLoaded) {
+      setHasIframeBeenLoaded(true);
+    }
     setShowDocument(!showDocument);
   };
 
@@ -2769,6 +2776,7 @@ const PuzzlePage = React.memo(() => {
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
+  const [hasIframeBeenLoaded, setHasIframeBeenLoaded] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [showDocument, setShowDocument] = useState<boolean>(true);
 
@@ -2944,6 +2952,8 @@ const PuzzlePage = React.memo(() => {
       isDesktop={isDesktop}
       showDocument={showDocument}
       setShowDocument={setShowDocument}
+      hasIframeBeenLoaded={hasIframeBeenLoaded}
+      setHasIframeBeenLoaded={setHasIframeBeenLoaded}
     />
   );
   const chat = (
@@ -3030,7 +3040,12 @@ const PuzzlePage = React.memo(() => {
             <PuzzleContent>
               {metadata}
               <PuzzlePageMultiplayerDocument document={doc} isShown={showDocument} showDocument={showDocument}/>
-              <StyledIframe $isShown={!showDocument} src={activePuzzle.url}/>
+              {
+                activePuzzle.url && hasIframeBeenLoaded ?
+                  (
+                    <StyledIframe $isShown={!showDocument} src={activePuzzle.url}/>
+                  ) : null
+              }
               {debugPane}
             </PuzzleContent>
           </SplitPanePlus>
