@@ -2,6 +2,9 @@ import type { SetStateAction } from "react";
 import { useCallback } from "react";
 import createPersistedState from "use-persisted-state";
 
+export type AppThemeState = "dark" | "light";
+export const useAppThemeState = createPersistedState<AppThemeState>("appTheme");
+
 export type OperatorActionsHiddenState = Record<string /* huntId */, boolean>;
 export const useOperatorActionsHidden =
   createPersistedState<OperatorActionsHiddenState>("operatorActionsHidden");
