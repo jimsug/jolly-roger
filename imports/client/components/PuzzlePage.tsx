@@ -48,7 +48,7 @@ import { CopyToClipboard } from "react-copy-to-clipboard";
 import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import type { Descendant } from "slate";
-import styled, { css } from "styled-components";
+import styled, { css, useTheme } from "styled-components";
 import {
   calendarTimeFormat,
   shortCalendarTimeFormat,
@@ -831,6 +831,8 @@ const ChatHistoryMessage = React.memo(
       setShownEmojiPicker(null);
     };
 
+    const theme = useTheme();
+
     const emojiPicker = shownEmojiPicker === message._id && emojiPickerButtonRef.current ? (
       createPortal(
         <EmojiPickerContainer
@@ -852,6 +854,7 @@ const ChatHistoryMessage = React.memo(
             reactionsDefaultOpen={true}
             reactions={["2705","274e","2757","2753","2194-fe0f"]}
             previewConfig={{showPreview:false}}
+            theme={theme.basicMode}
           />
         </EmojiPickerContainer>,
         document.body,
