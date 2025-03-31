@@ -6,7 +6,7 @@ import Button from "react-bootstrap/Button";
 import Form from "react-bootstrap/Form";
 import { useParams } from "react-router-dom";
 import ReactTextareaAutosize from "react-textarea-autosize";
-import styled from "styled-components";
+import styled, { useTheme } from "styled-components";
 import Announcements from "../../lib/models/Announcements";
 import Hunts from "../../lib/models/Hunts";
 import { userMayAddAnnouncementToHunt } from "../../lib/permission_stubs";

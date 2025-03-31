@@ -19,7 +19,7 @@ import Tooltip from "react-bootstrap/Tooltip";
 import CopyToClipboard from "react-copy-to-clipboard";
 import { Link } from "react-router-dom";
 import ReactTextareaAutosize from "react-textarea-autosize";
-import styled from "styled-components";
+import styled, { useTheme } from "styled-components";
 import Flags from "../../Flags";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
 import isAdmin from "../../lib/isAdmin";
@@ -296,6 +296,8 @@ const GuessMessage = React.memo(
       setOperatorActionsHidden(true);
     };
 
+    const theme = useTheme();
+
     return (
       <Toast onClose={dismissGuess}>
         <Toast.Header>
@@ -330,7 +332,7 @@ const GuessMessage = React.memo(
           )}
           <Dropdown className="ms-auto" onToggle={toggleSettings}>
             <Dropdown.Toggle
-              variant="light"
+              variant={theme.basicMode}
               size="sm"
               as={Button}
               id={`guess-settings-${guess._id}`}
@@ -663,6 +665,8 @@ const ChatNotificationMessage = ({
     setShowSettings(!showSettings);
   };
 
+  const theme = useTheme();
+
   return (
     <Toast className="bg-info-subtle" onClose={dismiss}>
       <Toast.Header>
@@ -679,7 +683,7 @@ const ChatNotificationMessage = ({
         </StyledNotificationTimestamp>
         <Dropdown className="ms-auto" onToggle={toggleSettings}>
           <Dropdown.Toggle
-            variant="light"
+            variant={theme.basicMode}
             size="sm"
             as={Button}
             id={`chat-settings-${cn._id}`}
@@ -746,6 +750,8 @@ const BookmarkNotificationMessage = ({
     await bookmarkPuzzle.callPromise({ puzzleId, bookmark: false });
   };
 
+  const theme = useTheme();
+
   return (
     <Toast onClose={dismiss}>
       <Toast.Header>
@@ -757,7 +763,7 @@ const BookmarkNotificationMessage = ({
         </strong>
         <Dropdown className="ms-auto" onToggle={toggleSettings}>
           <Dropdown.Toggle
-            variant="light"
+            variant={theme.basicMode}
             size="sm"
             as={Button}
             id={`bookmark-settings-${puzzleId}`}

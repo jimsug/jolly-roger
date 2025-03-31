@@ -48,7 +48,7 @@ import { CopyToClipboard } from "react-copy-to-clipboard";
 import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import type { Descendant } from "slate";
-import styled, { css } from "styled-components";
+import styled, { css, useTheme } from "styled-components";
 import {
   calendarTimeFormat,
   shortCalendarTimeFormat,
@@ -831,6 +831,8 @@ const ChatHistoryMessage = React.memo(
       setShownEmojiPicker(null);
     };
 
+    const theme = useTheme();
+
     const emojiPicker = shownEmojiPicker === message._id && emojiPickerButtonRef.current ? (
       createPortal(
         <EmojiPickerContainer
@@ -852,6 +854,7 @@ const ChatHistoryMessage = React.memo(
             reactionsDefaultOpen={true}
             reactions={["2705","274e","2757","2753","2194-fe0f"]}
             previewConfig={{showPreview:false}}
+            theme={theme.basicMode}
           />
         </EmojiPickerContainer>,
         document.body,
@@ -2101,10 +2104,10 @@ const GuessTableSmallRow = styled.div`
 
 const GuessRow = styled.div<{ $state: GuessType["state"]; theme: Theme }>`
   display: contents;
-  background-color: ${($state, theme) =>
-    theme.colors.guess[$state].background
-    };
 
+  background-color: ${({ $state, theme }) => {
+      return theme.colors.guess[$state].background;
+  }};
   &::before {
     content: " ";
     border-top: 1px solid #ddd;
@@ -2112,9 +2115,9 @@ const GuessRow = styled.div<{ $state: GuessType["state"]; theme: Theme }>`
   }
 
   :hover {
-    background-color: ${($state, theme) =>
-      theme.colors.guess[$state].hoverBackground
-      };
+    background-color: ${({ $state, theme }) => {
+      return theme.colors.guess[$state].hoverBackground;
+  }};
   }
 `;
 

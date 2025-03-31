@@ -2,7 +2,7 @@ import { faMicrophoneAlt } from "@fortawesome/free-solid-svg-icons/faMicrophoneA
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React from "react";
 import Toast from "react-bootstrap/Toast";
-import styled from "styled-components";
+import styled, { useTheme } from "styled-components";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
 import Markdown from "./Markdown";
 import { Theme } from "../theme";
@@ -17,15 +17,15 @@ const AnnouncementToast = ({
   createdAt,
   onClose,
   className,
-  theme,
 }: {
   displayName: string;
   message: string;
   createdAt: Date;
   onClose?: () => void;
   className?: string;
-  theme: Theme;
 }) => {
+  const theme = useTheme();
+
   return (
     <Toast
       className={className}

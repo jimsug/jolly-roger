@@ -38,6 +38,7 @@ import TagList from "./TagList";
 import { backgroundColorLookupTable } from "./styling/constants";
 import { mediaBreakpointDown } from "./styling/responsive";
 import { useTracker } from "meteor/react-meteor-data";
+import { Theme } from "../theme";
 
 enum SubmitState {
   IDLE = "idle",
@@ -66,10 +67,11 @@ const PuzzleListToolbar = styled.div`
 
 const TagPuzzleDiv = styled.div<{
   $solvedness: Solvedness;
+  theme: Theme;
 }>`
-  ${({ $solvedness }) => css`
-    background-color: ${backgroundColorLookupTable[$solvedness]};
-  `}
+  background-color: ${({ $solvedness, theme }) => {
+    return theme.colors.solvedness[$solvedness];
+  }};
 
   display: flex;
   flex-direction: row;

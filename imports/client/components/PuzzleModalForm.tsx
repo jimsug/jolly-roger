@@ -25,6 +25,7 @@ import LabelledRadioGroup from "./LabelledRadioGroup";
 import Loading from "./Loading";
 import type { ModalFormHandle } from "./ModalForm";
 import ModalForm from "./ModalForm";
+import { useTheme } from "styled-components";
 
 // Casting away the React.lazy because otherwise we lose access to the generic parameter
 const Creatable = React.lazy(
@@ -438,6 +439,8 @@ const PuzzleModalForm = React.forwardRef(
         />
       ) : null;
 
+    const theme = useTheme();
+
     return (
       <Suspense
         fallback={
@@ -490,6 +493,7 @@ const PuzzleModalForm = React.forwardRef(
             </FormLabel>
             <Col xs={9}>
               <Creatable
+                theme={theme.creatableTheme}
                 id="jr-new-puzzle-tags"
                 options={functionSelectOptions}
                 isMulti
@@ -515,6 +519,7 @@ const PuzzleModalForm = React.forwardRef(
             </FormLabel>
             <Col xs={9}>
               <Creatable
+                theme={theme.creatableTheme}
                 id="jr-new-puzzle-tags"
                 options={contentSelectOptions}
                 isMulti
