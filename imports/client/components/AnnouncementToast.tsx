@@ -17,12 +17,14 @@ const AnnouncementToast = ({
   createdAt,
   onClose,
   className,
+  theme,
 }: {
   displayName: string;
   message: string;
   createdAt: Date;
   onClose?: () => void;
   className?: string;
+  theme: Theme;
 }) => {
   const theme = useTheme();
 
