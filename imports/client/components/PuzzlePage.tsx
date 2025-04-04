@@ -3081,7 +3081,7 @@ const PuzzlePage = React.memo(() => {
                 (activePuzzle.url && hasIframeBeenLoaded) ? (
                   <StyledIframe
                     ref={iframeRef}
-                    style={{ display: !showDocument ? "block" : "none" }} // this is a bit of a hack to keep both the puzzlepag and the shared doc loaded
+                    style={{ zIndex: !showDocument ? 1 : -1, display: !showDocument ? "block" : "none" }} // this is a bit of a hack to keep both the puzzlepag and the shared doc loaded
                     src={activePuzzle.url}
                   />
                   ) : null
@@ -3090,7 +3090,7 @@ const PuzzlePage = React.memo(() => {
                 <PuzzlePageMultiplayerDocument
                   document={docRef.current}
                   showDocument={showDocument}
-                  style={{ display: showDocument ? "block" : "none" }}
+                  style={{ zIndex: showDocument ? 1 : -1, display: showDocument ? "block" : "none" }}
                   />
                 </PuzzleDocumentDiv>
               {debugPane}
