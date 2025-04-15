@@ -53,7 +53,7 @@ import "./mediasoupSetProducerPaused";
 import "./postAnnouncement";
 import "./promoteOperator";
 import "./provisionFirstUser";
-// import "./purgeHunt";
+import "./purgeHunt";
 import "./removeChatMessage";
 import "./removePuzzleAnswer";
 import "./removePuzzleTag";
