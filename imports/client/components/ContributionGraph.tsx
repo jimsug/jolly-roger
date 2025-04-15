@@ -120,7 +120,7 @@ const TotalCount = styled.div`
 const TimezoneOffsetMessage = styled.div<{ theme: Theme }>`
   text-align: right;
   font-size: 11px;
-  color: ${({ theme }) => theme.colors.textSecondary};
+  color: ${({ theme }) => theme.colors.text};
   margin-top: 4px;
   width: 100%;
 `;
@@ -256,7 +256,7 @@ const ContributionGraph = ({
 
   return (
     <StyledContainer>
-      {title && <h2>{title}</h2>}
+      {title && <strong>{title}</strong>}
       <GraphLayout>
         <DayLabelsSide>
           {daysOfWeek.map((day) => (
@@ -317,7 +317,7 @@ const ContributionGraph = ({
           </LegendAndCountRow>
           {(timezoneOffset ?? 0) !== 0 && (
             <TimezoneOffsetMessage>
-              Your activity has been offset by your browser's{" "}
+              Your activity has been offset by your browser&apos;s{" "}
               <strong>current</strong> timezone.
             </TimezoneOffsetMessage>
           )}
