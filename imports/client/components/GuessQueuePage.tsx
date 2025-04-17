@@ -56,6 +56,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
 } from "react-bootstrap";
+import { Theme } from "../theme";
 
 const StyledToggleButtonGroup = styled(ToggleButtonGroup)`
   @media (width < 360px) {
@@ -89,10 +90,10 @@ const StyledHeaderRow = styled.div`
   display: contents;
 `;
 
-const StyledHeader = styled.div`
+const StyledHeader = styled.div<{theme: Theme}>`
   position: sticky;
   top: 0;
-  background-color: white;
+  background-color: ${({theme}) => theme.colors.background};
   font-weight: bold;
   ${mediaBreakpointDown(
     compactViewBreakpoint,
@@ -102,11 +103,25 @@ const StyledHeader = styled.div`
   )}
 `;
 
-const StyledRow = styled.div<{ $state: GuessType["state"] }>`
+const StyledRow = styled.div<{ $state: GuessType["state"]; theme: Theme }>`
   display: contents;
   margin-bottom: 8px;
-  background-color: ${(props) =>
-    guessColorLookupTable[props.$state].background};
+  background-color: ${({ theme, $state }) => {
+    switch ($state) {
+      case "correct":
+        return theme.colors.guessColorCorrectBackground;
+      case "intermediate":
+        return theme.colors.guessColorIntermediateBackground;
+      case "incorrect":
+        return theme.colors.guessColorIncorrectBackground;
+      case "rejected":
+        return theme.colors.guessColorRejectedBackground;
+      case "pending":
+        return theme.colors.guessColorPendingBackground;
+      default:
+        return "transparent";
+    }
+  }};
 
   &::before {
     content: " ";
@@ -115,8 +130,22 @@ const StyledRow = styled.div<{ $state: GuessType["state"] }>`
   }
 
   :hover {
-    background-color: ${(props) =>
-      guessColorLookupTable[props.$state].hoverBackground};
+    background-color: ${({ theme, $state }) => {
+      switch ($state) {
+        case "correct":
+          return theme.colors.guessColorCorrectHoverBackground;
+        case "intermediate":
+          return theme.colors.guessColorIntermediateHoverBackground;
+        case "incorrect":
+          return theme.colors.guessColorIncorrectHoverBackground;
+        case "rejected":
+          return theme.colors.guessColorRejectedHoverBackground;
+        case "pending":
+          return theme.colors.guessColorPendingHoverBackground;
+        default:
+          return "transparent";
+      }
+    }};
   }
 `;
 

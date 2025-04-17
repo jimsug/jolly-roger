@@ -8,6 +8,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { FormText } from "react-bootstrap";
 import Alert from "react-bootstrap/Alert";
 import Col from "react-bootstrap/Col";
 import FormCheck from "react-bootstrap/FormCheck";
@@ -24,7 +25,7 @@ import LabelledRadioGroup from "./LabelledRadioGroup";
 import Loading from "./Loading";
 import type { ModalFormHandle } from "./ModalForm";
 import ModalForm from "./ModalForm";
-import { FormText } from "react-bootstrap";
+import { useTheme } from "styled-components";
 
 // Casting away the React.lazy because otherwise we lose access to the generic parameter
 const Creatable = React.lazy(
@@ -438,6 +439,8 @@ const PuzzleModalForm = React.forwardRef(
         />
       ) : null;
 
+    const theme = useTheme();
+
     return (
       <Suspense
         fallback={
@@ -490,6 +493,7 @@ const PuzzleModalForm = React.forwardRef(
             </FormLabel>
             <Col xs={9}>
               <Creatable
+                theme={theme.reactSelectTheme}
                 id="jr-new-puzzle-tags"
                 options={functionSelectOptions}
                 isMulti
@@ -515,6 +519,7 @@ const PuzzleModalForm = React.forwardRef(
             </FormLabel>
             <Col xs={9}>
               <Creatable
+                theme={theme.reactSelectTheme}
                 id="jr-new-puzzle-tags"
                 options={contentSelectOptions}
                 isMulti

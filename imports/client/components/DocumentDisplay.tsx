@@ -5,10 +5,12 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React from "react";
 import styled from "styled-components";
 import type { DocumentType } from "../../lib/models/Documents";
+import { Theme } from "../theme";
 
 interface DocumentDisplayProps {
   document: DocumentType;
   displayMode: "link" | "embed";
+  isShown: boolean;
 }
 
 const StyledDeepLink = styled.a`
@@ -17,7 +19,7 @@ const StyledDeepLink = styled.a`
   white-space: nowrap;
 `;
 
-const StyledIframe = styled.iframe`
+const StyledIframe = styled.iframe<{ $isShown: boolean }>`
   /* Workaround for unusual sizing behavior of iframes in iOS Safari:
    * Width and height need to be specified in absolute values then adjusted by min and max */
   width: 0;
@@ -31,18 +33,20 @@ const StyledIframe = styled.iframe`
   border: 0;
   padding-bottom: env(safe-area-inset-bottom, 0);
   background-color: #f1f3f4;
+  z-index: ${({ $isShown }) => ($isShown ? 1 : -1)};
 `;
 
-export const DocumentMessage = styled.span`
+export const DocumentMessage = styled.span<{ theme: Theme }>`
   display: block;
   width: 100%;
   height: 100%;
-  background-color: #ddf;
+  background-color: ${({ theme }) => theme.colors.documentMessageBackground};
 `;
 
 const GoogleDocumentDisplay = ({
   document,
   displayMode,
+  isShown,
 }: DocumentDisplayProps) => {
   let url: string;
   let title: string;
@@ -76,7 +80,14 @@ const GoogleDocumentDisplay = ({
       );
     case "embed":
       /* To workaround iOS Safari iframe behavior, scrolling should be "no" */
-      return <StyledIframe title="document" scrolling="no" src={url} />;
+      return (
+        <StyledIframe
+          title="document"
+          scrolling="no"
+          src={url}
+          $isShown={isShown}
+        />
+      );
     default:
       return (
         <DocumentMessage>Unknown displayMode {displayMode}</DocumentMessage>
@@ -84,11 +95,19 @@ const GoogleDocumentDisplay = ({
   }
 };
 
-const DocumentDisplay = ({ document, displayMode }: DocumentDisplayProps) => {
+const DocumentDisplay = ({
+  document,
+  displayMode,
+  isShown,
+}: DocumentDisplayProps) => {
   switch (document.provider) {
     case "google":
       return (
-        <GoogleDocumentDisplay document={document} displayMode={displayMode} />
+        <GoogleDocumentDisplay
+          document={document}
+          displayMode={displayMode}
+          isShown={isShown}
+        />
       );
     default:
       return (

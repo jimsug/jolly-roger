@@ -48,7 +48,7 @@ import { CopyToClipboard } from "react-copy-to-clipboard";
 import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import type { Descendant } from "slate";
-import styled, { css } from "styled-components";
+import styled, { css, useTheme } from "styled-components";
 import {
   calendarTimeFormat,
   shortCalendarTimeFormat,
@@ -129,8 +129,8 @@ import {
 import { mediaBreakpointDown } from "./styling/responsive";
 import { ToggleButton, ToggleButtonGroup } from "react-bootstrap";
 import removeChatMessage from "../../methods/removeChatMessage";
-import createDocumentImageUpload from "../../methods/createDocumentImageUpload";
-import Settings from "../../lib/models/Settings";
+import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons";
+import { Theme } from "../theme";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -202,7 +202,7 @@ const MinimumDesktopWidth = MinimumSidebarWidth + MinimumDocumentWidth;
 //   |           |
 //   |___________|
 
-const PinDiv = styled.div`
+const PinDiv = styled.div<{theme:Theme}>`
 min-height: 3em;
 height: auto;
 max-height: 12em;
@@ -210,7 +210,7 @@ max-height: 12em;
 overflow-y: scroll;
 overflow-x: hidden;
 border-bottom: 4px double black;
-background-color: #fff2cc;
+background-color: ${({theme})=>theme.colors.pinnedChatMessageBackground};
 `;
 
 const ChatHistoryDiv = styled.div`
@@ -276,16 +276,6 @@ const ReplyButton = styled(FontAwesomeIcon)`
   }
 `;
 
-const ReplyButtonPill = styled.span`
-background-color: #d3d3d3;
-padding: 4px 8px;
-margin: 4px;
-border-radius: 16px;
-cursor: pointer;
-color: #666;
-`;
-
-
 const PUZZLE_PAGE_PADDING = 8;
 
 const ChatMessageDiv = styled.div<{
@@ -295,28 +285,30 @@ const ChatMessageDiv = styled.div<{
   $isPulsing: boolean;
   $isHovered: boolean;
   $isReplyingTo: boolean;
+  theme: Theme
 }>`
   padding: 0 ${PUZZLE_PAGE_PADDING}px 2px;
   word-wrap: break-word;
-  font-size: 14px;
-  ${({ $isSystemMessage, $isHighlighted, $isPinned }) =>
+  font-size: 1rem;
+  position: relative;
+  ${({ $isSystemMessage, $isHighlighted, $isPinned, theme }) =>
     $isHighlighted &&
     !$isSystemMessage &&
     !$isPinned &&
     css`
-      background-color: #ffff70;
-    `}
+      background-color: ${({ theme })=>theme.colors.pinnedChatMessageBackground};
+      `}
 
-  ${({ $isSystemMessage }) =>
+  ${({ $isSystemMessage, theme }) =>
     $isSystemMessage &&
     css`
-      background-color: #e0e0e0;
+      background-color: ${({ theme })=>theme.colors.systemChatMessageBackground};
     `}
 
-  ${({ $isPinned }) =>
+  ${({ $isPinned, theme }) =>
     $isPinned &&
     css`
-      background-color: #fff2cc;
+      background-color: ${({ theme })=>theme.colors.pinnedChatMessageBackground};
     `}
     ${({ $isPulsing }) =>
     $isPulsing &&
@@ -337,30 +329,59 @@ const ChatMessageDiv = styled.div<{
   }
 
   &:hover {
-    background-color: #f0f0f0;
+    background-color: ${({ theme })=>theme.colors.hoverChatMessageBackground};
   }
 
   ${({ $isReplyingTo }) =>
     $isReplyingTo &&
     css`
-      background-color: #e0f0ff; /* Muted light blue */
-    `}
+      background-color: ${({ theme })=>theme.colors.replyChatMessageBackground};
+      `}
 `;
 
-const ImagePlaceholder = styled.div`
-  width: 100px;
-  height: 100px;
-  background-color: #eee;
+
+const ChatMessageActions = styled.div`
+  position: absolute;
+  top: 0;
+  right: 0;
   display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-bottom: 4px;
+  opacity: 0;
+  z-index: 10;
+  transition: opacity 0.2s ease-in-out;
+  ${ChatMessageDiv}:hover & {
+    opacity: 1;
+  }
+  & > * {
+    margin-left: 0;
+  }
 `;
 
-const ImagePreview = styled.img`
-  max-width: 100%;
-  max-height: 100px;
-  margin-bottom: 4px;
+const SplitPill = styled.div`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #d3d3d3;
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+  color: #666;
+  margin: 4px;
+  &:hover {
+    color: #000;
+  }
+`;
+
+const PillSection = styled.div`
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  &:first-child {
+    border-right: 1px solid #bbb;
+  }
+  &:hover {
+    background-color: #c0c0c0;
+  }
 `;
 
 const ChatInputRow = styled.div`
@@ -372,8 +393,8 @@ const ChatInputRow = styled.div`
   position: relative;
 `;
 
-const ReplyingTo = styled.div`
-  background-color: #eee;
+const ReplyingTo = styled.div<{theme:Theme}>`
+  background-color: ${({theme}) => theme.colors.replyingToBackground};
   padding: 4px;
   margin-bottom: 4px;
   border-radius: 4px;
@@ -419,10 +440,12 @@ const PuzzleContent = styled.div`
   flex-direction: column;
 `;
 
-const PuzzleMetadata = styled.div`
+const PuzzleMetadata = styled.div<{ theme: Theme }>`
   flex: none;
   padding: ${PUZZLE_PAGE_PADDING - 2}px 8px;
   border-bottom: 1px solid #dadce0;
+  z-index: 10;
+  background-color: ${({ theme })=>theme.colors.background};
 `;
 
 const PuzzleMetadataAnswer = styled.span`
@@ -549,7 +572,10 @@ const isReaction = (message: ChatMessageType | FilteredChatMessageType): boolean
 const AddReactionButton = styled(FontAwesomeIcon)`
   cursor: pointer;
   color: #666;
-  margin-left: 4px;
+  align-items: center;
+  justify-content: center;
+  align-items: center;
+  justify-content: center;
   &:hover {
     color: #000;
   }
@@ -559,7 +585,9 @@ const AddReactionButton = styled(FontAwesomeIcon)`
 const AddReactionPill = styled.span`
 background-color: #d3d3d3;
 padding: 4px 8px;
-margin: 4px;
+margin: 4px;s
+align-items: center;
+justify-content: center;
 border-radius: 16px;
 cursor: pointer;
 color: #666;
@@ -589,6 +617,8 @@ const ChatHistoryMessage = React.memo(
     isPulsing,
     setReplyingTo,
     isReplyingTo,
+    shownEmojiPicker,
+    setShownEmojiPicker,
   }: {
     message: FilteredChatMessageType;
     displayNames: Map<string, string>;
@@ -603,8 +633,10 @@ const ChatHistoryMessage = React.memo(
     isPulsing: boolean;
     setReplyingTo: (messageId: string | null) => void;
     isReplyingTo: boolean;
+    shownEmojiPicker: string | null;
+    setShownEmojiPicker: (messageId: string | null) => void;
   }) => {
-    const ts = shortCalendarTimeFormat(message.timestamp) : null;
+    const ts = shortCalendarTimeFormat(message.timestamp);
 
     const senderDisplayName =
     message.sender !== undefined
@@ -624,7 +656,7 @@ const ChatHistoryMessage = React.memo(
       if (parentId) {
         const fetchParentMessages = async () => {
           const parents: FilteredChatMessageType[] = [];
-          let currentParentId = parentId;
+          let currentParentId: string | undefined = parentId;
           let depth = 0;
           let nextParent = undefined;
           while (currentParentId && depth < 3) {
@@ -769,21 +801,43 @@ const ChatHistoryMessage = React.memo(
       }
     };
 
-    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const emojiPickerButtonRef = useRef<HTMLSpanElement>(null);
+    const emojiPickerRef = useRef<HTMLDivElement>(null);
 
     const handleAddReactionClick = () => {
-      setShowEmojiPicker(!showEmojiPicker);
+      setShownEmojiPicker(shownEmojiPicker === message._id ? null : message._id);
     };
+
+    const handleClickOutsideEmojiPicker = (event: MouseEvent) => {
+      if (
+        emojiPickerRef.current &&
+        !emojiPickerRef.current.contains(event.target as Node) &&
+        emojiPickerButtonRef.current &&
+        !emojiPickerButtonRef.current.contains(event.target as Node)
+      ) {
+        setShownEmojiPicker(null);
+      }
+    };
+
+    useEffect(() => {
+    document.addEventListener("mousedown", handleClickOutsideEmojiPicker);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutsideEmojiPicker);
+    };
+    }, [shownEmojiPicker])
+
 
     const handleEmojiClick = (emojiData: { emoji: string }) => {
       handleReactionClick(emojiData.emoji);
-      setShowEmojiPicker(false);
+      setShownEmojiPicker(null);
     };
 
-    const emojiPicker = showEmojiPicker && emojiPickerButtonRef.current ? (
+    const theme = useTheme();
+
+    const emojiPicker = shownEmojiPicker === message._id && emojiPickerButtonRef.current ? (
       createPortal(
         <EmojiPickerContainer
+          ref={emojiPickerRef}
           style={{
             bottom: `${
               window.innerHeight -
@@ -797,8 +851,11 @@ const ChatHistoryMessage = React.memo(
             autoFocusSearch={false}
             emojiStyle={EmojiStyle.NATIVE}
             skinTonesDisabled={true}
+            lazyLoadEmojis={true}
             reactionsDefaultOpen={true}
             reactions={["2705","274e","2757","2753","2194-fe0f"]}
+            previewConfig={{showPreview:false}}
+            theme={theme.basicMode}
           />
         </EmojiPickerContainer>,
         document.body,
@@ -816,6 +873,23 @@ const ChatHistoryMessage = React.memo(
         onMouseLeave={() => setIsHovered(false)}
         $isReplyingTo={isReplyingTo}
       >
+        <ChatMessageActions>
+          <SplitPill>
+            <PillSection
+              onClick={handleAddReactionClick}
+              ref={emojiPickerButtonRef}
+              title={"React"}
+            >
+              <AddReactionButton icon={faFaceSmile} />
+            </PillSection>
+            <PillSection
+              title={"Reply"}
+              onClick={() => setReplyingTo(message._id)}
+            >
+              <ReplyButton icon={faReplyAll} />
+            </PillSection>
+          </SplitPill>
+        </ChatMessageActions>
         {!suppressSender && <ChatMessageTimestamp>{ts}</ChatMessageTimestamp>}
         {!suppressSender && (
           <span style={{ display: "flex", alignItems: "center" }}>
@@ -869,7 +943,7 @@ const ChatHistoryMessage = React.memo(
               </ReactionPill>
             );
           })}
-          {isHovered && (
+          {(reactionCounts.size > 0) && (
             <>
               <AddReactionPill
               onClick={handleAddReactionClick}
@@ -880,14 +954,6 @@ const ChatHistoryMessage = React.memo(
                   icon={faFaceSmile}
                 />
               </AddReactionPill>
-              <ReplyButtonPill
-                title={"Reply"}
-                onClick={() => setReplyingTo(message._id)}
-                >
-                <ReplyButton
-                    icon={faReplyAll}
-                  />
-              </ReplyButtonPill>
             </>
           )}
         </ReactionContainer>
@@ -1075,6 +1141,8 @@ const ChatHistory = React.forwardRef(
       }
     }, [chatMessages.length, saveScrollBottomTarget, snapToBottom]);
 
+    const [shownEmojiPicker, setShownEmojiPicker] = useState<string | null>(null);
+
     trace("ChatHistory render", { messageCount: chatMessages.length });
     return (
       <ChatHistoryDiv ref={ref} onScroll={onScrollObserved}>
@@ -1123,6 +1191,8 @@ const ChatHistory = React.forwardRef(
               isPulsing={pulsingMessageId === msg._id}
               setReplyingTo={setReplyingTo}
               isReplyingTo={replyingTo === msg._id}
+              shownEmojiPicker={shownEmojiPicker}
+              setShownEmojiPicker={setShownEmojiPicker}
             />
           );
         })}
@@ -1299,10 +1369,10 @@ const PinnedMessage = React.forwardRef(
 const PinnedMessageMemo = React.memo(PinnedMessage);
 const ChatHistoryMemo = React.memo(ChatHistory);
 
-const StyledFancyEditor = styled(FancyEditor)`
+const StyledFancyEditor = styled(FancyEditor)<{theme:Theme}>`
   flex: 1;
   display: block;
-  background-color: #fff;
+  background-color: ${({theme})=>theme.colors.fancyEditorBackground};
   max-height: 200px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -1865,12 +1935,20 @@ const PuzzlePageMetadata = ({
   displayNames,
   document,
   isDesktop,
+  showDocument,
+  setShowDocument,
+  hasIframeBeenLoaded,
+  setHasIframeBeenLoaded,
 }: {
   puzzle: PuzzleType;
   bookmarked: boolean;
   displayNames: Map<string, string>;
   document?: DocumentType;
   isDesktop: boolean;
+  showDocument: boolean;
+  setShowDocument: (showDocument: boolean) => void;
+  hasIframeBeenLoaded: boolean;
+  setHasIframeBeenLoaded: (hasIframeBeenLoaded: boolean) => void;
 }) => {
   const huntId = puzzle.hunt;
   const puzzleId = puzzle._id;
@@ -1980,8 +2058,9 @@ const PuzzlePageMetadata = ({
       href={puzzle.url}
       target="_blank"
       rel="noreferrer noopener"
+      title="Open puzzle page"
     >
-      <FontAwesomeIcon fixedWidth icon={faPuzzlePiece} /> <span>Puzzle</span>
+      <FontAwesomeIcon fixedWidth icon={faPuzzlePiece} /> <span>Puzzle</span> <FontAwesomeIcon fixedWidth icon={faExternalLinkAlt} />
     </PuzzleMetadataExternalLink>
   ) : null;
 
@@ -2005,6 +2084,35 @@ const PuzzlePageMetadata = ({
       title="Edit puzzle..."
     >
       <FontAwesomeIcon icon={faEdit} /> Edit
+    </Button>
+  ) : null;
+
+  const canEmbedPuzzle = useTracker(() => {
+    return hunt?.allowPuzzleEmbed ?? false;
+  }, [hunt])
+
+  const handleShowButtonClick = () => {
+    if (!hasIframeBeenLoaded) {
+      setHasIframeBeenLoaded(true);
+    }
+    setShowDocument(!showDocument);
+  };
+
+  const handleShowButtonHover = () => {
+    if (!hasIframeBeenLoaded) {
+      setHasIframeBeenLoaded(true);
+    }
+  }
+
+  const togglePuzzleInset = (puzzle.url && isDesktop && canEmbedPuzzle) || !showDocument ? (
+    <Button
+    onClick={handleShowButtonClick}
+    onMouseEnter={handleShowButtonHover}
+    variant="secondary"
+    size="sm"
+    title={showDocument ? "View Puzzle" : "Hide Puzzle"}
+    >
+      {showDocument ? "View Puzzle" : "Hide Puzzle"}
     </Button>
   ) : null;
 
@@ -2059,6 +2167,7 @@ const PuzzlePageMetadata = ({
         {puzzleLink}
         {documentLink}
         <PuzzleMetadataButtons>
+          {togglePuzzleInset}
           {editButton}
           {imageInsert}
           {guessButton}
@@ -2118,10 +2227,11 @@ const GuessTableSmallRow = styled.div`
   )}
 `;
 
-const GuessRow = styled.div<{ $state: GuessType["state"] }>`
+const GuessRow = styled.div<{ $state: GuessType["state"]; theme: Theme }>`
   display: contents;
-  background-color: ${(props) =>
-    guessColorLookupTable[props.$state].background};
+  background-color: ${($state, theme) =>
+    theme.colors.guess[$state].background
+    };
 
   &::before {
     content: " ";
@@ -2130,8 +2240,9 @@ const GuessRow = styled.div<{ $state: GuessType["state"] }>`
   }
 
   :hover {
-    background-color: ${(props) =>
-      guessColorLookupTable[props.$state].hoverBackground};
+    background-color: ${($state, theme) =>
+      theme.colors.guess[$state].hoverBackground
+      };
   }
 `;
 
@@ -2678,15 +2789,49 @@ const PuzzleDocumentDiv = styled.div`
   position: relative;
 `;
 
+const StyledIframe = styled.iframe`
+  /* Workaround for unusual sizing behavior of iframes in iOS Safari:
+   * Width and height need to be specified in absolute values then adjusted by min and max */
+  width: 0;
+  height: 0;
+  min-width: 100%;
+  max-width: 100%;
+  min-height: 100%;
+  max-height: 100%;
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  background-color: #f1f3f4;
+`;
+
+const IframeTab = styled.div`
+  background-color: #f0f0f0;
+  border: 1px solid #a2a2a2;
+  border-right: none;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+  z-index: 101;
+  user-select: none;
+`;
+
 const PuzzlePageMultiplayerDocument = React.memo(
-  ({ document }: { document?: DocumentType }) => {
+  ({
+    document,
+    showDocument,
+   }: {
+    document?: DocumentType;
+    showDocument: boolean;
+  }) => {
     let inner = (
       <DocumentMessage>
         Attempting to load collaborative document...
       </DocumentMessage>
     );
     if (document) {
-      inner = <DocumentDisplay document={document} displayMode="embed" />;
+      inner = <DocumentDisplay document={document} displayMode="embed" isShown={showDocument}/>;
     }
 
     return <PuzzleDocumentDiv>{inner}</PuzzleDocumentDiv>;
@@ -2773,10 +2918,21 @@ const PuzzlePage = React.memo(() => {
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
+  const [hasIframeBeenLoaded, setHasIframeBeenLoaded] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [showDocument, setShowDocument] = useState<boolean>(true);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const docRef = useRef<DocumentType | undefined>(undefined);
 
   const huntId = useParams<"huntId">().huntId!;
   const puzzleId = useParams<"puzzleId">().puzzleId!;
+
+
+  const hunt = useTracker(() => {return Hunts.findOne(huntId)}, [huntId]);
+
+  const showPuzzleDocument = useTracker(() => {
+    return (hunt?.allowPuzzleEmbed ?? false) ? true : showDocument;
+  }, [hunt, showDocument]);
 
   // Add the current user to the collection of people viewing this puzzle.
   const subscribersTopic = `puzzle:${puzzleId}`;
@@ -2922,6 +3078,17 @@ const PuzzlePage = React.memo(() => {
     }
   }, [activePuzzle]);
 
+  useEffect(() => {
+    if (activePuzzle?.url && !hasIframeBeenLoaded) {
+      const iframe = new Image();
+      iframe.onload = () => setHasIframeBeenLoaded(true);
+      iframe.src = activePuzzle?.url;
+    }
+    if (doc && !docRef.current) {
+      docRef.current = doc;
+    }
+  }, [activePuzzle?.url, hasIframeBeenLoaded, doc]);
+
   trace("PuzzlePage render", { puzzleDataLoading, chatDataLoading });
 
   if (puzzleDataLoading) {
@@ -2945,6 +3112,10 @@ const PuzzlePage = React.memo(() => {
       document={doc}
       displayNames={displayNames}
       isDesktop={isDesktop}
+      showDocument={showDocument}
+      setShowDocument={setShowDocument}
+      hasIframeBeenLoaded={hasIframeBeenLoaded}
+      setHasIframeBeenLoaded={setHasIframeBeenLoaded}
     />
   );
   const chat = (
@@ -3030,7 +3201,23 @@ const PuzzlePage = React.memo(() => {
             {chat}
             <PuzzleContent>
               {metadata}
-              <PuzzlePageMultiplayerDocument document={doc} />
+                <PuzzleDocumentDiv>
+                {
+                (activePuzzle.url && hasIframeBeenLoaded) ? (
+                  <StyledIframe
+                    ref={iframeRef}
+                    style={{ zIndex: !showDocument ? 1 : -1, display: !showDocument ? "block" : "none" }} // this is a bit of a hack to keep both the puzzlepag and the shared doc loaded
+                    src={activePuzzle.url}
+                  />
+                  ) : null
+                }
+
+                <PuzzlePageMultiplayerDocument
+                  document={docRef.current}
+                  showDocument={showDocument}
+                  style={{ zIndex: showDocument ? 1 : -1, display: showDocument ? "block" : "none" }}
+                  />
+                </PuzzleDocumentDiv>
               {debugPane}
             </PuzzleContent>
           </SplitPanePlus>
