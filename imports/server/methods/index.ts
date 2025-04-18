@@ -23,6 +23,7 @@ import "./configureS3ImageBucket";
 import "./configureServerSettings";
 import "./configureTeamName";
 import "./configureGoogleScriptUrl";
+import "./createChatAttachmentUpload";
 import "./createDocumentImageUpload";
 import "./createFixtureHunt";
 import "./createGuess";
