@@ -765,6 +765,11 @@ const PuzzleListView = ({
   const retainedPuzzles = solvedOverConstrains
     ? matchingSearch
     : matchingSearchAndSolved;
+  const filterText = useTracker(() => {
+    return showSolvers !== "hide"
+      ? "Filter by title, answer, tag, or solver"
+      : "Filter by title, answer, or tag";
+  }, [showSolvers]);
 
   return (
     <div>
@@ -868,7 +873,7 @@ const PuzzleListView = ({
               as="input"
               type="text"
               ref={searchBarRef}
-              placeholder="Filter by title, answer, or tag"
+              placeholder={filterText}
               value={searchString}
               onChange={onSearchStringChange}
             />
