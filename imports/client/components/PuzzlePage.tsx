@@ -2104,9 +2104,8 @@ const GuessTableSmallRow = styled.div`
 
 const GuessRow = styled.div<{ $state: GuessType["state"]; theme: Theme }>`
   display: contents;
-  background-color: ${($state, theme) =>
-    theme.colors.guess[$state].background
-    };
+  background-color: ${({ $state, theme }) =>
+    theme.colors.guess[$state].background};
 
   &::before {
     content: " ";
@@ -2115,9 +2114,8 @@ const GuessRow = styled.div<{ $state: GuessType["state"]; theme: Theme }>`
   }
 
   :hover {
-    background-color: ${($state, theme) =>
-      theme.colors.guess[$state].hoverBackground
-      };
+    background-color: ${({ $state, theme }) =>
+    theme.colors.guess[$state].hoverBackground};
   }
 `;
 
