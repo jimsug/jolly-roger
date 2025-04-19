@@ -1,23 +1,25 @@
 import { Meteor } from "meteor/meteor";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { faCircle } from "@fortawesome/free-regular-svg-icons/faCircle";
+import { faClock } from "@fortawesome/free-regular-svg-icons/faClock";
+import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
+import { faEyeSlash } from "@fortawesome/free-regular-svg-icons/faEyeSlash";
+import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
+import { faBrain } from "@fortawesome/free-solid-svg-icons";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
-import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
-import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
-import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
-import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
-import { faClock } from "@fortawesome/free-regular-svg-icons/faClock";
-import { faCircle } from "@fortawesome/free-regular-svg-icons/faCircle";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
-import { faEyeSlash } from "@fortawesome/free-regular-svg-icons/faEyeSlash";
-import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
+import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
 import { faPencilAlt } from "@fortawesome/free-solid-svg-icons/faPencilAlt";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, {
   type ComponentPropsWithRef,
   type FC,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
 } from "react";
 import Alert from "react-bootstrap/Alert";
@@ -39,10 +41,12 @@ import Hunts from "../../lib/models/Hunts";
 import Puzzles from "../../lib/models/Puzzles";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
+import UserStatuses from "../../lib/models/UserStatuses";
 import Peers from "../../lib/models/mediasoup/Peers";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
+import statusesForHuntUsers from "../../lib/publications/statusesForHuntUsers";
 import {
   filteredPuzzleGroups,
   puzzleGroupsByRelevance,
@@ -61,6 +65,7 @@ import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import { Subscribers } from "../subscribers";
 import HuntNav from "./HuntNav";
+import { userStatusesToLastSeen } from "./HuntProfileListPage";
 import PuzzleList from "./PuzzleList";
 import type {
   PuzzleModalFormHandle,
@@ -374,8 +379,8 @@ const PuzzleListView = ({
   );
 
   const setShowSolversString = useCallback(
-    (value: string) => {
-      setShowSolvers(value === "show");
+    (value: "hide" | "viewing" | "active") => {
+      setShowSolvers(value);
     },
     [setShowSolvers],
   );
@@ -422,6 +427,7 @@ const PuzzleListView = ({
         addModalRef.current?.populateForm({
           title: bookmarkTitle,
           url: bookmarkURL,
+          tagIds: null,
         });
         setSearchParams((prev: URLSearchParams) => {
           prev.delete("url");
@@ -439,6 +445,33 @@ const PuzzleListView = ({
 
   const subscriptionsLoading =
     subscribersLoading() || callMembersLoading() || displayNamesLoading();
+
+  const statusesSubscribe = useTypedSubscribe(statusesForHuntUsers, { huntId }); // also the statuses for users
+
+  const statusesLoading = statusesSubscribe();
+  const puzzleUsers: Record<string, string[]> = useMemo(() => {
+    if (subscriptionsLoading || statusesLoading) {
+      return {};
+    }
+    const displayNames = indexedDisplayNames(); // don't try to move this out, this causes a loop
+    const puzzleUserStatuses = userStatusesToLastSeen(
+      UserStatuses.find({ hunt: huntId }).fetch(),
+    );
+    const mappedUsers = Object.entries(puzzleUserStatuses).reduce((acc, k) => {
+      const [userId, statusInfo] = k;
+      const puzzleId = statusInfo.puzzleStatus.puzzle;
+      if (!puzzleId) {
+        return acc;
+      }
+      if (!acc[puzzleId]) {
+        acc[puzzleId] = [displayNames.get(userId)];
+      } else {
+        acc[puzzleId].push(displayNames.get(userId));
+      }
+      return acc;
+    }, {});
+    return mappedUsers;
+  }, [subscriptionsLoading, statusesLoading, huntId]);
 
   const puzzleSubscribers = useTracker(() => {
     const displayNames = indexedDisplayNames();
@@ -535,6 +568,7 @@ const PuzzleListView = ({
                 trackPersistentExpand={searchString === ""}
                 showSolvers={showSolvers}
                 subscribers={puzzleSubscribers}
+                puzzleUsers={puzzleUsers}
                 addPuzzleCallback={showAddModalWithTags}
               />
             );
@@ -566,6 +600,7 @@ const PuzzleListView = ({
               canUpdate={canUpdate}
               showSolvers={showSolvers}
               subscribers={puzzleSubscribers}
+              puzzleUsers={puzzleUsers}
             />
           );
           listControls = null;
@@ -598,6 +633,7 @@ const PuzzleListView = ({
                 suppressedTagIds={[]}
                 showSolvers={showSolvers}
                 subscribers={puzzleSubscribers}
+                puzzleUsers={puzzleUsers}
               />
             </PuzzleGroupDiv>
           )}
@@ -616,6 +652,7 @@ const PuzzleListView = ({
               trackPersistentExpand={searchString !== ""}
               subscribers={puzzleSubscribers}
               showSolvers={showSolvers}
+              puzzleUsers={puzzleUsers}
               addPuzzleCallback={showAddModalWithTags}
             />
           )}
@@ -629,13 +666,14 @@ const PuzzleListView = ({
       canUpdate,
       showSolvers,
       puzzleSubscribers,
+      puzzleUsers,
       deletedPuzzles,
       huntId,
       searchString,
+      showAddModalWithTags,
       allPuzzles,
       canExpandAllGroups,
       expandAllGroups,
-      showAddModalWithTags,
     ],
   );
 
@@ -759,8 +797,8 @@ const PuzzleListView = ({
             <StyledToggleButtonGroup
               type="radio"
               name="show-solvers"
-              defaultValue="show"
-              value={showSolvers ? "show" : "hide"}
+              defaultValue="hide"
+              value={showSolvers}
               onChange={setShowSolversString}
             >
               <ToggleButton
@@ -773,9 +811,16 @@ const PuzzleListView = ({
               <ToggleButton
                 id="solvers-show-button"
                 variant="outline-info"
-                value="show"
+                value="viewers"
               >
-                <FontAwesomeIcon icon={faEye} key="hunters-show" /> Show
+                <FontAwesomeIcon icon={faEye} key="hunters-show" /> Viewers
+              </ToggleButton>
+              <ToggleButton
+                id="active-show-button"
+                variant="outline-info"
+                value="active"
+              >
+                <FontAwesomeIcon icon={faBrain} key="hunters-show" /> Active
               </ToggleButton>
             </StyledToggleButtonGroup>
           </ButtonToolbar>
@@ -799,12 +844,7 @@ const PuzzleListView = ({
           </InputGroup>
         </SearchFormGroup>
       </ViewControls>
-      {renderList(
-        retainedPuzzles,
-        solvedOverConstrains,
-        allPuzzles.length,
-        puzzleSubscribers,
-      )}
+      {renderList(retainedPuzzles, solvedOverConstrains, allPuzzles.length)}
     </div>
   );
 };
@@ -829,7 +869,6 @@ const PuzzleListPage = () => {
 
   // Don't bother including this in loading - it's ok if they trickle in
   useTypedSubscribe(puzzleActivityForHunt, { huntId });
-
   return loading ? (
     <span>loading...</span>
   ) : (
