@@ -65,6 +65,7 @@ import ChatMessage from "./ChatMessage";
 import Markdown from "./Markdown";
 import PuzzleAnswer from "./PuzzleAnswer";
 import SpinnerTimer from "./SpinnerTimer";
+import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 
 // How long to keep showing guess notifications after actioning.
 // Note that this cannot usefully exceed the linger period implemented by the
@@ -662,6 +663,21 @@ const ChatNotificationMessage = ({
     [id],
   );
 
+  const puzzleSubscribe = useTypedSubscribe(puzzlesForHunt, {
+    huntId: hunt._id,
+  });
+  const puzzleLoading = puzzleSubscribe();
+
+  const puzzleData = useTracker(() => {
+    return puzzleLoading
+      ? new Map<string, PuzzleType>()
+      : Puzzles.find({ hunt: hunt._id })
+          .fetch()
+          .reduce((mp, p) => {
+            return mp.set(p._id, p);
+          }, new Map<string, PuzzleType>());
+  }, [hunt._id, puzzleLoading]);
+
   const senderDisplayName = displayNames.get(cn.sender) ?? "???";
   const [showSettings, setShowSettings] = useState(false);
   const toggleSettings = () => {
@@ -706,6 +722,7 @@ const ChatNotificationMessage = ({
             message={cn.content}
             displayNames={displayNames}
             selfUserId={selfUserId}
+            puzzleData={puzzleData}
           />
         </div>
       </Toast.Body>
