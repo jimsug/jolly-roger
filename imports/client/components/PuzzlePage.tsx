@@ -2057,6 +2057,7 @@ const PuzzlePageMetadata = ({
 
   // State and logic for conditional tag rendering
   const actionRowRef = useRef<HTMLDivElement>(null);
+  const actionButtonsRef = useRef<HTMLDivElement>(null);
   const [tagsOnSeparateRow, setTagsOnSeparateRow] = useState(false);
   const tagsOnSeparateRowRef = useRef(tagsOnSeparateRow);
 
@@ -2069,8 +2070,10 @@ const PuzzlePageMetadata = ({
       // Threshold: height slightly larger than a single line of buttons/tags
       const singleLineHeightThreshold = 35; // Adjust this value as needed
       const currentHeight = actionRowRef.current.offsetHeight;
+      const currentPos = actionRowRef.current.clientHeight;
+      const currentActionPos = actionButtonsRef.current.clientHeight;
       const shouldBeSeparate = currentHeight > singleLineHeightThreshold;
-      if (shouldBeSeparate !== tagsOnSeparateRowRef.current) {
+      if (shouldBeSeparate !== tagsOnSeparateRowRef.current || currentPos !== currentActionPos) {
         tagsOnSeparateRowRef.current = shouldBeSeparate;
         setTagsOnSeparateRow(shouldBeSeparate);
       }
@@ -2128,7 +2131,7 @@ const PuzzlePageMetadata = ({
         {puzzleLink}
         {documentLink}
         {!tagsOnSeparateRow && tagListElement} {/* Render tags inline if they fit */}
-        <PuzzleMetadataButtons>
+        <PuzzleMetadataButtons ref={actionButtonsRef}>
           {togglePuzzleInset}
           {editButton}
           {imageInsert}
