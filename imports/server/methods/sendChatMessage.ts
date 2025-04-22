@@ -1,7 +1,6 @@
 import { check, Match } from "meteor/check";
-import ChatMessages, {
-  ChatAttachmentType,
-} from "../../lib/models/ChatMessages";
+import type { ChatAttachmentType } from "../../lib/models/ChatMessages";
+import ChatMessages from "../../lib/models/ChatMessages";
 import sendChatMessage from "../../methods/sendChatMessage";
 import sendChatMessageInternal from "../sendChatMessageInternal";
 import defineMethod from "./defineMethod";
@@ -18,7 +17,7 @@ defineMethod(sendChatMessage, {
     check(arg, {
       puzzleId: String,
       content: String,
-      parentId: Match.Maybe(String),
+      parentId: Match.OneOf(String, null, undefined),
       attachments: Match.Maybe([ChatAttachmentPattern]),
     });
 
@@ -45,6 +44,10 @@ defineMethod(sendChatMessage, {
           {
             type: "mention" as const,
             userId: String,
+          },
+          {
+            type: "puzzle" as const,
+            puzzleId: String,
           },
           {
             text: String,

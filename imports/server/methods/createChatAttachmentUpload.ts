@@ -8,10 +8,12 @@ import Puzzles from "../../lib/models/Puzzles";
 import Settings from "../../lib/models/Settings";
 import createChatAttachmentUpload from "../../methods/createChatAttachmentUpload";
 import defineMethod from "./defineMethod";
+import { trace } from "console";
 
 defineMethod(createChatAttachmentUpload, {
   validate(arg) {
     check(arg, {
+      huntId: String,
       puzzleId: String,
       filename: String,
       mimeType: String, // Consider adding validation for allowed mime types if needed
@@ -21,6 +23,7 @@ defineMethod(createChatAttachmentUpload, {
   },
 
   async run({ puzzleId, filename, mimeType }) {
+    trace("*************************");
     check(this.userId, String);
     const user = await MeteorUsers.findOneAsync(this.userId);
     if (!user) {

@@ -4,6 +4,8 @@ import { useFind, useSubscribe, useTracker } from "meteor/react-meteor-data";
 import EmojiPicker from "emoji-picker-react";
 import { EmojiStyle } from "emoji-picker-react";
 import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
+import { faChevronLeft } from "@fortawesome/free-solid-svg-icons/faChevronLeft";
+import { faChevronRight } from "@fortawesome/free-solid-svg-icons/faChevronRight";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
@@ -121,8 +123,9 @@ import { ButtonGroup, ToggleButton, ToggleButtonGroup } from "react-bootstrap";
 import removeChatMessage from "../../methods/removeChatMessage";
 import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons";
 import { Theme } from "../theme";
+import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
+import chatMessageNodeType from "../../lib/chatMessageNodeType";
 import createChatAttachmentUpload from "../../methods/createChatAttachmentUpload";
-
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -134,10 +137,10 @@ const FilteredChatFields = [
   "puzzle",
   "content",
   "sender",
-  "pinned",
   "timestamp",
   "pinTs",
   "parentId",
+  "attachments",
 ] as const;
 type FilteredChatMessageType = Pick<
   ChatMessageType,
@@ -476,7 +479,7 @@ const PuzzleMetadataRow = styled.div`
 
 const PuzzleMetadataActionRow = styled(PuzzleMetadataRow)`
   align-items: center;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 
   a {
     margin-right: 8px;
@@ -485,6 +488,8 @@ const PuzzleMetadataActionRow = styled(PuzzleMetadataRow)`
 
 const PuzzleMetadataButtons = styled.div`
   margin-left: auto;
+  display: flex;
+  flex-wrap: nowrap;
 
   button {
     margin: 2px 0 2px 8px;
@@ -666,6 +671,7 @@ const ChatHistoryMessage = React.memo(
     isReplyingTo,
     shownEmojiPicker,
     setShownEmojiPicker,
+    puzzles,
   }: {
     message: FilteredChatMessageType;
     displayNames: Map<string, string>;
@@ -682,6 +688,7 @@ const ChatHistoryMessage = React.memo(
     isReplyingTo: boolean;
     shownEmojiPicker: string | null;
     setShownEmojiPicker: (messageId: string | null) => void;
+    puzzles: PuzzleType[];
   }) => {
     const ts = shortCalendarTimeFormat(message.timestamp);
 
@@ -759,6 +766,11 @@ const ChatHistoryMessage = React.memo(
       }
     }, [isMouseOverIcon, isMouseOverPopover, showPopover]);
 
+    const puzzlesById = useTracker(()=>{
+      return puzzles.reduce((acc, puz)=>{
+        return acc.set(puz._id, puz)
+      }, new Map<string, PuzzleType>())
+    }, [puzzles])
 
     const replyPopover = (
       <ReplyPopover
@@ -782,7 +794,9 @@ const ChatHistoryMessage = React.memo(
                 <ChatMessage
                   message={parent.content}
                   displayNames={displayNames}
+                  puzzleData={puzzlesById}
                   selfUserId={selfUserId}
+                  attachments={parent.attachments}
                 />
               </ReplyPopoverMessage>
             ))}
@@ -967,7 +981,9 @@ const ChatHistoryMessage = React.memo(
         <ChatMessage
           message={message.content}
           displayNames={displayNames}
+          puzzleData={puzzlesById}
           selfUserId={selfUserId}
+          attachments={message.attachments}
         />
         <ReactionContainer>
           {Array.from(reactionCounts.entries()).map(([emoji, count]) => {
@@ -1029,6 +1045,7 @@ const ChatHistory = React.forwardRef(
       setPulsingMessageId,
       setReplyingTo,
       replyingTo,
+      puzzles,
     }: {
       puzzleId: string;
       displayNames: Map<string, string>;
@@ -1037,6 +1054,7 @@ const ChatHistory = React.forwardRef(
       setPulsingMessageId: (messageId: string | null) => void;
       setReplyingTo: (messageId: string | null) => void;
       replyingTo: string | null;
+      puzzles: PuzzleType[];
     },
     forwardedRef: React.Ref<ChatHistoryHandle>,
   ) => {
@@ -1240,6 +1258,7 @@ const ChatHistory = React.forwardRef(
               isReplyingTo={replyingTo === msg._id}
               shownEmojiPicker={shownEmojiPicker}
               setShownEmojiPicker={setShownEmojiPicker}
+              puzzles={puzzles}
             />
           );
         })}
@@ -1257,6 +1276,7 @@ const PinnedMessage = React.forwardRef(
       scrollToMessage,
       pulsingMessageId,
       setReplyingTo,
+      puzzles,
     }: {
       puzzleId: string;
       displayNames: Map<string, string>;
@@ -1264,6 +1284,7 @@ const PinnedMessage = React.forwardRef(
       scrollToMessage: (messageId: string, callback?: () => void) => void;
       pulsingMessageId: string | null;
       setReplyingTo: (messageId: string | null) => void;
+      puzzles: PuzzleType[];
     },
     forwardedRef: React.Ref<ChatHistoryHandle>,
   ) => {
@@ -1402,6 +1423,7 @@ const PinnedMessage = React.forwardRef(
               messageRef={() => {}}
               isPulsing={pulsingMessageId === msg._id}
               setReplyingTo={setReplyingTo}
+              puzzles={puzzles}
             />
           );
         })}
@@ -1450,6 +1472,7 @@ const ChatInput = React.memo(
     replyingTo,
     setReplyingTo,
     displayNames,
+    puzzles,
     scrollToMessage,
   }: {
     onHeightChange: () => void;
@@ -1460,6 +1483,7 @@ const ChatInput = React.memo(
     replyingTo: string | null;
     setReplyingTo: (messageId: string | null) => void;
     displayNames: Map<string, string>;
+    puzzles: PuzzleType[];
     scrollToMessage: (messageId: string, callback?: () => void) => void;
   }) => {
     // We want to have hunt profile data around so we can autocomplete from multiple fields.
@@ -1496,26 +1520,22 @@ const ChatInput = React.memo(
     const [isUploading, setIsUploading] = useState<boolean>(false);
     const [uploadError, setUploadError] = useState<string | null>(null);
 
-    // State to hold the configuration status and loading state
     const [s3Configured, setS3Configured] = useState<boolean | undefined>(undefined);
     const [isLoadingS3Config, setIsLoadingS3Config] = useState<boolean>(true);
 
-    // Effect to fetch the configuration status once on mount
     useEffect(() => {
-      let isMounted = true; // Track mounting status to prevent state updates after unmount
+      let isMounted = true;
 
-      isS3Configured.callPromise() // Use callPromise or callAsync
+      isS3Configured.callPromise()
         .then(result => {
           if (isMounted) {
-            console.log("Fetched S3 config status:", result);
             setS3Configured(result);
             setIsLoadingS3Config(false);
           }
         })
         .catch(error => {
           if (isMounted) {
-            console.error("Error fetching S3 config:", error);
-            setS3Configured(false); // Default to false on error, or handle differently
+            setS3Configured(false);
             setIsLoadingS3Config(false);
           }
         });
@@ -1546,7 +1566,7 @@ const ChatInput = React.memo(
         content.length > 0 &&
         (content[0]! as MessageElement).children.some((child) => {
           return (
-            nodeIsMention(child) ||
+            nodeIsMention(child) || chatMessageNodeType(child) !== "text" ||
             (nodeIsText(child) && child.text.trim().length > 0)
           );
         });
@@ -1645,7 +1665,7 @@ const ChatInput = React.memo(
 
           const uploadPromises = uploadingImages.map(async (file) => {
             try {
-              const uploadParams = await createChatAttachmentUpload.call({
+              const uploadParams = await createChatAttachmentUpload.callPromise({
                 huntId: huntId,
                 puzzleId: puzzleId,
                 filename: file.name,
@@ -1674,7 +1694,7 @@ const ChatInput = React.memo(
                   const text = await response.text();
                   errorBody += `, Body: ${text.substring(0, 500)}`;
                 } catch (e) { /* ignore */ }
-                throw new Error(`Failed to upload ${file.name}. ${errorBody}`);
+                throw new Error(`Failed to Upload ${file.name}. ${errorBody}`);
               }
 
               return {
@@ -1684,7 +1704,6 @@ const ChatInput = React.memo(
                 size: file.size,
               };
             } catch (err: any) { // Catch specific error type if possible
-              console.error(`Error uploading ${file.name}:`, err);
               throw new Error(`Failed to upload ${file.name}: ${err.message}`);
             }
           });
@@ -1699,8 +1718,19 @@ const ChatInput = React.memo(
           type,
           children: children.map((child) => {
             if (nodeIsMention(child)) {
-              return { type: child.type, userId: child.userId };
+              return {
+                type: child.type,
+                userId: child.userId,
+              };
             } else {
+              switch (chatMessageNodeType(child)) {
+                case "puzzle":
+                  return {
+                    type: child.type,
+                    puzzleId: child.puzzleId,
+                  }
+                  break;
+              }
               return child;
             }
           }),
@@ -1714,8 +1744,7 @@ const ChatInput = React.memo(
         await sendChatMessage.call({
           puzzleId,
           content: JSON.stringify({ ...cleanedMessage, children: finalChildren }),
-          parentId: replyingTo,
-          // Ensure attachments is an array or undefined, not null
+          parentId: replyingTo ?? null,
           attachments: attachments.length > 0 ? attachments : [],
         });
 
@@ -1729,13 +1758,11 @@ const ChatInput = React.memo(
           onMessageSent();
         }
       } catch (error: any) {
-        console.error("Failed to send message:", error);
         setUploadError(error.message || "An unknown error occurred during upload or message sending.");
       } finally {
         setIsUploading(false);
       }
     }, [
-      // *** UPDATED DEPENDENCIES ***
       hasNonTrivialContent,
       isUploading,
       uploadingImages,
@@ -1746,13 +1773,11 @@ const ChatInput = React.memo(
       replyingTo,
       onMessageSent,
       setReplyingTo,
-      // Add state setters used within the function
       setIsUploading,
       setUploadError,
       setContent,
       setUploadingImages,
       setImagePreviews,
-      // *** END UPDATED DEPENDENCIES ***
     ]);
 
     useBlockUpdate(
@@ -1789,9 +1814,17 @@ const ChatInput = React.memo(
           />
         </ReplyingTo>
       )}
+      {imagePreviews &&
+      (<ImagePreviewContainer>
       {imagePreviews.map((preview, index) => (
+        <ImagePreviewWrapper>
+          <RemoveImageButton onClick={handleRemoveImage}/>
           <ImagePreview key={index} src={preview} alt="Preview" />
-        ))}
+        </ImagePreviewWrapper>)
+        )}
+
+        </ImagePreviewContainer>
+        )}
         {uploadingImages.length > 0 && !s3Configured && (
           <ImagePlaceholder>
             <FontAwesomeIcon icon={faImage} />
@@ -1806,6 +1839,7 @@ const ChatInput = React.memo(
             initialContent={content}
             placeholder="Chat"
             users={users}
+            puzzles={puzzles}
             onContentChange={onContentChange}
             onSubmit={sendContentMessage}
             disabled={disabled}
@@ -1829,13 +1863,12 @@ const ChatInput = React.memo(
                 onChange={handleFileSelect}
                 style={{ display: "none" }}
                 id="image-upload-input"
+                ref={fileInputRef}
               />
-              <FormLabel htmlFor="image-upload-input">
-                <Button variant="secondary">
-                  <FontAwesomeIcon icon={faImage} />
-                </Button>
-              </FormLabel>
-              </>
+              <Button variant="secondary" onClick={triggerFileInput}>
+                <FontAwesomeIcon icon={faImage} />
+              </Button>
+            </>
           )}
           </ButtonGroup>
           </FormGroup>
@@ -1848,6 +1881,7 @@ const ChatInput = React.memo(
 interface ChatSectionHandle {
   scrollHistoryToTarget: () => void;
   scrollToMessage: (messageId: string, callback?: () => void) => void;
+  snapToBottom: () => void;
 }
 
 const ChatSection = React.forwardRef(
@@ -1856,6 +1890,7 @@ const ChatSection = React.forwardRef(
       chatDataLoading,
       disabled,
       displayNames,
+      puzzles,
       puzzleId,
       huntId,
       callState,
@@ -1869,6 +1904,7 @@ const ChatSection = React.forwardRef(
       chatDataLoading: boolean;
       disabled: boolean;
       displayNames: Map<string, string>;
+      puzzles: PuzzleType[];
       puzzleId: string;
       huntId: string;
       callState: CallState;
@@ -1920,10 +1956,18 @@ const ChatSection = React.forwardRef(
       }
     }, []);
 
+    const snapToBottom = useCallback(() => {
+      trace("ChatSection snapToBottom", { hasRef: !!historyRef.current });
+      if (historyRef.current) {
+        historyRef.current.snapToBottom();
+      }
+    }, []);
+
     useImperativeHandle(forwardedRef, () => ({
       scrollHistoryToTarget,
       scrollToMessage,
       highlightMessage,
+      snapToBottom,
     }));
 
     useLayoutEffect(() => {
@@ -1957,6 +2001,7 @@ const ChatSection = React.forwardRef(
           puzzleId={puzzleId}
           displayNames={displayNames}
           selfUser={selfUser}
+          puzzles={puzzles}
           scrollToMessage={scrollToMessage}
           pulsingMessageId={pulsingMessageId}
           setReplyingTo={setReplyingTo}
@@ -1966,6 +2011,7 @@ const ChatSection = React.forwardRef(
           puzzleId={puzzleId}
           displayNames={displayNames}
           selfUser={selfUser}
+          puzzles={puzzles}
           scrollToMessage={scrollToMessage}
           pulsingMessageId={pulsingMessageId}
           setPulsingMessageId={setPulsingMessageId}
@@ -1981,6 +2027,7 @@ const ChatSection = React.forwardRef(
           replyingTo={replyingTo}
           setReplyingTo={setReplyingTo}
           displayNames={displayNames}
+          puzzles={puzzles}
           scrollToMessage={scrollToMessage}
         />
       </ChatSectionDiv>
@@ -2006,7 +2053,7 @@ const InsertImage = ({ documentId }: { documentId: string }) => {
   );
 
   const onStartInsert = useCallback(
-    (e: MouseEvent) => {
+    (e: React.MouseEvent) => {
       e.preventDefault();
       setLoading(true);
 
@@ -2080,6 +2127,7 @@ const PuzzlePageMetadata = ({
   bookmarked,
   displayNames,
   document,
+  allPuzzles,
   isDesktop,
   showDocument,
   setShowDocument,
@@ -2090,6 +2138,7 @@ const PuzzlePageMetadata = ({
   bookmarked: boolean;
   displayNames: Map<string, string>;
   document?: DocumentType;
+  allPuzzles: PuzzleType[];
   isDesktop: boolean;
   showDocument: boolean;
   setShowDocument: (showDocument: boolean) => void;
@@ -2106,10 +2155,6 @@ const PuzzlePageMetadata = ({
     [hunt],
   );
 
-  const allPuzzles = useTracker(
-    () => Puzzles.find({ hunt: huntId }).fetch(),
-    [huntId],
-  );
   const allTags = useTracker(
     () => Tags.find({ hunt: huntId }).fetch(),
     [huntId],
@@ -2293,6 +2338,62 @@ const PuzzlePageMetadata = ({
     );
   }
 
+  // State and logic for conditional tag rendering
+  const actionRowRef = useRef<HTMLDivElement>(null);
+  const actionButtonsRef = useRef<HTMLDivElement>(null);
+  const [tagsOnSeparateRow, setTagsOnSeparateRow] = useState(false);
+  const tagsOnSeparateRowRef = useRef(tagsOnSeparateRow);
+
+  useEffect(() => {
+    tagsOnSeparateRowRef.current = tagsOnSeparateRow;
+  }, [tagsOnSeparateRow]);
+
+  const checkTagLayout = useCallback(() => {
+    if (actionRowRef.current) {
+      // Threshold: height slightly larger than a single line of buttons/tags
+      const singleLineHeightThreshold = 35; // Adjust this value as needed
+      const currentHeight = actionRowRef.current.offsetHeight;
+      const currentPos = actionRowRef.current.clientHeight;
+      const currentActionPos = actionButtonsRef.current.clientHeight;
+      const shouldBeSeparate = currentHeight > singleLineHeightThreshold;
+      if (shouldBeSeparate !== tagsOnSeparateRowRef.current || currentPos !== currentActionPos) {
+        tagsOnSeparateRowRef.current = shouldBeSeparate;
+        setTagsOnSeparateRow(shouldBeSeparate);
+      }
+    }
+  }, []);
+
+  // Check layout on mount and when tags change
+  useLayoutEffect(() => {
+    checkTagLayout();
+  }, [tags, checkTagLayout]); // Depend on tags
+
+  // Check layout on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      checkTagLayout();
+    };
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [checkTagLayout]);
+
+  const tagListElement = (
+    <StyledTagList
+      puzzle={puzzle}
+      tags={tags}
+      onCreateTag={onCreateTag}
+      onRemoveTag={onRemoveTag}
+      linkToSearch={false}
+      showControls={isDesktop}
+      popoverRelated
+      allPuzzles={allPuzzles}
+      allTags={allTags}
+      emptyMessage="No tags yet"
+    />
+  );
+
   return (
     <PuzzleMetadata>
       <PuzzleModalForm
@@ -2303,7 +2404,7 @@ const PuzzlePageMetadata = ({
         tags={allTags}
         onSubmit={onEdit}
       />
-      <PuzzleMetadataActionRow>
+      <PuzzleMetadataActionRow ref={actionRowRef}>
         <BookmarkButton
           puzzleId={puzzleId}
           bookmarked={bookmarked}
@@ -2312,7 +2413,8 @@ const PuzzlePageMetadata = ({
         />
         {puzzleLink}
         {documentLink}
-        <PuzzleMetadataButtons>
+        {!tagsOnSeparateRow && tagListElement} {/* Render tags inline if they fit */}
+        <PuzzleMetadataButtons ref={actionButtonsRef}>
           {togglePuzzleInset}
           {editButton}
           {imageInsert}
@@ -2320,20 +2422,11 @@ const PuzzlePageMetadata = ({
         </PuzzleMetadataButtons>
       </PuzzleMetadataActionRow>
       <PuzzleMetadataRow>{answersElement}</PuzzleMetadataRow>
-      <PuzzleMetadataRow>
-        <StyledTagList
-          puzzle={puzzle}
-          tags={tags}
-          onCreateTag={onCreateTag}
-          onRemoveTag={onRemoveTag}
-          linkToSearch={false}
-          showControls={isDesktop}
-          popoverRelated
-          allPuzzles={allPuzzles}
-          allTags={allTags}
-          emptyMessage="No tags yet"
-        />
-      </PuzzleMetadataRow>
+      {tagsOnSeparateRow && ( /* Render tags on separate row if they wrapped */
+        <PuzzleMetadataRow>
+          {tagListElement}
+        </PuzzleMetadataRow>
+      )}
     </PuzzleMetadata>
   );
 };
@@ -2375,9 +2468,8 @@ const GuessTableSmallRow = styled.div`
 
 const GuessRow = styled.div<{ $state: GuessType["state"]; theme: Theme }>`
   display: contents;
-  background-color: ${($state, theme) =>
-    theme.colors.guess[$state].background
-    };
+  background-color: ${({ $state, theme }) =>
+    theme.colors.guess[$state].background};
 
   &::before {
     content: " ";
@@ -2386,9 +2478,8 @@ const GuessRow = styled.div<{ $state: GuessType["state"]; theme: Theme }>`
   }
 
   :hover {
-    background-color: ${($state, theme) =>
-      theme.colors.guess[$state].hoverBackground
-      };
+    background-color: ${({ $state, theme }) =>
+    theme.colors.guess[$state].hoverBackground};
   }
 `;
 
@@ -2466,6 +2557,31 @@ const AdditionalNotesCell = styled(GuessCell)`
 const LinkButton: FC<ComponentPropsWithRef<typeof Button>> = styled(Button)`
   padding: 0;
   vertical-align: baseline;
+`;
+
+const MinimizeButton = styled.button<{ $left: number; $isMinimized: boolean; theme: Theme }>`
+  position: absolute;
+  top: 50%;
+  left: ${({ $left }) => $left}px;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  background-color: ${({ theme }) => theme.colors.background};
+  border: 1px solid ${({ theme }) => theme.colors.text};
+  border-left: none;
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+  padding: 8px 4px;
+  cursor: pointer;
+
+  ${({ $isMinimized }) =>
+    $isMinimized &&
+    css`
+      left: 0;
+      transform: translateY(-50%);
+      border-left: 1px solid ${({ theme }) => theme.colors.border};
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+    `}
 `;
 
 enum PuzzleGuessSubmitState {
@@ -3061,6 +3177,8 @@ const PuzzlePage = React.memo(() => {
   const puzzlePageDivRef = useRef<HTMLDivElement | null>(null);
   const chatSectionRef = useRef<ChatSectionHandle | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState<number>(DefaultSidebarWidth);
+  const [isChatMinimized, setIsChatMinimized] = useState<boolean>(false);
+  const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(DefaultSidebarWidth);
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
@@ -3073,7 +3191,7 @@ const PuzzlePage = React.memo(() => {
   const huntId = useParams<"huntId">().huntId!;
   const puzzleId = useParams<"puzzleId">().puzzleId!;
 
-
+  const theme = useTheme();
   const hunt = useTracker(() => {return Hunts.findOne(huntId)}, [huntId]);
 
   const showPuzzleDocument = useTracker(() => {
@@ -3135,6 +3253,19 @@ const PuzzlePage = React.memo(() => {
         : indexedDisplayNames(),
     [puzzleDataLoading, chatDataLoading],
   );
+
+  const chatMessages: FilteredChatMessageType[] = useTracker(
+    () => {return chatDataLoading ? [] : ChatMessages.find({ puzzle: puzzleId }, { sort: { timestamp: 1 } }).fetch()},
+    [puzzleId],
+  );
+  const prevMessagesLength = useRef<number>(0);
+
+  const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, {huntId});
+  const puzzlesLoading = puzzlesSubscribe();
+  const puzzles = useTracker(()=>{
+    return puzzlesLoading ? [] : Puzzles.find({hunt:huntId}).fetch();
+  }, [puzzlesLoading, huntId]);
+
   // Sort by created at so that the "first" document always has consistent meaning
   const doc = useTracker(
     () =>
@@ -3177,20 +3308,67 @@ const PuzzlePage = React.memo(() => {
     }
   }, [puzzleId]);
 
-  const onCommitSideBarSize = useCallback((newSidebarWidth: number) => {
-    setSidebarWidth(newSidebarWidth);
-  }, []);
+  const onCommitSidebarSize = useCallback((newSidebarWidth: number, collapsed: 0 | 1 | 2, cause: 'drag' | 'resize') => {
+    if (cause === 'drag' && isChatMinimized && newSidebarWidth > 0) {
+      setIsChatMinimized(false);
+      setSidebarWidth(newSidebarWidth);
+      setLastSidebarWidth(newSidebarWidth);
+    } else if (!isChatMinimized) {
+      if (newSidebarWidth > 0) {
+        setSidebarWidth(newSidebarWidth);
+        setLastSidebarWidth(newSidebarWidth);
+      } else if (cause === 'drag') {
+        setIsChatMinimized(true);
+      }
+    }
+  }, [isChatMinimized]);
+
+  const toggleChatMinimize = useCallback(() => {
+    setIsChatMinimized(prevMinimized => {
+      const nextMinimized = !prevMinimized;
+      if (nextMinimized) {
+        if (sidebarWidth > 0) {
+          setLastSidebarWidth(sidebarWidth);
+        }
+      } else {
+        setSidebarWidth(lastSidebarWidth);
+        setTimeout(() => {
+          if (chatSectionRef.current) {
+            chatSectionRef.current.scrollHistoryToTarget();
+          }
+        }, 0);
+      }
+      return nextMinimized;
+    });
+  }, [sidebarWidth, lastSidebarWidth]);
+
+  const restoreChat = useCallback(() => {
+    if (isChatMinimized) {
+      setIsChatMinimized(false);
+      setSidebarWidth(lastSidebarWidth);
+      // Trigger scroll adjustment and snap AFTER state update completes
+      setTimeout(() => {
+        if (chatSectionRef.current) {
+          chatSectionRef.current.scrollHistoryToTarget();
+          chatSectionRef.current.snapToBottom(); // Snap when restoring
+        }
+      }, 0);
+    }
+  }, [isChatMinimized, lastSidebarWidth]);
 
   const [pulsingMessageId, setPulsingMessageId] = useState<string | null>(null);
 
-  const onChangeSideBarSize = useCallback(() => {
+  const onChangeSidebarSize = useCallback((newSize: number) => {
+    if (!isChatMinimized) {
+      setSidebarWidth(newSize);
+    }
     trace("PuzzlePage onChangeSideBarSize", {
       hasRef: !!chatSectionRef.current,
     });
     if (chatSectionRef.current) {
       chatSectionRef.current.scrollHistoryToTarget();
     }
-  }, []);
+  }, [isChatMinimized]);
 
   useLayoutEffect(() => {
     // When sidebarWidth is updated, scroll history to the target
@@ -3217,6 +3395,21 @@ const PuzzlePage = React.memo(() => {
       window.removeEventListener("resize", onResize);
     };
   }, [onResize]);
+
+  useEffect(() => {
+    const currentLength = chatMessages.length;
+    // Check if length increased AND it wasn't the initial load (prev length > 0)
+    // Avoid triggering on initial load or deletions
+    if (currentLength > prevMessagesLength.current && prevMessagesLength.current > 0) {
+      if (isChatMinimized) {
+        restoreChat();
+        setTimeout(() => {
+          chatSectionRef.current?.snapToBottom();
+        }, 10);
+      }
+    }
+    prevMessagesLength.current = currentLength;
+  }, [chatMessages, isChatMinimized, restoreChat]);
 
   useEffect(() => {
     if (activePuzzle && !activePuzzle.deleted) {
@@ -3256,6 +3449,7 @@ const PuzzlePage = React.memo(() => {
       puzzle={activePuzzle}
       bookmarked={bookmarked}
       document={doc}
+      allPuzzles={puzzles}
       displayNames={displayNames}
       isDesktop={isDesktop}
       showDocument={showDocument}
@@ -3270,6 +3464,7 @@ const PuzzlePage = React.memo(() => {
       chatDataLoading={chatDataLoading}
       disabled={activePuzzle.deleted ?? true /* disable while still loading */}
       displayNames={displayNames}
+      puzzles={puzzles}
       huntId={huntId}
       puzzleId={puzzleId}
       callState={callState}
@@ -3328,11 +3523,22 @@ const PuzzlePage = React.memo(() => {
     );
   }
 
+  const effectiveSidebarWidth = isChatMinimized ? 0 : sidebarWidth;
+
   if (isDesktop) {
     return (
       <>
         {deletedModal}
         <FixedLayout className="puzzle-page" ref={puzzlePageDivRef}>
+        <MinimizeButton
+            $left={effectiveSidebarWidth + 10}
+            $isMinimized={isChatMinimized}
+            onClick={toggleChatMinimize}
+            title={isChatMinimized ? "Restore Chat" : "Minimize Chat"}
+            theme={theme}
+          >
+            <FontAwesomeIcon icon={isChatMinimized ? faChevronRight : faChevronLeft} />
+          </MinimizeButton>
           <SplitPanePlus
             split="vertical"
             minSize={MinimumSidebarWidth}
@@ -3340,11 +3546,13 @@ const PuzzlePage = React.memo(() => {
             primary="first"
             autoCollapse1={-1}
             autoCollapse2={-1}
-            size={sidebarWidth}
-            onChanged={onChangeSideBarSize}
-            onPaneChanged={onCommitSideBarSize}
+            size={effectiveSidebarWidth}
+            collapsed={0}
+            onChanged={onChangeSidebarSize}
+            onPaneChanged={onCommitSidebarSize}
+            allowResize={!isChatMinimized}
           >
-            {chat}
+            {isChatMinimized ? <div /> : chat}
             <PuzzleContent>
               {metadata}
                 <PuzzleDocumentDiv>
