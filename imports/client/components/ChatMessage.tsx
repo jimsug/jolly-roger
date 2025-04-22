@@ -318,6 +318,7 @@ const ChatMessage = ({
                 to={a.url}
                 target="_blank"
                 title={`Download: ${a.filename}`}
+                download={imageAttachments[currentImageIndex]?.filename}
               >
                 <small>
                   <FontAwesomeIcon icon={faPaperclip} size="sm" />{" "}
@@ -361,6 +362,7 @@ const ChatMessage = ({
               <Link
                 to={imageAttachments[currentImageIndex]?.url}
                 target="_blank"
+                download={imageAttachments[currentImageIndex]?.filename}
               >
                 <LightboxButton title="Download">
                   <FontAwesomeIcon icon={faDownload} size="2xs" />
