@@ -23,7 +23,6 @@ defineMethod(createChatAttachmentUpload, {
   },
 
   async run({ puzzleId, filename, mimeType }) {
-    trace("*************************");
     check(this.userId, String);
     const user = await MeteorUsers.findOneAsync(this.userId);
     if (!user) {
@@ -59,7 +58,7 @@ defineMethod(createChatAttachmentUpload, {
       );
     }
 
-    const key = `${puzzle.hunt}/${puzzleId}/chat/${Random.id()}-${filename}`;
+    const key = `${puzzle.hunt}/${puzzleId}/chat/${Random.id()}/${filename}`;
 
     const s3 = new S3Client({ region: s3BucketSettings.value.bucketRegion });
     const { url, fields } = await createPresignedPost(s3, {
