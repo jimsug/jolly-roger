@@ -5,6 +5,10 @@ import createPersistedState from "use-persisted-state";
 export type AppThemeState = "dark" | "light";
 export const useAppThemeState = createPersistedState<AppThemeState>("appTheme");
 
+export const usePersistedSidebarWidth = createPersistedState<number>(
+  "persistentSidebarWidth",
+);
+
 export type OperatorActionsHiddenState = Record<string /* huntId */, boolean>;
 export const useOperatorActionsHidden =
   createPersistedState<OperatorActionsHiddenState>("operatorActionsHidden");

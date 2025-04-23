@@ -126,6 +126,7 @@ import { Theme } from "../theme";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import chatMessageNodeType from "../../lib/chatMessageNodeType";
 import createChatAttachmentUpload from "../../methods/createChatAttachmentUpload";
+import { usePersistedSidebarWidth } from "../hooks/persisted-state";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -3179,9 +3180,11 @@ const PuzzleDeletedModal = ({
 const PuzzlePage = React.memo(() => {
   const puzzlePageDivRef = useRef<HTMLDivElement | null>(null);
   const chatSectionRef = useRef<ChatSectionHandle | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState<number>(DefaultSidebarWidth);
+  const [persistentWidth, setPersistentWidth] = usePersistedSidebarWidth();
+  const [sidebarWidth, setSidebarWidth] = useState<number>(persistentWidth ?? DefaultSidebarWidth);
+  // const [sidebarWidth, setSidebarWidth] = useState<number>(DefaultSidebarWidth);
   const [isChatMinimized, setIsChatMinimized] = useState<boolean>(false);
-  const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(DefaultSidebarWidth);
+  const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(persistentWidth ?? DefaultSidebarWidth);
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
@@ -3313,11 +3316,13 @@ const PuzzlePage = React.memo(() => {
 
   const onCommitSidebarSize = useCallback((newSidebarWidth: number, collapsed: 0 | 1 | 2, cause: 'drag' | 'resize') => {
     if (cause === 'drag' && isChatMinimized && newSidebarWidth > 0) {
+      setPersistentWidth(newSidebarWidth);
       setIsChatMinimized(false);
       setSidebarWidth(newSidebarWidth);
       setLastSidebarWidth(newSidebarWidth);
     } else if (!isChatMinimized) {
       if (newSidebarWidth > 0) {
+        setPersistentWidth(newSidebarWidth);
         setSidebarWidth(newSidebarWidth);
         setLastSidebarWidth(newSidebarWidth);
       } else if (cause === 'drag') {
@@ -3386,7 +3391,7 @@ const PuzzlePage = React.memo(() => {
     if (puzzlePageDivRef.current) {
       setSidebarWidth(
         Math.min(
-          DefaultSidebarWidth,
+          sidebarWidth,
           puzzlePageDivRef.current.clientWidth - MinimumDocumentWidth,
         ),
       );
