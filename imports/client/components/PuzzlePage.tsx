@@ -1446,7 +1446,7 @@ const StyledFancyEditor = styled(FancyEditor)<{theme:Theme}>`
   overflow-x: hidden;
   white-space: pre-wrap;
   line-height: 20px;
-  padding: 9px 4px;
+  padding: 4px 4px;
   resize: none;
 `;
 
@@ -1473,6 +1473,7 @@ const ChatInput = React.memo(
     displayNames,
     puzzles,
     scrollToMessage,
+    sidebarWidth,
   }: {
     onHeightChange: () => void;
     onMessageSent: () => void;
@@ -1484,6 +1485,7 @@ const ChatInput = React.memo(
     displayNames: Map<string, string>;
     puzzles: PuzzleType[];
     scrollToMessage: (messageId: string, callback?: () => void) => void;
+    sidebarWidth: number;
   }) => {
     // We want to have hunt profile data around so we can autocomplete from multiple fields.
     const profilesLoadingFunc = useSubscribe("huntProfiles", huntId);
@@ -1800,10 +1802,6 @@ const ChatInput = React.memo(
       return undefined;
     }, [parentMessage, displayNames]);
 
-    const showSendButton = useTracker(()=>{
-      return imagePreviews.length > 0 || JSON.stringify(content) !== JSON.stringify(initialValue);
-    }, [imagePreviews.length, content, initialValue])
-
     return (
       <ChatInputRow>
       {replyingTo && parentSenderName && (
@@ -1838,7 +1836,7 @@ const ChatInput = React.memo(
             Image upload not configured
           </ImagePlaceholder>
         )}
-        <InputGroup>
+        <InputGroup size="sm">
           <StyledFancyEditor
             ref={fancyEditorRef}
             className="form-control"
@@ -1852,20 +1850,16 @@ const ChatInput = React.memo(
             onPaste={handlePaste}
           />
             <FormGroup>
-          <ButtonGroup>
-            {
-              showSendButton &&
-                (
-                  <Button
-                    variant="secondary"
-                    onClick={sendContentMessage}
-                    onMouseDown={preventDefaultCallback}
-                    disabled={disabled || !hasNonTrivialContent}
-                  >
-                  {isUploading ? <FontAwesomeIcon icon={faSpinner} spin /> : <FontAwesomeIcon icon={faPaperPlane} />}
-                  </Button>
-                )
-            }
+          <ButtonGroup vertical>
+            <Button
+              variant="secondary"
+              onClick={sendContentMessage}
+              onMouseDown={preventDefaultCallback}
+              disabled={disabled || !hasNonTrivialContent}
+              size={s3Configured ? "sm" : "lg"}
+            >
+            {isUploading ? <FontAwesomeIcon icon={faSpinner} spin /> : <FontAwesomeIcon icon={faPaperPlane} />}
+            </Button>
           {s3Configured && (
             <>
               <FormControl
@@ -1877,7 +1871,7 @@ const ChatInput = React.memo(
                 id="image-upload-input"
                 ref={fileInputRef}
               />
-              <Button variant="secondary" onClick={triggerFileInput} disabled={isUploading}>
+              <Button variant="secondary" onClick={triggerFileInput} size="sm" disabled={isUploading}>
                 <FontAwesomeIcon icon={faImage} />
               </Button>
             </>
@@ -1981,6 +1975,7 @@ const ChatSection = React.forwardRef(
       setPulsingMessageId,
       replyingTo,
       setReplyingTo,
+      sidebarWidth,
     }: {
       chatDataLoading: boolean;
       disabled: boolean;
@@ -1995,6 +1990,7 @@ const ChatSection = React.forwardRef(
       setPulsingMessageId: (messageId: string | null) => void;
       replyingTo: string | null;
       setReplyingTo: (messageId: string | null) => void;
+      sidebarWidth: number;
     },
     forwardedRef: React.Ref<ChatSectionHandle>,
   ) => {
@@ -2122,6 +2118,7 @@ const ChatSection = React.forwardRef(
           displayNames={displayNames}
           puzzles={puzzles}
           scrollToMessage={scrollToMessage}
+          sidebarWidth={sidebarWidth}
         />
         <AttachmentsMemo
           chatMessages={chatMessages}
@@ -3577,6 +3574,7 @@ const PuzzlePage = React.memo(() => {
       setPulsingMessageId={setPulsingMessageId}
       replyingTo={replyingTo}
       setReplyingTo={setReplyingTo}
+      sidebarWidth={sidebarWidth}
     />
   );
   const deletedModal = activePuzzle.deleted && (

@@ -8,7 +8,6 @@ import Puzzles from "../../lib/models/Puzzles";
 import Settings from "../../lib/models/Settings";
 import createChatAttachmentUpload from "../../methods/createChatAttachmentUpload";
 import defineMethod from "./defineMethod";
-import { trace } from "console";
 
 defineMethod(createChatAttachmentUpload, {
   validate(arg) {
@@ -16,7 +15,7 @@ defineMethod(createChatAttachmentUpload, {
       huntId: String,
       puzzleId: String,
       filename: String,
-      mimeType: String, // Consider adding validation for allowed mime types if needed
+      mimeType: String,
     });
 
     return arg;
