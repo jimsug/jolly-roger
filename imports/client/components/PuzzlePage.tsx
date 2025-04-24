@@ -50,7 +50,7 @@ import Tooltip from "react-bootstrap/esm/Tooltip";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
-import type { Descendant } from "slate";
+import { select, type Descendant } from "slate";
 import styled, { css, useTheme } from "styled-components";
 import {
   calendarTimeFormat,
@@ -61,7 +61,7 @@ import { indexedById, sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import type { ChatAttachmentType, ChatMessageType } from "../../lib/models/ChatMessages";
 import ChatMessages from "../../lib/models/ChatMessages";
-import Documents from "../../lib/models/Documents";
+import Documents, { DOCUMENT_TYPES } from "../../lib/models/Documents";
 import type { DocumentType } from "../../lib/models/Documents";
 import Guesses from "../../lib/models/Guesses";
 import type { GuessType } from "../../lib/models/Guesses";
@@ -123,7 +123,7 @@ import {
   SolvedPuzzleBackgroundColor,
 } from "./styling/constants";
 import { mediaBreakpointDown } from "./styling/responsive";
-import { ButtonGroup, Offcanvas, ToggleButton, ToggleButtonGroup } from "react-bootstrap";
+import { ButtonGroup, Dropdown, DropdownButton, Offcanvas, ToggleButton, ToggleButtonGroup } from "react-bootstrap";
 import removeChatMessage from "../../methods/removeChatMessage";
 import { Theme } from "../theme";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
@@ -132,6 +132,7 @@ import createChatAttachmentUpload from "../../methods/createChatAttachmentUpload
 import { usePersistedSidebarWidth } from "../hooks/persisted-state";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons";
+import createPuzzleDocument from "../../methods/createPuzzleDocument";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -2242,6 +2243,9 @@ const PuzzlePageMetadata = ({
   hasIframeBeenLoaded,
   setHasIframeBeenLoaded,
   toggleMetadataMinimize,
+  allDocs,
+  selectedDocumentIndex,
+  setSelectedDocument,
 }: {
   isMinimized: boolean;
   puzzle: PuzzleType;
@@ -2254,7 +2258,10 @@ const PuzzlePageMetadata = ({
   setShowDocument: (showDocument: boolean) => void;
   hasIframeBeenLoaded: boolean;
   setHasIframeBeenLoaded: (hasIframeBeenLoaded: boolean) => void;
-  toggleMetadataMinimize: ()=> void;
+  toggleMetadataMinimize: () => void;
+  allDocs: DocumentType[] | undefined;
+  selectedDocumentIndex: number;
+  setSelectedDocument: (number) => void;
 }) => {
   const huntId = puzzle.hunt;
   const puzzleId = puzzle._id;
@@ -2406,16 +2413,14 @@ const PuzzlePageMetadata = ({
     }
   }
 
-  const togglePuzzleInset = (puzzle.url && isDesktop && canEmbedPuzzle) || !showDocument ? (
-    <Button
+  const togglePuzzleInsetDD = (puzzle.url && isDesktop && canEmbedPuzzle) || !showDocument ? (
+    <Dropdown.Item
     onClick={handleShowButtonClick}
     onMouseEnter={handleShowButtonHover}
-    variant="secondary"
-    size="sm"
-    title={showDocument ? "View Puzzle" : "Hide Puzzle"}
+    title={showDocument ? "Show Puzzle" : "Hide Puzzle"}
     >
-      {showDocument ? "View Puzzle" : "Hide Puzzle"}
-    </Button>
+      {showDocument ? "Show Puzzle" : "Hide Puzzle"}
+    </Dropdown.Item>
   ) : null;
 
   let guessButton = null;
@@ -2505,6 +2510,70 @@ const PuzzlePageMetadata = ({
     />
   );
 
+  const toTitleCase = (str: string): string => {
+    return str
+      .toLowerCase()
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
+  const unusedDocumentTypes = useTracker(()=>{
+    return DOCUMENT_TYPES.filter((dt)=>{
+      return !allDocs?.some((d)=>dt === d.value.type);
+    })
+  }, [allDocs])
+
+  const switchOrCreateDocument = useCallback((e:string|number)=>{
+    console.log(e);
+    if(unusedDocumentTypes.includes(e)){
+      createPuzzleDocument.call({
+        huntId: puzzle.hunt,
+        puzzleId: puzzle._id,
+        docType: "document"
+      });
+    } else if(e !== selectedDocumentIndex) {
+      setSelectedDocument(e);
+    } else if(e === selectedDocumentIndex) {
+      //nothing here
+    } else {
+      // otherwise it's probably toggling the puzzle site, so we don't need to do anything
+    }
+  }, [unusedDocumentTypes])
+
+  const resourceSelectorButton = useTracker(()=>{
+    return allDocs && (
+      <DropdownButton
+        as={ButtonGroup}
+        key="puzzle-resource-selector"
+        id="puzzle-resource-selector"
+        size="sm"
+        onSelect={switchOrCreateDocument}
+        title={toTitleCase(allDocs[selectedDocumentIndex]?.value.type ?? "")}
+      >
+        {allDocs?.map((doc, idx)=>{
+          return (
+            <Dropdown.Item eventKey={idx} active={selectedDocumentIndex===idx}>{toTitleCase(doc.value.type)}</Dropdown.Item>
+          )
+        })}
+        {unusedDocumentTypes.length > 0 && <>
+          <Dropdown.Divider />
+            <Dropdown.Header>
+              Add new
+            </Dropdown.Header>
+          {unusedDocumentTypes.map((doc,idx)=>{
+            return (
+              <Dropdown.Item eventKey={doc}>
+                {toTitleCase(doc)}
+              </Dropdown.Item>
+            )
+          })}</>}
+        <Dropdown.Divider />
+        {togglePuzzleInsetDD}
+      </DropdownButton>
+    )
+  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes])
+
   const minimizeMetadataButton = (<Button onClick={toggleMetadataMinimize} size="sm" title="Hide puzzle information">
     <FontAwesomeIcon icon={faAngleDoubleUp} />
   </Button>);
@@ -2531,7 +2600,7 @@ const PuzzlePageMetadata = ({
           {documentLink}
           {!tagsOnSeparateRow && tagListElement} {/* Render tags inline if they fit */}
           <PuzzleMetadataButtons ref={actionButtonsRef}>
-            {togglePuzzleInset}
+            {resourceSelectorButton}
             {editButton}
             {imageInsert}
             {guessButton}
@@ -3298,6 +3367,7 @@ const PuzzlePage = React.memo(() => {
   const restoreButtonRef =
     useRef<ReactElement<typeof PuzzleMetadataFloatingButton>>(null);
   const [persistentWidth, setPersistentWidth] = usePersistedSidebarWidth();
+  const [selectedDocumentIndex, setSelectedDocumentIndex] = useState<number>(0);
   const [sidebarWidth, setSidebarWidth] = useState<number>(persistentWidth ?? DefaultSidebarWidth);
   const [isChatMinimized, setIsChatMinimized] = useState<boolean>(false);
   const [isMetadataMinimized, setIsMetadataMinimized] = useState<boolean>(false);
@@ -3390,13 +3460,23 @@ const PuzzlePage = React.memo(() => {
   }, [puzzlesLoading, huntId]);
 
   // Sort by created at so that the "first" document always has consistent meaning
-  const doc = useTracker(
+
+
+  const allDocs = useTracker(
     () =>
       puzzleDataLoading
-        ? undefined
-        : Documents.findOne({ puzzle: puzzleId }, { sort: { createdAt: 1 } }),
-    [puzzleDataLoading, puzzleId],
-  );
+      ? undefined
+      : Documents.find({puzzle: puzzleId}, {sort:{createdAt: 1}}).fetch(), [puzzleDataLoading, puzzleId]
+  )
+
+  const doc = useTracker(
+    () => {
+      if (puzzleDataLoading || !allDocs) {
+        return undefined;
+      }
+      return allDocs[selectedDocumentIndex];
+    }, [puzzleDataLoading, allDocs, selectedDocumentIndex]
+  )
 
   const activePuzzle = useTracker(
     () => Puzzles.findOneAllowingDeleted(puzzleId),
@@ -3587,6 +3667,9 @@ const PuzzlePage = React.memo(() => {
       hasIframeBeenLoaded={hasIframeBeenLoaded}
       setHasIframeBeenLoaded={setHasIframeBeenLoaded}
       toggleMetadataMinimize={toggleMetadata}
+      allDocs={allDocs}
+      selectedDocumentIndex={selectedDocumentIndex}
+      setSelectedDocument={setSelectedDocumentIndex}
     />
   );
   const chat = (
@@ -3705,7 +3788,7 @@ const PuzzlePage = React.memo(() => {
                 }
 
                 <PuzzlePageMultiplayerDocument
-                  document={docRef.current}
+                  document={doc}
                   showDocument={showDocument}
                   style={{ zIndex: showDocument ? 1 : -1, display: showDocument ? "block" : "none" }}
                   />
