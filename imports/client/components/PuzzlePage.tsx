@@ -24,6 +24,7 @@ import { faReplyAll } from "@fortawesome/free-solid-svg-icons/faReplyAll";
 import Popover from "react-bootstrap/Popover";
 import Overlay from "react-bootstrap/Overlay";
 import React, {
+  ReactElement,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -129,6 +130,8 @@ import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import chatMessageNodeType from "../../lib/chatMessageNodeType";
 import createChatAttachmentUpload from "../../methods/createChatAttachmentUpload";
 import { usePersistedSidebarWidth } from "../hooks/persisted-state";
+import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
+import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -436,6 +439,7 @@ const ChatSectionDiv = styled.div`
 const PuzzleContent = styled.div`
   display: flex;
   flex-direction: column;
+  /* position: relative; */
 `;
 
 const PuzzleMetadata = styled.div<{ theme: Theme }>`
@@ -469,6 +473,13 @@ const AnswerRemoveButton: FC<ComponentPropsWithRef<typeof Button>> = styled(
     padding: 0;
   }
 `;
+
+const PuzzleMetadataFloatingButton = styled(Button)`
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 20;
+`
 
 const PuzzleMetadataRow = styled.div`
   display: flex;
@@ -2219,6 +2230,7 @@ const InsertImage = ({ documentId }: { documentId: string }) => {
 };
 
 const PuzzlePageMetadata = ({
+  isMinimized,
   puzzle,
   bookmarked,
   displayNames,
@@ -2229,7 +2241,9 @@ const PuzzlePageMetadata = ({
   setShowDocument,
   hasIframeBeenLoaded,
   setHasIframeBeenLoaded,
+  toggleMetadataMinimize,
 }: {
+  isMinimized: boolean;
   puzzle: PuzzleType;
   bookmarked: boolean;
   displayNames: Map<string, string>;
@@ -2240,6 +2254,7 @@ const PuzzlePageMetadata = ({
   setShowDocument: (showDocument: boolean) => void;
   hasIframeBeenLoaded: boolean;
   setHasIframeBeenLoaded: (hasIframeBeenLoaded: boolean) => void;
+  toggleMetadataMinimize: ()=> void;
 }) => {
   const huntId = puzzle.hunt;
   const puzzleId = puzzle._id;
@@ -2490,41 +2505,48 @@ const PuzzlePageMetadata = ({
     />
   );
 
-  return (
-    <PuzzleMetadata>
-      <PuzzleModalForm
-        key={puzzleId}
-        ref={editModalRef}
-        puzzle={puzzle}
-        huntId={huntId}
-        tags={allTags}
-        onSubmit={onEdit}
-      />
-      <PuzzleMetadataActionRow ref={actionRowRef}>
-        <BookmarkButton
-          puzzleId={puzzleId}
-          bookmarked={bookmarked}
-          variant="link"
-          size="sm"
+  const minimizeMetadataButton = (<Button onClick={toggleMetadataMinimize} size="sm">
+    <FontAwesomeIcon icon={faAngleDoubleUp} />
+  </Button>);
+
+  return !isMinimized ? (
+    <div>
+      <PuzzleMetadata>
+        <PuzzleModalForm
+          key={puzzleId}
+          ref={editModalRef}
+          puzzle={puzzle}
+          huntId={huntId}
+          tags={allTags}
+          onSubmit={onEdit}
         />
-        {puzzleLink}
-        {documentLink}
-        {!tagsOnSeparateRow && tagListElement} {/* Render tags inline if they fit */}
-        <PuzzleMetadataButtons ref={actionButtonsRef}>
-          {togglePuzzleInset}
-          {editButton}
-          {imageInsert}
-          {guessButton}
-        </PuzzleMetadataButtons>
-      </PuzzleMetadataActionRow>
-      <PuzzleMetadataRow>{answersElement}</PuzzleMetadataRow>
-      {tagsOnSeparateRow && ( /* Render tags on separate row if they wrapped */
-        <PuzzleMetadataRow>
-          {tagListElement}
-        </PuzzleMetadataRow>
-      )}
-    </PuzzleMetadata>
-  );
+        <PuzzleMetadataActionRow ref={actionRowRef}>
+          <BookmarkButton
+            puzzleId={puzzleId}
+            bookmarked={bookmarked}
+            variant="link"
+            size="sm"
+          />
+          {puzzleLink}
+          {documentLink}
+          {!tagsOnSeparateRow && tagListElement} {/* Render tags inline if they fit */}
+          <PuzzleMetadataButtons ref={actionButtonsRef}>
+            {togglePuzzleInset}
+            {editButton}
+            {imageInsert}
+            {guessButton}
+            {minimizeMetadataButton}
+          </PuzzleMetadataButtons>
+        </PuzzleMetadataActionRow>
+        <PuzzleMetadataRow>{answersElement}</PuzzleMetadataRow>
+        {tagsOnSeparateRow && ( /* Render tags on separate row if they wrapped */
+          <PuzzleMetadataRow>
+            {tagListElement}
+          </PuzzleMetadataRow>
+        )}
+      </PuzzleMetadata>
+    </div>
+  ) : null;
 };
 
 const ValidatedSliderContainer = styled.div`
@@ -2655,14 +2677,15 @@ const LinkButton: FC<ComponentPropsWithRef<typeof Button>> = styled(Button)`
   vertical-align: baseline;
 `;
 
-const MinimizeButton = styled.button<{ $left: number; $isMinimized: boolean; theme: Theme }>`
+const MinimizeChatButton = styled.button<{ $left: number; $isMinimized: boolean; theme: Theme }>`
   position: absolute;
   top: 50%;
   left: ${({ $left }) => $left}px;
   transform: translate(-50%, -50%);
   z-index: 10;
-  background-color: ${({ theme }) => theme.colors.background};
+  background-color: ${({ theme }) => theme.colors.secondary};
   border: 1px solid ${({ theme }) => theme.colors.text};
+  color: ${({ theme }) => theme.colors.text};
   border-left: none;
   border-top-right-radius: 8px;
   border-bottom-right-radius: 8px;
@@ -2674,7 +2697,7 @@ const MinimizeButton = styled.button<{ $left: number; $isMinimized: boolean; the
     css`
       left: 0;
       transform: translateY(-50%);
-      border-left: 1px solid ${({ theme }) => theme.colors.border};
+      border-left: 1px solid ${({ theme }) => theme.colors.text};
       border-top-left-radius: 0;
       border-bottom-left-radius: 0;
     `}
@@ -3272,10 +3295,12 @@ const PuzzleDeletedModal = ({
 const PuzzlePage = React.memo(() => {
   const puzzlePageDivRef = useRef<HTMLDivElement | null>(null);
   const chatSectionRef = useRef<ChatSectionHandle | null>(null);
+  const restoreButtonRef =
+    useRef<ReactElement<typeof PuzzleMetadataFloatingButton>>(null);
   const [persistentWidth, setPersistentWidth] = usePersistedSidebarWidth();
   const [sidebarWidth, setSidebarWidth] = useState<number>(persistentWidth ?? DefaultSidebarWidth);
-  // const [sidebarWidth, setSidebarWidth] = useState<number>(DefaultSidebarWidth);
   const [isChatMinimized, setIsChatMinimized] = useState<boolean>(false);
+  const [isMetadataMinimized, setIsMetadataMinimized] = useState<boolean>(false);
   const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(persistentWidth ?? DefaultSidebarWidth);
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
@@ -3470,6 +3495,10 @@ const PuzzlePage = React.memo(() => {
     }
   }, [isChatMinimized]);
 
+  const toggleMetadata = useCallback(()=>{
+    setIsMetadataMinimized(prev => !prev);
+  },[setIsMetadataMinimized])
+
   useLayoutEffect(() => {
     // When sidebarWidth is updated, scroll history to the target
     trace("PuzzlePage useLayoutEffect", { hasRef: !!chatSectionRef.current });
@@ -3546,6 +3575,7 @@ const PuzzlePage = React.memo(() => {
   }
   const metadata = (
     <PuzzlePageMetadata
+      isMinimized={isMetadataMinimized}
       puzzle={activePuzzle}
       bookmarked={bookmarked}
       document={doc}
@@ -3556,6 +3586,7 @@ const PuzzlePage = React.memo(() => {
       setShowDocument={setShowDocument}
       hasIframeBeenLoaded={hasIframeBeenLoaded}
       setHasIframeBeenLoaded={setHasIframeBeenLoaded}
+      toggleMetadataMinimize={toggleMetadata}
     />
   );
   const chat = (
@@ -3626,12 +3657,17 @@ const PuzzlePage = React.memo(() => {
 
   const effectiveSidebarWidth = isChatMinimized ? 0 : sidebarWidth;
 
+  const showMetadataButton = isMetadataMinimized ? (
+    <PuzzleMetadataFloatingButton ref={restoreButtonRef} variant="secondary" size="sm" onClick={toggleMetadata}>
+      <FontAwesomeIcon icon={faAngleDoubleDown} />
+    </PuzzleMetadataFloatingButton>
+  ) : null;
   if (isDesktop) {
     return (
       <>
         {deletedModal}
         <FixedLayout className="puzzle-page" ref={puzzlePageDivRef}>
-        <MinimizeButton
+        <MinimizeChatButton
             $left={effectiveSidebarWidth + 10}
             $isMinimized={isChatMinimized}
             onClick={toggleChatMinimize}
@@ -3639,7 +3675,7 @@ const PuzzlePage = React.memo(() => {
             theme={theme}
           >
             <FontAwesomeIcon icon={isChatMinimized ? faChevronRight : faChevronLeft} />
-          </MinimizeButton>
+          </MinimizeChatButton>
           <SplitPanePlus
             split="vertical"
             minSize={MinimumSidebarWidth}
@@ -3656,6 +3692,7 @@ const PuzzlePage = React.memo(() => {
             {isChatMinimized ? <div /> : chat}
             <PuzzleContent>
               {metadata}
+              {showMetadataButton}
                 <PuzzleDocumentDiv>
                 {
                 (activePuzzle.url && hasIframeBeenLoaded) ? (
