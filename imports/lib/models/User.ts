@@ -18,6 +18,8 @@ declare module "meteor/meteor" {
       phoneNumber?: string;
       dingwords?: string[];
       dingwordsOpenMatch?: boolean;
+      dingwordsMatchOnce?: string[];
+      dingwordsMatchedOnce?: Record<string, Record<string, string[]>>; // hunt -> puzzle -> "used" words
     }
   }
 }
@@ -50,6 +52,10 @@ export const User = z.object({
   phoneNumber: nonEmptyString.optional(),
   dingwords: nonEmptyString.array().optional(),
   dingwordsOpenMatch: z.boolean().optional(),
+  dingwordsMatchOnce: nonEmptyString.array().optional(),
+  dingwordsMatchedOnce: z
+    .record(z.string(), z.record(z.string(), nonEmptyString.array()))
+    .optional(),
 });
 validateSchema(User);
 
@@ -59,6 +65,8 @@ export type ProfileFields =
   | "discordAccount"
   | "phoneNumber"
   | "dingwords"
-  | "dingwordsOpenMatch";
+  | "dingwordsOpenMatch"
+  | "dingwordsMatchOnce"
+  | "dingwordsMatchedOnce";
 
 export default User;
