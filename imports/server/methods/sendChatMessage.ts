@@ -18,7 +18,7 @@ defineMethod(sendChatMessage, {
       puzzleId: String,
       content: String,
       parentId: Match.OneOf(String, null, undefined),
-      attachments: Match.Maybe([ChatAttachmentPattern]),
+      attachments: Match.OneOf(null, [ChatAttachmentPattern]),
     });
 
     return arg;
@@ -33,7 +33,7 @@ defineMethod(sendChatMessage, {
     puzzleId: string;
     content: string;
     parentId?: string | null;
-    attachments?: ChatAttachmentType[];
+    attachments?: ChatAttachmentType[] | null;
   }) {
     check(this.userId, String);
     let contentObj = JSON.parse(content);
