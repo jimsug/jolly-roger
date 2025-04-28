@@ -3668,6 +3668,7 @@ const PuzzlePage = React.memo(() => {
 
   const restoreChat = useCallback(() => {
     if (isChatMinimized) {
+      console.log("restoreChat: Setting isChatMinimized=false"); // Debug log 4
       setIsChatMinimized(false);
       setSidebarWidth(lastSidebarWidth);
     }
@@ -3751,10 +3752,11 @@ const PuzzlePage = React.memo(() => {
 
   useEffect(() => {
     const currentLength = chatMessages.length;
-    console.log("new message?");
+    console.log("Effect check: New message?", { currentLength, prev: prevMessagesLength.current, isMinimized: isChatMinimized }); // Debug log 1
     if (currentLength > prevMessagesLength.current && prevMessagesLength.current > 0) {
-      console.log("new message!");
+      console.log("Effect action: New message detected!"); // Debug log 2
       if (isChatMinimized) {
+        console.log("Effect action: Chat is minimized, calling restoreChat"); // Debug log 3
         restoreChat();
       }
     }
