@@ -3761,7 +3761,7 @@ const PuzzlePage = React.memo(() => {
       }
     }
     prevMessagesLength.current = currentLength;
-  }, [chatMessages, isChatMinimized, restoreChat]);
+  }, [chatMessages, isChatMinimized, restoreChat, chatMessages.length]);
 
   useEffect(() => {
     if (activePuzzle && !activePuzzle.deleted) {
