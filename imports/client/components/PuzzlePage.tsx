@@ -2895,7 +2895,13 @@ const PuzzlePage = React.memo(() => {
   const chatSectionRef = useRef<ChatSectionHandle | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState<number>(DefaultSidebarWidth);
   const [isChatMinimized, setIsChatMinimized] = useState<boolean>(false);
+<<<<<<< Updated upstream
   const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(DefaultSidebarWidth);
+=======
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [isMetadataMinimized, setIsMetadataMinimized] = useState<boolean>(false);
+  const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(persistentWidth ?? DefaultSidebarWidth);
+>>>>>>> Stashed changes
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
@@ -3061,15 +3067,16 @@ const PuzzlePage = React.memo(() => {
 
   const restoreChat = useCallback(() => {
     if (isChatMinimized) {
+      setIsRestoring(true);
       setIsChatMinimized(false);
       setSidebarWidth(lastSidebarWidth);
-      // Trigger scroll adjustment and snap AFTER state update completes
       setTimeout(() => {
         if (chatSectionRef.current) {
           chatSectionRef.current.scrollHistoryToTarget();
-          chatSectionRef.current.snapToBottom(); // Snap when restoring
+          chatSectionRef.current.snapToBottom();
         }
       }, 0);
+      setIsRestoring(false);
     }
   }, [isChatMinimized, lastSidebarWidth]);
 
@@ -3088,7 +3095,6 @@ const PuzzlePage = React.memo(() => {
   }, [isChatMinimized]);
 
   useLayoutEffect(() => {
-    // When sidebarWidth is updated, scroll history to the target
     trace("PuzzlePage useLayoutEffect", { hasRef: !!chatSectionRef.current });
     if (chatSectionRef.current) {
       chatSectionRef.current.scrollHistoryToTarget();
@@ -3096,7 +3102,6 @@ const PuzzlePage = React.memo(() => {
   }, [sidebarWidth]);
 
   useEffect(() => {
-    // Populate sidebar width on mount
     if (puzzlePageDivRef.current) {
       setSidebarWidth(
         Math.min(
@@ -3115,18 +3120,22 @@ const PuzzlePage = React.memo(() => {
 
   useEffect(() => {
     const currentLength = chatMessages.length;
-    // Check if length increased AND it wasn't the initial load (prev length > 0)
-    // Avoid triggering on initial load or deletions
     if (currentLength > prevMessagesLength.current && prevMessagesLength.current > 0) {
       if (isChatMinimized) {
         restoreChat();
-        setTimeout(() => {
-          chatSectionRef.current?.snapToBottom();
-        }, 10);
       }
     }
     prevMessagesLength.current = currentLength;
   }, [chatMessages, isChatMinimized, restoreChat]);
+
+  useEffect((): (() => void) | undefined => {
+    if (!isChatMinimized && !isRestoring) {
+       const timer = setTimeout(() => {
+          chatSectionRef.current?.snapToBottom();
+       }, 100);
+       return () => clearTimeout(timer);
+    }
+  }, [isChatMinimized, isRestoring]);
 
   useEffect(() => {
     if (activePuzzle && !activePuzzle.deleted) {
