@@ -3751,17 +3751,45 @@ const PuzzlePage = React.memo(() => {
   }, [isChatMinimized, sidebarWidth]);
 
   useEffect(() => {
+    // Get the current length *inside* the effect run
     const currentLength = chatMessages.length;
-    console.log("Effect check: New message?", { currentLength, prev: prevMessagesLength.current, isMinimized: isChatMinimized }); // Debug log 1
-    if (currentLength > prevMessagesLength.current && prevMessagesLength.current > 0) {
-      console.log("Effect action: New message detected!"); // Debug log 2
+
+    console.log("[Effect Check - Refined]", {
+      currentLength,
+      prev: prevMessagesLength.current,
+      isMinimized: isChatMinimized, // Log current state
+    });
+
+    // Compare current length with the stored previous length
+    if (currentLength > prevMessagesLength.current) {
+      // This block now correctly identifies an increase in messages
+      console.log("[Effect Action - Refined] New message detected!");
+
+      // Check the *current* minimized state when the effect runs
       if (isChatMinimized) {
-        console.log("Effect action: Chat is minimized, calling restoreChat"); // Debug log 3
+        console.log("[Effect Action - Refined] Chat is minimized, calling restoreChat");
         restoreChat();
+      } else {
+        console.log("[Effect Info - Refined] Chat not minimized when new message arrived.");
+      }
+    } else {
+      // Log why the action wasn't taken if length didn't increase
+      if (currentLength === prevMessagesLength.current && currentLength > 0) {
+         console.log("[Effect Info - Refined] Effect ran, but message length didn't increase.");
+      } else if (currentLength < prevMessagesLength.current) {
+         console.log("[Effect Info - Refined] Effect ran, but message length decreased?");
       }
     }
-    prevMessagesLength.current = currentLength;
-  }, [chatMessages, isChatMinimized, restoreChat, chatMessages.length]);
+
+    // Update the ref *after* the comparison for the *next* run
+    // Only update if the currentLength is different from the ref to avoid unnecessary updates if effect runs for other reasons
+    if (currentLength !== prevMessagesLength.current) {
+       prevMessagesLength.current = currentLength;
+    }
+
+  // DEPEND ONLY ON chatMessages. This relies on useTracker returning a new
+  // array reference when the underlying data changes.
+  }, [chatMessages, isChatMinimized, restoreChat]);
 
   useEffect(() => {
     if (activePuzzle && !activePuzzle.deleted) {
