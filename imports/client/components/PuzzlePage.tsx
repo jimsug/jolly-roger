@@ -4,6 +4,7 @@ import { useFind, useSubscribe, useTracker } from "meteor/react-meteor-data";
 import EmojiPicker from "emoji-picker-react";
 import { EmojiStyle } from "emoji-picker-react";
 import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalLinkAlt";
+import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
 import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
 import { faChevronLeft } from "@fortawesome/free-solid-svg-icons/faChevronLeft";
 import { faChevronRight } from "@fortawesome/free-solid-svg-icons/faChevronRight";
@@ -49,8 +50,8 @@ import OverlayTrigger from "react-bootstrap/esm/OverlayTrigger";
 import Tooltip from "react-bootstrap/esm/Tooltip";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { createPortal } from "react-dom";
-import { Link, useParams } from "react-router-dom";
-import { select, type Descendant } from "slate";
+import { Link, useLocation, useParams } from "react-router-dom";
+import { type Descendant } from "slate";
 import styled, { css, useTheme } from "styled-components";
 import {
   calendarTimeFormat,
@@ -133,7 +134,6 @@ import { usePersistedSidebarWidth } from "../hooks/persisted-state";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons";
 import createPuzzleDocument from "../../methods/createPuzzleDocument";
-import { faBan } from "@fortawesome/free-solid-svg-icons/faBan";
 import setChatMessagePin from "../../methods/setChatMessagePin";
 
 // Shows a state dump as an in-page overlay when enabled.
@@ -947,7 +947,7 @@ const ChatHistoryMessage = React.memo(
       () => {
         setChatMessagePin.call({messageId: message._id, puzzleId: message.puzzle, huntId: message.hunt, newPinState: message.pinTs === null})
       },
-      [setChatMessagePin],
+      [setChatMessagePin, message],
     )
 
 
@@ -982,8 +982,8 @@ const ChatHistoryMessage = React.memo(
               onClick={() => toggleMessagePin(message._id)}
             >
               <ReplyButton icon={faMapPin}/>
-
             </PillSection>
+
           </SplitPill>
         </ChatMessageActions>
         {!suppressSender && <ChatMessageTimestamp>{ts}</ChatMessageTimestamp>}
@@ -3505,6 +3505,15 @@ const PuzzlePage = React.memo(() => {
 
   const theme = useTheme();
   const hunt = useTracker(() => {return Hunts.findOne(huntId)}, [huntId]);
+  const location = useLocation();
+
+  const messageIdFromHash = useMemo(()=>{
+    const hash = location.hash;
+    if (hash && hash.startsWith("#msg=")) {
+      return hash.substring(5);
+    }
+    return null;
+  }, [location.hash])
 
   const showPuzzleDocument = useTracker(() => {
     return (hunt?.allowPuzzleEmbed ?? false) ? true : showDocument;
@@ -3750,22 +3759,19 @@ const PuzzlePage = React.memo(() => {
     }
   }, [isChatMinimized, sidebarWidth]);
 
+  // useEffect for restoring chat on new message - broken
   useEffect(() => {
-    // Get the current length *inside* the effect run
     const currentLength = chatMessages.length;
 
     console.log("[Effect Check - Refined]", {
       currentLength,
       prev: prevMessagesLength.current,
-      isMinimized: isChatMinimized, // Log current state
+      isMinimized: isChatMinimized,
     });
 
-    // Compare current length with the stored previous length
     if (currentLength > prevMessagesLength.current) {
-      // This block now correctly identifies an increase in messages
       console.log("[Effect Action - Refined] New message detected!");
 
-      // Check the *current* minimized state when the effect runs
       if (isChatMinimized) {
         console.log("[Effect Action - Refined] Chat is minimized, calling restoreChat");
         restoreChat();
@@ -3773,7 +3779,6 @@ const PuzzlePage = React.memo(() => {
         console.log("[Effect Info - Refined] Chat not minimized when new message arrived.");
       }
     } else {
-      // Log why the action wasn't taken if length didn't increase
       if (currentLength === prevMessagesLength.current && currentLength > 0) {
          console.log("[Effect Info - Refined] Effect ran, but message length didn't increase.");
       } else if (currentLength < prevMessagesLength.current) {
@@ -3781,15 +3786,39 @@ const PuzzlePage = React.memo(() => {
       }
     }
 
-    // Update the ref *after* the comparison for the *next* run
-    // Only update if the currentLength is different from the ref to avoid unnecessary updates if effect runs for other reasons
     if (currentLength !== prevMessagesLength.current) {
        prevMessagesLength.current = currentLength;
     }
 
-  // DEPEND ONLY ON chatMessages. This relies on useTracker returning a new
-  // array reference when the underlying data changes.
   }, [chatMessages, isChatMinimized, restoreChat]);
+
+
+  // useEffect for scrolling to messageId in hash
+  useEffect(() => {
+    if (messageIdFromHash && !chatDataLoading && chatSectionRef.current) {
+
+      if (isChatMinimized) {
+        restoreChat();
+        setTimeout(() => {
+          chatSectionRef.current?.scrollToMessage(messageIdFromHash, () => {
+            setPulsingMessageId(messageIdFromHash);
+          });
+        }, 100);
+      } else {
+        chatSectionRef.current.scrollToMessage(messageIdFromHash, () => {
+          setPulsingMessageId(messageIdFromHash);
+        });
+      }
+    }
+  }, [
+      messageIdFromHash,
+      chatDataLoading,
+      chatSectionRef,
+      isChatMinimized,
+      restoreChat,
+      setPulsingMessageId,
+    ]);
+
 
   useEffect(() => {
     if (activePuzzle && !activePuzzle.deleted) {
