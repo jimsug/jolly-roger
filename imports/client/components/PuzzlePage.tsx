@@ -3803,11 +3803,13 @@ const PuzzlePage = React.memo(() => {
           chatSectionRef.current?.scrollToMessage(messageIdFromHash, () => {
             setPulsingMessageId(messageIdFromHash);
           });
-        }, 100);
+        }, 300);
       } else {
-        chatSectionRef.current.scrollToMessage(messageIdFromHash, () => {
-          setPulsingMessageId(messageIdFromHash);
-        });
+        setTimeout(() => {
+          chatSectionRef.current?.scrollToMessage(messageIdFromHash, () => {
+            setPulsingMessageId(messageIdFromHash);
+          });
+        }, 300);
       }
     }
   }, [
