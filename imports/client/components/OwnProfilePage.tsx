@@ -459,19 +459,6 @@ const OwnProfilePage = ({
           disabled
         />
       </FormGroup>
-      {submitState === "submitting" ? (
-        <Alert variant="info">Saving...</Alert>
-      ) : null}
-      {submitState === "success" ? (
-        <Alert variant="success" dismissible onClose={dismissAlert}>
-          Saved changes.
-        </Alert>
-      ) : null}
-      {submitState === "error" ? (
-        <Alert variant="danger" dismissible onClose={dismissAlert}>
-          Saving failed: {submitError}
-        </Alert>
-      ) : null}
 
       <GoogleLinkBlock user={initialUser} />
 
@@ -577,6 +564,19 @@ const OwnProfilePage = ({
           onChange={handleDingwordsModeChange}
         />
       </FormGroup>
+      {submitState === "submitting" ? (
+        <Alert variant="info">Saving...</Alert>
+      ) : null}
+      {submitState === "success" ? (
+        <Alert variant="success" dismissible onClose={dismissAlert}>
+          Saved changes.
+        </Alert>
+      ) : null}
+      {submitState === "error" ? (
+        <Alert variant="danger" dismissible onClose={dismissAlert}>
+          Saving failed: {submitError}
+        </Alert>
+      ) : null}
 
       <ActionButtonRow>
         <FormGroup className="mb-3">
