@@ -42,7 +42,7 @@ defineMethod(createHunt, {
     if (initialTags) {
       const initialTagList = initialTags.split(",");
       for (const tag of initialTagList) {
-        await getOrCreateTagByName(huntId, tag.trim());
+        await getOrCreateTagByName(Meteor.user().id, huntId, tag.trim());
       }
     }
 
