@@ -1,26 +1,14 @@
 import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import Logger from "../../Logger";
-import Hunts, { EditableHuntType, HuntPattern } from "../../lib/models/Hunts";
+import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
-import Settings from "../../lib/models/Settings";
 import { addUserToRole, checkAdmin } from "../../lib/permission_stubs";
 import createHunt, { CreateHuntPayloadSchema } from "../../methods/createHunt";
 import addUsersToDiscordRole from "../addUsersToDiscordRole";
 import { ensureHuntFolder } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
-
-const DEFAULT_TAGS = [
-  "is:meta",
-  "is:metameta",
-  "is:runaround",
-  "priority:high",
-  "priority:low",
-  "group:events",
-  "needs:extraction",
-  "needs:onsite  ",
-];
 
 defineMethod(createHunt, {
   validate(arg) {
@@ -42,7 +30,7 @@ defineMethod(createHunt, {
     if (initialTags) {
       const initialTagList = initialTags.split(",");
       for (const tag of initialTagList) {
-        await getOrCreateTagByName(Meteor.user().id, huntId, tag.trim());
+        await getOrCreateTagByName(this.userId, huntId, tag.trim());
       }
     }
 

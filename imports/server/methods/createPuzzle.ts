@@ -1,16 +1,7 @@
 import { check, Match } from "meteor/check";
-import { Meteor } from "meteor/meteor";
-import { MongoInternals } from "meteor/mongo";
-import { Random } from "meteor/random";
-import Flags from "../../Flags";
-import Logger from "../../Logger";
 import type { GdriveMimeTypesType } from "../../lib/GdriveMimeTypes";
 import GdriveMimeTypes from "../../lib/GdriveMimeTypes";
 import createPuzzle from "../../methods/createPuzzle";
-import GlobalHooks from "../GlobalHooks";
-import { deleteUnusedDocument, ensureDocument } from "../gdrive";
-import getOrCreateTagByName from "../getOrCreateTagByName";
-import GoogleClient from "../googleClientRefresher";
 import addPuzzle from "../addPuzzle";
 import defineMethod from "./defineMethod";
 
