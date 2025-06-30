@@ -4,6 +4,7 @@ export default new TypedMethod<
   {
     displayName: string;
     phoneNumber?: string;
+    timezone?: string;
     dingwords: string[];
     dingwordsOpenMatch?: boolean;
     dingwordsMatchOnce: string[];

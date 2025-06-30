@@ -16,6 +16,7 @@ declare module "meteor/meteor" {
       googleAccountId?: string;
       discordAccount?: DiscordAccountType;
       phoneNumber?: string;
+      timezone?: string;
       dingwords?: string[];
       dingwordsOpenMatch?: boolean;
       dingwordsMatchOnce?: string[];
@@ -50,6 +51,7 @@ export const User = z.object({
   googleAccountId: nonEmptyString.optional(),
   discordAccount: DiscordAccount.optional(),
   phoneNumber: nonEmptyString.optional(),
+  timezone: nonEmptyString.optional(),
   dingwords: nonEmptyString.array().optional(),
   dingwordsOpenMatch: z.boolean().optional(),
   dingwordsMatchOnce: nonEmptyString.array().optional(),
@@ -64,6 +66,7 @@ export type ProfileFields =
   | "googleAccount"
   | "discordAccount"
   | "phoneNumber"
+  | "timezone"
   | "dingwords"
   | "dingwordsOpenMatch"
   | "dingwordsMatchOnce"

@@ -309,6 +309,7 @@ const OwnProfilePage = ({
   const [phoneNumber, setPhoneNumber] = useState<string>(
     initialUser.phoneNumber ?? "",
   );
+  const [timezone, setTimezone] = useState<string>(initialUser.timezone ?? "");
   const [dingwordsFlat, setDingwordsFlat] = useState<string>(
     initialUser.dingwords ? initialUser.dingwords.join(",") : "",
   );
@@ -328,6 +329,34 @@ const OwnProfilePage = ({
   const [regeneratingAPIKey, setRegeneratingAPIKey] = useState<boolean>(false);
   const [APIKeyError, setAPIKeyError] = useState<string>();
 
+  const timezones = useMemo(() => {
+    let supportedTimezones: readonly string[] = [];
+    try {
+      supportedTimezones = Intl.supportedValuesOf("timeZone");
+    } catch (e) {
+      console.warn(
+        "Intl.supportedValuesOf('timeZone') is not supported in this browser.",
+      );
+      supportedTimezones = [
+        "UTC",
+        "America/New_York",
+        "America/Chicago",
+        "America/Denver",
+        "America/Los_Angeles",
+        "Europe/London",
+        "Asia/Singapore",
+        "Australia/Melbourne",
+        "Australia/Sydney",
+      ];
+    }
+
+    const userTimezone = initialUser.timezone;
+    if (userTimezone && !supportedTimezones.includes(userTimezone)) {
+      return [userTimezone, ...supportedTimezones];
+    }
+    return supportedTimezones;
+  }, [initialUser.timezone]);
+
   const handleDisplayNameFieldChange: NonNullable<
     FormControlProps["onChange"]
   > = useCallback((e) => {
@@ -339,6 +368,11 @@ const OwnProfilePage = ({
   > = useCallback((e) => {
     setPhoneNumber(e.currentTarget.value);
   }, []);
+
+  const handleTimezoneChange: NonNullable<FormControlProps["onChange"]> =
+    useCallback((e) => {
+      setTimezone(e.currentTarget.value);
+    }, []);
 
   const handleDingwordsChange: NonNullable<FormControlProps["onChange"]> =
     useCallback((e) => {
@@ -378,6 +412,7 @@ const OwnProfilePage = ({
     const newProfile = {
       displayName: trimmedDisplayName,
       phoneNumber: phoneNumber !== "" ? phoneNumber : undefined,
+      timezone: timezone !== "" ? timezone : undefined,
       dingwords,
       dingwordsOpenMatch,
       dingwordsMatchOnce,
@@ -391,11 +426,12 @@ const OwnProfilePage = ({
       }
     });
   }, [
+    displayName,
+    phoneNumber,
+    timezone,
     dingwordsFlat,
     dingwordsMatchOnceFlat,
     dingwordsOpenMatch,
-    displayName,
-    phoneNumber,
   ]);
 
   const dismissAlert = useCallback(() => {
@@ -490,6 +526,27 @@ const OwnProfilePage = ({
           onChange={handlePhoneNumberFieldChange}
         />
         <FormText>In case we need to reach you via phone.</FormText>
+      </FormGroup>
+      <FormGroup className="mb-3">
+        <FormLabel htmlFor="jr-profile-edit-timezone">Timezone</FormLabel>
+        <FormControl
+          as="select"
+          id="jr-profile-edit-timezone"
+          value={timezone}
+          disabled={shouldDisableForm}
+          onChange={handleTimezoneChange}
+        >
+          <option value="">(None)</option>
+          {timezones.map((tz) => (
+            <option key={tz} value={tz}>
+              {tz.replace(/_/g, " ")}
+            </option>
+          ))}
+        </FormControl>
+        <FormText>
+          Select your local timezone. We&apos;ll display this to other users so
+          they know what time it is for you.
+        </FormText>
       </FormGroup>
 
       <FormGroup className="mb-3">

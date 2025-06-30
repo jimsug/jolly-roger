@@ -17,6 +17,7 @@ const profileFields: Record<ProfileFields, 1> = {
   googleAccount: 1,
   discordAccount: 1,
   phoneNumber: 1,
+  timezone: 1,
   dingwords: 1,
   dingwordsOpenMatch: 1,
   dingwordsMatchOnce: 1,

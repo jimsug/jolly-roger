@@ -10,6 +10,7 @@ defineMethod(updateProfile, {
     check(arg, {
       displayName: String,
       phoneNumber: Match.Optional(String),
+      timezone: Match.Optional(String),
       dingwords: [String],
       dingwordsOpenMatch: Match.Optional(Boolean),
       dingwordsMatchOnce: [String],
@@ -21,6 +22,7 @@ defineMethod(updateProfile, {
   async run({
     displayName,
     phoneNumber,
+    timezone,
     dingwords,
     dingwordsOpenMatch,
     dingwordsMatchOnce,
@@ -35,7 +37,10 @@ defineMethod(updateProfile, {
       );
     }
 
-    const unset = { phoneNumber: phoneNumber ? undefined : 1 } as const;
+    const unset = {
+      phoneNumber: phoneNumber ? undefined : 1,
+      timezone: timezone ? undefined : 1,
+    } as const;
 
     Logger.info("Updating profile for user", { displayName });
     await MeteorUsers.updateAsync(
@@ -46,6 +51,7 @@ defineMethod(updateProfile, {
         $set: {
           displayName,
           phoneNumber,
+          timezone,
           dingwords,
           dingwordsOpenMatch,
           dingwordsMatchOnce,

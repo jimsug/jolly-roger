@@ -1,6 +1,6 @@
 import type { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Tooltip from "react-bootstrap/esm/Tooltip";
 import styled from "styled-components";
@@ -29,6 +29,40 @@ const ProfileTable = styled.table`
 
 const OthersProfilePage = ({ user }: { user: Meteor.User }) => {
   const showHuntList = (user.hunts?.length ?? 0) > 0;
+  const [currentTime, setCurrentTime] = useState("");
+
+  useEffect(() => {
+    if (!user.timezone) {
+      setCurrentTime("");
+      return undefined;
+    }
+
+    const updateCurrentTime = () => {
+      try {
+        const timeString = new Date().toLocaleTimeString([], {
+          timeZone: user.timezone,
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        setCurrentTime(timeString);
+      } catch (e) {
+        if (e instanceof RangeError) {
+          setCurrentTime("Invalid Timezone");
+          return true;
+        }
+        throw e;
+      }
+      return false;
+    };
+
+    if (updateCurrentTime()) {
+      return undefined;
+    }
+
+    const intervalId = setInterval(updateCurrentTime, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [user.timezone]);
 
   // TODO: The current implementation of the "profile" publication that fetches
   // the user will always include the list of hunts, so we don't need to
@@ -84,6 +118,14 @@ const OthersProfilePage = ({ user }: { user: Meteor.User }) => {
               ) : (
                 "(none)"
               )}
+            </td>
+          </tr>
+          <tr>
+            <th>Timezone / Current Time</th>
+            <td>
+              {user.timezone
+                ? `${user.timezone.replace(/_/g, " ")} (${currentTime})`
+                : "(none)"}
             </td>
           </tr>
           <tr>
