@@ -2636,13 +2636,15 @@ const PuzzlePageMetadata = ({
     })
   }, [allDocs])
 
-  const switchOrCreateDocument = useCallback((e:string|number)=>{
+  const switchOrCreateDocument = useCallback((e:"spreadsheet"|"document"
+    |"drawing"|number)=>{
     if(!e) return;
     if(unusedDocumentTypes.includes(e)){
       createPuzzleDocument.call({
         huntId: puzzle.hunt,
         puzzleId: puzzle._id,
-        docType: e,
+        docType: e as "spreadsheet"|"document"
+    |"drawing",
       });
     } else if(e !== selectedDocumentIndex) {
       setSelectedDocument(e);
@@ -3677,7 +3679,6 @@ const PuzzlePage = React.memo(() => {
 
   const restoreChat = useCallback(() => {
     if (isChatMinimized) {
-      console.log("restoreChat: Setting isChatMinimized=false"); // Debug log 4
       setIsChatMinimized(false);
       setSidebarWidth(lastSidebarWidth);
     }
@@ -3762,29 +3763,6 @@ const PuzzlePage = React.memo(() => {
   // useEffect for restoring chat on new message - broken
   useEffect(() => {
     const currentLength = chatMessages.length;
-
-    console.log("[Effect Check - Refined]", {
-      currentLength,
-      prev: prevMessagesLength.current,
-      isMinimized: isChatMinimized,
-    });
-
-    if (currentLength > prevMessagesLength.current) {
-      console.log("[Effect Action - Refined] New message detected!");
-
-      if (isChatMinimized) {
-        console.log("[Effect Action - Refined] Chat is minimized, calling restoreChat");
-        restoreChat();
-      } else {
-        console.log("[Effect Info - Refined] Chat not minimized when new message arrived.");
-      }
-    } else {
-      if (currentLength === prevMessagesLength.current && currentLength > 0) {
-         console.log("[Effect Info - Refined] Effect ran, but message length didn't increase.");
-      } else if (currentLength < prevMessagesLength.current) {
-         console.log("[Effect Info - Refined] Effect ran, but message length decreased?");
-      }
-    }
 
     if (currentLength !== prevMessagesLength.current) {
        prevMessagesLength.current = currentLength;
