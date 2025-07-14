@@ -3490,7 +3490,6 @@ const PuzzlePage = React.memo(() => {
   const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(DefaultSidebarWidth);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isMetadataMinimized, setIsMetadataMinimized] = useState<boolean>(false);
-  const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(persistentWidth ?? DefaultSidebarWidth);
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
@@ -3767,24 +3766,6 @@ const PuzzlePage = React.memo(() => {
       return () => cancelAnimationFrame(animationFrameId);
     }
   }, [isChatMinimized, sidebarWidth]);
-
-  // useEffect for restoring chat on new message - broken
-  useEffect(() => {
-    const currentLength = chatMessages.length;
-    if (currentLength > prevMessagesLength.current && prevMessagesLength.current > 0) {
-      if (isChatMinimized) {
-        restoreChat();
-      }
-    }
-  }, [
-      messageIdFromHash,
-      chatDataLoading,
-      chatSectionRef,
-      isChatMinimized,
-      restoreChat,
-      setPulsingMessageId,
-    ]);
-
 
   useEffect((): (() => void) | undefined => {
     if (!isChatMinimized && !isRestoring) {
