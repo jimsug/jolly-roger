@@ -1,0 +1,96 @@
+name: Build and Package Extension
+
+on:
+  push:
+    paths:
+      - "extension/**"
+    tags:
+      - "v*.*.*"
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "extension/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: ./extension
+        run: npm install
+
+      - name: Build extension
+        working-directory: ./extension
+        run: npm run build
+
+      - name: List files in extension/dist after build
+        if: always()
+        working-directory: ./extension
+        run: ls -R dist/
+
+      - name: Generate Firefox Update Manifest
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: ./extension
+        run: |
+          VERSION=${{ github.ref_name }}
+          VERSION=${VERSION#v} # remove 'v' prefix
+          cat > dist/updates.json <<EOL
+          {
+            "addons": {
+              "{2bf7bc48-4f7d-4c16-9a88-58bb9f1c6ff5}": {
+                "updates": [
+                  {
+                    "version": "${VERSION}",
+                    "update_link": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/jolly-roger-firefox.xpi"
+                  }
+                ]
+              }
+            }
+          }
+          EOL
+
+      - name: Package Chrome Extension
+        uses: cardinalby/webext-buildtools-chrome-crx-action@v2
+        with:
+          zipFilePath: 'extension/dist/chrome/jolly-roger-chrome.zip'
+          crxFilePath: 'extension/dist/jolly-roger-chrome.crx'
+          privateKey: ${{ secrets.CRX_PRIVATE_KEY }}
+          updateXmlPath: 'extension/dist/update.xml'
+          updateXmlCodebaseUrl: 'https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/jolly-roger-chrome.crx'
+
+      - name: List files in extension/dist before release
+        if: always()
+        working-directory: ./extension
+        run: ls -R dist/
+
+      - name: Create Release and Upload Artifacts
+        uses: ncipollo/release-action@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          # Note: The artifact paths must exist. If .crx packaging is skipped,
+          # that part of the artifact list will gracefully fail to upload.
+          artifacts: |
+            extension/dist/chrome/jolly-roger-chrome.zip
+            extension/dist/jolly-roger-chrome.crx
+            extension/dist/firefox/jolly-roger-firefox.xpi
+            extension/dist/update_manifest.xml
+            extension/dist/updates.json
+          generateReleaseNotes: true
+          bodyFile: 'extension/UPDATES.md'
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -291,7 +291,13 @@ const Puzzle = React.memo(
         );
       }
       return null;
-    }, [showEdit, puzzle.deleted, onShowEditModal, onShowDeleteModal]);
+    }, [
+      showEdit,
+      puzzle.deleted,
+      onShowEditModal,
+      onShowDeleteModal,
+      theme.basicMode,
+    ]);
 
     // id, title, answer, tags
     const linkTarget = `/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`;
@@ -542,7 +548,7 @@ const Puzzle = React.memo(
               {rtcViewers.length > 0 && activeSolvers.length > 0 ? (
                 <br />
               ) : null}
-              {viewers.length > 0 ? (
+              {activeSolvers.length > 0 ? (
                 <span>
                   <FontAwesomeIcon icon={faEye} />{" "}
                 </span>

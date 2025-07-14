@@ -24,6 +24,8 @@ const authenticator: express.Handler = expressAsyncWrapper(
       return;
     }
 
+    res.locals.userId = key.user;
+
     next();
   },
 );

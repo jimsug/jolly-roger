@@ -4,6 +4,8 @@ import SoftDeletedModel from "./SoftDeletedModel";
 import { foreignKey, nonEmptyString } from "./customTypes";
 import withCommon from "./withCommon";
 
+export const DOCUMENT_TYPES = ["spreadsheet", "document", "drawing"];
+
 const DocumentSchema = withCommon(
   z
     .object({
@@ -15,7 +17,7 @@ const DocumentSchema = withCommon(
         z.object({
           provider: z.literal("google"),
           value: z.object({
-            type: z.enum(["spreadsheet", "document"]),
+            type: z.enum(["spreadsheet", "document", "drawing"]),
             id: nonEmptyString,
             folder: nonEmptyString.optional(),
           }),

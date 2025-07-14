@@ -7,6 +7,7 @@ import GdriveMimeTypes from "../lib/GdriveMimeTypes";
 import Documents from "../lib/models/Documents";
 import FolderPermissions from "../lib/models/FolderPermissions";
 import Hunts from "../lib/models/Hunts";
+import type { PuzzleType } from "../lib/models/Puzzles";
 import type { SettingType } from "../lib/models/Settings";
 import Settings from "../lib/models/Settings";
 import getTeamName from "./getTeamName";
@@ -64,6 +65,7 @@ async function createDocument(
         (
           | { name: "gdrive.template.document" }
           | { name: "gdrive.template.spreadsheet" }
+          | { name: "gdrive.template.drawing" }
         ));
   const mimeType = GdriveMimeTypes[type];
   const parents = parentId ? [parentId] : undefined;
@@ -263,23 +265,27 @@ export async function ensureHuntFolderPermission(
 }
 
 export async function ensureDocument(
-  puzzle: {
-    _id: string;
-    title: string;
-    hunt: string;
-  },
+  userId: string,
+  puzzle:
+    | {
+        _id: string;
+        title: string;
+        hunt: string;
+      }
+    | PuzzleType,
   type: GdriveMimeTypesType = "spreadsheet",
+  additionalDocument = false,
 ) {
   const hunt = await Hunts.findOneAllowingDeletedAsync(puzzle.hunt);
   const folderId = hunt ? await ensureHuntFolder(hunt) : undefined;
 
   let doc = await Documents.findOneAsync({ puzzle: puzzle._id });
-  if (!doc) {
+  if (!doc || (additionalDocument && doc.value.type !== type)) {
     await checkClientOk();
 
     await withLock(`puzzle:${puzzle._id}:documents`, async () => {
       doc = await Documents.findOneAsync({ puzzle: puzzle._id });
-      if (!doc) {
+      if (!doc || (additionalDocument && doc.value.type !== type)) {
         Logger.info("Creating missing document for puzzle", {
           puzzle: puzzle._id,
         });
@@ -290,13 +296,16 @@ export async function ensureDocument(
           folderId,
         );
         const newDoc = {
+          createdBy: userId,
           hunt: puzzle.hunt,
           puzzle: puzzle._id,
           provider: "google" as const,
           value: { type, id: googleDocId, folder: folderId },
         };
         const docId = await Documents.insertAsync(newDoc);
-        doc = await Documents.findOneAsync(docId)!;
+        doc = await Documents.findOneAsync(docId, {
+          sort: { createdTimestamp: -1 },
+        })!;
       }
     });
   }

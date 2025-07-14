@@ -64,18 +64,19 @@ const MoreAppPage = () => {
     return Puzzles.find({ hunt: huntId, tags: administriviaTag._id }).fetch();
   }, [huntId, loading, administriviaTag]);
 
-  const jr_host = window.location.host;
+  const jrHost = window.location.host;
   const protocol = window.location.protocol;
   const bookmarklet = useMemo(() => {
     const code = `
       (function() {
-        var title = encodeURIComponent(document.title)
-        var url = encodeURIComponent(window.location.href)
-        window.location.href = "${protocol}//${jr_host}/hunts/${huntId}/puzzles?title=" + title + "&url=" + url;
+        var title = encodeURIComponent(document.title);
+        var url = encodeURIComponent(window.location.href);
+        var jrUrl = "${protocol}//${jrHost}/hunts/${huntId}/puzzles?title=" + title + "&url=" + url;
+        window.open(jrUrl, '_blank');
       })();
     `;
-    return `javascript:${encodeURIComponent(code)}`;
-  }, [huntId]);
+    return `javascript:${code}`;
+  }, [huntId, jrHost, protocol]);
 
   const hunt = useTracker(
     () => (huntId ? Hunts.findOne(huntId) : null),

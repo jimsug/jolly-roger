@@ -274,10 +274,10 @@ const GuessMessage = React.memo(
     let confidenceLabel;
     let confidenceVariant;
 
-    if (guess?.confidence > 0) {
+    if (guess?.confidence > 50) {
       confidenceLabel = "High";
       confidenceVariant = "success";
-    } else if (guess?.confidence < -5) {
+    } else if (guess?.confidence < 50) {
       confidenceLabel = "Low";
       confidenceVariant = "danger";
     } else {
@@ -650,12 +650,14 @@ const ChatNotificationMessage = ({
   puzzle,
   displayNames,
   selfUserId,
+  messageId,
 }: {
   cn: ChatNotificationType;
   hunt: HuntType;
   puzzle: PuzzleType;
   displayNames: Map<string, string>;
   selfUserId: string;
+  messageId: string;
 }) => {
   const id = cn._id;
   const dismiss = useCallback(
@@ -693,7 +695,9 @@ const ChatNotificationMessage = ({
         <strong className="me-auto">
           {/* {senderDisplayName} */}
           {/* {" on "} */}
-          <Link to={`/hunts/${hunt._id}/puzzles/${puzzle._id}`}>
+          <Link
+            to={`/hunts/${hunt._id}/puzzles/${puzzle._id}#msg=${messageId}`}
+          >
             {puzzle.title}
           </Link>
         </strong>
@@ -1124,6 +1128,7 @@ const NotificationCenter = () => {
         key={cn._id}
         cn={cn}
         hunt={hunt}
+        messageId={cn.message}
         puzzle={puzzle}
         displayNames={displayNames}
         selfUserId={selfUserId}
