@@ -105,9 +105,6 @@ const MarkdownToken = ({ token }: { token: marked.Token }) => {
     }
     return <PreWrapParagraph>{children}</PreWrapParagraph>;
   } else if (token.type === "link") {
-    // const children = token.tokens.map((t, i) => (
-    //   <MarkdownToken key={i} token={t} />
-    // ));
 
     // Truncate the link href
     let displayedHref = token.href;
@@ -120,7 +117,7 @@ const MarkdownToken = ({ token }: { token: marked.Token }) => {
       <a
         target="_blank"
         rel="noopener noreferrer"
-        title={`{children}`}
+        title={token.href}
         href={token.href}
       >
         {displayedHref} {/* Display the truncated href */}
