@@ -8,11 +8,12 @@ const APIKey = withCommon(
   z.object({
     user: foreignKey,
     key: z.string().regex(/^[A-Za-z0-9]{32}$/),
+    lastUsedAt: z.date().optional(),
   }),
 );
 
 const APIKeys = new SoftDeletedModel("jr_api_keys", APIKey);
-APIKeys.addIndex({ key: 1 });
+APIKeys.addIndex({ key: 1 }, { unique: true });
 export type APIKeyType = ModelType<typeof APIKeys>;
 
 export default APIKeys;

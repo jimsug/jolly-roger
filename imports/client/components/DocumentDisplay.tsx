@@ -1,3 +1,4 @@
+import type { Meteor } from "meteor/meteor";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import { faFileAlt } from "@fortawesome/free-solid-svg-icons/faFileAlt";
 import { faFilePen } from "@fortawesome/free-solid-svg-icons/faFilePen";
@@ -13,6 +14,7 @@ interface DocumentDisplayProps {
   document: DocumentType;
   displayMode: "link" | "embed";
   isShown: boolean;
+  user: Meteor.User;
 }
 
 const StyledDeepLink = styled.a`
@@ -49,18 +51,25 @@ const GoogleDocumentDisplay = ({
   document,
   displayMode,
   isShown,
+  user,
 }: DocumentDisplayProps) => {
   let url: string;
   let title: string;
   let icon: IconDefinition;
+  // If the user has linked their Google account, try to force usage of that specific account.
+  // Otherwise, they may open the document anonymously. If the user isn't signed in, they will be
+  // redirected to the default account in their browser session anyway.
+  const authUserParam = user.googleAccount
+    ? `authuser=${user.googleAccount}&`
+    : "";
   switch (document.value.type) {
     case "spreadsheet":
-      url = `https://docs.google.com/spreadsheets/d/${document.value.id}/edit?ui=2&rm=embedded&gid=0#gid=0`;
+      url = `https://docs.google.com/spreadsheets/d/${document.value.id}/edit?${authUserParam}ui=2&rm=embedded&gid=0#gid=0`;
       title = "Sheet";
       icon = faTable;
       break;
     case "document":
-      url = `https://docs.google.com/document/d/${document.value.id}/edit?ui=2&rm=embedded#gid=0`;
+      url = `https://docs.google.com/document/d/${document.value.id}/edit?${authUserParam}ui=2&rm=embedded#gid=0`;
       title = "Doc";
       icon = faFileAlt;
       break;
@@ -106,6 +115,7 @@ const DocumentDisplay = ({
   document,
   displayMode,
   isShown,
+  user,
 }: DocumentDisplayProps) => {
   switch (document.provider) {
     case "google":
@@ -114,6 +124,7 @@ const DocumentDisplay = ({
           document={document}
           displayMode={displayMode}
           isShown={isShown}
+          user={user}
         />
       );
     default:

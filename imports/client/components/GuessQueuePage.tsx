@@ -4,14 +4,14 @@ import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import React, {
-  type ComponentPropsWithRef,
-  type FC,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import React, { useCallback, useRef, useState } from "react";
+import {
+  Badge,
+  ButtonToolbar,
+  FormLabel,
+  ToggleButton,
+  ToggleButtonGroup,
+} from "react-bootstrap";
 import Button from "react-bootstrap/Button";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
@@ -19,7 +19,6 @@ import FormGroup from "react-bootstrap/FormGroup";
 import InputGroup from "react-bootstrap/InputGroup";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Tooltip from "react-bootstrap/Tooltip";
-import CopyToClipboard from "react-copy-to-clipboard";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import styled, { css } from "styled-components";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
@@ -35,28 +34,18 @@ import guessesForGuessQueue from "../../lib/publications/guessesForGuessQueue";
 import setGuessState from "../../methods/setGuessState";
 import { guessURL } from "../../model-helpers";
 import { useBreadcrumb } from "../hooks/breadcrumb";
+import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
+import type { Theme } from "../theme";
+import CopyToClipboardButton from "./CopyToClipboardButton";
 import GuessState from "./GuessState";
 import Markdown from "./Markdown";
 import PuzzleAnswer from "./PuzzleAnswer";
-import {
-  GuessConfidence,
-  GuessDirection,
-  formatGuessDirection,
-} from "./guessDetails";
+import { formatGuessDirection } from "./guessDetails";
 import Breakable from "./styling/Breakable";
-import { guessColorLookupTable } from "./styling/constants";
 import type { Breakpoint } from "./styling/responsive";
 import { mediaBreakpointDown } from "./styling/responsive";
-import {
-  Badge,
-  ButtonToolbar,
-  FormLabel,
-  ToggleButton,
-  ToggleButtonGroup,
-} from "react-bootstrap";
-import { Theme } from "../theme";
 
 const StyledToggleButtonGroup = styled(ToggleButtonGroup)`
   @media (width < 360px) {
@@ -90,10 +79,10 @@ const StyledHeaderRow = styled.div`
   display: contents;
 `;
 
-const StyledHeader = styled.div<{theme: Theme}>`
+const StyledHeader = styled.div<{ theme: Theme }>`
   position: sticky;
   top: 0;
-  background-color: ${({theme}) => theme.colors.background};
+  background-color: ${({ theme }) => theme.colors.background};
   font-weight: bold;
   ${mediaBreakpointDown(
     compactViewBreakpoint,
@@ -155,33 +144,7 @@ const StyledCell = styled.div`
   background-color: inherit;
 `;
 
-const StyledGuessDirection = styled(GuessDirection)`
-  padding: 4px;
-  background-color: inherit;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      padding: 0;
-      max-width: 200px;
-    `,
-  )}
-`;
-
-const StyledGuessConfidence = styled(GuessConfidence)`
-  padding: 4px;
-  background-color: inherit;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      padding: 0;
-      max-width: 200px;
-    `,
-  )}
-`;
-
-const StyledLinkButton: FC<ComponentPropsWithRef<typeof Button>> = styled(
-  Button,
-)`
+const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
   padding: 0;
   vertical-align: baseline;
 `;
@@ -204,13 +167,13 @@ const StyledPuzzleTimestampAndSubmitter = styled.div`
 
 const StyledPuzzleTimestamp = styled(StyledCell)`
   color: #888;
-  font-size: .9rem;
+  font-size: 0.9rem;
 
   ${mediaBreakpointDown(
     compactViewBreakpoint,
     css`
       line-height: 1.7;
-      margin-right: .5em;
+      margin-right: 0.5em;
 
       ::after {
         content: " submitted by ";
@@ -223,64 +186,14 @@ const StyledPuzzleTimestamp = styled(StyledCell)`
 const StyledPuzzleCell = styled(StyledCell)`
   display: flex;
   align-items: start;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      /* &::before { */
-        /* content: "Puzzle: "; */
-        /* white-space: pre; */
-      /* } */
-    `,
-  )}
+  ${mediaBreakpointDown(compactViewBreakpoint)}
 `;
 
 const StyledGuessCell = styled(StyledCell)`
   display: flex;
   align-items: start;
   overflow: hidden;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      /* &::before { */
-        /* content: "Guess: "; */
-        /* white-space: pre; */
-      /* } */
-    `,
-  )}
-`;
-
-const StyledGuessDetails = styled.div`
-  display: contents;
-  background-color: inherit;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      display: flex;
-    `,
-  )}
-`;
-
-const StyledGuessDetailWithLabel = styled(StyledCell)`
-  display: contents;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      display: flex;
-      flex-direction: column;
-      align-items: stretch;
-      flex-grow: 1;
-    `,
-  )}
-`;
-
-const StyledGuessDetailLabel = styled.span`
-  display: none;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      display: inline;
-    `,
-  )}
+  ${mediaBreakpointDown(compactViewBreakpoint)}
 `;
 
 const StyledGuessStatuses = styled.div`
@@ -294,7 +207,7 @@ const StyledGuessStatuses = styled.div`
 
       & > * {
         padding: 0;
-        margin-right: .5em;
+        margin-right: 0.5em;
       }
     `,
   )}
@@ -337,16 +250,7 @@ const GuessBlock = React.memo(
         Open on Jolly Roger
       </Tooltip>
     );
-    const copyTooltip = (
-      <Tooltip id={`guess-${guess._id}-copy-tooltip`}>
-        Copy to clipboard
-      </Tooltip>
-    );
-    const requeueTooltip = (
-      <Tooltip>
-        Return this guess to the queue
-      </Tooltip>
-    );
+    const requeueTooltip = <Tooltip>Return this guess to the queue</Tooltip>;
 
     let directionLabel;
     let directionVariant;
@@ -409,44 +313,41 @@ const GuessBlock = React.memo(
           </OverlayTrigger>{" "}
         </StyledPuzzleCell>
         <StyledGuessCell>
-          <OverlayTrigger placement="top" overlay={copyTooltip}>
-            {({ ref, ...triggerHandler }) => (
-              <CopyToClipboard text={guess.guess} {...triggerHandler}>
-                <StyledLinkButton ref={ref} variant="link" aria-label="Copy">
-                  <FontAwesomeIcon icon={faCopy} fixedWidth />
-                </StyledLinkButton>
-              </CopyToClipboard>
-            )}
-          </OverlayTrigger>{" "}
+          <StyledCopyToClipboardButton
+            variant="link"
+            aria-label="Copy"
+            tooltipId={`guess-${guess._id}-copy-tooltip`}
+            text={guess.guess}
+          >
+            <FontAwesomeIcon icon={faCopy} fixedWidth />
+          </StyledCopyToClipboardButton>
           <PuzzleAnswer answer={guess.guess} breakable indented />
         </StyledGuessCell>
         {hunt.hasGuessQueue && (
-          <>
-            <StyledGuessStatuses>
-              <StyledCell>
-                <Badge bg={directionVariant}>{directionLabel}</Badge>
-              </StyledCell>
-              <StyledCell>
-                <Badge bg={confidenceVariant}>{confidenceLabel}</Badge>
-              </StyledCell>
-              <StyledCell>
-                <GuessState id={`guess-${guess._id}-state`} state={guess.state} />
-              </StyledCell>
-          <StyledCell>
-            {canEdit && guess.state !== "pending" && (
-              <OverlayTrigger placement="top" overlay={requeueTooltip}>
-              <Button
-                variant="outline-secondary"
-                size="sm"
-                onClick={markPending}
-                >
-                Re-queue
-              </Button>
-              </OverlayTrigger>
-            )}
-          </StyledCell>
-            </StyledGuessStatuses>
-          </>
+          <StyledGuessStatuses>
+            <StyledCell>
+              <Badge bg={directionVariant}>{directionLabel}</Badge>
+            </StyledCell>
+            <StyledCell>
+              <Badge bg={confidenceVariant}>{confidenceLabel}</Badge>
+            </StyledCell>
+            <StyledCell>
+              <GuessState id={`guess-${guess._id}-state`} state={guess.state} />
+            </StyledCell>
+            <StyledCell>
+              {canEdit && guess.state !== "pending" && (
+                <OverlayTrigger placement="top" overlay={requeueTooltip}>
+                  <Button
+                    variant="outline-secondary"
+                    size="sm"
+                    onClick={markPending}
+                  >
+                    Re-queue
+                  </Button>
+                </OverlayTrigger>
+              )}
+            </StyledCell>
+          </StyledGuessStatuses>
         )}
         {guess.additionalNotes && (
           <Markdown as={StyledAdditionalNotes} text={guess.additionalNotes} />
@@ -457,6 +358,7 @@ const GuessBlock = React.memo(
 );
 
 const GuessQueuePage = () => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [displayMode, setDisplayMode] = useState<string[]>([
     "correct",
     "intermediate",
@@ -488,7 +390,11 @@ const GuessQueuePage = () => {
     () =>
       loading
         ? []
-        : Guesses.find({ hunt: huntId }, { sort: { createdAt: -1 } }).fetch().filter((x)=>displayMode.includes(x.state)||x.state==="pending"),
+        : Guesses.find({ hunt: huntId }, { sort: { createdAt: -1 } })
+            .fetch()
+            .filter(
+              (x) => displayMode.includes(x.state) || x.state === "pending",
+            ),
     [huntId, loading, displayMode],
   );
   const puzzles = useTracker(
@@ -508,28 +414,7 @@ const GuessQueuePage = () => {
   );
 
   const searchBarRef = useRef<HTMLInputElement>(null);
-
-  const onChangeDisplayMode = useCallback(
-    (value: string[]) => {
-      setDisplayMode(value);
-    }
-
-  const maybeStealCtrlF = useCallback((e: KeyboardEvent) => {
-    if (e.ctrlKey && e.key === "f") {
-      e.preventDefault();
-      const node = searchBarRef.current;
-      if (node) {
-        node.focus();
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener("keydown", maybeStealCtrlF);
-    return () => {
-      window.removeEventListener("keydown", maybeStealCtrlF);
-    };
-  }, [maybeStealCtrlF]);
+  useFocusRefOnFindHotkey(searchBarRef);
 
   const setSearchString = useCallback(
     (val: string) => {
@@ -643,9 +528,9 @@ const GuessQueuePage = () => {
             <FontAwesomeIcon icon={faEraser} />
           </Button>
         </InputGroup>
-        </FormGroup>
-        <FormGroup>
-          <FormLabel>Guesses to show</FormLabel>
+      </FormGroup>
+      <FormGroup>
+        <FormLabel>Guesses to show</FormLabel>
         <ButtonToolbar>
           <StyledToggleButtonGroup
             type="checkbox"

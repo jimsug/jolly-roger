@@ -4,7 +4,9 @@ import { Google } from "meteor/google-oauth";
 import { Meteor } from "meteor/meteor";
 import Mustache from "mustache";
 import Logger from "../Logger";
+import type { LoginOptions } from "../lib/loginOptions";
 import Hunts from "../lib/models/Hunts";
+import InvitationCodes from "../lib/models/InvitationCodes";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import type { SettingType } from "../lib/models/Settings";
 import Settings from "../lib/models/Settings";
@@ -17,12 +19,6 @@ type LoginInfo = {
   connection: Meteor.Connection;
   methodName: string;
   methodArguments: any[];
-};
-
-type LoginOptions = {
-  isGoogleJrLogin?: boolean;
-  key?: string;
-  secret?: string;
 };
 
 const summaryFromLoginInfo = function (info: LoginInfo) {
@@ -53,32 +49,119 @@ const summaryFromLoginInfo = function (info: LoginInfo) {
   }
 };
 
-Accounts.registerLoginHandler((options: LoginOptions) => {
+Accounts.registerLoginHandler(async (options: LoginOptions) => {
   // Only handle requests that include our hook's custom flag.
-  if (!options.isGoogleJrLogin) {
+  if (!options.isJrLogin) {
     return undefined;
   }
 
   check(options, {
-    isGoogleJrLogin: true,
-    key: Match.Optional(String),
-    secret: Match.Optional(String),
+    isJrLogin: true,
+    googleCredentials: Match.Optional({
+      key: String,
+      secret: String,
+    }),
+    allowAutoProvision: Match.Optional({
+      huntInvitationCode: String,
+    }),
   });
 
-  if (!options.key || !options.secret) {
+  // If an invitation code is provided, create a new user if needed.
+  // We don't actually add the user to the hunt here - that should be handled once the user is
+  // signed in and redirected to the /join URL they originally tried to access.
+  if (options.allowAutoProvision) {
+    if (!options.googleCredentials) {
+      throw new Meteor.Error(
+        400,
+        "Autoprovisioning login request is missing Google credentials",
+      );
+    }
+
+    const invitation = await InvitationCodes.findOneAsync({
+      code: options.allowAutoProvision.huntInvitationCode,
+    });
+    if (!invitation) {
+      throw new Meteor.Error(404, "Invalid invitation code");
+    }
+
+    const hunt = await Hunts.findOneAsync({
+      _id: invitation.hunt,
+    });
+    if (!hunt) {
+      throw new Meteor.Error(404, "Hunt does not exist for invitation");
+    }
+
+    // Google credentials were provided - obtain the email from the associated account,
+    // create a passwordless account with that email, and link it to the Google account.
+    // Also set the initial displayName for the user to their Google account's name.
+    const credential = await Google.retrieveCredential(
+      options.googleCredentials.key,
+      options.googleCredentials.secret,
+    );
+    const { email, id, name, picture } = credential.serviceData;
+    const users = await MeteorUsers.find(
+      { googleAccountId: id },
+      { limit: 2 },
+    ).fetchAsync();
+    switch (users.length) {
+      case 0: {
+        // Autoprovision a new user
+        const userId = await Accounts.createUserAsync({
+          email,
+        });
+        await MeteorUsers.updateAsync(userId, {
+          $set: {
+            googleAccount: email,
+            googleAccountId: id,
+            googleProfilePicture: picture,
+            displayName: name,
+          },
+        });
+        // Tell accounts-base to log the user in.
+        return { userId };
+      }
+      case 1: {
+        // The user already exists, so just log them in.
+        const userId = users[0]?._id;
+        if (!userId) {
+          throw new Meteor.Error(500, "User missing ID");
+        }
+        await MeteorUsers.updateAsync(userId, {
+          $set: {
+            googleAccount: email,
+            googleProfilePicture: picture,
+          },
+        });
+        return { userId };
+      }
+      default: {
+        throw new Meteor.Error(
+          400,
+          "Google account is associated with multiple users",
+        );
+      }
+    }
+  }
+
+  // Otherwise, we only support Google sign-in; password sign-ins use the normal handler.
+  if (!options.googleCredentials) {
     throw new Meteor.Error(
       400,
-      "Google authentication request missing key or secret",
+      "Google authentication request missing credentials",
     );
   }
 
-  const credential = Google.retrieveCredential(options.key, options.secret);
-  const googleAccountId = credential.serviceData.id;
+  const credential = await Google.retrieveCredential(
+    options.googleCredentials.key,
+    options.googleCredentials.secret,
+  );
+  const { email, id, picture } = credential.serviceData;
 
   // Attempt to match existing Google users by their linked account ID.
-  // We can't use the async method since Meteor's API only takes a sync one.
-  // eslint-disable-next-line jolly-roger/no-disallowed-sync-methods
-  const users = MeteorUsers.find({ googleAccountId }, { limit: 2 }).fetch();
+  const users = await MeteorUsers.find(
+    { googleAccountId: id },
+    { limit: 2 },
+  ).fetchAsync();
   switch (users.length) {
     case 0: {
       throw new Meteor.Error(
@@ -91,6 +174,12 @@ Accounts.registerLoginHandler((options: LoginOptions) => {
       if (!userId) {
         throw new Meteor.Error(500, "User missing ID");
       }
+      await MeteorUsers.updateAsync(userId, {
+        $set: {
+          googleAccount: email,
+          googleProfilePicture: picture,
+        },
+      });
       return { userId };
     }
     default: {
@@ -178,9 +267,8 @@ const DEFAULT_ENROLL_ACCOUNT_TEMPLATE =
   "\n" +
   "This message was sent to {{email}}";
 
-function makeView(user: Meteor.User, url: string) {
-  // eslint-disable-next-line jolly-roger/no-disallowed-sync-methods
-  const hunts = Hunts.find({ _id: { $in: user.hunts } }).fetch();
+async function makeView(user: Meteor.User, url: string) {
+  const hunts = await Hunts.find({ _id: { $in: user.hunts } }).fetchAsync();
   const email = user?.emails?.[0]?.address;
   const huntNames = hunts.map((h) => h.name);
   const huntNamesCount = huntNames.length;
@@ -221,8 +309,8 @@ function updateEmailTemplatesHooks(
       return Mustache.render(DEFAULT_ENROLL_ACCOUNT_SUBJECT_TEMPLATE, view);
     }
   };
-  Accounts.emailTemplates.enrollAccount.text = (user, url: string) => {
-    const view = makeView(user, url);
+  Accounts.emailTemplates.enrollAccount.text = async (user, url: string) => {
+    const view = await makeView(user, url);
     if (doc.value.enrollAccountMessageTemplate) {
       return Mustache.render(doc.value.enrollAccountMessageTemplate, view);
     } else {
@@ -236,8 +324,8 @@ function clearEmailTemplatesHooks() {
   Accounts.emailTemplates.enrollAccount.subject = () => {
     return `[jolly-roger] You're invited to ${Accounts.emailTemplates.siteName}`;
   };
-  Accounts.emailTemplates.enrollAccount.text = (user, url: string) => {
-    const view = makeView(user, url);
+  Accounts.emailTemplates.enrollAccount.text = async (user, url: string) => {
+    const view = await makeView(user, url);
     return Mustache.render(DEFAULT_ENROLL_ACCOUNT_TEMPLATE, view);
   };
 }
@@ -245,13 +333,13 @@ function clearEmailTemplatesHooks() {
 // Scope hoisted to keep the handle alive beyond the startup block.
 let configCursor;
 
-Meteor.startup(() => {
+Meteor.startup(async () => {
   // Initialize to default values
   clearEmailTemplatesHooks();
 
   // Set up observer
   configCursor = Settings.find({ name: "email.branding" });
-  configCursor.observe({
+  await configCursor.observeAsync({
     added: (doc) => updateEmailTemplatesHooks(doc),
     changed: (doc) => updateEmailTemplatesHooks(doc),
     removed: () => clearEmailTemplatesHooks(),

@@ -1,7 +1,7 @@
 import { Google } from "meteor/google-oauth";
 import type { Meteor } from "meteor/meteor";
 import { OAuth } from "meteor/oauth";
-import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { useTracker } from "meteor/react-meteor-data";
 import { ServiceConfiguration } from "meteor/service-configuration";
 import React, { useCallback, useMemo, useState } from "react";
 import Alert from "react-bootstrap/Alert";
@@ -16,14 +16,17 @@ import InputGroup from "react-bootstrap/InputGroup";
 import CopyToClipboard from "react-copy-to-clipboard";
 import Flags from "../../Flags";
 import { formatDiscordName } from "../../lib/discord";
+import type { APIKeyType } from "../../lib/models/APIKeys";
+import createAPIKey from "../../methods/createAPIKey";
 import linkUserDiscordAccount from "../../methods/linkUserDiscordAccount";
 import linkUserGoogleAccount from "../../methods/linkUserGoogleAccount";
 import rollAPIKey from "../../methods/rollAPIKey";
 import unlinkUserDiscordAccount from "../../methods/unlinkUserDiscordAccount";
 import unlinkUserGoogleAccount from "../../methods/unlinkUserGoogleAccount";
 import updateProfile from "../../methods/updateProfile";
-import TeamName from "../TeamName";
 import { requestDiscordCredential } from "../discord";
+import useTeamName from "../hooks/useTeamName";
+import APIKeysTable from "./APIKeysTable";
 import ActionButtonRow from "./ActionButtonRow";
 import AudioConfig from "./AudioConfig";
 import Avatar from "./Avatar";
@@ -174,17 +177,12 @@ const DiscordLinkBlock = ({ user }: { user: Meteor.User }) => {
     state: DiscordLinkBlockLinkState.IDLE,
   });
 
-  useSubscribe("teamName");
-
   const config = useTracker(
     () => ServiceConfiguration.configurations.findOne({ service: "discord" }),
     [],
   );
   const discordDisabled = useTracker(() => Flags.active("disable.discord"), []);
-  const teamName = useTracker(
-    () => TeamName.findOne("teamName")?.name ?? "Default Team Name",
-    [],
-  );
+  const { teamName } = useTeamName();
 
   const requestComplete = useCallback((token: string) => {
     const secret = OAuth._retrieveCredentialSecret(token);
@@ -296,12 +294,59 @@ enum OwnProfilePageSubmitState {
   ERROR = "error",
 }
 
+const APIKeysSection = ({ apiKeys }: { apiKeys?: APIKeyType[] }) => {
+  const [createState, setCreateState] = useState<
+    "idle" | "requesting" | "success" | "error"
+  >("idle");
+  const [createError, setCreateError] = useState<string | undefined>(undefined);
+  const createKey = useCallback(() => {
+    setCreateState("requesting");
+    createAPIKey.call({}, (error, _newKey) => {
+      if (error) {
+        setCreateState("error");
+        setCreateError(error.message);
+      } else {
+        setCreateState("success");
+      }
+    });
+  }, []);
+  const disabled = createState === "requesting";
+  return (
+    <>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <h3>API Keys</h3>
+        <Button disabled={disabled} onClick={createKey}>
+          + Create API key
+        </Button>
+      </div>
+      {createState === "error" ? (
+        <Alert
+          variant="danger"
+          onClose={() => setCreateState("idle")}
+          dismissible
+        >
+          Creating API key failed: {createError}
+        </Alert>
+      ) : undefined}
+      <p>Authorization credentials used to make API calls. Keep them secret!</p>
+      <APIKeysTable apiKeys={apiKeys} />
+    </>
+  );
+};
+
 const OwnProfilePage = ({
   initialUser,
-  initialAPIKey,
+  apiKeys,
 }: {
   initialUser: Meteor.User;
-  initialAPIKey?: string;
+  apiKeys?: APIKeyType[];
 }) => {
   const [displayName, setDisplayName] = useState<string>(
     initialUser.displayName ?? "",
@@ -595,47 +640,7 @@ const OwnProfilePage = ({
 
       <section className="advanced-section mt-3">
         <h2>Advanced</h2>
-        <FormGroup className="mb-3">
-          <FormLabel htmlFor="jr-profile-api-key">API key</FormLabel>
-          <InputGroup>
-            <FormControl
-              id="jr-profile-api-key"
-              type={showAPIKey ? "text" : "password"}
-              readOnly
-              disabled
-              value={initialAPIKey}
-            />
-            <CopyToClipboard text={initialAPIKey ?? ""}>
-              <Button variant="outline-secondary" disabled={regeneratingAPIKey}>
-                Copy
-              </Button>
-            </CopyToClipboard>
-            <Button
-              variant="outline-secondary"
-              onClick={toggleShowAPIKey}
-              disabled={regeneratingAPIKey}
-            >
-              {showAPIKey ? "Hide" : "Show"}
-            </Button>
-            <Button
-              variant="outline-secondary"
-              onClick={regenerateAPIKey}
-              disabled={regeneratingAPIKey}
-            >
-              {regeneratingAPIKey || (initialAPIKey?.length ?? 0) > 0
-                ? "Regenerate"
-                : "Generate"}
-            </Button>
-          </InputGroup>
-          <FormText>
-            Authorization credential used to make API calls. Keep this secret!
-          </FormText>
-          {APIKeyError ? (
-            <Alert variant="danger" dismissible onClose={dismissAPIKeyAlert}>
-              Key generation failed: {APIKeyError}
-            </Alert>
-          ) : null}
-        </FormGroup>
+        <APIKeysSection apiKeys={apiKeys} />
       </section>
     </Container>
   );

@@ -10,6 +10,19 @@ import { ensureHuntFolder } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
 
+const DEFAULT_TAGS = [
+  "is:meta",
+  "is:metameta",
+  "is:runaround",
+  "priority:high",
+  "priority:low",
+  "type:crossword",
+  "type:duck-konundrum",
+  "group:events",
+  "needs:extraction",
+  "needs:onsite",
+];
+
 defineMethod(createHunt, {
   validate(arg) {
     check(arg, CreateHuntPayloadSchema);
@@ -46,3 +59,5 @@ defineMethod(createHunt, {
     return huntId;
   },
 });
+
+export default { DEFAULT_TAGS };

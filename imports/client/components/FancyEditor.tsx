@@ -1,4 +1,5 @@
 import type { Meteor } from "meteor/meteor";
+import { type Tokens, type Token } from "marked";
 import { marked } from "marked";
 import React, {
   useCallback,
@@ -102,8 +103,8 @@ interface PuzzleRendererProps extends ElementRendererProps<PuzzleElement> {
 }
 
 export const MentionSpan = styled.span<{
-  isSelf: boolean;
   theme: Theme;
+  $isSelf: boolean;
 }>`
   padding: 2px 3px 3px;
   margin: 0 1px;
@@ -113,8 +114,8 @@ export const MentionSpan = styled.span<{
   border-radius: 4px;
   color: ${({ theme }) => theme.colors.mentionSpanText};
   background-color: ${({ theme }) => theme.colors.mentionSpanBackground};
-  ${({ isSelf }) =>
-    isSelf &&
+  ${({ $isSelf }) =>
+    $isSelf &&
     css`
       background-color: ${({ theme }) => theme.colors.mentionSpanBackground};
       color: ${({ theme }) => theme.colors.mentionSpanText};
@@ -422,12 +423,12 @@ const AutocompleteContainer = styled.div<{ theme: Theme }>`
 
 // TraverseCallback should return the offset into its raw text at which its
 // children's text starts
-type TraverseCallback = (token: marked.Token, offset: number) => number;
+type TraverseCallback = (token: Token, offset: number) => number;
 
 // Walks the tokens provided, calling callback, and keeping track of the raw offset
 // into the input string along the way.
 const walkTokenList = (
-  tokens: marked.Token[],
+  tokens: Token[],
   callback: TraverseCallback,
   offset: number,
 ) => {
@@ -442,7 +443,7 @@ const walkTokenList = (
 };
 
 const walkToken = (
-  token: marked.Token,
+  token: Token,
   callback: TraverseCallback,
   offset: number,
 ) => {
@@ -498,13 +499,13 @@ const decorate = ([node, path]: [Node, Path]) => {
   const tokensList = marked.lexer(node.text);
   walkTokenList(
     tokensList,
-    (token: marked.Token, offset: number) => {
+    (token: Token, offset: number) => {
       if (token.type !== "text") {
         if (token.type === "link") {
           ranges.push({
             link: { href: token.href },
             anchor: { path, offset },
-            focus: { path, offset: offset + token.raw.length },
+            focus: { path, offset: offset + (token as Tokens.Link).raw.length },
           });
           return 0; // links consume no formatting characters
         } else if (token.type === "blockquote") {
@@ -576,20 +577,23 @@ const decorate = ([node, path]: [Node, Path]) => {
   return ranges;
 };
 
-const PlaceholderSpan = styled.span`
-  position: absolute;
-  opacity: 0.333;
-`;
-
 const renderPlaceholder = ({
   attributes,
   children,
 }: RenderPlaceholderProps) => {
-  // Drop the `style` from `attributes` -- the value provided by default by
+  // Override the `style` from `attributes` -- the value provided by default by
   // slate-react carries a top: 0 that causes the placeholder text to not sit
-  // on the baseline correctly.
-  const { style: _unused, ...rest } = attributes;
-  return <PlaceholderSpan {...rest}>{children}</PlaceholderSpan>;
+  // on the baseline correctly.  9px appears to be about right.
+  const { style: givenStyle, ...rest } = attributes;
+  const style = {
+    ...givenStyle,
+    top: "9px",
+  };
+  const attrs = {
+    ...rest,
+    style,
+  };
+  return <span {...attrs}>{children}</span>;
 };
 
 const Portal = ({ children }: { children: React.ReactNode }) => {

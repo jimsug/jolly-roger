@@ -16,7 +16,6 @@ import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Toast from "react-bootstrap/Toast";
 import ToastContainer from "react-bootstrap/ToastContainer";
 import Tooltip from "react-bootstrap/Tooltip";
-import CopyToClipboard from "react-copy-to-clipboard";
 import { Link } from "react-router-dom";
 import ReactTextareaAutosize from "react-textarea-autosize";
 import styled, { useTheme } from "styled-components";
@@ -62,6 +61,7 @@ import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import AnnouncementToast from "./AnnouncementToast";
 import ChatMessage from "./ChatMessage";
+import CopyToClipboardButton from "./CopyToClipboardButton";
 import Markdown from "./Markdown";
 import PuzzleAnswer from "./PuzzleAnswer";
 import SpinnerTimer from "./SpinnerTimer";
@@ -179,11 +179,6 @@ const GuessMessage = React.memo(
       onDismiss(guess._id);
     }, [onDismiss, guess._id]);
 
-    const copyTooltip = (
-      <Tooltip id={`notification-guess-${guess._id}-copy-tooltip`}>
-        Copy to clipboard
-      </Tooltip>
-    );
     const extLinkTooltip = (
       <Tooltip id={`notification-guess-${guess._id}-ext-link-tooltip`}>
         Open puzzle
@@ -363,20 +358,15 @@ const GuessMessage = React.memo(
           </StyledNotificationRow>
           <StyledNotificationActionBar>
             <StyledNotificationActionItem>
-              <OverlayTrigger placement="top" overlay={copyTooltip}>
-                {({ ref, ...triggerHandler }) => (
-                  <CopyToClipboard text={guess.guess} {...triggerHandler}>
-                    <Button
-                      variant="outline-secondary"
-                      size="sm"
-                      ref={ref}
-                      aria-label="Copy"
-                    >
-                      <FontAwesomeIcon icon={faCopy} />
-                    </Button>
-                  </CopyToClipboard>
-                )}
-              </OverlayTrigger>
+              <CopyToClipboardButton
+                tooltipId={`notification-guess-${guess._id}-copy-tooltip`}
+                text={guess.guess}
+                variant="outline-secondary"
+                size="sm"
+                aria-label="Copy"
+              >
+                <FontAwesomeIcon icon={faCopy} />
+              </CopyToClipboardButton>
             </StyledNotificationActionItem>
             <StyledNotificationActionItem>
               <OverlayTrigger placement="top" overlay={extLinkTooltip}>

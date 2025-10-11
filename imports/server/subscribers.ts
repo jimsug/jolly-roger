@@ -55,7 +55,7 @@ Meteor.publish("subscribers.inc", async function (name, context) {
 // (logged in) subscribe to any counter because Hunt is tomorrow and I
 // don't think counts are thaaat sensitive, especially if you can't
 // even look up the puzzle ids
-Meteor.publish("subscribers.counts", function (q: Record<string, any>) {
+Meteor.publish("subscribers.counts", async function (q: Record<string, any>) {
   check(q, Object);
 
   if (!this.userId) {
@@ -75,7 +75,7 @@ Meteor.publish("subscribers.counts", function (q: Record<string, any>) {
   const counters: Record<string, Record<string, number>> = {};
 
   const cursor = Subscribers.find(query);
-  const handle = cursor.observe({
+  const handle = await cursor.observeAsync({
     added: (doc) => {
       const { name, user } = doc;
       if (!Object.prototype.hasOwnProperty.call(counters, name)) {
@@ -90,7 +90,7 @@ Meteor.publish("subscribers.counts", function (q: Record<string, any>) {
         counters[name]![user] = 0;
       }
 
-      counters[name]![user] += 1;
+      counters[name]![user]! += 1;
       if (initialized) {
         this.changed("subscribers.counts", name, {
           value: Object.keys(counters[name]!).length,
@@ -101,7 +101,7 @@ Meteor.publish("subscribers.counts", function (q: Record<string, any>) {
     removed: (doc) => {
       const { name, user } = doc;
 
-      counters[name]![user] -= 1;
+      counters[name]![user]! -= 1;
       if (counters[name]![user] === 0) {
         delete counters[name]![user];
       }
@@ -126,7 +126,7 @@ Meteor.publish("subscribers.counts", function (q: Record<string, any>) {
 // Unlike subscribers.counts, which takes a query string against the
 // context, we require you to specify the name of a subscription here
 // to avoid fanout.
-Meteor.publish("subscribers.fetch", function (name) {
+Meteor.publish("subscribers.fetch", async function (name) {
   check(name, String);
 
   if (!this.userId) {
@@ -136,7 +136,7 @@ Meteor.publish("subscribers.fetch", function (name) {
   const users: Record<string, number> = {};
 
   const cursor = Subscribers.find({ name });
-  const handle = cursor.observe({
+  const handle = await cursor.observeAsync({
     added: (doc) => {
       const { user } = doc;
 
@@ -145,13 +145,13 @@ Meteor.publish("subscribers.fetch", function (name) {
         this.added("subscribers", `${name}:${user}`, { name, user });
       }
 
-      users[user] += 1;
+      users[user]! += 1;
     },
 
     removed: (doc) => {
       const { user } = doc;
 
-      users[user] -= 1;
+      users[user]! -= 1;
       if (users[user] === 0) {
         delete users[user];
         this.removed("subscribers", `${name}:${user}`);

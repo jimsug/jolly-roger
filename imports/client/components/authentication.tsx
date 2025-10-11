@@ -7,7 +7,7 @@ import SplashPage from "./SplashPage";
 import { useAppThemeState } from "../hooks/persisted-state";
 import { Container, Navbar, Row } from "react-bootstrap";
 
-const useAuthenticated = () => {
+export const useAuthenticated = () => {
   const { loggingIn, loggedIn } = useTracker(() => {
     return {
       loggingIn: Meteor.loggingIn(),

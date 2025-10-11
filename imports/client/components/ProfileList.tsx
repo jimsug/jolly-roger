@@ -4,10 +4,9 @@ import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import type { ComponentPropsWithRef, FC, MouseEvent } from "react";
+import type { MouseEvent } from "react";
 import React, {
   useCallback,
-  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -26,8 +25,6 @@ import InputGroup from "react-bootstrap/InputGroup";
 import ListGroup from "react-bootstrap/ListGroup";
 import ListGroupItem from "react-bootstrap/ListGroupItem";
 import Modal from "react-bootstrap/Modal";
-import Tooltip from "react-bootstrap/Tooltip";
-import CopyToClipboard from "react-copy-to-clipboard";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import styled from "styled-components";
@@ -40,6 +37,7 @@ import demoteOperator from "../../methods/demoteOperator";
 import generateHuntInvitationCode from "../../methods/generateHuntInvitationCode";
 import promoteOperator from "../../methods/promoteOperator";
 import syncHuntDiscordRole from "../../methods/syncHuntDiscordRole";
+import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
 import Avatar from "./Avatar";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
@@ -88,9 +86,10 @@ const StatusDiv = styled.div`
 const StyledLinkButton: FC<ComponentPropsWithRef<typeof Button>> = styled(
   Button,
 )`
-  padding: 0;
-  vertical-align: baseline;
+padding: 0;
+vertical-align: baseline;
 `;
+const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
 
 type ModalHandle = {
   show(): void;
@@ -556,23 +555,7 @@ const ProfileList = ({
   const [searchString, setSearchString] = useState<string>("");
 
   const searchBarRef = useRef<HTMLInputElement>(null); // Wrong type but I should fix it
-
-  const maybeStealCtrlF = useCallback((e: KeyboardEvent) => {
-    if (e.ctrlKey && e.key === "f") {
-      e.preventDefault();
-      const node = searchBarRef.current;
-      if (node) {
-        node.focus();
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener("keydown", maybeStealCtrlF);
-    return () => {
-      window.removeEventListener("keydown", maybeStealCtrlF);
-    };
-  }, [maybeStealCtrlF]);
+  useFocusRefOnFindHotkey(searchBarRef);
 
   // The type annotation on FormControl is wrong here - the event is from the
   // input element, not the FormControl React component
@@ -685,22 +668,19 @@ const ProfileList = ({
       return null;
     }
 
-    const copyTooltip = <Tooltip>Copy to clipboard</Tooltip>;
-
     const invitationUrl = Meteor.absoluteUrl(`/join/${invitationCode}`);
 
     return (
       <p>
         Invitation link:{" "}
-        <OverlayTrigger placement="top" overlay={copyTooltip}>
-          {({ ref, ...triggerHandler }) => (
-            <CopyToClipboard text={invitationUrl} {...triggerHandler}>
-              <StyledLinkButton ref={ref} variant="link" aria-label="Copy">
-                <FontAwesomeIcon icon={faCopy} fixedWidth />
-              </StyledLinkButton>
-            </CopyToClipboard>
-          )}
-        </OverlayTrigger>{" "}
+        <StyledCopyToClipboardButton
+          tooltipId={`invitation-code-${invitationCode}`}
+          text={invitationUrl}
+          variant="link"
+          aria-label="Copy"
+        >
+          <FontAwesomeIcon icon={faCopy} fixedWidth />
+        </StyledCopyToClipboardButton>
         {invitationUrl}
       </p>
     );

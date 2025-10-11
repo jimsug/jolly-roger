@@ -20,14 +20,14 @@ const ResolvedProfilePage = ({
   const huntId = useParams<"huntId">().huntId;
 
   const profileLoading = useSubscribe("profile", userId);
+  const apiKeysLoading = useTypedSubscribe(apiKeysForSelf);
+  const loading = profileLoading() || apiKeysLoading();
 
-  const apiKeyLoading = useTypedSubscribe(apiKeysForSelf);
-
-  const apiKey = useTracker(() => {
-    return isSelf ? APIKeys.findOne()?.key : undefined;
-  }, [isSelf]);
-
-  const loading = profileLoading() || apiKeyLoading();
+  const apiKeys = useTracker(() => {
+    return isSelf && !loading
+      ? APIKeys.find({ user: userId }, { sort: { createdAt: 1 } }).fetch()
+      : undefined;
+  }, [isSelf, loading, userId]);
 
   const user = useTracker(() => {
     return loading ? undefined : MeteorUsers.findOne(userId);
@@ -43,7 +43,7 @@ const ResolvedProfilePage = ({
   } else if (!user) {
     return <div>{`No user ${userId} found.`}</div>;
   } else if (isSelf) {
-    return <OwnProfilePage initialUser={user} initialAPIKey={apiKey} />;
+    return <OwnProfilePage initialUser={user} apiKeys={apiKeys} />;
   }
 
   return <OthersProfilePage user={user} />;

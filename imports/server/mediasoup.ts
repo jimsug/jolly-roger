@@ -5,8 +5,8 @@ import { networkInterfaces } from "os";
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { Address6 } from "ip-address";
-import { createWorker, types } from "mediasoup";
-import { AudioLevelObserver } from "mediasoup/node/lib/AudioLevelObserver";
+import { createWorker, type types } from "mediasoup";
+import { AudioLevelObserverImpl } from "mediasoup/node/lib/AudioLevelObserver";
 import Flags from "../Flags";
 import Logger from "../Logger";
 import { ACTIVITY_GRANULARITY } from "../lib/config/activityTracking";
@@ -47,7 +47,7 @@ import CallActivities from "./models/CallActivities";
 import onExit from "./onExit";
 import UserStatuses from "../lib/models/UserStatuses";
 
-const mediaCodecs: types.RtpCodecCapability[] = [
+const mediaCodecs: types.RouterRtpCodecCapability[] = [
   {
     kind: "audio",
     mimeType: "audio/opus",
@@ -171,8 +171,18 @@ class Watchdog extends EventEmitter {
   }
 }
 
+// This type, previously called `TransportListenIp`, is deprecated on the mediasoup side, but
+// remains a reasonable internal representation of addresses, so we still store ips in SFU like this
+// and adapt them to the new `TransportListenInfo` on demand where needed.
+type ListenIp = {
+  // listening IPv4 or IPv6 address
+  ip: string;
+  // external announced address (v4 or v6 or hostname)
+  announcedIp?: string;
+};
+
 class SFU {
-  public ips: [types.TransportListenIp, ...types.TransportListenIp[]];
+  public ips: [ListenIp, ...ListenIp[]];
 
   public worker: types.Worker;
 
@@ -218,26 +228,26 @@ class SFU {
     Promise<types.PipeTransport>
   > = new Map();
 
-  public peersHandle: Meteor.LiveQueryHandle;
+  public peersHandle?: Meteor.LiveQueryHandle;
 
-  public localRoomsHandle: Meteor.LiveQueryHandle;
+  public localRoomsHandle?: Meteor.LiveQueryHandle;
 
-  public transportRequestsHandle: Meteor.LiveQueryHandle;
+  public transportRequestsHandle?: Meteor.LiveQueryHandle;
 
-  public connectRequestsHandle: Meteor.LiveQueryHandle;
+  public connectRequestsHandle?: Meteor.LiveQueryHandle;
 
-  public producerClientsHandle: Meteor.LiveQueryHandle;
+  public producerClientsHandle?: Meteor.LiveQueryHandle;
 
-  public consumerAcksHandle: Meteor.LiveQueryHandle;
+  public consumerAcksHandle?: Meteor.LiveQueryHandle;
 
-  public serversHandle: Meteor.LiveQueryHandle;
+  public serversHandle?: Meteor.LiveQueryHandle;
 
-  public monitorConnectRequestsHandle: Meteor.LiveQueryHandle;
+  public monitorConnectRequestsHandle?: Meteor.LiveQueryHandle;
 
-  public monitorConnectAcksHandle: Meteor.LiveQueryHandle;
+  public monitorConnectAcksHandle?: Meteor.LiveQueryHandle;
 
   private constructor(
-    ips: [types.TransportListenIp, ...types.TransportListenIp[]],
+    ips: [ListenIp, ...ListenIp[]],
     worker: types.Worker,
     monitorRouter: types.Router,
     heartbeatDirectTransport: types.DirectTransport,
@@ -252,16 +262,18 @@ class SFU {
     // Don't use mediasoup.observer because it's too hard to unwind.
     this.onWorkerCreated(this.worker);
     this.onMonitorRouterCreated(this.monitorRouter);
+  }
 
-    this.peersHandle = Peers.find({}).observeChanges({
+  async setupDBWatches() {
+    this.peersHandle = await Peers.find({}).observeChangesAsync({
       // Use this as an opportunity to cleanup data created as part of the
       // transport negotiation
       removed: (id) => this.peerRemoved(id),
     });
 
-    this.localRoomsHandle = Rooms.find({
+    this.localRoomsHandle = await Rooms.find({
       routedServer: serverId,
-    }).observeChanges({
+    }).observeChangesAsync({
       added: (id, fields) => {
         void this.roomCreated({ _id: id, ...fields } as RoomType);
       },
@@ -270,9 +282,9 @@ class SFU {
       },
     });
 
-    this.transportRequestsHandle = TransportRequests.find({
+    this.transportRequestsHandle = await TransportRequests.find({
       routedServer: serverId,
-    }).observeChanges({
+    }).observeChangesAsync({
       added: (id, fields) => {
         void this.transportRequestCreated({
           _id: id,
@@ -284,9 +296,9 @@ class SFU {
       },
     });
 
-    this.connectRequestsHandle = ConnectRequests.find({
+    this.connectRequestsHandle = await ConnectRequests.find({
       routedServer: serverId,
-    }).observeChanges({
+    }).observeChangesAsync({
       added: (id, fields) => {
         void this.connectRequestCreated({
           _id: id,
@@ -296,9 +308,9 @@ class SFU {
       // nothing to do when this is removed
     });
 
-    this.producerClientsHandle = ProducerClients.find({
+    this.producerClientsHandle = await ProducerClients.find({
       routedServer: serverId,
-    }).observeChanges({
+    }).observeChangesAsync({
       added: (id, fields) => {
         void this.producerClientCreated({
           _id: id,
@@ -313,18 +325,18 @@ class SFU {
       },
     });
 
-    this.consumerAcksHandle = ConsumerAcks.find({
+    this.consumerAcksHandle = await ConsumerAcks.find({
       routedServer: serverId,
-    }).observeChanges({
+    }).observeChangesAsync({
       added: (id, fields) => {
         void this.consumerAckCreated({ _id: id, ...fields } as ConsumerAckType);
       },
       // nothing to do when removed
     });
 
-    this.serversHandle = Servers.find({
+    this.serversHandle = await Servers.find({
       _id: { $ne: serverId },
-    }).observeChanges({
+    }).observeChangesAsync({
       added: (id, fields) => {
         void this.serverCreated({ _id: id, ...fields } as ServerType);
       },
@@ -334,9 +346,9 @@ class SFU {
       },
     });
 
-    this.monitorConnectRequestsHandle = MonitorConnectRequests.find({
+    this.monitorConnectRequestsHandle = await MonitorConnectRequests.find({
       receivingServer: serverId,
-    }).observeChanges({
+    }).observeChangesAsync({
       added: (id, fields) => {
         void this.monitorConnectRequestCreated({
           _id: id,
@@ -348,9 +360,9 @@ class SFU {
       },
     });
 
-    this.monitorConnectAcksHandle = MonitorConnectAcks.find({
+    this.monitorConnectAcksHandle = await MonitorConnectAcks.find({
       initiatingServer: serverId,
-    }).observeChanges({
+    }).observeChangesAsync({
       added: (id, fields) => {
         void this.monitorConnectAckCreated({
           _id: id,
@@ -360,9 +372,7 @@ class SFU {
     });
   }
 
-  static async create(
-    ips: [types.TransportListenIp, ...types.TransportListenIp[]],
-  ) {
+  static async create(ips: [ListenIp, ...ListenIp[]]) {
     process.env.DEBUG = "mediasoup:WARN:* mediasoup:ERROR:*";
     const worker = await createWorker({
       rtcMinPort: 50000,
@@ -399,19 +409,20 @@ class SFU {
       Meteor.clearTimeout(heartbeatTimeoutHandle),
     );
 
-    return new SFU(
+    const sfu = new SFU(
       ips,
       worker,
       monitorRouter,
       heartbeatDirectTransport,
       heartbeatDataProducer,
     );
+    await sfu.setupDBWatches();
+    return sfu;
   }
 
   async close() {
-    // Since these are all initiated in the constructor, optional chaining here
-    // shouldn't be required, but because this can be called in a signal
-    // handler, it can be called in the middle of the constructor
+    // Note that this can be called in a signal handler, before the constructor
+    // has completed.
     this.monitorConnectAcksHandle?.stop();
     this.monitorConnectRequestsHandle?.stop();
     this.serversHandle?.stop();
@@ -599,7 +610,7 @@ class SFU {
   }
 
   onRtpObserverCreated(observer: types.RtpObserver) {
-    if (!(observer instanceof AudioLevelObserver)) {
+    if (!(observer instanceof AudioLevelObserverImpl)) {
       return;
     }
 
@@ -708,7 +719,7 @@ class SFU {
       }),
     );
 
-    if (!(transport instanceof types.WebRtcTransport)) {
+    if (!(transport.type === "webrtc")) {
       Logger.warn("Ignoring unexpected non-WebRTC transport", {
         call: transportAppData.call,
         peer: transportAppData.peer,
@@ -717,7 +728,9 @@ class SFU {
       return;
     }
 
-    transport.observer.on(
+    const wtransport = transport as types.WebRtcTransport;
+
+    wtransport.observer.on(
       "icestatechange",
       Meteor.bindEnvironment((iceState: types.IceState) => {
         void TransportStates.upsertAsync(
@@ -734,7 +747,7 @@ class SFU {
         );
       }),
     );
-    transport.observer.on(
+    wtransport.observer.on(
       "iceselectedtuplechange",
       Meteor.bindEnvironment((iceSelectedTuple?: types.TransportTuple) => {
         void TransportStates.upsertAsync(
@@ -753,7 +766,7 @@ class SFU {
         );
       }),
     );
-    transport.observer.on(
+    wtransport.observer.on(
       "dtlsstatechange",
       Meteor.bindEnvironment((dtlsState: types.DtlsState) => {
         void TransportStates.upsertAsync(
@@ -778,7 +791,7 @@ class SFU {
 
     this.transports.set(
       `${transportAppData.transportRequest}:${transportAppData.direction}`,
-      transport,
+      wtransport,
     );
     void Transports.insertAsync({
       call: transportAppData.call,
@@ -787,9 +800,9 @@ class SFU {
       transportRequest: transportAppData.transportRequest,
       direction: transportAppData.direction,
       transportId: transport.id,
-      iceParameters: JSON.stringify(transport.iceParameters),
-      iceCandidates: JSON.stringify(transport.iceCandidates),
-      dtlsParameters: JSON.stringify(transport.dtlsParameters),
+      iceParameters: JSON.stringify(wtransport.iceParameters),
+      iceCandidates: JSON.stringify(wtransport.iceCandidates),
+      dtlsParameters: JSON.stringify(wtransport.dtlsParameters),
       createdBy: transportAppData.createdBy,
       turnConfig: generateTurnConfig(),
     });
@@ -896,12 +909,14 @@ class SFU {
       return;
     }
 
-    if (!(transport instanceof types.PipeTransport)) {
+    if (!(transport.type === "pipe")) {
       Logger.warn("Ignoring unexpected non-pipe monitor transport", {
         transport: transport.id,
       });
       return;
     }
+
+    const ptransport = transport as types.PipeTransport;
 
     if (transportAppData.type === "monitor-initiated") {
       transport.observer.on(
@@ -934,11 +949,11 @@ class SFU {
         await MonitorConnectRequests.insertAsync({
           initiatingServer: serverId,
           receivingServer: transportAppData.server,
-          transportId: transport.id,
-          ip: transport.tuple.localIp,
-          port: transport.tuple.localPort,
-          srtpParameters: transport.srtpParameters
-            ? JSON.stringify(transport.srtpParameters)
+          transportId: ptransport.id,
+          ip: ptransport.tuple.localIp,
+          port: ptransport.tuple.localPort,
+          srtpParameters: ptransport.srtpParameters
+            ? JSON.stringify(ptransport.srtpParameters)
             : undefined,
           producerId: this.heartbeatDataProducer.id,
           producerSctpStreamParameters: consumer.sctpStreamParameters
@@ -949,7 +964,7 @@ class SFU {
         });
       })();
     } else if (transportAppData.type === "monitor-received") {
-      transport.observer.on(
+      ptransport.observer.on(
         "close",
         Meteor.bindEnvironment(() => {
           void MonitorConnectAcks.removeAsync({ transportId: transport.id });
@@ -958,13 +973,13 @@ class SFU {
 
       void (async () => {
         try {
-          await transport.connect({
+          await ptransport.connect({
             ip: transportAppData.ip,
             port: transportAppData.port,
             srtpParameters: transportAppData.srtpParameters,
           });
 
-          const producer = await transport.produceData({
+          const producer = await ptransport.produceData({
             id: transportAppData.producerId,
             sctpStreamParameters: transportAppData.producerSctpStreamParameters,
             label: transportAppData.producerLabel,
@@ -986,17 +1001,17 @@ class SFU {
           await MonitorConnectAcks.insertAsync({
             initiatingServer: transportAppData.server,
             receivingServer: serverId,
-            transportId: transport.id,
-            ip: transport.tuple.localIp,
-            port: transport.tuple.localPort,
-            srtpParameters: transport.srtpParameters
-              ? JSON.stringify(transport.srtpParameters)
+            transportId: ptransport.id,
+            ip: ptransport.tuple.localIp,
+            port: ptransport.tuple.localPort,
+            srtpParameters: ptransport.srtpParameters
+              ? JSON.stringify(ptransport.srtpParameters)
               : undefined,
           });
         } catch (error) {
           Logger.error("Error connecting monitor transport", {
             direction: "receiving",
-            transport: transport.id,
+            transport: ptransport.id,
             initiatingServer: transportAppData.server,
             receivingServer: serverId,
             error,
@@ -1005,7 +1020,7 @@ class SFU {
       })();
     } else {
       Logger.error("Unexpected monitor transport type", {
-        transport: transport.id,
+        transport: ptransport.id,
         type: (transportAppData as any).type,
       });
     }
@@ -1068,7 +1083,18 @@ class SFU {
           direction,
         };
         return router.createWebRtcTransport({
-          listenIps: this.ips,
+          listenInfos: this.ips.flatMap((listenIp) => {
+            return [
+              {
+                ...listenIp,
+                protocol: "udp",
+              },
+              {
+                ...listenIp,
+                protocol: "tcp",
+              },
+            ];
+          }),
           enableUdp: true,
           enableTcp: true,
           preferUdp: true,
@@ -1248,7 +1274,7 @@ class SFU {
     };
 
     const transport = this.monitorRouter.createPipeTransport({
-      listenIp: this.ips[0],
+      listenInfo: { ...this.ips[0], protocol: "udp" },
       enableRtx: true,
       enableSrtp: true,
       enableSctp: true /* Enable SCTP so we can use DataChannels. */,
@@ -1298,7 +1324,7 @@ class SFU {
     };
 
     const transport = this.monitorRouter.createPipeTransport({
-      listenIp: this.ips[0],
+      listenInfo: { ...this.ips[0], protocol: "udp" },
       enableRtx: true,
       enableSrtp: true,
       enableSctp: true /* Enable SCTP so we can use DataChannels. */,
@@ -1412,7 +1438,7 @@ const lookupIPSources = async (ipv: "v4" | "v6") => {
   return [...new Set(ips.flat())];
 };
 
-const getPublicIPAddresses = async (): Promise<types.TransportListenIp[]> => {
+const getPublicIPAddresses = async (): Promise<ListenIp[]> => {
   const [ipv4, ipv6] = await Promise.all([
     lookupIPSources("v4"),
     lookupIPSources("v6"),
@@ -1427,7 +1453,7 @@ const getPublicIPAddresses = async (): Promise<types.TransportListenIp[]> => {
   ].flat();
 };
 
-const getLocalIPAddresses = (): types.TransportListenIp[] => {
+const getLocalIPAddresses = (): ListenIp[] => {
   return Object.values(networkInterfaces())
     .flatMap((addresses) => {
       if (!addresses) {
@@ -1519,9 +1545,12 @@ Meteor.startup(async () => {
   };
   // The logic here looks backwards because when a feature flag is on, calls are
   // disabled.
-  const observer = Flags.observeChanges("disable.webrtc", (active) => {
-    void updateSFU(!active);
-  });
+  const observer = await Flags.observeChangesAsync(
+    "disable.webrtc",
+    (active) => {
+      void updateSFU(!active);
+    },
+  );
 
   onExit(
     Meteor.bindEnvironment(async () => {

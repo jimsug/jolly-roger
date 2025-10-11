@@ -156,7 +156,7 @@ const DiscordChannelSelector = ({
       {
         // We want to sort them in the same order they're provided in the Discord UI.
         sort: { "object.rawPosition": 1 },
-        fields: { "object.id": 1, "object.name": 1 },
+        projection: { "object.id": 1, "object.name": 1 },
       },
     ).map((c) => c.object as SavedDiscordObjectType);
 
@@ -186,7 +186,7 @@ const DiscordRoleSelector = ({
       {
         // We want to sort them in the same order they're provided in the Discord UI.
         sort: { "object.rawPosition": 1 },
-        fields: { "object.id": 1, "object.name": 1 },
+        projection: { "object.id": 1, "object.name": 1 },
       },
     ).map((c) => c.object as SavedDiscordObjectType);
 

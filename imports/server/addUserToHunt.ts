@@ -93,14 +93,15 @@ export default async function addUserToHunt({
     const joineeUserId = await Accounts.createUserAsync({ email });
     joineeUser = await MeteorUsers.findOneAsync(joineeUserId);
   }
-  if (!joineeUser?._id)
+  if (!joineeUser?._id) {
     throw new Meteor.Error(500, "Something has gone terribly wrong");
+  }
 
-  if (joineeUser.hunts?.includes(hunt._id)) {
+  if (joineeUser.hunts?.includes(huntId)) {
     Logger.info("Tried to add user to hunt but they were already a member", {
       joiner: invitedBy,
       joinee: joineeUser._id,
-      hunt: hunt._id,
+      hunt: huntId,
     });
     return;
   }
@@ -108,10 +109,10 @@ export default async function addUserToHunt({
   Logger.info("Adding user to hunt", {
     joiner: invitedBy,
     joinee: joineeUser._id,
-    hunt: hunt._id,
+    hunt: huntId,
   });
   await MeteorUsers.updateAsync(joineeUser._id, {
-    $addToSet: { hunts: { $each: [hunt._id] } },
+    $addToSet: { hunts: { $each: [huntId] } },
   });
 
   const joineeEmails = (joineeUser.emails ?? []).map((e) => e.address);
@@ -128,7 +129,7 @@ export default async function addUserToHunt({
     });
   });
 
-  await addUsersToDiscordRole([joineeUser._id], hunt._id);
+  await addUsersToDiscordRole([joineeUser._id], huntId);
 
   if (newUser) {
     Accounts.sendEnrollmentEmail(joineeUser._id);

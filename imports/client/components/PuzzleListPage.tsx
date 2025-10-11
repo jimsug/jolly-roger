@@ -18,8 +18,6 @@ import React, {
   type ComponentPropsWithRef,
   type FC,
   useCallback,
-  useEffect,
-  useMemo,
   useRef,
 } from "react";
 import Alert from "react-bootstrap/Alert";
@@ -61,6 +59,7 @@ import {
   useOperatorActionsHiddenForHunt,
 } from "../hooks/persisted-state";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
+import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import { Subscribers } from "../subscribers";
@@ -237,22 +236,7 @@ const PuzzleListView = ({
     [setOperatorActionsHidden],
   );
 
-  const maybeStealCtrlF = useCallback((e: KeyboardEvent) => {
-    if (e.ctrlKey && e.key === "f") {
-      e.preventDefault();
-      const node = searchBarRef.current;
-      if (node) {
-        node.focus();
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener("keydown", maybeStealCtrlF);
-    return () => {
-      window.removeEventListener("keydown", maybeStealCtrlF);
-    };
-  }, [maybeStealCtrlF]);
+  useFocusRefOnFindHotkey(searchBarRef);
 
   const onAdd = useCallback(
     (
@@ -265,9 +249,16 @@ const PuzzleListView = ({
         return;
       }
 
-      createPuzzle.call({ docType, ...rest }, callback);
+      function onAddComplete(error?: Error) {
+        if (!error && addModalRef.current) {
+          addModalRef.current.reset();
+        }
+        callback(error);
+      }
+
+      createPuzzle.call({ docType, ...rest }, onAddComplete);
     },
-    [],
+    [addModalRef],
   );
 
   const setSearchString = useCallback(
@@ -554,6 +545,7 @@ const PuzzleListView = ({
   const renderList = useCallback(
     (
       retainedPuzzles: PuzzleType[],
+      retainedDeletedPuzzles: PuzzleType[] | undefined,
       solvedOverConstrains: boolean,
       allPuzzlesCount: number,
     ) => {
@@ -678,11 +670,11 @@ const PuzzleListView = ({
             </PuzzleGroupDiv>
           )}
           {listComponent}
-          {deletedPuzzles && deletedPuzzles.length > 0 && (
+          {retainedDeletedPuzzles && retainedDeletedPuzzles.length > 0 && (
             <RelatedPuzzleGroup
               key="deleted"
               huntId={huntId}
-              group={{ puzzles: deletedPuzzles, subgroups: [] }}
+              group={{ puzzles: retainedDeletedPuzzles, subgroups: [] }}
               noSharedTagLabel="Deleted puzzles (operator only)"
               bookmarked={bookmarked}
               allTags={allTags}
@@ -702,6 +694,7 @@ const PuzzleListView = ({
     [
       displayMode,
       bookmarked,puzzlesMatchingSearchString
+      allPuzzles,
       allTags,
       canUpdate,
       showSolvers,
@@ -792,6 +785,8 @@ const PuzzleListView = ({
       },
       [retainedPuzzles],
     );
+  const retainedDeletedPuzzles =
+    deletedPuzzles && puzzlesMatchingSearchString(deletedPuzzles);
 
   return (
     <div>
@@ -906,7 +901,12 @@ const PuzzleListView = ({
           </InputGroup>
         </SearchFormGroup>
       </ViewControls>
-      {renderList(retainedPuzzles, solvedOverConstrains, allPuzzles.length)}
+      {renderList(
+        retainedPuzzles,
+        retainedDeletedPuzzles,
+        solvedOverConstrains,
+        allPuzzles.length,
+      )}
     </div>
   );
 };

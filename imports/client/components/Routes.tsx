@@ -10,6 +10,7 @@ import AnnouncementsPage from "./AnnouncementsPage";
 import EnrollForm from "./EnrollForm";
 import FirehosePage from "./FirehosePage";
 import FirstUserForm from "./FirstUserForm";
+import ForgotPasswordForm from "./ForgotPasswordForm";
 import GuessQueuePage from "./GuessQueuePage";
 import HuntApp from "./HuntApp";
 import HuntListApp from "./HuntListApp";
@@ -110,7 +111,6 @@ export const AuthenticatedRouteList: RouteObject[] = [
   { path: "/history", element: <UserPuzzleHistory /> },
   { path: "/setup", element: <SetupPage /> },
   { path: "/rtcdebug", element: <RTCDebugPage /> },
-  { path: "/join/:invitationCode", element: <JoinHunt /> },
 ].map((r) => {
   return {
     ...r,
@@ -121,6 +121,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
 /* Unauthenticated routes - if user already logged in, get redirected to /hunts */
 export const UnauthenticatedRouteList: RouteObject[] = [
   { path: "/login", element: <LoginForm /> },
+  { path: "/forgot-password", element: <ForgotPasswordForm /> },
   { path: "/reset-password/:token", element: <PasswordResetForm /> },
   { path: "/enroll/:token", element: <EnrollForm /> },
   { path: "/create-first-user", element: <FirstUserForm /> },
@@ -149,6 +150,11 @@ export const RouteList: RouteObject[] = [
   ...NoAuthenticationRouteList,
   ...AuthenticatedRouteList,
   ...UnauthenticatedRouteList,
+  // JoinHunt handles both authenticated and unauthenticated users.
+  // Authenticated users are presented with a single button to join the hunt.
+  // Unauthenticated users are presented with a login or account provisioning
+  // flow that depends on the invitation code.
+  { path: "/join/:invitationCode", element: <JoinHunt /> },
 ];
 
 const Routes = React.memo(() => {

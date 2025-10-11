@@ -43,7 +43,7 @@ const hashes = [
   defaultMappings.set(assetName, id);
   defaultAssets.set(id, {
     _id: id,
-    value: data,
+    value: data as Uint8Array<ArrayBuffer>,
     mimeType,
     md5,
     size: data.length,
@@ -55,8 +55,8 @@ await Promise.all(hashes);
 // Include blob mappings in the runtime config, for faster loading, in addition
 // to publishing it (for live updates)
 export const cachedDBMappings: Map<string, string> = new Map();
-Meteor.startup(() => {
-  const observer = BlobMappings.find().observeChanges({
+Meteor.startup(async () => {
+  const observer = await BlobMappings.find().observeChangesAsync({
     added: (id, doc) => {
       cachedDBMappings.set(id, doc.blob!);
     },
@@ -81,8 +81,8 @@ addRuntimeConfig(() => {
 
 // Keep the current set of assets in memory for faster access.
 const dbAssets: Map<string, BlobType> = new Map();
-Meteor.startup(() => {
-  const observer = Blobs.find().observe({
+Meteor.startup(async () => {
+  const observer = await Blobs.find().observeAsync({
     added: (doc) => {
       dbAssets.set(doc._id, doc);
     },
@@ -213,4 +213,4 @@ router.post(
 
 app.use("/", router);
 
-WebApp.connectHandlers.use("/asset", Meteor.bindEnvironment(app));
+WebApp.handlers.use("/asset", Meteor.bindEnvironment(app));

@@ -1,4 +1,6 @@
 /* eslint-disable react/no-array-index-key */
+import * as he from "he";
+import type { Token, Tokens } from "marked";
 import { marked } from "marked";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import styled from "styled-components";
@@ -80,7 +82,10 @@ const AttachmentLinkTrigger = styled.a`
 `;
 
 // Renders a markdown token to React components.
-const MarkdownToken = ({ token }: { token: marked.Token }) => {
+const MarkdownToken = ({ token }: { token: Token }) => {
+  // NOTE: Marked's lexer encodes using HTML entities in the text; see:
+  // https://github.com/markedjs/marked/discussions/1737
+  // We need to decode the text since React will apply its own escaping.
   if (token.type === "text") {
     return <PreWrapSpan>{token.raw}</PreWrapSpan>;
   } else if (token.type === "space") {
@@ -88,13 +93,14 @@ const MarkdownToken = ({ token }: { token: marked.Token }) => {
   } else if (token.type === "paragraph") {
     // If the raw text includes a newline but the consumed text does not,
     // insert the additional space at the end.
-    const children = token.tokens.map((t, i) => (
+    const children = (token as Tokens.Paragraph).tokens.map((t, i) => (
       <MarkdownToken key={i} token={t} />
     ));
-    if (token.raw.length > token.text.length) {
-      const trail = token.raw.substring(token.text.length);
+    const decodedText = he.decode(token.text);
+    if (token.raw.length > decodedText.length) {
+      const trail = token.raw.substring(decodedText.length);
       if (trail.trim() === "") {
-        const syntheticSpace: marked.Tokens.Space = {
+        const syntheticSpace: Tokens.Space = {
           type: "space",
           raw: trail,
         };
@@ -105,12 +111,11 @@ const MarkdownToken = ({ token }: { token: marked.Token }) => {
     }
     return <PreWrapParagraph>{children}</PreWrapParagraph>;
   } else if (token.type === "link") {
-
     // Truncate the link href
     let displayedHref = token.href;
-    const pathStart = token.href.indexOf("/", token.href.indexOf("//") + 2); // Find the start of the path
+    const pathStart = token.href.indexOf("/", rootStart + 2); // Find the start of the path
     if (pathStart !== -1 && token.href.length - pathStart > 50) {
-      displayedHref = token.href.slice(0, pathStart + 10) + "... [truncated]";
+      displayedHref = `${token.href.slice(0, pathStart + 10)}... [truncated]`;
     }
 
     return (
@@ -130,12 +135,12 @@ const MarkdownToken = ({ token }: { token: marked.Token }) => {
     //   </a>
     // );
   } else if (token.type === "blockquote") {
-    const children = token.tokens.map((t, i) => (
+    const children = (token as Tokens.Blockquote).tokens.map((t, i) => (
       <MarkdownToken key={i} token={t} />
     ));
     return <StyledBlockquote>{children}</StyledBlockquote>;
   } else if (token.type === "strong") {
-    const children = token.tokens.map((t, i) => (
+    const children = (token as Tokens.Strong).tokens.map((t, i) => (
       <MarkdownToken key={i} token={t} />
     ));
     if (token.raw.startsWith("__")) {
@@ -144,24 +149,21 @@ const MarkdownToken = ({ token }: { token: marked.Token }) => {
       return <strong>{children}</strong>;
     }
   } else if (token.type === "em") {
-    const children = token.tokens.map((t, i) => (
+    const children = (token as Tokens.Em).tokens.map((t, i) => (
       <MarkdownToken key={i} token={t} />
     ));
     return <em>{children}</em>;
   } else if (token.type === "del") {
-    const children = token.tokens.map((t, i) => (
+    const children = (token as Tokens.Del).tokens.map((t, i) => (
       <MarkdownToken key={i} token={t} />
     ));
     return <del>{children}</del>;
   } else if (token.type === "codespan") {
-    const sanitizedHtml = DOMPurify.sanitize(token.text);
-    // eslint-disable-next-line react/no-danger
-    return <code dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />;
+    const decodedText = he.decode(token.text);
+    return <code>{decodedText}</code>;
   } else if (token.type === "code") {
-    const sanitizedHtml = DOMPurify.sanitize(token.text);
-    return (
-      <StyledCodeBlock dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
-    );
+    // Text in code blocks is _not_ encoded, so pass it through as is.
+    return <StyledCodeBlock>{token.text}</StyledCodeBlock>;
   } else {
     // Unhandled token types: just return the raw string with pre-wrap.
     // This covers things like bulleted or numbered lists, which we explicitly
@@ -245,7 +247,7 @@ const ChatMessage = ({
     if (nodeIsMention(child)) {
       const displayName = displayNames.get(child.userId);
       return (
-        <MentionSpan key={i} isSelf={child.userId === selfUserId}>
+        <MentionSpan key={i} $isSelf={child.userId === selfUserId}>
           @{`${displayName ?? child.userId}`}
         </MentionSpan>
       );

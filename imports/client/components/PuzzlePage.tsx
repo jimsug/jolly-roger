@@ -8,6 +8,9 @@ import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
 import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
 import { faChevronLeft } from "@fortawesome/free-solid-svg-icons/faChevronLeft";
 import { faChevronRight } from "@fortawesome/free-solid-svg-icons/faChevronRight";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
@@ -48,7 +51,6 @@ import Modal from "react-bootstrap/Modal";
 import Row from "react-bootstrap/Row";
 import OverlayTrigger from "react-bootstrap/esm/OverlayTrigger";
 import Tooltip from "react-bootstrap/esm/Tooltip";
-import { CopyToClipboard } from "react-copy-to-clipboard";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { type Descendant } from "slate";
@@ -103,6 +105,7 @@ import { trace } from "../tracing";
 import BookmarkButton from "./BookmarkButton";
 import ChatMessage from "./ChatMessage";
 import ChatPeople from "./ChatPeople";
+import CopyToClipboardButton from "./CopyToClipboardButton";
 import DocumentDisplay, { DocumentMessage } from "./DocumentDisplay";
 import type { FancyEditorHandle, MessageElement } from "./FancyEditor";
 import FancyEditor from "./FancyEditor";
@@ -115,7 +118,7 @@ import ModalForm from "./ModalForm";
 import PuzzleAnswer from "./PuzzleAnswer";
 import type { PuzzleModalFormSubmitPayload } from "./PuzzleModalForm";
 import PuzzleModalForm from "./PuzzleModalForm";
-import SplitPanePlus from "./SplitPanePlus";
+import SplitPaneMinus from "./SplitPaneMinus";
 import TagList from "./TagList";
 import Breakable from "./styling/Breakable";
 import FixedLayout from "./styling/FixedLayout";
@@ -2358,6 +2361,7 @@ const PuzzlePageMetadata = ({
   allDocs,
   selectedDocumentIndex,
   setSelectedDocument,
+  selfUser,
 }: {
   isMinimized: boolean;
   puzzle: PuzzleType;
@@ -2374,6 +2378,7 @@ const PuzzlePageMetadata = ({
   allDocs: DocumentType[] | undefined;
   selectedDocumentIndex: number;
   setSelectedDocument: (number) => void;
+  selfUser: Meteor.User;
 }) => {
   const huntId = puzzle.hunt;
   const puzzleId = puzzle._id;
@@ -2494,7 +2499,7 @@ const PuzzlePageMetadata = ({
 
   const documentLink =
     document && !isDesktop ? (
-      <DocumentDisplay document={document} displayMode="link" />
+      <DocumentDisplay document={document} displayMode="link" user={selfUser} />
     ) : null;
 
   const editButton = canUpdate ? (
@@ -2561,7 +2566,11 @@ const PuzzlePageMetadata = ({
           {" Answer"}
         </Button>
         {/* eslint-disable-next-line @typescript-eslint/no-use-before-define */}
-        <PuzzleAnswerModal ref={answerModalRef} puzzle={puzzle} />
+        <PuzzleAnswerModal
+          ref={answerModalRef}
+          puzzle={puzzle}
+          guesses={guesses}
+        />
       </>
     );
   }
@@ -2858,7 +2867,7 @@ const AdditionalNotesCell = styled(GuessCell)`
   )}
 `;
 
-const LinkButton: FC<ComponentPropsWithRef<typeof Button>> = styled(Button)`
+const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
   padding: 0;
   vertical-align: baseline;
 `;
@@ -3016,6 +3025,15 @@ const PuzzleGuessModal = React.forwardRef(
 
     const copyTooltip = (
       <Tooltip id="jr-puzzle-guess-copy-tooltip">Copy to clipboard</Tooltip>
+    const directionTooltip = (
+      <Tooltip id="jr-puzzle-guess-direction-tooltip">
+        <strong>Solve direction:</strong> {formatGuessDirection(directionInput)}
+      </Tooltip>
+    );
+    const confidenceTooltip = (
+      <Tooltip id="jr-puzzle-guess-confidence-tooltip">
+        <strong>Confidence:</strong> {formatConfidence(confidenceInput)}
+      </Tooltip>
     );
 
     const clearError = useCallback(() => {
@@ -3148,22 +3166,14 @@ const PuzzleGuessModal = React.forwardRef(
                           />
                         </GuessCell>
                         <GuessAnswerCell>
-                          <OverlayTrigger placement="top" overlay={copyTooltip}>
-                            {({ ref, ...triggerHandler }) => (
-                              <CopyToClipboard
-                                text={guess.guess}
-                                {...triggerHandler}
-                              >
-                                <LinkButton
-                                  ref={ref}
-                                  variant="link"
-                                  aria-label="Copy"
-                                >
-                                  <FontAwesomeIcon icon={faCopy} fixedWidth />
-                                </LinkButton>
-                              </CopyToClipboard>
-                            )}
-                          </OverlayTrigger>{" "}
+                          <StyledCopyToClipboardButton
+                            variant="link"
+                            aria-label="Copy"
+                            tooltipId={`jr-puzzle-guess-${guess._id}-copy-tooltip`}
+                            text={guess.guess}
+                          >
+                            <FontAwesomeIcon icon={faCopy} fixedWidth />
+                          </StyledCopyToClipboardButton>
                           <PuzzleAnswer
                             answer={guess.guess}
                             breakable
@@ -3251,12 +3261,16 @@ const PuzzleAnswerModal = React.forwardRef(
   (
     {
       puzzle,
+      guesses,
     }: {
       puzzle: PuzzleType;
+      guesses: GuessType[];
     },
     forwardedRef: React.Ref<PuzzleAnswerModalHandle>,
   ) => {
     const [answer, setAnswer] = useState<string>("");
+    const [confirmingSubmit, setConfirmingSubmit] = useState<boolean>(false);
+    const [confirmationMessage, setConfirmationMessage] = useState<string>("");
     const [submitState, setSubmitState] = useState<PuzzleAnswerSubmitState>(
       PuzzleAnswerSubmitState.IDLE,
     );
@@ -3282,7 +3296,8 @@ const PuzzleAnswerModal = React.forwardRef(
 
     const onAnswerChange: NonNullable<FormControlProps["onChange"]> =
       useCallback((e) => {
-        setAnswer(e.currentTarget.value);
+        setAnswer(e.currentTarget.value.toUpperCase());
+        setConfirmingSubmit(false);
       }, []);
 
     const onDismissError = useCallback(() => {
@@ -3290,7 +3305,33 @@ const PuzzleAnswerModal = React.forwardRef(
       setSubmitError("");
     }, []);
 
+    const solvedness = useMemo(() => {
+      return computeSolvedness(puzzle);
+    }, [puzzle]);
+
     const onSubmit = useCallback(() => {
+      const strippedAnswer = answer.replaceAll(/\s/g, "");
+      const repeatAnswer = guesses.find((g) => {
+        return (
+          g.state === "correct" &&
+          g.guess.replaceAll(/\s/g, "") === strippedAnswer
+        );
+      });
+      if ((repeatAnswer || solvedness !== "unsolved") && !confirmingSubmit) {
+        const repeatAnswerStr = repeatAnswer
+          ? "This answer has already been submitted. "
+          : "";
+        const solvednessStr = {
+          solved: "This puzzle has already been solved. ",
+          noAnswers:
+            "This puzzle does not expect any answers to be submitted. ",
+          unsolved: "",
+        }[solvedness];
+        const msg = `${solvednessStr} ${repeatAnswerStr} Are you sure you want to submit this answer?`;
+        setConfirmationMessage(msg);
+        setConfirmingSubmit(true);
+        return;
+      }
       setSubmitState(PuzzleAnswerSubmitState.SUBMITTING);
       setSubmitError("");
       addPuzzleAnswer.call(
@@ -3307,20 +3348,17 @@ const PuzzleAnswerModal = React.forwardRef(
             setSubmitState(PuzzleAnswerSubmitState.IDLE);
             hide();
           }
+          setConfirmingSubmit(false);
         },
       );
-    }, [puzzle._id, answer, hide]);
+    }, [puzzle._id, confirmingSubmit, guesses, solvedness, answer, hide]);
 
     return (
       <ModalForm
         ref={formRef}
         title={`Submit answer to ${puzzle.title}`}
         onSubmit={onSubmit}
-        submitLabel={
-          submitState === PuzzleAnswerSubmitState.SUBMITTING
-            ? "Confirm Submit"
-            : "Submit"
-        }
+        submitLabel={confirmingSubmit ? "Confirm Submit" : "Submit"}
       >
         <FormGroup as={Row} className="mb-3">
           <FormLabel column xs={3} htmlFor="jr-puzzle-answer">
@@ -3338,6 +3376,9 @@ const PuzzleAnswerModal = React.forwardRef(
           </Col>
         </FormGroup>
 
+        {confirmingSubmit ? (
+          <Alert variant="warning">{confirmationMessage}</Alert>
+        ) : null}
         {submitState === PuzzleAnswerSubmitState.FAILED ? (
           <Alert variant="danger" dismissible onClose={onDismissError}>
             {submitError ||
@@ -3388,9 +3429,11 @@ const PuzzlePageMultiplayerDocument = React.memo(
   ({
     document,
     showDocument,
+    selfUser,
    }: {
     document?: DocumentType;
     showDocument: boolean;
+    selfUser: Meteor.User;
   }) => {
     let inner = (
       <DocumentMessage>
@@ -3398,7 +3441,7 @@ const PuzzlePageMultiplayerDocument = React.memo(
       </DocumentMessage>
     );
     if (document) {
-      inner = <DocumentDisplay document={document} displayMode="embed" isShown={showDocument}/>;
+      inner = <DocumentDisplay document={document} displayMode="embed" isShown={showDocument} user={selfUser}/>;
     }
 
     return <PuzzleDocumentDiv>{inner}</PuzzleDocumentDiv>;
@@ -3826,6 +3869,7 @@ const PuzzlePage = React.memo(() => {
       allDocs={allDocs}
       selectedDocumentIndex={selectedDocumentIndex}
       setSelectedDocument={setSelectedDocumentIndex}
+      selfUser={selfUser}
     />
   );
   const chat = (
@@ -3919,7 +3963,7 @@ const PuzzlePage = React.memo(() => {
           >
             <FontAwesomeIcon icon={isChatMinimized ? faChevronRight : faChevronLeft} />
           </MinimizeChatButton>
-          <SplitPanePlus
+          <SplitPaneMinus
             split="vertical"
             minSize={MinimumSidebarWidth}
             maxSize={-MinimumDocumentWidth}
@@ -3955,7 +3999,7 @@ const PuzzlePage = React.memo(() => {
                 </PuzzleDocumentDiv>
               {debugPane}
             </PuzzleContent>
-          </SplitPanePlus>
+          </SplitPaneMinus>
         </FixedLayout>
       </>
     );

@@ -55,16 +55,23 @@ const republishOnUserChange = async (
   let currentSub: SubSubscription | undefined;
   if (cursor) {
     currentSub = merger.newSub();
-    publishCursor(currentSub, Meteor.users._name, cursor, makeTransform?.(u));
+    await publishCursor(
+      currentSub,
+      Meteor.users._name,
+      cursor,
+      makeTransform?.(u),
+    );
   }
-  const watch = MeteorUsers.find(sub.userId!, { fields: projection }).observe({
+  const watch = await MeteorUsers.find(sub.userId!, {
+    projection,
+  }).observeAsync({
     changed: (doc) => {
       void (async () => {
         const newCursor = await makeCursor(doc);
         let newSub;
         if (newCursor) {
           newSub = merger.newSub();
-          publishCursor(
+          await publishCursor(
             newSub,
             Meteor.users._name,
             newCursor,
@@ -107,7 +114,10 @@ Meteor.publish("displayNames", async function (huntId: unknown) {
       return undefined;
     }
 
-    return MeteorUsers.find({ hunts: huntId }, { fields: { displayName: 1 } });
+    return MeteorUsers.find(
+      { hunts: huntId },
+      { projection: { displayName: 1 } },
+    );
   });
 
   return undefined;
@@ -127,7 +137,7 @@ Meteor.publish("avatars", async function (huntId: unknown) {
 
     return MeteorUsers.find(
       { hunts: huntId },
-      { fields: { discordAccount: 1 } },
+      { projection: { discordAccount: 1 } },
     );
   });
 
@@ -146,7 +156,7 @@ Meteor.publish("allProfiles", async function () {
       return MeteorUsers.find(
         { hunts: { $in: u.hunts ?? [] } },
         {
-          fields: {
+          projection: {
             "emails.address": 1,
             hunts: 1,
             ...profileFields,
@@ -178,7 +188,7 @@ Meteor.publish("huntProfiles", async function (huntId: unknown) {
       return MeteorUsers.find(
         { hunts: huntId },
         {
-          fields: {
+          projection: {
             "emails.address": 1,
             hunts: 1,
             ...profileFields,
@@ -207,7 +217,7 @@ Meteor.publish("profile", async function (userId: unknown) {
       return MeteorUsers.find(
         { _id: userId, hunts: { $in: u.hunts ?? [] } },
         {
-          fields: {
+          projection: {
             "emails.address": 1,
             hunts: 1,
             ...profileFields,
@@ -233,7 +243,7 @@ Meteor.publish("huntRoles", async function (huntId: unknown) {
     return MeteorUsers.find(
       { hunts: huntId },
       {
-        fields: {
+        projection: {
           // Specifying sub-fields here is allowed, but will conflict with any other
           // concurrent publications for the same top-level field (roles). This
           // should be fine so long as we don't try to subscribe to huntRoles for

@@ -24,17 +24,19 @@ defineMethod(linkUserGoogleAccount, {
     // not going to do anything with it (and with only identity
     // scopes, I don't think you can do anything with it), but we do
     // want to validate it.
-    const credential = Google.retrieveCredential(key, secret);
-    const { email, id } = credential.serviceData;
+    const credential = await Google.retrieveCredential(key, secret);
+    const { email, id, picture } = credential.serviceData;
     Logger.info("Linking user to Google account", {
       email,
       id,
+      picture,
     });
 
     await MeteorUsers.updateAsync(this.userId, {
       $set: {
         googleAccount: email,
         googleAccountId: id,
+        googleProfilePicture: picture,
       },
     });
 

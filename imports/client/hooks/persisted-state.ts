@@ -1,6 +1,6 @@
 import type { SetStateAction } from "react";
 import { useCallback } from "react";
-import createPersistedState from "use-persisted-state";
+import { useLocalStorage } from "usehooks-ts";
 
 export type AppThemeState = "dark" | "light";
 export const useAppThemeState = createPersistedState<AppThemeState>("appTheme");
@@ -10,8 +10,13 @@ export const usePersistedSidebarWidth = createPersistedState<number>(
 );
 
 export type OperatorActionsHiddenState = Record<string /* huntId */, boolean>;
-export const useOperatorActionsHidden =
-  createPersistedState<OperatorActionsHiddenState>("operatorActionsHidden");
+
+export const useOperatorActionsHidden = () => {
+  return useLocalStorage<OperatorActionsHiddenState>(
+    "operatorActionsHidden",
+    {},
+  );
+};
 
 export const useOperatorActionsHiddenForHunt = (huntId: string) => {
   const [operatorActionsHidden, setOperatorActionsHidden] =
@@ -42,10 +47,6 @@ export type PuzzleListState = {
   showSolvers: "hide" | "viewers" | "active";
   collapseGroups: Record<string /* tag ID */, boolean>;
 };
-export const usePuzzleListState =
-  createPersistedState<Record<string /* huntId */, PuzzleListState>>(
-    "puzzleListView",
-  );
 
 const defaultPuzzleListState = () => {
   return {
@@ -57,7 +58,9 @@ const defaultPuzzleListState = () => {
 };
 
 export const useHuntPuzzleListState = (huntId: string) => {
-  const [puzzleListView, setPuzzleListView] = usePuzzleListState();
+  const [puzzleListView, setPuzzleListView] = useLocalStorage<
+    Record<string /* huntId */, PuzzleListState>
+  >("puzzleListView", {});
   return [
     puzzleListView?.[huntId] ?? defaultPuzzleListState(),
     useCallback(
