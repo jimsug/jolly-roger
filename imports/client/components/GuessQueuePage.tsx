@@ -416,6 +416,10 @@ const GuessQueuePage = () => {
   const searchBarRef = useRef<HTMLInputElement>(null);
   useFocusRefOnFindHotkey(searchBarRef);
 
+  const onChangeDisplayMode = useCallback((value: string[]) => {
+    setDisplayMode(value);
+  }, []);
+
   const setSearchString = useCallback(
     (val: string) => {
       const u = new URLSearchParams(searchParams);

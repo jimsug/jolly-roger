@@ -4,15 +4,16 @@ import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import type { MouseEvent } from "react";
+import type { ComponentPropsWithRef, FC, MouseEvent } from "react";
 import React, {
   useCallback,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { ButtonGroup, OverlayTrigger } from "react-bootstrap";
+import { ButtonGroup, OverlayTrigger, Tooltip } from "react-bootstrap";
 import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
@@ -46,6 +47,7 @@ import RelativeTime from "./RelativeTime";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons";
 import { shortCalendarTimeFormat } from "../../lib/calendarTimeFormat";
 import MeteorUsers from "../../lib/models/MeteorUsers";
+import CopyToClipboardButton from "./CopyToClipboardButton";
 
 const ProfilesSummary = styled.div`
   text-align: right;
@@ -86,10 +88,11 @@ const StatusDiv = styled.div`
 const StyledLinkButton: FC<ComponentPropsWithRef<typeof Button>> = styled(
   Button,
 )`
-padding: 0;
-vertical-align: baseline;
+  padding: 0;
+  vertical-align: baseline;
 `;
-const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
+
+const StyledCopyToClipboardButton = styled(CopyToClipboardButton);
 
 type ModalHandle = {
   show(): void;

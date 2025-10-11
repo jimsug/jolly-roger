@@ -138,6 +138,7 @@ import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDouble
 import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons";
 import createPuzzleDocument from "../../methods/createPuzzleDocument";
 import setChatMessagePin from "../../methods/setChatMessagePin";
+import { formatConfidence, formatGuessDirection } from "./guessDetails";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -2081,6 +2082,7 @@ const ChatSection = React.forwardRef(
       disabled,
       displayNames,
       puzzles,
+      chatMessages,
       puzzleId,
       huntId,
       callState,
@@ -2100,6 +2102,7 @@ const ChatSection = React.forwardRef(
       disabled: boolean;
       displayNames: Map<string, string>;
       puzzles: PuzzleType[];
+      chatMessages: FilteredChatMessageType[];
       puzzleId: string;
       huntId: string;
       callState: CallState;
@@ -2182,11 +2185,6 @@ const ChatSection = React.forwardRef(
     });
 
     trace("ChatSection render", { chatDataLoading });
-
-    const chatMessages: FilteredChatMessageType[] = useFind(
-      () => ChatMessages.find({ puzzle: puzzleId }, { sort: { timestamp: 1 } }),
-      [puzzleId],
-    );
 
     const puzzlesById = useTracker(()=>{
       return puzzles.reduce((acc, puz)=>{
@@ -2377,7 +2375,7 @@ const PuzzlePageMetadata = ({
   toggleMetadataMinimize: () => void;
   allDocs: DocumentType[] | undefined;
   selectedDocumentIndex: number;
-  setSelectedDocument: (number) => void;
+  setSelectedDocument: (arg0: number) => void;
   selfUser: Meteor.User;
 }) => {
   const huntId = puzzle.hunt;
@@ -2499,7 +2497,7 @@ const PuzzlePageMetadata = ({
 
   const documentLink =
     document && !isDesktop ? (
-      <DocumentDisplay document={document} displayMode="link" user={selfUser} />
+      <DocumentDisplay document={document} displayMode="link" user={selfUser} isShown={false} />
     ) : null;
 
   const editButton = canUpdate ? (
@@ -3623,7 +3621,7 @@ const PuzzlePage = React.memo(() => {
 
   const chatMessages: FilteredChatMessageType[] = useTracker(
     () => {return chatDataLoading ? [] : ChatMessages.find({ puzzle: puzzleId }, { sort: { timestamp: 1 } }).fetch()},
-    [puzzleId],
+    [puzzleId, chatDataLoading],
   );
   const prevMessagesLength = useRef<number>(0);
 
@@ -3879,6 +3877,7 @@ const PuzzlePage = React.memo(() => {
       disabled={activePuzzle.deleted ?? true /* disable while still loading */}
       displayNames={displayNames}
       puzzles={puzzles}
+      chatMessages={chatMessages}
       huntId={huntId}
       puzzleId={puzzleId}
       callState={callState}
@@ -3965,7 +3964,7 @@ const PuzzlePage = React.memo(() => {
           </MinimizeChatButton>
           <SplitPaneMinus
             split="vertical"
-            minSize={MinimumSidebarWidth}
+            minSize={isChatMinimized ? 1 : MinimumSidebarWidth}
             maxSize={-MinimumDocumentWidth}
             primary="first"
             autoCollapse1={-1}
