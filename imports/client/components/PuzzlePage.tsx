@@ -3959,7 +3959,7 @@ const PuzzlePage = React.memo(() => {
         {deletedModal}
         <FixedLayout className="puzzle-page" ref={puzzlePageDivRef}>
         <MinimizeChatButton
-            $left={effectiveSidebarWidth + 10}
+            $left={effectiveSidebarWidth + 15}
             $isMinimized={isChatMinimized}
             onClick={toggleChatMinimize}
             title={isChatMinimized ? "Restore Chat" : "Minimize Chat"}
