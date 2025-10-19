@@ -1,9 +1,15 @@
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
-import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
 import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { useFind, useSubscribe, useTracker } from "meteor/react-meteor-data";
+import EmojiPicker from "emoji-picker-react";
+import { EmojiStyle } from "emoji-picker-react";
+import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalLinkAlt";
+import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
+import { faChevronLeft } from "@fortawesome/free-solid-svg-icons/faChevronLeft";
+import { faChevronRight } from "@fortawesome/free-solid-svg-icons/faChevronRight";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
@@ -27,7 +33,6 @@ import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
-import OverlayTrigger from "react-bootstrap/esm/OverlayTrigger";
 import Tooltip from "react-bootstrap/esm/Tooltip";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
@@ -106,6 +111,9 @@ import {
   GuessDirection,
 } from "./guessDetails";
 import InsertImage from "./InsertImage";
+import type { ImageInsertModalHandle } from "./InsertImageModal";
+import InsertImageModal from "./InsertImageModal";
+import MinimizedChatInfo from "./MinimizedChatInfo";
 import Markdown from "./Markdown";
 import type { ModalFormHandle } from "./ModalForm";
 import ModalForm from "./ModalForm";
@@ -122,6 +130,17 @@ import {
 import FixedLayout from "./styling/FixedLayout";
 import { mediaBreakpointDown } from "./styling/responsive";
 import TagList from "./TagList";
+import { ButtonGroup, Dropdown, DropdownButton, Offcanvas, OverlayTrigger, Tab, Tabs, ToggleButton, ToggleButtonGroup } from "react-bootstrap";
+import removeChatMessage from "../../methods/removeChatMessage";
+import { Theme } from "../theme";
+import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
+import chatMessageNodeType from "../../lib/chatMessageNodeType";
+import createChatAttachmentUpload from "../../methods/createChatAttachmentUpload";
+import { usePersistedSidebarWidth } from "../hooks/persisted-state";
+import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
+import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons";
+import createPuzzleDocument from "../../methods/createPuzzleDocument";
+import setChatMessagePin from "../../methods/setChatMessagePin";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -1274,22 +1293,145 @@ const PuzzlePageMetadata = ({
     );
   }
 
-  return (
-    <PuzzleMetadata>
-      <PuzzleModalForm
-        key={puzzleId}
-        ref={editModalRef}
-        puzzle={puzzle}
-        huntId={huntId}
-        tags={allTags}
-        onSubmit={onEdit}
-      />
-      <PuzzleMetadataActionRow>
-        <BookmarkButton
-          puzzleId={puzzleId}
-          bookmarked={bookmarked}
-          variant="link"
-          size="sm"
+  // State and logic for conditional tag rendering
+  const actionRowRef = useRef<HTMLDivElement>(null);
+  const actionButtonsRef = useRef<HTMLDivElement>(null);
+  const [tagsOnSeparateRow, setTagsOnSeparateRow] = useState(false);
+  const tagsOnSeparateRowRef = useRef(tagsOnSeparateRow);
+
+  useEffect(() => {
+    tagsOnSeparateRowRef.current = tagsOnSeparateRow;
+  }, [tagsOnSeparateRow]);
+
+  const checkTagLayout = useCallback(() => {
+    if (actionRowRef.current) {
+      // Threshold: height slightly larger than a single line of buttons/tags
+      const singleLineHeightThreshold = 35;
+      const currentHeight = actionRowRef.current.offsetHeight;
+      const currentPos = actionRowRef.current.clientHeight;
+      const currentActionPos = actionButtonsRef.current.clientHeight;
+      const shouldBeSeparate = currentHeight > singleLineHeightThreshold;
+      if (shouldBeSeparate !== tagsOnSeparateRowRef.current || currentPos !== currentActionPos) {
+        tagsOnSeparateRowRef.current = shouldBeSeparate;
+        setTagsOnSeparateRow(shouldBeSeparate);
+      }
+    }
+  }, []);
+
+  // Check layout on mount and when tags change
+  useLayoutEffect(() => {
+    checkTagLayout();
+  }, [tags, checkTagLayout]); // Depend on tags
+
+  // Check layout on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      checkTagLayout();
+    };
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [checkTagLayout]);
+
+  const tagListElement = (
+    <StyledTagList
+      puzzle={puzzle}
+      tags={tags}
+      onCreateTag={onCreateTag}
+      onRemoveTag={onRemoveTag}
+      linkToSearch={false}
+      showControls={isDesktop}
+      popoverRelated
+      allPuzzles={allPuzzles}
+      allTags={allTags}
+      emptyMessage="No tags yet"
+    />
+  );
+
+  const toTitleCase = (str: string): string => {
+    return str
+      .toLowerCase()
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
+  const unusedDocumentTypes = useTracker(()=>{
+    return DOCUMENT_TYPES.filter((dt)=>{
+      return !allDocs?.some((d)=>dt === d.value.type);
+    })
+  }, [allDocs])
+
+  const switchOrCreateDocument = useCallback((e:"spreadsheet"|"document"
+    |"drawing"|number)=>{
+    if(!e) return;
+    if(unusedDocumentTypes.includes(e)){
+      createPuzzleDocument.call({
+        huntId: puzzle.hunt,
+        puzzleId: puzzle._id,
+        docType: e as "spreadsheet"|"document"
+    |"drawing",
+      });
+    } else if(e !== selectedDocumentIndex) {
+      setSelectedDocument(e);
+    } else if(e === selectedDocumentIndex) {
+      // nothing here
+    } else {
+      // otherwise it's probably toggling the puzzle site, so we don't need to do anything
+    }
+  }, [unusedDocumentTypes])
+
+  const resourceSelectorButton = useTracker(()=>{
+    return allDocs && (
+      <DropdownButton
+        as={ButtonGroup}
+        key="puzzle-resource-selector"
+        id="puzzle-resource-selector"
+        size="sm"
+        variant={allDocs.length > 1 ? "primary" : "secondary"}
+        onSelect={switchOrCreateDocument}
+        title={toTitleCase(allDocs[selectedDocumentIndex]?.value.type ?? "")}
+      >
+        <Dropdown.Header>
+          Documents
+        </Dropdown.Header>
+        {allDocs?.map((doc, idx)=>{
+          return (
+            <Dropdown.Item eventKey={idx}>{toTitleCase(doc.value.type)}</Dropdown.Item>
+          )
+        })}
+        {unusedDocumentTypes.length > 0 && <>
+            <Dropdown.Header>
+              Add new
+            </Dropdown.Header>
+          {unusedDocumentTypes.map((doc,idx)=>{
+            return (
+              <Dropdown.Item eventKey={doc}>
+                {toTitleCase(doc)}
+              </Dropdown.Item>
+            )
+          })}</>}
+          {canEmbedPuzzle && <Dropdown.Divider />}
+        {togglePuzzleInsetDD}
+      </DropdownButton>
+    )
+  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes, showDocument])
+
+  const minimizeMetadataButton = (<OverlayTrigger placement="bottom-end" overlay={<Tooltip>Hide puzzle information</Tooltip>}><Button onClick={toggleMetadataMinimize} size="sm">
+    <FontAwesomeIcon icon={faAngleDoubleUp} />
+  </Button></OverlayTrigger>);
+
+  return !isMinimized ? (
+    <div>
+      <PuzzleMetadata>
+        <PuzzleModalForm
+          key={puzzleId}
+          ref={editModalRef}
+          puzzle={puzzle}
+          huntId={huntId}
+          tags={allTags}
+          onSubmit={onEdit}
         />
         {puzzleLink}
         {documentLink}
@@ -1461,6 +1603,31 @@ const AdditionalNotesCell = styled(GuessCell)`
 const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
   padding: 0;
   vertical-align: baseline;
+`;
+
+const MinimizeChatButton = styled.button<{ $left: number; $isMinimized: boolean; theme: Theme }>`
+  position: absolute;
+  top: 50%;
+  left: ${({ $left }) => $left}px;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  background-color: ${({ theme }) => theme.colors.secondary};
+  border: 1px solid ${({ theme }) => theme.colors.text};
+  color: ${({ theme }) => theme.colors.text};
+  border-left: none;
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+  padding: 8px 4px;
+  cursor: pointer;
+
+  ${({ $isMinimized }) =>
+    $isMinimized &&
+    css`
+      left: 1px;
+      transform: translateY(-50%);
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+    `}
 `;
 
 enum PuzzleGuessSubmitState {
@@ -2299,11 +2466,40 @@ const PuzzlePage = React.memo(() => {
     );
   }
 
+  const effectiveSidebarWidth = isChatMinimized ? 1 : sidebarWidth;
+
+  const showMetadataButton = isMetadataMinimized ? (
+    <OverlayTrigger placement="bottom-end" overlay={<Tooltip>Show puzzle information</Tooltip>}>
+    <PuzzleMetadataFloatingButton ref={restoreButtonRef} variant="secondary" size="sm" onClick={toggleMetadata}>
+      <FontAwesomeIcon icon={faAngleDoubleDown} />
+    </PuzzleMetadataFloatingButton>
+    </OverlayTrigger>
+  ) : null;
   if (isDesktop) {
     return (
       <>
         {deletedModal}
         <FixedLayout className="puzzle-page" ref={puzzlePageDivRef}>
+        {isChatMinimized && (
+          <MinimizedChatInfo
+            huntId={huntId}
+            puzzleId={puzzleId}
+            callState={callState}
+            callDispatch={dispatch}
+          />
+        )}
+        <OverlayTrigger
+        placement="right"
+        overlay={<Tooltip>{isChatMinimized ? "Restore Chat" : "Minimize Chat"}</Tooltip>}>
+        <MinimizeChatButton
+            $left={isChatMinimized ? effectiveSidebarWidth : effectiveSidebarWidth + 15}
+            $isMinimized={isChatMinimized}
+            onClick={toggleChatMinimize}
+            theme={theme}
+            >
+            <FontAwesomeIcon icon={isChatMinimized ? faChevronRight : faChevronLeft} />
+          </MinimizeChatButton>
+          </OverlayTrigger>
           <SplitPaneMinus
             split="vertical"
             minSize={MinimumSidebarWidth}
