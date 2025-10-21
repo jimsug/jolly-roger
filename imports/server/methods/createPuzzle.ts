@@ -31,7 +31,9 @@ defineMethod(createPuzzle, {
     allowDuplicateUrls,
   }) {
     check(this.userId, String);
+
     return addPuzzle({
+      userId: this.userId,
       huntId,
       title,
       tags,

@@ -21,7 +21,7 @@ import FormLabel from "react-bootstrap/FormLabel";
 import InputGroup from "react-bootstrap/InputGroup";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import styled, { css } from "styled-components";
 import { sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
@@ -45,6 +45,7 @@ import {
   useOperatorActionsHiddenForHunt,
 } from "../hooks/persisted-state";
 import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
+import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import HuntNav from "./HuntNav";
 import PuzzleList from "./PuzzleList";
@@ -482,10 +483,16 @@ const PuzzleListView = ({
     [
       huntId,
       displayMode,
+      bookmarked,
       allPuzzles,
       allTags,
       canUpdate,
+      showSolvers,
+      puzzleSubscribers,
+      puzzleUsers,
+      huntId,
       searchString,
+      showAddModalWithTags,
       canExpandAllGroups,
       expandAllGroups,
       bookmarked,
@@ -548,6 +555,25 @@ const PuzzleListView = ({
   const retainedPuzzles = solvedOverConstrains
     ? matchingSearch
     : matchingSearchAndSolved;
+  const filterText = useTracker(() => {
+    return showSolvers !== "hide"
+      ? "Filter by title, answer, tag, or solver"
+      : "Filter by title, answer, or tag";
+  }, [showSolvers]);
+
+  const onSubmitSearch: NonNullable<FormControlProps["onKeyDown"]> =
+    useCallback(
+      (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === "Enter") {
+          const huntId = retainedPuzzles[0]?.hunt;
+          const puzzleId = retainedPuzzles[0]?._id;
+          if (huntId && puzzleId && retainedPuzzles.length === 1) {
+            return navigate(`/hunts/${huntId}/puzzles/${puzzleId}`);
+          }
+        }
+      },
+      [navigate, retainedPuzzles],
+    );
   const retainedDeletedPuzzles =
     deletedPuzzles && puzzlesMatchingSearchString(deletedPuzzles);
 

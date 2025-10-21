@@ -218,6 +218,88 @@ const ChatMessageDiv = styled.div<{
     css`
       background-color: #e0e0e0;
     `}
+
+  ${({ $isPinned }) =>
+    $isPinned &&
+    css`
+      background-color: ${({ theme })=>theme.colors.pinnedChatMessageBackground};
+    `}
+    ${({ $isPulsing }) =>
+    $isPulsing &&
+    css`
+      animation: pulse 1s ease-in-out;
+    `}
+
+  @keyframes pulse {
+    0% {
+      background-color: #ffff70;
+    }
+    50% {
+      background-color: #ffff6d;
+    }
+    100% {
+      background-color: #ffff70;
+    }
+  }
+
+  &:hover {
+    background-color: ${({ theme })=>theme.colors.hoverChatMessageBackground};
+  }
+
+  ${({ $isReplyingTo }) =>
+    $isReplyingTo &&
+    css`
+      background-color: ${({ theme })=>theme.colors.replyChatMessageBackground};
+      `}
+`;
+
+
+const ChatMessageActions = styled.div`
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  opacity: 0;
+  z-index: 10;
+  transition: opacity 0.2s ease-in-out;
+  ${ChatMessageDiv}:hover & {
+    opacity: 1;
+  }
+  & > * {
+    margin-left: 0;
+  }
+`;
+
+const SplitPill = styled.div`
+  display: inline-flex;
+  align-items: stretch;
+  justify-content: center;
+  background-color: #d3d3d3;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  color: #666;
+  margin: 4px;
+  &:hover {
+    color: #000;
+  }
+`;
+
+const PillSection = styled.div`
+  padding: 4px 7px;
+  display: flex;
+  align-items: center;
+  flex-grow: 1;
+  flex-basis: 0;
+  text-align: center;
+  white-space: nowrap;
+  justify-content: center;
+  &:not(:last-child) {
+    border-right: 1px solid #bbb;
+  }
+  &:hover {
+    background-color: #c0c0c0;
+  }
 `;
 
 const ChatInputRow = styled.div`
@@ -410,12 +492,6 @@ const ChatHistory = React.forwardRef(
     forwardedRef: React.Ref<ChatHistoryHandle>,
   ) => {
     // TODO: consider using useFind once fixed upstream
-    const chatMessages: FilteredChatMessageType[] = useTracker(() => {
-      return ChatMessages.find(
-        { puzzle: puzzleId },
-        { sort: { timestamp: 1 } },
-      ).fetch();
-    }, [puzzleId]);
 
     const ref = useRef<HTMLDivElement>(null);
     const scrollBottomTarget = useRef<number>(0);
@@ -753,6 +829,13 @@ const ChatInput = React.memo(
       content,
       puzzleId,
       onMessageSent,
+      setReplyingTo,
+      // Add state setters used within the function
+      setIsUploading,
+      setUploadError,
+      setContent,
+      setUploadingImages,
+      setImagePreviews,
     ]);
 
     useBlockUpdate(
@@ -998,6 +1081,14 @@ const PuzzlePageMetadata = ({
   document,
   isDesktop,
   selfUser,
+  showDocument,
+  setShowDocument,
+  hasIframeBeenLoaded,
+  setHasIframeBeenLoaded,
+  toggleMetadataMinimize,
+  allDocs,
+  selectedDocumentIndex,
+  setSelectedDocument,
 }: {
   puzzle: PuzzleType;
   bookmarked: boolean;
@@ -1005,6 +1096,14 @@ const PuzzlePageMetadata = ({
   document?: DocumentType;
   isDesktop: boolean;
   selfUser: Meteor.User;
+  showDocument: boolean;
+  setShowDocument: (showDocument: boolean) => void;
+  hasIframeBeenLoaded: boolean;
+  setHasIframeBeenLoaded: (hasIframeBeenLoaded: boolean) => void;
+  toggleMetadataMinimize: () => void;
+  allDocs: DocumentType[] | undefined;
+  selectedDocumentIndex: number;
+  setSelectedDocument: (arg0: number) => void;
 }) => {
   const huntId = puzzle.hunt;
   const puzzleId = puzzle._id;

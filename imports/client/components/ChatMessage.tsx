@@ -10,6 +10,28 @@ import nodeIsImage from "../../lib/nodeIsImage";
 import nodeIsMention from "../../lib/nodeIsMention";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import { MentionSpan } from "./FancyEditor";
+import {
+  faChevronLeft,
+  faChevronRight,
+  faPaperclip,
+  faTimes,
+} from "@fortawesome/free-solid-svg-icons";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
+import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Link } from "react-router-dom";
+import { shortCalendarTimeFormat } from "../../lib/calendarTimeFormat";
+import chatMessageNodeType from "../../lib/chatMessageNodeType";
+import type { PuzzleType } from "../../lib/models/Puzzles";
+import { computeSolvedness } from "../../lib/solvedness";
+import type { Theme } from "../theme";
+import {
+  LightboxOverlay,
+  LightboxContent,
+  LightboxButton,
+  LightboxImage,
+  TopRightButtonGroup,
+} from "./Lightbox";
 
 // This file implements standalone rendering for the MessageElement format
 // defined by FancyEditor, for use in the chat pane.
@@ -41,69 +63,21 @@ const StyledCodeBlock = styled.code`
   margin-bottom: 0;
 `;
 
-const ResponsiveImage = ({
-  src,
-  onLoadCB,
-}: {
-  src: string;
-  onLoadCB?: () => void;
-}) => {
-  const [isLarge, setIsLarge] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
+const AttachmentLinkTrigger = styled.a`
+  cursor: pointer;
+  color: ${(props) => props.theme.colors.linkColor ?? "#0d6efd"};
+  text-decoration: none;
 
-  const handleLoad = useCallback(() => {
-    if (imgRef.current && containerRef.current) {
-      const imgWidth = imgRef.current.naturalWidth;
-      const containerWidth = containerRef.current.offsetWidth;
-      setIsLarge(imgWidth > containerWidth);
-    }
-    onLoadCB?.();
-  }, [onLoadCB]);
+  &:hover {
+    text-decoration: underline;
+    color: ${(props) => props.theme.colors.linkHoverColor ?? "#0a58ca"};
+  }
 
-  // update on container resize
-  useEffect(() => {
-    const container = containerRef.current;
-    const observer = container ? new ResizeObserver(() => handleLoad()) : null;
-
-    if (observer && container) {
-      observer.observe(container);
-    }
-
-    return () => {
-      if (observer) observer.disconnect();
-    };
-  }, [handleLoad]);
-
-  return (
-    <div ref={containerRef} style={{ width: "100%" }}>
-      {isLarge ? (
-        <a href={src} target="_blank" rel="noopener noreferrer">
-          <BSImage
-            ref={imgRef}
-            src={src}
-            onLoad={handleLoad}
-            className={isLarge ? "img-thumbnail" : ""}
-            style={{
-              width: "100%",
-              height: "auto",
-              display: "block",
-            }}
-          />
-        </a>
-      ) : (
-        <BSImage
-          ref={imgRef}
-          src={src}
-          onLoad={handleLoad}
-          style={{
-            display: "block",
-          }}
-        />
-      )}
-    </div>
-  );
-};
+  small {
+    /* Ensure small tag inherits color */
+    color: inherit;
+  }
+`;
 
 // Renders a markdown token to React components.
 const MarkdownToken = ({
@@ -204,13 +178,71 @@ const ChatMessage = ({
   selfUserId,
   roles,
   imageOnLoad,
+  timestamp,
+  attachments,
 }: {
   message: ChatMessageContentType;
   displayNames: Map<string, string>;
   selfUserId: string;
   roles: string[];
   imageOnLoad?: () => void;
+  timestamp?: Date;
+  attachments: ChatAttachmentType[];
 }) => {
+  const [isLightboxOpen, setIsLightboxOpen] = useState<boolean>(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState<number>(0);
+  const imageAttachments = useMemo(
+    () => attachments?.filter((a) => a.mimeType.startsWith("image/")) ?? [],
+    [attachments],
+  );
+  const openLightbox = useCallback((index: number) => {
+    setCurrentImageIndex(index);
+    setIsLightboxOpen(true);
+  }, []);
+  const closeLightbox = useCallback(() => {
+    setIsLightboxOpen(false);
+  }, []);
+  const navigateLightbox = useCallback(
+    (direction: "prev" | "next") => {
+      setCurrentImageIndex((prevIndex) => {
+        if (direction === "prev") {
+          return prevIndex > 0 ? prevIndex - 1 : imageAttachments.length - 1;
+        } else {
+          return prevIndex < imageAttachments.length - 1 ? prevIndex + 1 : 0;
+        }
+      });
+    },
+    [imageAttachments.length],
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isLightboxOpen) {
+        if (event.key === "Escape") {
+          closeLightbox();
+        } else if (event.key === "ArrowLeft") {
+          navigateLightbox("prev");
+        } else if (event.key === "ArrowRight") {
+          navigateLightbox("next");
+        }
+      }
+    };
+
+    if (isLightboxOpen) {
+      document.addEventListener("keydown", handleKeyDown);
+    }
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isLightboxOpen, closeLightbox, navigateLightbox]);
+
+  const handleOverlayClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) {
+      closeLightbox();
+    }
+  };
+
   const children = message.children.map((child, i) => {
     if (nodeIsMention(child)) {
       const displayName = displayNames.get(child.userId);

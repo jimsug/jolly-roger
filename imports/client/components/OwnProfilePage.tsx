@@ -25,6 +25,7 @@ import APIKeysTable from "./APIKeysTable";
 import AudioConfig from "./AudioConfig";
 import Avatar from "./Avatar";
 import GoogleLinkBlock from "./GoogleLinkBlock";
+import LabelledRadioGroup from "./LabelledRadioGroup";
 
 enum DiscordLinkBlockLinkState {
   IDLE = "idle",
@@ -355,6 +356,74 @@ const OwnProfilePage = ({
           notice.
         </FormText>
       </FormGroup>
+
+      <FormGroup className="mb-3">
+        <FormLabel htmlFor="jr-profile-edit-dingwords">
+          Dingwords <strong>once per puzzle</strong> (comma-separated)
+        </FormLabel>
+        <FormControl
+          id="jr-profile-edit-dingwords"
+          type="text"
+          value={dingwordsMatchOnceFlat}
+          disabled={shouldDisableForm}
+          onChange={handleDingwordsOnceChange}
+          placeholder="e.g. cryptic, akari, REO Speedwagon lyrics"
+        />
+        <FormText>
+          This works the same as the above, but you will be notified at most
+          once per puzzle for each word.
+        </FormText>
+      </FormGroup>
+
+      <FormGroup className="mb-3">
+        <FormLabel htmlFor="jr-profile-dingwords-open">
+          Dingwords matching mode
+        </FormLabel>
+        <LabelledRadioGroup
+          header=""
+          name="jr-new-puzzle-doc-type"
+          options={[
+            {
+              value: "exact",
+              label: (
+                <>
+                  <strong>Match precisely:</strong> dingwords and -phrases must
+                  match the typed text <em>exactly</em> in order to trigger an
+                  alert.
+                </>
+              ),
+            },
+            {
+              value: "open",
+              label: (
+                <>
+                  <strong>Match start:</strong> dingwords and -phrases only need
+                  to match the <em>start</em> of a typed word or phrase. For
+                  example, the dingword <code>logic</code> would match
+                  &quot;logic&quot;, &quot;logician&quot;, and
+                  &quot;logical&quot;, but not &quot;illogical&quot;.
+                </>
+              ),
+            },
+          ]}
+          initialValue={dingwordsOpenMatch ? "open" : "exact"}
+          help=""
+          onChange={handleDingwordsModeChange}
+        />
+      </FormGroup>
+      {submitState === "submitting" ? (
+        <Alert variant="info">Saving...</Alert>
+      ) : null}
+      {submitState === "success" ? (
+        <Alert variant="success" dismissible onClose={dismissAlert}>
+          Saved changes.
+        </Alert>
+      ) : null}
+      {submitState === "error" ? (
+        <Alert variant="danger" dismissible onClose={dismissAlert}>
+          Saving failed: {submitError}
+        </Alert>
+      ) : null}
 
       <ActionButtonRow>
         <FormGroup className="mb-3">

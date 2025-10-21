@@ -5,7 +5,18 @@ import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faSkullCrossbones } from "@fortawesome/free-solid-svg-icons/faSkullCrossbones";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import React, { useCallback, useId, useRef } from "react";
+import React, {
+  useCallback,
+  useRef,
+  useState,
+} from "react";
+import {
+  ToggleButtonGroup,
+  Badge,
+  FormLabel,
+  ButtonToolbar,
+  ToggleButton,
+} from "react-bootstrap";
 import Button from "react-bootstrap/Button";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
@@ -44,6 +55,12 @@ import Breakable from "./styling/Breakable";
 import { guessColorLookupTable } from "./styling/constants";
 import type { Breakpoint } from "./styling/responsive";
 import { mediaBreakpointDown } from "./styling/responsive";
+
+const StyledToggleButtonGroup = styled(ToggleButtonGroup)`
+  @media (width < 360px) {
+    width: 100%;
+  }
+`;
 
 const compactViewBreakpoint: Breakpoint = "md";
 
@@ -194,7 +211,7 @@ const StyledGuessCell = styled(StyledCell)`
   )}
 `;
 
-const StyledGuessDetails = styled.div`
+const StyledGuessStatuses = styled.div`
   display: contents;
   background-color: inherit;
   ${mediaBreakpointDown(
@@ -265,6 +282,43 @@ const GuessBlock = React.memo(
         Open Jolly Roger discussion
       </Tooltip>
     );
+    const requeueTooltip = <Tooltip>Return this guess to the queue</Tooltip>;
+
+    let directionLabel;
+    let directionVariant;
+    const guessDir = guess?.direction ?? 0;
+    if (guessDir > 5) {
+      directionLabel = "Forward";
+      directionVariant = "primary";
+    } else if (guessDir > 0) {
+      directionLabel = "Forward*";
+      directionVariant = "primary";
+    } else if (guessDir < -5) {
+      directionLabel = "Back";
+      directionVariant = "danger";
+    } else if (guessDir < 0) {
+      directionLabel = "Back*";
+      directionVariant = "danger";
+    } else {
+      directionLabel = "Mixed";
+      directionVariant = "secondary";
+    }
+
+    let confidenceLabel;
+    let confidenceVariant;
+
+    const guessConf = guess?.confidence ?? 0;
+    if (guessConf > 50) {
+      confidenceLabel = "High";
+      confidenceVariant = "success";
+    } else if (guessConf < 50) {
+      confidenceLabel = "Low";
+      confidenceVariant = "danger";
+    } else {
+      confidenceLabel = "Medium";
+      confidenceVariant = "warning";
+    }
+
     return (
       <StyledRow $state={guess.state}>
         <StyledPuzzleTimestampAndSubmitter>
@@ -346,6 +400,12 @@ const GuessBlock = React.memo(
 );
 
 const GuessQueuePage = () => {
+  const [displayMode, setDisplayMode] = useState<string[]>([
+    "correct",
+    "intermediate",
+    "incorrect",
+    "rejected",
+  ]); // pending guesses are always shown
   const huntId = useParams<"huntId">().huntId!;
   const [searchParams, setSearchParams] = useSearchParams();
   const searchString = searchParams.get("q") ?? "";

@@ -18,6 +18,7 @@ import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
 import Row from "react-bootstrap/Row";
 import type { ActionMeta } from "react-select";
+import { useTheme } from "styled-components";
 import type { GdriveMimeTypesType } from "../../lib/GdriveMimeTypes";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
@@ -107,6 +108,8 @@ const PuzzleModalForm = React.forwardRef(
     );
     const [errorMessage, setErrorMessage] = useState<string>("");
     const [titleDirty, setTitleDirty] = useState<boolean>(false);
+    const [lastAutoPopulatedTitle, setLastAutoPopulatedTitle] =
+      useState<string>("");
     const [urlDirty, setUrlDirty] = useState<boolean>(false);
     const [tagsDirty, setTagsDirty] = useState<boolean>(false);
     const [expectedAnswerCountDirty, setExpectedAnswerCountDirty] =
@@ -342,6 +345,8 @@ const PuzzleModalForm = React.forwardRef(
           className="mt-1"
         />
       ) : null;
+
+    const theme = useTheme();
 
     return (
       <Suspense
