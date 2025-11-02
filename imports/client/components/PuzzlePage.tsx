@@ -49,7 +49,7 @@ import Tooltip from "react-bootstrap/esm/Tooltip";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { select, type Descendant } from "slate";
-import styled, { css, useTheme } from "styled-components";
+import styled, { css, keyframes, useTheme } from "styled-components";
 import {
   calendarTimeFormat,
   shortCalendarTimeFormat,
@@ -451,12 +451,29 @@ const PuzzleContent = styled.div`
   /* position: relative; */
 `;
 
+const buttonPulseAnimation = keyframes`
+  0% {
+    box-shadow: 0 0 0 0px rgba(0, 123, 255, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(0, 123, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0px rgba(0, 123, 255, 0);
+  }
+`;
+
 const PuzzleMetadata = styled.div<{ theme: Theme }>`
   flex: none;
   padding: ${PUZZLE_PAGE_PADDING - 2}px 8px;
   border-bottom: 1px solid #dadce0;
   z-index: 10;
   background-color: ${({ theme })=>theme.colors.background};
+
+  .resource-selector-pulse {
+    animation: ${buttonPulseAnimation} 1s 2;
+    border-radius: 6px;
+  }
 `;
 
 const PuzzleMetadataAnswer = styled.span`
@@ -2404,6 +2421,23 @@ const PuzzlePageMetadata = ({
     [hunt],
   );
 
+  const [pulseButton, setPulseButton] = useState(false);
+  const [hasPulsed, setHasPulsed] = useState(false);
+
+  useEffect(() => {
+  if (allDocs && allDocs.length > 1 && !hasPulsed) {
+    setPulseButton(true);
+    setHasPulsed(true);
+
+    const timer = setTimeout(() => {
+      setPulseButton(false);
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }
+  return;
+}, [allDocs, hasPulsed]);
+
   const allTags = useTracker(
     () => Tags.find({ hunt: huntId }).fetch(),
     [huntId],
@@ -2708,6 +2742,7 @@ const PuzzlePageMetadata = ({
         variant={allDocs.length > 1 ? "primary" : "secondary"}
         onSelect={switchOrCreateDocument}
         title={toTitleCase(allDocs[selectedDocumentIndex]?.value.type ?? "")}
+        className={pulseButton ? "resource-selector-pulse" : ""}
       >
         <Dropdown.Header>
           Documents
@@ -2759,7 +2794,7 @@ const PuzzlePageMetadata = ({
         {togglePuzzleInsetDD}
       </DropdownButton>
     )
-  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes, showDocument, splitDirection, selectedSecondaryDocument, isTall])
+  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes, showDocument, splitDirection, selectedSecondaryDocument, isTall, pulseButton])
 
   const minimizeMetadataButton = (<OverlayTrigger placement="bottom-end" overlay={<Tooltip>Hide puzzle information</Tooltip>}><Button onClick={toggleMetadataMinimize} size="sm">
     <FontAwesomeIcon icon={faAngleDoubleUp} />
