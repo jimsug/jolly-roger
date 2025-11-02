@@ -43,9 +43,9 @@ import InputGroup from "react-bootstrap/InputGroup";
 import Modal from "react-bootstrap/Modal";
 import Row from "react-bootstrap/Row";
 import { createPortal } from "react-dom";
-import { Link, useParams } from "react-router-dom";
-import type { Descendant } from "slate";
 import styled, { css } from "styled-components";
+import { Link, useLocation, useParams } from "react-router-dom";
+import { select, type Descendant } from "slate";
 import {
   calendarTimeFormat,
   shortCalendarTimeFormat,
@@ -138,9 +138,11 @@ import chatMessageNodeType from "../../lib/chatMessageNodeType";
 import createChatAttachmentUpload from "../../methods/createChatAttachmentUpload";
 import { usePersistedSidebarWidth } from "../hooks/persisted-state";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
-import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons";
+import { faAngleDoubleDown, faClose, faList, faTableColumns } from "@fortawesome/free-solid-svg-icons";
 import createPuzzleDocument from "../../methods/createPuzzleDocument";
 import setChatMessagePin from "../../methods/setChatMessagePin";
+import { formatConfidence, formatGuessDirection } from "./guessDetails";
+import { set } from "zod";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -365,6 +367,30 @@ const PuzzleMetadata = styled.div`
   flex: none;
   padding: ${PUZZLE_PAGE_PADDING - 2}px 8px;
   border-bottom: 1px solid #dadce0;
+
+const buttonPulseAnimation = keyframes`
+  0% {
+    box-shadow: 0 0 0 0px rgba(0, 123, 255, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(0, 123, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0px rgba(0, 123, 255, 0);
+  }
+`;
+
+const PuzzleMetadata = styled.div<{ theme: Theme }>`
+  flex: none;
+  padding: ${PUZZLE_PAGE_PADDING - 2}px 8px;
+  border-bottom: 1px solid #dadce0;
+  z-index: 10;
+  background-color: ${({ theme })=>theme.colors.background};
+
+  .resource-selector-pulse {
+    animation: ${buttonPulseAnimation} 1s 2;
+    border-radius: 6px;
+  }
 `;
 
 const PuzzleMetadataAnswer = styled.span`
@@ -1099,6 +1125,7 @@ const PuzzlePageMetadata = ({
   displayNames,
   document,
   isDesktop,
+  isTall,
   selfUser,
   showDocument,
   setShowDocument,
@@ -1108,12 +1135,17 @@ const PuzzlePageMetadata = ({
   allDocs,
   selectedDocumentIndex,
   setSelectedDocument,
+  selectedSecondaryDocument,
+  setSecondaryDocument,
+  splitDirection,
+  setSplitDirection,
 }: {
   puzzle: PuzzleType;
   bookmarked: boolean;
   displayNames: Map<string, string>;
   document?: DocumentType;
   isDesktop: boolean;
+  isTall: boolean;
   selfUser: Meteor.User;
   showDocument: boolean;
   setShowDocument: (showDocument: boolean) => void;
@@ -1123,6 +1155,10 @@ const PuzzlePageMetadata = ({
   allDocs: DocumentType[] | undefined;
   selectedDocumentIndex: number;
   setSelectedDocument: (arg0: number) => void;
+  selectedSecondaryDocument: number | null;
+  setSecondaryDocument: (arg0: number | null) => void;
+  splitDirection: "vertical" | "horizontal";
+  setSplitDirection: (arg0: "vertical" | "horizontal") => void;
 }) => {
   const huntId = puzzle.hunt;
   const puzzleId = puzzle._id;
@@ -1138,6 +1174,23 @@ const PuzzlePageMetadata = ({
     () => Puzzles.find({ hunt: huntId }).fetch(),
     [huntId],
   );
+  const [pulseButton, setPulseButton] = useState(false);
+  const [hasPulsed, setHasPulsed] = useState(false);
+
+  useEffect(() => {
+  if (allDocs && allDocs.length > 1 && !hasPulsed) {
+    setPulseButton(true);
+    setHasPulsed(true);
+
+    const timer = setTimeout(() => {
+      setPulseButton(false);
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }
+  return;
+}, [allDocs, hasPulsed]);
+
   const allTags = useTracker(
     () => Tags.find({ hunt: huntId }).fetch(),
     [huntId],
@@ -1363,6 +1416,7 @@ const PuzzlePageMetadata = ({
     })
   }, [allDocs])
 
+
   const switchOrCreateDocument = useCallback((e:"spreadsheet"|"document"
     |"drawing"|number)=>{
     if(!e) return;
@@ -1382,6 +1436,25 @@ const PuzzlePageMetadata = ({
     }
   }, [unusedDocumentTypes])
 
+  const toggleSecondaryDocument = useCallback((e:number, newstate: "horizontal" | "vertical" | "hide")=>{
+    if(!e) return;
+    switch(newstate){
+      case "horizontal":
+        setSplitDirection("horizontal");
+        setSecondaryDocument(e);
+        break;
+      case "vertical":
+        setSplitDirection("vertical");
+        setSecondaryDocument(e);
+        break;
+      case "hide":
+        setSplitDirection("horizontal");
+        setSecondaryDocument(null);
+        break;
+    }
+  },[selectedSecondaryDocument, selectedDocumentIndex, setSecondaryDocument, unusedDocumentTypes, setSplitDirection])
+
+
   const resourceSelectorButton = useTracker(()=>{
     return allDocs && (
       <DropdownButton
@@ -1392,13 +1465,41 @@ const PuzzlePageMetadata = ({
         variant={allDocs.length > 1 ? "primary" : "secondary"}
         onSelect={switchOrCreateDocument}
         title={toTitleCase(allDocs[selectedDocumentIndex]?.value.type ?? "")}
+        className={pulseButton ? "resource-selector-pulse" : ""}
       >
         <Dropdown.Header>
           Documents
         </Dropdown.Header>
         {allDocs?.map((doc, idx)=>{
+          let nextState: "horizontal" | "vertical" | "hide" = "horizontal";
+          let nextIcon = faTableColumns;
+          let nextTooltip = "Split current view";
+          if (selectedSecondaryDocument === null) {
+            nextState = isTall ? "horizontal" : "vertical";
+            nextIcon = isTall ? faList : faTableColumns;
+          } else if (isTall && splitDirection === "horizontal") {
+            nextState = "vertical";
+            nextIcon = faTableColumns;
+          } else if (!isTall && splitDirection === "vertical") {
+            nextState = "horizontal";
+            nextIcon = faList;
+          } else {
+            nextState = "hide";
+            nextIcon = faClose;
+            nextTooltip = "Hide split view";
+          }
           return (
-            <Dropdown.Item eventKey={idx}>{toTitleCase(doc.value.type)}</Dropdown.Item>
+            <Dropdown.Item eventKey={idx}>
+              {toTitleCase(doc.value.type)}
+              {(isDesktop && idx !== selectedDocumentIndex && (selectedSecondaryDocument === null || selectedSecondaryDocument === idx)) &&(
+                <Button size="sm" onClick={(evt)=>{
+                  evt.stopPropagation();
+                  toggleSecondaryDocument(idx, nextState);
+                }}>
+                  <FontAwesomeIcon icon={nextIcon} title={nextTooltip}/>
+                </Button>
+              )}
+            </Dropdown.Item>
           )
         })}
         {unusedDocumentTypes.length > 0 && <>
@@ -1416,7 +1517,7 @@ const PuzzlePageMetadata = ({
         {togglePuzzleInsetDD}
       </DropdownButton>
     )
-  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes, showDocument])
+  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes, showDocument, splitDirection, selectedSecondaryDocument, isTall, selectedSecondaryDocument, pulseButton])
 
   const minimizeMetadataButton = (<OverlayTrigger placement="bottom-end" overlay={<Tooltip>Hide puzzle information</Tooltip>}><Button onClick={toggleMetadataMinimize} size="sm">
     <FontAwesomeIcon icon={faAngleDoubleUp} />
@@ -1619,6 +1720,7 @@ const MinimizeChatButton = styled.button<{ $left: number; $isMinimized: boolean;
   border-bottom-right-radius: 8px;
   padding: 8px 4px;
   cursor: pointer;
+  height: 40px;
 
   ${({ $isMinimized }) =>
     $isMinimized &&
@@ -2230,7 +2332,20 @@ const PuzzleDeletedModal = ({
 const PuzzlePage = React.memo(() => {
   const puzzlePageDivRef = useRef<HTMLDivElement | null>(null);
   const chatSectionRef = useRef<ChatSectionHandle | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState<number>(DefaultSidebarWidth);
+  const restoreButtonRef =
+    useRef<ReactElement<typeof PuzzleMetadataFloatingButton>>(null);
+  const [persistentWidth, setPersistentWidth] = usePersistedSidebarWidth();
+  const [selectedDocumentIndex, setSelectedDocumentIndex] = useState<number>(0);
+  const [secondaryDocumentIndex, setSecondaryDocumentIndex] = useState<number|null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(persistentWidth ?? DefaultSidebarWidth);
+  const [pageWidth, setPageWidth] = useState<number>(window.innerWidth);
+  const [splitWidth, setSplitWidth] = useState<number>((window.innerWidth - DefaultSidebarWidth) / 2);
+  const [splitDirection, setSplitDirection] = useState<"vertical" | "horizontal">("vertical")
+  const [isTall, setIsTall] = useState<boolean>(window.innerHeight > window.innerWidth);
+  const [isChatMinimized, setIsChatMinimized] = useState<boolean>(false);
+  const [lastSidebarWidth, setLastSidebarWidth] = useState<number>(DefaultSidebarWidth);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [isMetadataMinimized, setIsMetadataMinimized] = useState<boolean>(false);
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
   );
@@ -2302,6 +2417,15 @@ const PuzzlePage = React.memo(() => {
     [puzzleDataLoading, puzzleId],
   );
 
+  const secondDoc = useTracker(
+    () => {
+      if (puzzleDataLoading || !allDocs || secondaryDocumentIndex === null) {
+        return undefined;
+      }
+      return allDocs[secondaryDocumentIndex];
+    }, [puzzleDataLoading, allDocs, secondaryDocumentIndex]
+  );
+
   const activePuzzle = useTracker(
     () => Puzzles.findOneAllowingDeleted(puzzleId),
     [puzzleId],
@@ -2323,12 +2447,14 @@ const PuzzlePage = React.memo(() => {
   });
 
   const documentTitle = `${title} :: Jolly Roger`;
+
   useDocumentTitle(documentTitle);
 
   const [callState, dispatch] = useCallState({ huntId, puzzleId, tabId });
 
   const onResize = useCallback(() => {
     setIsDesktop(window.innerWidth >= MinimumDesktopWidth);
+    setIsTall(window.innerHeight > window.innerWidth);
     trace("PuzzlePage onResize", { hasRef: !!chatSectionRef.current });
     if (chatSectionRef.current) {
       chatSectionRef.current.scrollHistoryToTarget();
@@ -2339,7 +2465,65 @@ const PuzzlePage = React.memo(() => {
     setSidebarWidth(newSidebarWidth);
   }, []);
 
-  const onChangeSideBarSize = useCallback(() => {
+  const onCommitSplitWidth = useCallback((newSplitWidth: number, collapsed: 0 | 1 | 2, cause: 'drag' | 'resize') => {
+    if (cause === 'drag') {
+      setSplitWidth(newSplitWidth);
+    }
+  })
+
+  const toggleChatMinimize = useCallback(() => {
+    setIsChatMinimized(prevMinimized => {
+      const nextMinimized = !prevMinimized;
+      if (nextMinimized) {
+        if (sidebarWidth > 0) {
+          setLastSidebarWidth(sidebarWidth);
+        }
+      } else {
+        setSidebarWidth(lastSidebarWidth);
+        setTimeout(() => {
+          if (chatSectionRef.current) {
+            chatSectionRef.current.scrollHistoryToTarget();
+          }
+        }, 0);
+      }
+      return nextMinimized;
+    });
+  }, [sidebarWidth, lastSidebarWidth]);
+
+  const restoreChat = useCallback(() => {
+    if (isChatMinimized) {
+      setIsRestoring(true);
+      setIsChatMinimized(false);
+      setSidebarWidth(lastSidebarWidth);
+      setTimeout(() => {
+        if (chatSectionRef.current) {
+          chatSectionRef.current.scrollHistoryToTarget();
+          chatSectionRef.current.snapToBottom();
+        }
+      }, 0);
+      setIsRestoring(false);
+    }
+  }, [isChatMinimized, lastSidebarWidth]);
+
+  const [pulsingMessageId, setPulsingMessageId] = useState<string | null>(null);
+
+  const handleHighlightMessageClick = useCallback((messageId: string) => {
+    setShowHighlights(false);
+    setTimeout(() => {
+      chatSectionRef.current?.scrollToMessage(messageId, () => {
+        setPulsingMessageId(messageId);
+      });
+    }, 100);
+  }, [setShowHighlights]);
+
+
+  const handleClose = useCallback(() => setShowHighlights(false), []);
+  const handleOpen = useCallback(() => setShowHighlights(true), []);
+
+  const onChangeSidebarSize = useCallback((newSize: number) => {
+    if (!isChatMinimized) {
+      setSidebarWidth(newSize);
+    }
     trace("PuzzlePage onChangeSideBarSize", {
       hasRef: !!chatSectionRef.current,
     });
@@ -2404,6 +2588,19 @@ const PuzzlePage = React.memo(() => {
       displayNames={displayNames}
       isDesktop={isDesktop}
       selfUser={selfUser}
+      showDocument={showDocument}
+      setShowDocument={setShowDocument}
+      hasIframeBeenLoaded={hasIframeBeenLoaded}
+      setHasIframeBeenLoaded={setHasIframeBeenLoaded}
+      toggleMetadataMinimize={toggleMetadata}
+      allDocs={allDocs}
+      selectedDocumentIndex={selectedDocumentIndex}
+      setSelectedDocument={setSelectedDocumentIndex}
+      selectedSecondaryDocument={secondaryDocumentIndex}
+      setSecondaryDocument={setSecondaryDocumentIndex}
+      splitDirection={splitDirection}
+      setSplitDirection={setSplitDirection}
+      selfUser={selfUser}
     />
   );
   const chat = (
@@ -2466,6 +2663,7 @@ const PuzzlePage = React.memo(() => {
     );
   }
 
+
   const effectiveSidebarWidth = isChatMinimized ? 1 : sidebarWidth;
 
   const showMetadataButton = isMetadataMinimized ? (
@@ -2512,10 +2710,39 @@ const PuzzlePage = React.memo(() => {
             {chat}
             <PuzzleContent>
               {metadata}
-              <PuzzlePageMultiplayerDocument
-                document={document}
-                selfUser={selfUser}
-              />
+              {showMetadataButton}
+                <PuzzleDocumentDiv>
+                {
+                (activePuzzle.url && hasIframeBeenLoaded) ? (
+                  <StyledIframe
+                    ref={iframeRef}
+                    style={{ zIndex: !showDocument ? 1 : -1, display: !showDocument ? "block" : "none" }} // this is a bit of a hack to keep both the puzzlepage and the shared doc loaded
+                    src={activePuzzle.url}
+                  />
+                  ) : null
+                }
+                <SplitPaneMinus
+                  split={splitDirection}
+                  minSize={secondaryDocumentIndex ? 100 : 0}
+                  maxSize={(splitDirection === 'horizontal' ? window.innerHeight - 300 : window.innerWidth - effectiveSidebarWidth - 100)}
+                  primary="second"
+                  size={secondaryDocumentIndex ? splitWidth : 0}
+                  onChanged={onCommitSplitWidth}
+                  onPaneChanged={onCommitSplitWidth}
+                  style={{ zIndex: showDocument ? 1 : -1, display: showDocument ? "block" : "none" }}
+                  >
+                <PuzzlePageMultiplayerDocument
+                  document={doc}
+                  showDocument={showDocument}
+                  selfUser={selfUser}
+                  />
+                <PuzzlePageMultiplayerDocument
+                  document={secondDoc}
+                  showDocument={showDocument}
+                  selfUser={selfUser}
+                  />
+                  </SplitPaneMinus>
+                </PuzzleDocumentDiv>
               {debugPane}
             </PuzzleContent>
           </SplitPaneMinus>
