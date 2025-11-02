@@ -2768,7 +2768,7 @@ const PuzzlePageMetadata = ({
           return (
             <Dropdown.Item eventKey={idx}>
               {toTitleCase(doc.value.type)}
-              {(isDesktop && idx !== selectedDocumentIndex) &&(
+              {(isDesktop && idx !== selectedDocumentIndex && (selectedSecondaryDocument === null || selectedSecondaryDocument === idx)) &&(
                 <Button size="sm" onClick={(evt)=>{
                   evt.stopPropagation();
                   toggleSecondaryDocument(idx, nextState);
@@ -2794,7 +2794,7 @@ const PuzzlePageMetadata = ({
         {togglePuzzleInsetDD}
       </DropdownButton>
     )
-  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes, showDocument, splitDirection, selectedSecondaryDocument, isTall, pulseButton])
+  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes, showDocument, splitDirection, selectedSecondaryDocument, isTall, selectedSecondaryDocument, pulseButton])
 
   const minimizeMetadataButton = (<OverlayTrigger placement="bottom-end" overlay={<Tooltip>Hide puzzle information</Tooltip>}><Button onClick={toggleMetadataMinimize} size="sm">
     <FontAwesomeIcon icon={faAngleDoubleUp} />
