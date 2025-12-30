@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { allowedEmptyString, foreignKey } from "./customTypes";
 import type { ModelType } from "./Model";
 import SoftDeletedModel from "./SoftDeletedModel";
 import { allowedEmptyString, foreignKey, nonEmptyString } from "./customTypes";
@@ -18,11 +19,25 @@ const ChatAttachment = z.object({
   size: z.number().optional(),
 });
 
-const MentionBlock = z.object({
+import withCommon from "./withCommon";
+
+const UserMentionBlock = z.object({
   type: z.literal("mention"),
   userId: foreignKey,
 });
-export type ChatMessageMentionNodeType = z.infer<typeof MentionBlock>;
+export type ChatMessageMentionNodeType = z.infer<typeof UserMentionBlock>;
+
+const RoleMentionBlock = z.object({
+  type: z.literal("role-mention"),
+  roleId: z.literal("operator"), // expand this into a union if we add more roles
+});
+export type ChatMessageRoleMentionNodeType = z.infer<typeof RoleMentionBlock>;
+
+const ImageBlock = z.object({
+  type: z.literal("image"),
+  url: z.string().url(),
+});
+export type ChatMessageImageNodeType = z.infer<typeof ImageBlock>;
 
 const PuzzleBlock = z.object({
   type: z.literal("puzzle"),
@@ -35,7 +50,12 @@ const TextBlock = z.object({
 });
 export type ChatMessageTextNodeType = z.infer<typeof TextBlock>;
 
-const ContentNode = z.union([MentionBlock, TextBlock, PuzzleBlock]);
+const ContentNode = z.union([
+  UserMentionBlock,
+  RoleMentionBlock,
+  ImageBlock,
+  TextBlock,
+]);
 export type ChatMessageContentNodeType = z.infer<typeof ContentNode>;
 
 export const ChatMessageContent = z.object({
