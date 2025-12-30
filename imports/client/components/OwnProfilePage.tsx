@@ -328,19 +328,6 @@ const OwnProfilePage = ({
           disabled
         />
       </FormGroup>
-      {submitState === OwnProfilePageSubmitState.SUBMITTING ? (
-        <Alert variant="info">Saving...</Alert>
-      ) : null}
-      {submitState === OwnProfilePageSubmitState.SUCCESS ? (
-        <Alert variant="success" dismissible onClose={dismissAlert}>
-          Saved changes.
-        </Alert>
-      ) : null}
-      {submitState === OwnProfilePageSubmitState.ERROR ? (
-        <Alert variant="danger" dismissible onClose={dismissAlert}>
-          Saving failed: {submitError}
-        </Alert>
-      ) : null}
 
       <GoogleLinkBlock user={initialUser} />
 

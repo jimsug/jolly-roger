@@ -10,7 +10,13 @@ import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Token, Tokens } from "marked";
 import { marked } from "marked";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+} from "react";
 import { Link } from "react-router-dom";
 import styled from "styled-components";
 import { shortCalendarTimeFormat } from "../../lib/calendarTimeFormat";
@@ -32,16 +38,9 @@ import {
   TopRightButtonGroup,
 } from "./Lightbox";
 import { decodeHTML } from "entities";
-import type { Token, Tokens } from "marked";
-import { marked } from "marked";
-import { useCallback, useEffect, useRef, useState } from "react";
 import BSImage from "react-bootstrap/Image";
-import styled from "styled-components";
-import type { ChatMessageContentType } from "../../lib/models/ChatMessages";
 import nodeIsImage from "../../lib/nodeIsImage";
-import nodeIsMention from "../../lib/nodeIsMention";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
-import { MentionSpan } from "./FancyEditor";
 
 // This file implements standalone rendering for the MessageElement format
 // defined by FancyEditor, for use in the chat pane.

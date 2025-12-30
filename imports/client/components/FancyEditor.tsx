@@ -1,7 +1,6 @@
 import type { Meteor } from "meteor/meteor";
 import { faFileCircleExclamation } from "@fortawesome/free-solid-svg-icons/faFileCircleExclamation";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Token, Tokens } from "marked";
 import { marked } from "marked";
 import React, {
@@ -936,11 +935,6 @@ const FancyEditor = React.forwardRef(
       [users, completionSearchString],
     );
 
-    const matchingPuzzles: PuzzleType[] = useMemo(
-      () => matchPuzzles(puzzles, completionSearchString),
-      [puzzles, completionSearchString],
-    );
-
     const onKeyDown: React.KeyboardEventHandler<HTMLDivElement> = useCallback(
       (event) => {
         if (completionAnchorRange && matchingMentions.length > 0) {
@@ -1126,32 +1120,11 @@ const FancyEditor = React.forwardRef(
                     selected={i === completionCursorIndex}
                     onSelected={onMentionSelected}
                   />
-                ))}
-              </AutocompleteContainer>
-            </Portal>
-          )}
-        {completionAnchorRange &&
-          completionType === "puzzle" &&
-          matchingPuzzles.length > 0 && (
-            <Portal>
-              <AutocompleteContainer
-                ref={ref}
-                style={{
-                  top: "-9999px",
-                  left: "-9999px",
-                }}
-              >
-                {matchingPuzzles.map((puzzle, i) => (
-                  <PuzzleMatchCandidate
-                    key={puzzle._id}
-                    puzzle={puzzle}
-                    selected={i === completionCursorIndex}
-                    onSelected={onPuzzleSelected}
-                  />
-                ))}
-              </AutocompleteContainer>
-            </Portal>
-          )}
+                );
+              })}
+            </AutocompleteContainer>
+          </Portal>
+        )}
         <Editable
           ref={editableRef}
           className={className}

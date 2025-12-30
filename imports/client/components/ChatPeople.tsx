@@ -40,8 +40,7 @@ import {
   PeopleItemDiv,
   PeopleListDiv,
 } from "./styling/PeopleComponents";
-import { PuzzlePagePadding } from "./styling/constants";
-import { Theme } from "../theme";
+import type { Theme } from "../theme";
 
 interface ViewerSubscriber {
   user: string;

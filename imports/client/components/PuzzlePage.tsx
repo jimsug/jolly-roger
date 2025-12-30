@@ -62,7 +62,6 @@ import type { ChatAttachmentType, ChatMessageType } from "../../lib/models/ChatM
 import ChatMessages from "../../lib/models/ChatMessages";
 import Documents, { DOCUMENT_TYPES } from "../../lib/models/Documents";
 import type { DocumentType } from "../../lib/models/Documents";
-import Documents from "../../lib/models/Documents";
 import type { GuessType } from "../../lib/models/Guesses";
 import Guesses from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";
@@ -131,7 +130,7 @@ import {
 } from "./styling/constants";
 import FixedLayout from "./styling/FixedLayout";
 import { mediaBreakpointDown } from "./styling/responsive";
-import { ButtonGroup, Dropdown, DropdownButton, Offcanvas, OverlayTrigger, Tab, Tabs, ToggleButton, ToggleButtonGroup } from "react-bootstrap";
+import { ButtonGroup, Dropdown, DropdownButton, Offcanvas, Tab, Tabs, ToggleButton, ToggleButtonGroup } from "react-bootstrap";
 import removeChatMessage from "../../methods/removeChatMessage";
 import type { Theme } from "../theme";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
@@ -602,7 +601,7 @@ const isReaction = (message: ChatMessageType | FilteredChatMessageType): boolean
     ) {
       return true;
     }
-  } catch (e) {
+  } catch {
     return false;
   }
   return false;
@@ -1268,6 +1267,11 @@ const ChatHistory = React.forwardRef(
 
     const [shownEmojiPicker, setShownEmojiPicker] = useState<string | null>(null);
 
+    const roles = useMemo(
+      () => listAllRolesForHunt(selfUser, { _id: huntId }),
+      [selfUser, huntId],
+    );
+
     return (
       <ChatHistoryDiv ref={ref} onScroll={onScrollObserved}>
         {chatMessages.length === 0 ? (
@@ -1658,142 +1662,11 @@ const ChatInput = React.memo(
       if (hasNonTrivialContent && !hasLoadingImage) {
         // Prepare to send message to server.
 
-      for (const file of Array.from(files)) {
-        if (!file.type.startsWith("image/")) {
-          continue;
-        }
-        if (file.size > MAX_ATTACHMENT_SIZE) {
-          error = `File "${file.name}" is too large (max ${MAX_ATTACHMENT_SIZE / 1024 / 1024}MB).`;
-          break;
-        }
-        validFiles.push(file);
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          setImagePreviews((prev) => [...prev, reader.result as string]);
-        };
-        reader.readAsDataURL(file);
-      }
-
-      if (error) {
-        setUploadError(error);
-      } else {
-        setUploadingImages((prev) => [...prev, ...validFiles]);
-        setUploadError(null);
-      }
-    }, []);
-
-    const handleFileSelect = useCallback(
-      (event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.files) {
-          addFilesForUpload(event.target.files);
-          event.target.value = "";
-        }
-      },
-      [addFilesForUpload]
-    );
-
-    const handlePaste = useCallback(
-      (event: React.ClipboardEvent<HTMLDivElement>) => {
-        if (!s3Configured) return;
-
-        const items = (event.clipboardData || (window as any).clipboardData)?.items;
-        if (!items) return;
-
-        const filesToProcess: File[] = [];
-        for (let index in items) {
-          const item = items[index];
-          if (item.kind === 'file' && item.type.startsWith('image/')) {
-            const file = item.getAsFile();
-            if (file) {
-              filesToProcess.push(file);
-            }
-          }
-        }
-
-        if (filesToProcess.length > 0) {
-          event.preventDefault();
-          addFilesForUpload(filesToProcess);
-        }
-      },
-      [s3Configured, addFilesForUpload],
-    );
-
-    const handleRemoveImage = useCallback((indexToRemove: number) => {
-      setUploadingImages((prev) => prev.filter((_, index) => index !== indexToRemove));
-      setImagePreviews((prev) => prev.filter((_, index) => index !== indexToRemove));
-      setUploadError(null); // Clear error when user modifies selection
-    }, []);
-
-    const triggerFileInput = useCallback(() => {
-      fileInputRef.current?.click();
-    }, []);
-
-    const sendContentMessage = useCallback(async () => {
-      if (!hasNonTrivialContent || isUploading) {
-        return;
-      }
-
-      setIsUploading(true);
-      setUploadError(null);
-      let attachments: ChatAttachmentType[] = [];
-
-      try {
-        // 1. Upload images if any
-        if (uploadingImages.length > 0) {
-          if (!s3Configured) {
-             throw new Error("Image upload is not configured on the server.");
-          }
-
-          const uploadPromises = uploadingImages.map(async (file) => {
-            try {
-              const uploadParams = await createChatAttachmentUpload.call({
-                huntId: huntId,
-                puzzleId: puzzleId,
-                filename: file.name,
-                mimeType: file.type,
-              });
-
-              if (!uploadParams) {
-                throw new Error("Failed to get upload parameters from server.");
-              }
-
-              const { publicUrl, uploadUrl, fields } = uploadParams;
-              const formData = new FormData();
-              for (const [key, value] of Object.entries(fields)) {
-                formData.append(key, value as string);
-              }
-              formData.append("file", file);
-
-              const response = await fetch(uploadUrl, {
-                method: "POST",
-                body: formData,
-              });
-
-              if (!response.ok) {
-                let errorBody = `Status: ${response.status}`;
-                try {
-                  const text = await response.text();
-                  errorBody += `, Body: ${text.substring(0, 500)}`;
-                } catch (e) { /* ignore */ }
-                throw new Error(`Failed to upload ${file.name}. ${errorBody}`);
-              }
-
-              return {
-                url: publicUrl,
-                filename: file.name,
-                mimeType: file.type,
-                size: file.size,
-              };
-            } catch (err: any) { // Catch specific error type if possible
-              throw new Error(`Failed to upload ${file.name}: ${err.message}`);
-            }
-          });
-
-          attachments = await Promise.all(uploadPromises);
-        }
-
-        // 2. Prepare text content
+        // Take only the first Descendant; we normalize the input to a single
+        // block with type "message".
         const message = content[0]! as MessageElement;
+        // Strip out children from mention elements.  We only need the type and
+        // userId for display purposes.
         const { type, children } = message;
         const cleanedMessage = {
           type,
@@ -1832,25 +1705,14 @@ const ChatInput = React.memo(
             }),
         };
 
-        const finalChildren = cleanedMessage.children.length > 0 || attachments.length === 0
-          ? cleanedMessage.children
-          : [{ text: "" }];
-
-        // 3. Send the message
-        await sendChatMessage.call({
+        // Send chat message.
+        sendChatMessage.call({
           puzzleId,
-          content: JSON.stringify({ ...cleanedMessage, children: finalChildren }),
+          content: JSON.stringify(cleanedMessage),
           parentId: replyingTo,
-          // Ensure attachments is an array or undefined, not null
-          attachments: attachments.length > 0 ? attachments : [],
         });
-
-        // 4. Cleanup on success
         setContent(initialValue);
         fancyEditorRef.current?.clearInput();
-        setUploadingImages([]);
-        setImagePreviews([]);
-        setReplyingTo(null);
         if (onMessageSent) {
           onMessageSent();
         }
@@ -1863,15 +1725,24 @@ const ChatInput = React.memo(
       content,
       puzzleId,
       onMessageSent,
+      replyingTo,
     ]);
+
+    const handleRemoveImage = useCallback((indexToRemove: number) => {
+      setUploadingImages((prev) => prev.filter((_, index) => index !== indexToRemove));
+      setImagePreviews((prev) => prev.filter((_, index) => index !== indexToRemove));
+      setUploadError(null); // Clear error when user modifies selection
+    }, []);
+
+    const triggerFileInput = useCallback(() => {
+      fileInputRef.current?.click();
+    }, []);
 
     useBlockUpdate(
       hasNonTrivialContent
         ? "You're in the middle of typing a message."
         : undefined,
     );
-
-    const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleButtonClick = useCallback(() => {
       fileInputRef.current?.click();
@@ -1953,8 +1824,37 @@ const ChatInput = React.memo(
       </Modal>
     );
 
+    const parentMessage = useTracker(() => {
+      if (replyingTo) {
+        return ChatMessages.findOne(replyingTo);
+      }
+      return undefined;
+    }, [replyingTo]);
+
+    const parentSenderName = useTracker(() => {
+      if (parentMessage) {
+        return parentMessage.sender
+          ? (displayNames.get(parentMessage.sender) ?? "???")
+          : "jolly-roger";
+      }
+      return undefined;
+    }, [displayNames, parentMessage]);
+
+
     return (
       <ChatInputRow>
+        {replyingTo && parentSenderName && (
+          <ReplyingTo onClick={() => scrollToMessage(replyingTo)}>
+            Replying to {parentSenderName}
+            <ReplyingToCancel
+              icon={faTimes}
+              onClick={(e) => {
+                e.stopPropagation();
+                setReplyingTo(null);
+              }}
+            />
+          </ReplyingTo>
+        )}
         {uploadImageError && createPortal(errorModal, document.body)}
         <InputGroup>
           <StyledFancyEditor
@@ -1968,7 +1868,6 @@ const ChatInput = React.memo(
             onSubmit={sendContentMessage}
             uploadImageFile={uploadImageFile}
             disabled={disabled}
-            onPaste={handlePaste}
           />
           <Button
             variant="secondary"
@@ -1993,7 +1892,11 @@ const ChatInput = React.memo(
             </>
           )}
         </InputGroup>
-        {uploadError && <Alert variant="danger" className="mt-2 p-1">{uploadError}</Alert>}
+        {uploadError && (
+          <Alert variant="danger" className="mt-2 p-1">
+            {uploadError}
+          </Alert>
+        )}
       </ChatInputRow>
     );
   },
@@ -2218,10 +2121,11 @@ const ChatSection = React.forwardRef(
 
     const onMessageSent = useCallback(() => {
       trace("ChatSection onMessageSent", { hasRef: !!historyRef.current });
+      setReplyingTo(null);
       if (historyRef.current) {
         historyRef.current.snapToBottom();
       }
-    }, []);
+    }, [setReplyingTo]);
 
     const scrollToMessage = useCallback((messageId: string, callback?: () => void) => {
       if (historyRef.current) {
@@ -2333,6 +2237,14 @@ const ChatSection = React.forwardRef(
 );
 const ChatSectionMemo = React.memo(ChatSection);
 const AttachmentsMemo = React.memo(AttachmentsSection);
+
+const toTitleCase = (str: string): string => {
+  return str
+    .toLowerCase()
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+};
 
 const PuzzlePageMetadata = ({
   isMinimized,
@@ -2533,28 +2445,25 @@ const PuzzlePageMetadata = ({
     return hunt?.allowPuzzleEmbed ?? false;
   }, [hunt])
 
-  const handleShowButtonClick = () => {
+  const handleShowButtonClick = useCallback(() => {
     if (!hasIframeBeenLoaded) {
       setHasIframeBeenLoaded(true);
     }
     setShowDocument(!showDocument);
-  };
+  }, [
+    hasIframeBeenLoaded,
+    setHasIframeBeenLoaded,
+    setShowDocument,
+    showDocument,
+  ]);
 
-  const handleShowButtonHover = () => {
+  const handleShowButtonHover = useCallback(() => {
     if (!hasIframeBeenLoaded) {
       setHasIframeBeenLoaded(true);
     }
-  }
+  }, [hasIframeBeenLoaded, setHasIframeBeenLoaded]);
 
-  const togglePuzzleInsetDD = (puzzle.url && isDesktop && canEmbedPuzzle) || !showDocument ? (
-    <Dropdown.Item
-    onClick={handleShowButtonClick}
-    onMouseEnter={handleShowButtonHover}
-    title={showDocument ? "Show puzzle page" : "Hide puzzle page"}
-    >
-      {showDocument ? "Show puzzle page" : "Hide puzzle page"}
-    </Dropdown.Item>
-  ) : null;
+
 
   let guessButton = null;
   if (puzzle.expectedAnswerCount > 0) {
@@ -2617,7 +2526,7 @@ const PuzzlePageMetadata = ({
   // Check layout on mount and when tags change
   useLayoutEffect(() => {
     checkTagLayout();
-  }, [tags, checkTagLayout]); // Depend on tags
+  }, [checkTagLayout]); // Depend on tags
 
   // Check layout on window resize
   useEffect(() => {
@@ -2645,13 +2554,7 @@ const PuzzlePageMetadata = ({
     />
   );
 
-  const toTitleCase = (str: string): string => {
-    return str
-      .toLowerCase()
-      .split(' ')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
-  };
+
 
   const unusedDocumentTypes = useTracker(()=>{
     return DOCUMENT_TYPES.filter((dt)=>{
@@ -2681,7 +2584,7 @@ const PuzzlePageMetadata = ({
 
   const toggleSecondaryDocument = useCallback((e:number, newstate: "horizontal" | "vertical" | "hide")=>{
     if(!e) return;
-    switch(newstate){
+    switch (newstate) {
       case "horizontal":
         setSplitDirection("horizontal");
         setSecondaryDocument(e);
@@ -2694,73 +2597,111 @@ const PuzzlePageMetadata = ({
         setSplitDirection("horizontal");
         setSecondaryDocument(null);
         break;
+      default:
+        break;
     }
   },[selectedSecondaryDocument, selectedDocumentIndex, setSecondaryDocument, unusedDocumentTypes, setSplitDirection])
 
-
-  const resourceSelectorButton = useTracker(()=>{
-    return allDocs && (
-      <DropdownButton
-        as={ButtonGroup}
-        key="puzzle-resource-selector"
-        id="puzzle-resource-selector"
-        size="sm"
-        variant={allDocs.length > 1 ? "primary" : "secondary"}
-        onSelect={switchOrCreateDocument}
-        title={toTitleCase(allDocs[selectedDocumentIndex]?.value.type ?? "")}
-        className={pulseButton ? "resource-selector-pulse" : ""}
-      >
-        <Dropdown.Header>
-          Documents
-        </Dropdown.Header>
-        {allDocs?.map((doc, idx)=>{
-          let nextState: "horizontal" | "vertical" | "hide" = "horizontal";
-          let nextIcon = faTableColumns;
-          let nextTooltip = "Split current view";
-          if (selectedSecondaryDocument === null) {
-            nextState = isTall ? "horizontal" : "vertical";
-            nextIcon = isTall ? faList : faTableColumns;
-          } else if (isTall && splitDirection === "horizontal") {
-            nextState = "vertical";
-            nextIcon = faTableColumns;
-          } else if (!isTall && splitDirection === "vertical") {
-            nextState = "horizontal";
-            nextIcon = faList;
-          } else {
-            nextState = "hide";
-            nextIcon = faClose;
-            nextTooltip = "Hide split view";
-          }
-          return (
-            <Dropdown.Item eventKey={idx}>
-              {toTitleCase(doc.value.type)}
-              {(isDesktop && idx !== selectedDocumentIndex && (selectedSecondaryDocument === null || selectedSecondaryDocument === idx)) &&(
-                <Button size="sm" onClick={(evt)=>{
-                  evt.stopPropagation();
-                  toggleSecondaryDocument(idx, nextState);
-                }}>
-                  <FontAwesomeIcon icon={nextIcon} title={nextTooltip}/>
-                </Button>
-              )}
-            </Dropdown.Item>
-          )
-        })}
-        {unusedDocumentTypes.length > 0 && <>
-            <Dropdown.Header>
-              Add new
-            </Dropdown.Header>
-          {unusedDocumentTypes.map((doc,idx)=>{
+  const idPrefix = useId();
+  const resourceSelectorButton = useTracker(() => {
+    return (
+      allDocs && (
+        <DropdownButton
+          as={ButtonGroup}
+          key="puzzle-resource-selector"
+          id={`puzzle-resource-selector-${puzzle._id}`}
+          size="sm"
+          variant={allDocs.length > 1 ? "primary" : "secondary"}
+          onSelect={switchOrCreateDocument}
+          title={toTitleCase(allDocs[selectedDocumentIndex]?.value.type ?? "")}
+          className={pulseButton ? "resource-selector-pulse" : ""}
+        >
+          <Dropdown.Header>Documents</Dropdown.Header>
+          {allDocs?.map((doc, idx) => {
+            let nextState: "horizontal" | "vertical" | "hide" = "horizontal";
+            let nextIcon = faTableColumns;
+            let nextTooltip = "Split current view";
+            if (selectedSecondaryDocument === null) {
+              nextState = isTall ? "horizontal" : "vertical";
+              nextIcon = isTall ? faList : faTableColumns;
+            } else if (isTall && splitDirection === "horizontal") {
+              nextState = "vertical";
+              nextIcon = faTableColumns;
+            } else if (!isTall && splitDirection === "vertical") {
+              nextState = "horizontal";
+              nextIcon = faList;
+            } else {
+              nextState = "hide";
+              nextIcon = faClose;
+              nextTooltip = "Hide split view";
+            }
             return (
-              <Dropdown.Item eventKey={doc}>
-                {toTitleCase(doc)}
+              <Dropdown.Item key={`${idPrefix}-dropdown`} eventKey={idx}>
+                {toTitleCase(doc.value.type)}
+                {isDesktop &&
+                  idx !== selectedDocumentIndex &&
+                  (selectedSecondaryDocument === null ||
+                    selectedSecondaryDocument === idx) && (
+                    <Button
+                      size="sm"
+                      onClick={(evt) => {
+                        evt.stopPropagation();
+                        toggleSecondaryDocument(idx, nextState);
+                      }}
+                    >
+                      <FontAwesomeIcon icon={nextIcon} title={nextTooltip} />
+                    </Button>
+                  )}
               </Dropdown.Item>
-            )
-          })}</>}
+            );
+          })}
+          {unusedDocumentTypes.length > 0 && (
+            <>
+              <Dropdown.Header>Add new</Dropdown.Header>
+              {unusedDocumentTypes.map((doc, idx) => {
+                return (
+                  <Dropdown.Item
+                    key={`${idPrefix}-dropdown-add`}
+                    eventKey={doc}
+                  >
+                    {toTitleCase(doc)}
+                  </Dropdown.Item>
+                );
+              })}
+            </>
+          )}
           {canEmbedPuzzle && <Dropdown.Divider />}
-        {togglePuzzleInsetDD}
-      </DropdownButton>
-    )
-  }, [allDocs, selectedDocumentIndex, unusedDocumentTypes, showDocument, splitDirection, selectedSecondaryDocument, isTall, selectedSecondaryDocument, pulseButton])
+          {((puzzle.url && isDesktop && canEmbedPuzzle) || !showDocument) && (
+            <Dropdown.Item
+              onClick={handleShowButtonClick}
+              onMouseEnter={handleShowButtonHover}
+              title={showDocument ? "Show puzzle page" : "Hide puzzle page"}
+            >
+              {showDocument ? "Show puzzle page" : "Hide puzzle page"}
+            </Dropdown.Item>
+          )}
+        </DropdownButton>
+      )
+    );
+  }, [
+    allDocs,
+    selectedDocumentIndex,
+    unusedDocumentTypes,
+    splitDirection,
+    selectedSecondaryDocument,
+    isTall,
+    pulseButton,
+    canEmbedPuzzle,
+    isDesktop,
+    puzzle._id,
+    puzzle.url,
+    switchOrCreateDocument,
+    toggleSecondaryDocument,
+    idPrefix,
+    showDocument,
+    handleShowButtonClick,
+    handleShowButtonHover,
+  ]);
 
   const minimizeMetadataButton = (<OverlayTrigger placement="bottom-end" overlay={<Tooltip>Hide puzzle information</Tooltip>}><Button onClick={toggleMetadataMinimize} size="sm">
     <FontAwesomeIcon icon={faAngleDoubleUp} />
@@ -3085,11 +3026,13 @@ const PuzzleGuessModal = React.forwardRef(
       haveSetConfidence,
     ]);
 
-    const copyTooltip = (
-      <Tooltip id="jr-puzzle-guess-copy-tooltip">Copy to clipboard</Tooltip>
-    );
-
     const idPrefix = useId();
+
+    const copyTooltip = (
+      <Tooltip id={`${idPrefix}-jr-puzzle-guess-copy-tooltip`}>
+        Copy to clipboard
+      </Tooltip>
+    );
 
     const directionTooltip = (
       <Tooltip id={`${idPrefix}-direction-tooltip`}>
