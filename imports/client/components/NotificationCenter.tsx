@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { ServiceConfiguration } from "meteor/service-configuration";
+import { faBellSlash } from "@fortawesome/free-solid-svg-icons/faBellSlash";
 import { faCog } from "@fortawesome/free-solid-svg-icons/faCog";
 import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
@@ -9,7 +10,9 @@ import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
+import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
+import ButtonGroup from "react-bootstrap/ButtonGroup";
 import Dropdown from "react-bootstrap/Dropdown";
 import Form from "react-bootstrap/Form";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
@@ -49,6 +52,7 @@ import puzzleNotificationsForSelf from "../../lib/publications/puzzleNotificatio
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import bookmarkPuzzle from "../../methods/bookmarkPuzzle";
 import configureEnsureGoogleScript from "../../methods/configureEnsureGoogleScript";
+import dismissAllDingsForPuzzle from "../../methods/dismissAllDingsForPuzzle";
 import dismissBookmarkNotification from "../../methods/dismissBookmarkNotification";
 import dismissChatNotification from "../../methods/dismissChatNotification";
 import dismissPendingAnnouncement from "../../methods/dismissPendingAnnouncement";
@@ -134,6 +138,11 @@ const GuessMessage = React.memo(
     onDismiss: (guessId: string) => void;
   }) => {
     const [nextState, setNextState] = useState<GuessType["state"]>();
+    const [confirmNonTrivialEdit, setConfirmNonTrivialEdit] =
+      useState<boolean>(false);
+    const [nonTrivialEdit, setNonTrivialEdit] = useState<string | undefined>(
+      undefined,
+    );
     const [additionalNotes, setAdditionalNotes] = useState("");
     const onAdditionalNotesChange: React.ChangeEventHandler<HTMLTextAreaElement> =
       useCallback((e) => {
@@ -141,32 +150,82 @@ const GuessMessage = React.memo(
       }, []);
 
     const markCorrect = useCallback(() => {
+      if (nextState === "correct") {
+        setNextState(undefined);
+        return;
+      }
       setGuessState.call({ guessId: guess._id, state: "correct" });
-    }, [guess._id]);
+    }, [guess._id, nextState]);
 
     const markIncorrect = useCallback(() => {
       setGuessState.call({ guessId: guess._id, state: "incorrect" });
     }, [guess._id]);
 
+    const resetNonTrivialEdit = useCallback(() => {
+      setConfirmNonTrivialEdit(false);
+      setNonTrivialEdit(undefined);
+    }, []);
+
     const toggleStateIntermediate = useCallback(() => {
+      resetNonTrivialEdit();
       setNextState((state) =>
         state === "intermediate" ? undefined : "intermediate",
       );
-    }, []);
+    }, [resetNonTrivialEdit]);
 
     const toggleStateRejected = useCallback(() => {
+      resetNonTrivialEdit();
       setNextState((state) => (state === "rejected" ? undefined : "rejected"));
-    }, []);
+    }, [resetNonTrivialEdit]);
+
+    const toggleStateCorrectWithEdit = useCallback(() => {
+      resetNonTrivialEdit();
+      setNextState((state) => (state === "correct" ? undefined : "correct"));
+    }, [resetNonTrivialEdit]);
 
     const submitStageTwo = useCallback(() => {
       if (!nextState) return;
+
+      if (nextState === "correct") {
+        if (additionalNotes === "" || additionalNotes === guess.guess) {
+          setGuessState.call({
+            guessId: guess._id,
+            state: "correct",
+          });
+          return;
+        } else {
+          if (
+            (!confirmNonTrivialEdit || nonTrivialEdit !== additionalNotes) &&
+            additionalNotes.replace(/\s/g, "").toLowerCase() !==
+              guess.guess.replace(/\s/g, "").toLowerCase()
+          ) {
+            setConfirmNonTrivialEdit(true);
+            setNonTrivialEdit(additionalNotes);
+            setAdditionalNotes("");
+            return;
+          }
+          setGuessState.call({
+            guessId: guess._id,
+            state: "correct",
+            correctAnswer: additionalNotes,
+          });
+          return;
+        }
+      }
 
       setGuessState.call({
         guessId: guess._id,
         state: nextState,
         additionalNotes: additionalNotes === "" ? undefined : additionalNotes,
       });
-    }, [guess._id, nextState, additionalNotes]);
+    }, [
+      guess._id,
+      nextState,
+      additionalNotes,
+      guess.guess,
+      confirmNonTrivialEdit,
+      nonTrivialEdit,
+    ]);
     const onAdditionalNotesKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> =
       useCallback(
         (e) => {
@@ -194,11 +253,13 @@ const GuessMessage = React.memo(
     const disableForms = guess.state !== "pending";
 
     const correctButtonVariant =
-      guess.state === "correct" ? "success" : "outline-secondary";
+      guess.state === "correct" || nextState === "correct"
+        ? "success"
+        : "outline-success";
     const intermediateButtonVariant =
-      guess.state === "intermediate" ? "warning" : "outline-secondary";
+      guess.state === "intermediate" ? "primary" : "outline-primary";
     const incorrectButtonVariant =
-      guess.state === "incorrect" ? "danger" : "outline-secondary";
+      guess.state === "incorrect" ? "danger" : "outline-danger";
     const rejectButtonVariant =
       guess.state === "rejected" ? "secondary" : "outline-secondary";
 
@@ -207,10 +268,45 @@ const GuessMessage = React.memo(
         "Paste or write any additional instructions to pass on to the solver:",
       rejected:
         "Include any additional information on why this guess was rejected:",
+      correct: (
+        <>
+          <p>
+            Enter the corrected answer to this puzzle as provided by game
+            control (or just submit to mark it correct).
+          </p>
+          {confirmNonTrivialEdit && nextState === "correct" && (
+            <Alert variant="warning" transition={false}>
+              <strong>⚠️ Are you sure?</strong>
+              You are changing more than just the spacing of this answer. Please
+              check it and submit it again to confirm.
+              <br />
+            </Alert>
+          )}
+          <Form.Group>
+            <Form.Label>Original answer:</Form.Label>
+            <ReactTextareaAutosize
+              id={`${idPrefix}-additional-notes`}
+              minRows={1}
+              className="form-control"
+              disabled
+            >
+              {guess.guess}
+            </ReactTextareaAutosize>
+          </Form.Group>
+          <br />
+          <Form.Label>Your correction:</Form.Label>
+        </>
+      ),
     };
 
     let stageTwoSection;
+    const submittedStageTwoLabels = {
+      intermediate: "Additional instructions passed on to the solver:",
+      rejected: "Additional information on why this guess was rejected:",
+      correct: "Corrected answer submitted:",
+    };
     switch (nextState) {
+      case "correct":
       case "intermediate":
       case "rejected":
         stageTwoSection = (
@@ -235,7 +331,7 @@ const GuessMessage = React.memo(
             <StyledNotificationActionBar>
               <StyledNotificationActionItem>
                 <Button
-                  variant="outline-secondary"
+                  variant="secondary"
                   size="sm"
                   disabled={disableForms}
                   onClick={submitStageTwo}
@@ -394,15 +490,27 @@ const GuessMessage = React.memo(
           </StyledNotificationActionBar>
           <StyledNotificationActionBar>
             <StyledNotificationActionItem $grow>
-              <Button
-                variant={correctButtonVariant}
-                size="sm"
-                className="flex-grow-1"
-                disabled={disableForms}
-                onClick={markCorrect}
-              >
-                Correct
-              </Button>
+              <Dropdown as={ButtonGroup}>
+                <Button
+                  variant={correctButtonVariant}
+                  className="flex-grow-1"
+                  disabled={disableForms}
+                  onClick={markCorrect}
+                  size="sm"
+                >
+                  Correct
+                </Button>
+                <Dropdown.Toggle split variant={correctButtonVariant} />
+                <Dropdown.Menu align="end">
+                  <Dropdown.Item
+                    onClick={toggleStateCorrectWithEdit}
+                    variant="success"
+                    size="sm"
+                  >
+                    Correct with edit...
+                  </Dropdown.Item>
+                </Dropdown.Menu>
+              </Dropdown>
             </StyledNotificationActionItem>
             <StyledNotificationActionItem $grow>
               <Button
@@ -442,7 +550,7 @@ const GuessMessage = React.memo(
           </StyledNotificationActionBar>
           {guess.state !== "pending" && guess.additionalNotes && (
             <>
-              <div>Additional notes:</div>
+              <div>{submittedStageTwoLabels[guess.state]}</div>
               <Markdown text={guess.additionalNotes} />
             </>
           )}
@@ -657,8 +765,7 @@ const ChatNotificationMessage = ({
   const id = cn._id;
 
   const [locallyMutedWords, setLocallyMutedWords] = useState<string[]>([]);
-  const [suppressedAllForThis, setSuppressedAllForThis] =
-    useState<boolean>(false);
+  const [suppressedAllForThis] = useState<boolean>(false);
 
   const suppressedFromProfile = useTracker(() => {
     const user = Meteor.user();
@@ -685,22 +792,25 @@ const ChatNotificationMessage = ({
     suppressedAllForThis,
   ]);
 
-  const handleSuppressAllDingwords = useCallback(() => {
-    suppressDingwordsForPuzzle.call({
+  const handleDismissAll = useCallback(() => {
+    const dismissUntil = new Date();
+    dismissAllDingsForPuzzle.call({
       puzzle: cn.puzzle,
       hunt: cn.hunt,
+      dismissUntil,
     });
-    setSuppressedAllForThis(true);
   }, [cn.hunt, cn.puzzle]);
 
-  const handleSuppressSpecificDingword = useCallback(
-    (word: string) => {
+  const handleSuppressDingwords = useCallback(
+    (dingword: string) => {
+      const dismissUntil = new Date();
       suppressDingwordsForPuzzle.call({
         puzzle: cn.puzzle,
         hunt: cn.hunt,
-        dingword: word,
+        dingword,
+        dismissUntil,
       });
-      setLocallyMutedWords((prev) => [...prev, word]);
+      setLocallyMutedWords((prev) => [...prev, dingword]);
     },
     [cn.hunt, cn.puzzle],
   );
@@ -737,15 +847,15 @@ const ChatNotificationMessage = ({
     return displayedDingwords.map((word) => (
       <Dropdown.Item
         key={`${cn._id}-mute-${word}`}
-        onClick={() => handleSuppressSpecificDingword(word)}
+        onClick={() => handleSuppressDingwords(word)}
       >
         Mute &quot;{word}&quot; for this puzzle
       </Dropdown.Item>
     ));
-  }, [displayedDingwords, cn._id, handleSuppressSpecificDingword]);
+  }, [displayedDingwords, cn._id, handleSuppressDingwords]);
 
   return (
-    <Toast className="text-bg-secondary" onClose={dismiss}>
+    <Toast onClose={dismiss}>
       <Toast.Header>
         <FontAwesomeIcon icon={faComment} style={{ marginRight: ".4em" }} />
         <strong className="me-auto">
@@ -760,29 +870,29 @@ const ChatNotificationMessage = ({
         <StyledNotificationTimestamp>
           {calendarTimeFormat(cn.createdAt)}
         </StyledNotificationTimestamp>
-        {cn.dingwords && (
-          <Dropdown className="ms-auto" onToggle={toggleSettings}>
-            <Dropdown.Toggle
-              variant={theme.basicMode}
-              size="sm"
-              as={Button}
-              id={`chat-settings-${cn._id}`}
-            >
-              <FontAwesomeIcon icon={faCog} />
-            </Dropdown.Toggle>
-            <Dropdown.Menu align="end">
-              {!suppressedAllForThis ? individualDingwordsMute : null}
-              {!suppressAll && (
-                <Dropdown.Item onClick={handleSuppressAllDingwords}>
-                  Mute <strong>all</strong> dingwords for this puzzle
-                </Dropdown.Item>
-              )}
-              <Dropdown.Item as={Link} to="/users/me">
-                Edit dingwords
-              </Dropdown.Item>
-            </Dropdown.Menu>
-          </Dropdown>
-        )}
+        <Dropdown className="ms-auto" onToggle={toggleSettings}>
+          <Dropdown.Toggle
+            variant={theme.basicMode}
+            size="sm"
+            as={Button}
+            id={`chat-settings-${cn._id}`}
+          >
+            <FontAwesomeIcon icon={faCog} />
+          </Dropdown.Toggle>
+          <Dropdown.Menu align="end">
+            <Dropdown.Item onClick={handleDismissAll}>
+              Dismiss all for this puzzle
+            </Dropdown.Item>
+            <Dropdown.Item as={Link} to="/users/me">
+              Edit dingwords
+            </Dropdown.Item>
+            <Dropdown.Divider />
+            <Dropdown.Item onClick={() => handleSuppressDingwords("__ALL__")}>
+              Mute <strong>all</strong> dingwords for this puzzle
+            </Dropdown.Item>
+            {!suppressedAllForThis ? individualDingwordsMute : null}
+          </Dropdown.Menu>
+        </Dropdown>
       </Toast.Header>
       <Toast.Body>
         <div>

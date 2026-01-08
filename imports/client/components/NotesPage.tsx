@@ -31,6 +31,10 @@ import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import RelativeTime from "./RelativeTime";
 import { mediaBreakpointDown } from "./styling/responsive";
 
+const NotesTable = styled(Table)`
+  color: ${({ theme }) => theme.colors.text};
+`;
+
 const StyledToggleButtonGroup = styled(ToggleButtonGroup)`
   @media (width < 360px) {
     width: 100%;
@@ -96,7 +100,7 @@ const TagPuzzle = React.memo(
           </Accordion.Header>
           <Accordion.Body>
             {note ? (
-              <Table striped variant="secondary" responsive hover bordered>
+              <NotesTable striped variant="secondary" responsive hover bordered>
                 <tr>
                   <td>Flavor text</td>
                   <td>{note.flavor ? note.flavor : null}</td>
@@ -127,7 +131,7 @@ const TagPuzzle = React.memo(
                   <td>Tags</td>
                   <td>{puzzleTags ? puzzleTags.join(", ") : null}</td>
                 </tr>
-              </Table>
+              </NotesTable>
             ) : (
               "No notes"
             )}
@@ -164,7 +168,7 @@ const NotesPage = () => {
   const [showSolved, setShowSolved] = useState<boolean>(false);
   const [searchString, setSearchString] = useState<string>("");
 
-  useBreadcrumb({ title: "Notes", path: `/hunts/${huntId}/tags` });
+  useBreadcrumb({ title: "Notes", path: `/hunts/${huntId}/notes` });
 
   const allPuzzles = useTracker(
     () =>

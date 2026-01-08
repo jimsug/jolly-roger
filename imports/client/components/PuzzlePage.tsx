@@ -80,6 +80,7 @@ import nodeIsText from "../../lib/nodeIsText";
 import {
   listAllRolesForHunt,
   userMayWritePuzzlesForHunt,
+  userMayUpdateGuessesForHunt,
 } from "../../lib/permission_stubs";
 import chatMessagesForPuzzle from "../../lib/publications/chatMessagesForPuzzle";
 import puzzleForPuzzlePage from "../../lib/publications/puzzleForPuzzlePage";
@@ -99,7 +100,10 @@ import undestroyPuzzle from "../../methods/undestroyPuzzle";
 import updatePuzzle from "../../methods/updatePuzzle";
 import EnabledChatImage from "../EnabledChatImage";
 import { useBreadcrumb } from "../hooks/breadcrumb";
-import { usePersistedSidebarWidth } from "../hooks/persisted-state";
+import {
+  useOperatorActionsHiddenForHunt,
+  usePersistedSidebarWidth,
+} from "../hooks/persisted-state";
 import useBlockUpdate from "../hooks/useBlockUpdate";
 import type { Action, CallState } from "../hooks/useCallState";
 import useCallState from "../hooks/useCallState";
@@ -2726,6 +2730,12 @@ const PuzzleGuessModal = React.forwardRef(
     }[solvedness];
 
     const huntId = useParams<"huntId">().huntId!;
+    const hunt = useTracker(() => Hunts.findOne(huntId), [huntId]);
+    const canUpdate = useTracker(
+      () => userMayUpdateGuessesForHunt(Meteor.user(), hunt),
+      [hunt],
+    );
+    const [operatorActionsHidden] = useOperatorActionsHiddenForHunt(huntId);
 
     return (
       <ModalForm
@@ -2742,7 +2752,6 @@ const PuzzleGuessModal = React.forwardRef(
           <Col xs={9}>
             <AnswerFormControl
               type="text"
-              id={`${idPrefix}-guess`}
               autoFocus
               autoComplete="off"
               onChange={onGuessInputChange}
@@ -2768,7 +2777,7 @@ const PuzzleGuessModal = React.forwardRef(
                 defaultValue={10}
               >
                 <ToggleButton
-                  variant="outline-primary"
+                  variant="outline-secondary"
                   value={-10}
                   id={`${idPrefix}-guess-direction-back`}
                   checked={directionInput === -10}
@@ -2776,7 +2785,7 @@ const PuzzleGuessModal = React.forwardRef(
                   Backsolve
                 </ToggleButton>
                 <ToggleButton
-                  variant="outline-dark"
+                  variant="outline-secondary"
                   value={-5}
                   id={`${idPrefix}-guess-direction-mostly-back`}
                   checked={directionInput === -5}
@@ -2792,7 +2801,7 @@ const PuzzleGuessModal = React.forwardRef(
                   Mixed
                 </ToggleButton>
                 <ToggleButton
-                  variant="outline-dark"
+                  variant="outline-secondary"
                   value={5}
                   id={`${idPrefix}-guess-direction-mostly-forward`}
                   checked={directionInput === 5}
@@ -2949,13 +2958,23 @@ const PuzzleGuessModal = React.forwardRef(
                   );
                 })}
             </GuessTable>,
-            <br key={`${idPrefix}-br`} />,
-            <Alert variant="info" key={`${idPrefix}-deputy-warning`}>
-              To mark answers correct or incorrect, you must have the{" "}
-              <Link to={`/hunts/${huntId}`}>Deputy View</Link> toggled on. As
-              Deputy, alerts will popup for all pending submissions. To view
-              alerts you've dismissed, just reload the site.
-            </Alert>,
+            canUpdate ? (
+              <>
+                <br key={`${idPrefix}-br`} />
+                <Alert variant="info" key={`${idPrefix}-deputy-warning`}>
+                  To mark answers correct or incorrect, use the popup alerts.
+                  {operatorActionsHidden ? (
+                    <>
+                      {" "}
+                      To see alerts, turn on Deputy View: open the profile menu
+                      in the top-right, and choose "Switch to Deputy".
+                    </>
+                  ) : (
+                    <> If you've dismissed them, simply reload the page.</>
+                  )}
+                </Alert>
+              </>
+            ) : null,
           ]
         )}
         {confirmingSubmit ? (

@@ -85,6 +85,37 @@ export function normalizedMessageDingsUserByDingwordOnce(
   return newlyMatchedWords;
 }
 
+export function dingedByMentions(
+  chatMessage: PartialChatMessageType,
+  user: Meteor.User,
+): boolean {
+  return (chatMessage.content?.children ?? []).some(
+    (child) => {
+      if (nodeIsMention(child)) {
+        return child.userId === user._id;
+      } else {
+        return false;
+      }
+    },
+  );
+}
+
+export function dingedByRoleMentions(
+  chatMessage: PartialChatMessageType,
+  user: Meteor.User,
+): boolean {
+  const roles = listAllRolesForHunt(user, { _id: chatMessage.hunt });
+  return (chatMessage.content?.children ?? []).some(
+    (child) => {
+      if (nodeIsRoleMention(child)) {
+        return roles.includes(child.roleId);
+      } else {
+        return false;
+      }
+    },
+  );
+}
+
 export function messageDingsUser(
   chatMessage: PartialChatMessageType,
   user: Meteor.User,
@@ -94,28 +125,9 @@ export function messageDingsUser(
     return false;
   }
   const normalizedText = normalizedForDingwordSearch(chatMessage);
-  const dingedByDingwords = normalizedMessageDingsUserByDingword(
-    normalizedText,
-    user,
-  );
-  const dingedByMentions = (chatMessage.content?.children ?? []).some(
-    (child) => {
-      if (nodeIsMention(child)) {
-        return child.userId === user._id;
-      } else {
-        return false;
-      }
-    },
-  );
-  const roles = listAllRolesForHunt(user, { _id: chatMessage.hunt });
-  const dingedByRoleMentions = (chatMessage.content?.children ?? []).some(
-    (child) => {
-      if (nodeIsRoleMention(child)) {
-        return roles.includes(child.roleId);
-      } else {
-        return false;
-      }
-    },
-  );
-  return dingedByDingwords || dingedByMentions || dingedByRoleMentions;
+  const dingedByDingwords =
+    normalizedMessageDingsUserByDingword(normalizedText, user).length > 0;
+  const userDingedByMentions = dingedByMentions(chatMessage, user);
+  const userDingedByRoleMentions = dingedByRoleMentions(chatMessage, user);
+  return dingedByDingwords || userDingedByMentions || userDingedByRoleMentions;
 }
