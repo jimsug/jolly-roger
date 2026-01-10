@@ -19,6 +19,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -30,8 +31,10 @@ import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
 import InputGroup from "react-bootstrap/InputGroup";
+import Overlay from "react-bootstrap/Overlay";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
+import Tooltip from "react-bootstrap/Tooltip";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import styled, { css } from "styled-components";
 import isAdmin from "../../lib/isAdmin";
@@ -44,6 +47,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
 import UserStatuses from "../../lib/models/UserStatuses";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
+import presenceForHunt from "../../lib/publications/presenceForHunt";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
 import statusesForHuntUsers from "../../lib/publications/statusesForHuntUsers";
@@ -53,6 +57,7 @@ import {
 } from "../../lib/puzzle-sort-and-group";
 import { computeSolvedness } from "../../lib/solvedness";
 import createPuzzle from "../../methods/createPuzzle";
+import { useBreadcrumb } from "../hooks/breadcrumb";
 import {
   useHuntPuzzleListCollapseGroups,
   useHuntPuzzleListDisplayMode,
@@ -61,6 +66,7 @@ import {
   useOperatorActionsHiddenForHunt,
 } from "../hooks/persisted-state";
 import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
+import useSubscribeAvatars from "../hooks/useSubscribeAvatars";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
@@ -76,7 +82,6 @@ import PuzzleModalForm from "./PuzzleModalForm";
 import RelatedPuzzleGroup, { PuzzleGroupDiv } from "./RelatedPuzzleGroup";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import { mediaBreakpointDown } from "./styling/responsive";
-import { useBreadcrumb } from "../hooks/breadcrumb";
 
 const ViewControls = styled.div<{ $canAdd?: boolean }>`
   display: grid;
@@ -180,6 +185,27 @@ const HuntNavWrapper = styled.div`
   )}
 `;
 
+const ONE_PUZZLE_TOOLTIP_ARROW_MAX = 120;
+
+const StyledTooltip = styled(Tooltip)<{ $cursorOffset: number }>`
+  & .tooltip-arrow {
+    position: absolute !important;
+    transform: none !important;
+    left: ${(props) => props.$cursorOffset}px !important;
+    max-width: calc(100% - 10px);
+  }
+`;
+
+const getTextWidth = (text: string, font: string) => {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.font = font;
+    return context.measureText(text).width;
+  }
+  return 0;
+};
+
 const PuzzleListView = ({
   huntId,
   canAdd,
@@ -226,12 +252,39 @@ const PuzzleListView = ({
   const [showSolvers, setShowSolvers] = useHuntPuzzleListShowSolvers(huntId);
   const [huntPuzzleListCollapseGroups, setHuntPuzzleListCollapseGroups] =
     useHuntPuzzleListCollapseGroups(huntId);
+  const [cursorOffset, setCursorOffset] = useState<number>(10);
+
   const expandAllGroups = useCallback(() => {
     setHuntPuzzleListCollapseGroups({});
   }, [setHuntPuzzleListCollapseGroups]);
   const canExpandAllGroups =
     displayMode === "group" &&
     Object.values(huntPuzzleListCollapseGroups).some((collapsed) => collapsed);
+
+  const updateCursorPosition = useCallback(() => {
+    const input = searchBarRef.current;
+    if (!input) return;
+
+    const selectionStart = input.selectionStart || 0;
+    const text = input.value.substring(0, selectionStart);
+
+    // Get the computed font style to ensure accurate measurement
+    const computedStyle = window.getComputedStyle(input);
+    const font = `${computedStyle.fontWeight} ${computedStyle.fontSize} ${computedStyle.fontFamily}`;
+    const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+
+    // Measure text and add padding
+    const textWidth = getTextWidth(text, font);
+
+    // We add paddingLeft to align with where the text actually starts.
+    // We clamp it slightly so the arrow doesn't look weird at the very start (0px).
+    setCursorOffset(Math.max(6, textWidth + paddingLeft));
+  }, []);
+
+  const arrowOffsetForTooltip = Math.min(
+    ONE_PUZZLE_TOOLTIP_ARROW_MAX,
+    cursorOffset,
+  );
 
   const [operatorActionsHidden, setOperatorActionsHidden] =
     useOperatorActionsHiddenForHunt(huntId);
@@ -285,25 +338,32 @@ const PuzzleListView = ({
     useCallback(
       (e) => {
         setSearchString(e.currentTarget.value);
+        updateCursorPosition();
       },
-      [setSearchString],
+      [setSearchString, updateCursorPosition],
     );
   const subscribersLoading = useSubscribe("subscribers.fetchAll", huntId);
   const callMembersLoading = useSubscribe("mediasoup:metadataAll", huntId);
 
   const displayNamesLoading = useSubscribeDisplayNames(huntId);
+  const avatarsLoading = useSubscribeAvatars(huntId);
 
   const subscriptionsLoading =
-    subscribersLoading() || callMembersLoading() || displayNamesLoading();
+    subscribersLoading() ||
+    callMembersLoading() ||
+    displayNamesLoading() ||
+    avatarsLoading();
 
-  const statusesSubscribe = useTypedSubscribe(statusesForHuntUsers, { huntId }); // also the statuses for users
+  const statusArgs = useMemo(() => ({ huntId }), [huntId]);
+  const statusesSubscribe = useTypedSubscribe(statusesForHuntUsers, statusArgs); // also the statuses for users
 
   const statusesLoading = statusesSubscribe();
+  const displayNames = useTracker(() => indexedDisplayNames(), []);
+
   const puzzleUsers: Record<string, string[]> = useTracker(() => {
     if (subscriptionsLoading || statusesLoading) {
       return {};
     }
-    const displayNames = indexedDisplayNames(); // don't try to move this out, this causes a loop
     const puzzleUserStatuses = userStatusesToLastSeen(
       UserStatuses.find({ hunt: huntId }).fetch(),
     );
@@ -314,58 +374,133 @@ const PuzzleListView = ({
         return acc;
       }
       if (!acc[puzzleId]) {
-        acc[puzzleId] = [displayNames.get(userId)];
+        acc[puzzleId] = [userId];
       } else {
-        acc[puzzleId].push(displayNames.get(userId));
+        acc[puzzleId].push(userId);
       }
       return acc;
     }, {});
+
     return mappedUsers;
   }, [subscriptionsLoading, statusesLoading, huntId]);
 
   const puzzleSubscribers = useTracker(() => {
-    const displayNames = indexedDisplayNames();
-
     if (subscriptionsLoading) {
-      return { none: { none: [] } };
+      return {
+        none: { activeViewers: [], passiveViewers: [], rtcViewers: [] },
+      };
     }
 
-    const puzzleSubs = {};
+    const nextPuzzleSubs: Record<
+      string,
+      {
+        activeViewers: string[];
+        passiveViewers: string[];
+        rtcViewers: string[];
+      }
+    > = {};
+    const FIVE_MINUTES_MS = 5 * 60 * 1000;
+    const now = Date.now();
 
-    Peers.find({})
-      .fetch()
-      .forEach((s) => {
-        const puzzle = s.call;
-        const user = displayNames.get(s.createdBy);
-        if (!Object.hasOwn(puzzleSubs, puzzle)) {
-          puzzleSubs[puzzle] = {
-            viewers: [],
-            callers: [],
-          };
-        }
-        if (!puzzleSubs[puzzle].callers.includes(user)) {
-          puzzleSubs[puzzle].callers.push(user);
-        }
-      });
-
-    Subscribers.find({}).forEach((s) => {
-      const puzzle = s.name.replace(/^puzzle:/, "");
-      const user = displayNames.get(s.user);
-      if (!Object.hasOwn(puzzleSubs, puzzle)) {
-        puzzleSubs[puzzle] = {
-          viewers: [],
-          callers: [],
+    const ensurePuzzle = (pid: string) => {
+      if (!Object.hasOwn(nextPuzzleSubs, pid)) {
+        nextPuzzleSubs[pid] = {
+          activeViewers: [],
+          passiveViewers: [],
+          rtcViewers: [],
         };
       }
-      if (
-        !puzzleSubs[puzzle].callers.includes(user) &&
-        !puzzleSubs[puzzle].viewers.includes(user)
-      ) {
-        puzzleSubs[puzzle].viewers.push(user);
+    };
+
+    // Process RTC Viewers
+    Peers.find({}).forEach((p) => {
+      ensurePuzzle(p.call);
+      if (!nextPuzzleSubs[p.call].rtcViewers.includes(p.createdBy)) {
+        nextPuzzleSubs[p.call].rtcViewers.push(p.createdBy);
       }
     });
-    return puzzleSubs;
-  }, [subscriptionsLoading]);
+
+    interface Candidate {
+      puzzleId: string;
+      updatedAt: number;
+      visible: boolean;
+      isInteraction: boolean;
+    }
+    const candidatesByUser: Record<string, Candidate[]> = {};
+
+    const addCandidate = (uid: string, c: Candidate) => {
+      if (!candidatesByUser[uid]) candidatesByUser[uid] = [];
+      candidatesByUser[uid].push(c);
+    };
+
+    // Gather Subscribers
+    Subscribers.find({ name: { $regex: /^puzzle:/ } }).forEach((s) => {
+      // Logic for checking visibility (string or boolean)
+      const isVisible = s.visible === "visible" || s.visible === true;
+
+      addCandidate(s.user, {
+        puzzleId: s.name.replace(/^puzzle:/, ""),
+        updatedAt: s.updatedAt ? new Date(s.updatedAt).getTime() : 0,
+        visible: isVisible,
+        isInteraction: false,
+      });
+    });
+
+    // Gather UserStatuses
+    UserStatuses.find({ hunt: huntId, puzzle: { $exists: true } }).forEach(
+      (s) => {
+        addCandidate(s.user, {
+          puzzleId: s.puzzle!,
+          updatedAt: s.updatedAt ? new Date(s.updatedAt).getTime() : 0,
+          visible: false,
+          isInteraction: true,
+        });
+      },
+    );
+
+    // Determine Best Location & Sort
+    Object.entries(candidatesByUser).forEach(([uid, locations]) => {
+      let bestLocations: Candidate[] = [];
+      const visible = locations.filter((l) => l.visible);
+
+      if (visible.length > 0) {
+        bestLocations = visible;
+      } else {
+        const recent = locations.filter(
+          (l) => now - l.updatedAt < FIVE_MINUTES_MS,
+        );
+
+        if (recent.length > 0) {
+          recent.sort((a, b) => {
+            // If one is an interaction and the other isn't, prefer the interaction
+            if (a.isInteraction !== b.isInteraction) {
+              return a.isInteraction ? -1 : 1;
+            }
+            // Otherwise, sort by recency (newest first)
+            return b.updatedAt - a.updatedAt;
+          });
+
+          bestLocations = [recent[0]];
+        }
+      }
+
+      bestLocations.forEach((loc) => {
+        ensurePuzzle(loc.puzzleId);
+        const pData = nextPuzzleSubs[loc.puzzleId];
+
+        if (pData.rtcViewers.includes(uid)) return;
+
+        if (loc.visible) {
+          if (!pData.activeViewers.includes(uid)) pData.activeViewers.push(uid);
+        } else {
+          if (!pData.passiveViewers.includes(uid))
+            pData.passiveViewers.push(uid);
+        }
+      });
+    });
+
+    return nextPuzzleSubs;
+  }, [subscriptionsLoading, huntId]);
 
   // Automatically focus the search bar whenever the search string changes
   // (e.g., when a tag is clicked)
@@ -416,8 +551,19 @@ const PuzzleListView = ({
           if (showSolvers === "viewers") {
             const matchingViewers =
               puzzle._id in puzzleSubscribers
-                ? puzzleSubscribers[puzzle._id].viewers.some((user) => {
-                    return user.toLowerCase().includes(key);
+                ? puzzleSubscribers[puzzle._id].activeViewers.some((userId) => {
+                    const user = tagNames[userId] || displayNames.get(userId);
+                    return user?.toLowerCase().includes(key);
+                  }) ||
+                  puzzleSubscribers[puzzle._id].passiveViewers.some(
+                    (userId) => {
+                      const user = tagNames[userId] || displayNames.get(userId);
+                      return user?.toLowerCase().includes(key);
+                    },
+                  ) ||
+                  puzzleSubscribers[puzzle._id].rtcViewers.some((userId) => {
+                    const user = tagNames[userId] || displayNames.get(userId);
+                    return user?.toLowerCase().includes(key);
                   })
                 : false;
             if (matchingViewers) {
@@ -427,8 +573,9 @@ const PuzzleListView = ({
           if (showSolvers !== "hide") {
             const matchingCallers =
               puzzle._id in puzzleSubscribers
-                ? puzzleSubscribers[puzzle._id].callers.some((user) => {
-                    return user.toLowerCase().includes(key);
+                ? puzzleSubscribers[puzzle._id].rtcViewers.some((userId) => {
+                    const user = tagNames[userId] || displayNames.get(userId);
+                    return user?.toLowerCase().includes(key);
                   })
                 : false;
             if (matchingCallers) {
@@ -440,7 +587,7 @@ const PuzzleListView = ({
         });
       };
     },
-    [allTags, puzzleSubscribers, showSolvers],
+    [allTags, puzzleSubscribers, showSolvers, displayNames],
   );
 
   const puzzlesMatchingSearchString = useCallback(
@@ -557,13 +704,6 @@ const PuzzleListView = ({
           puzzles
         </Alert>
       );
-      const singleMatchMessage = isSearchFocused &&
-        retainedPuzzles.length === 1 && (
-          <Alert variant="info">
-            Press <kbd>Enter</kbd> to go to{" "}
-            <strong>{retainedPuzzles[0].title}</strong>
-          </Alert>
-        );
       const retainedIds = new Set(retainedPuzzles.map((puzzle) => puzzle._id));
       const filterMessage = `Showing ${retainedPuzzles.length} of ${allPuzzlesCount} rows`;
 
@@ -645,7 +785,6 @@ const PuzzleListView = ({
       return (
         <div>
           {maybeMatchWarning}
-          {singleMatchMessage}
           <PuzzleListToolbar>
             <div>{listControls}</div>
             <div>{filterMessage}</div>
@@ -709,7 +848,6 @@ const PuzzleListView = ({
       showAddModalWithTags,
       canExpandAllGroups,
       expandAllGroups,
-      isSearchFocused,
     ],
   );
 
@@ -890,15 +1028,33 @@ const PuzzleListView = ({
               ref={searchBarRef}
               placeholder={filterText}
               value={searchString}
-              onChange={onSearchStringChange}
+              onClick={updateCursorPosition}
               onKeyDown={onSubmitSearch}
               onFocus={handleSearchFocus}
               onBlur={handleSearchBlur}
+              onKeyUp={updateCursorPosition}
+              onChange={onSearchStringChange}
             />
             <Button variant="secondary" onClick={clearSearch}>
               <FontAwesomeIcon icon={faEraser} content="erase-filter" />
             </Button>
           </InputGroup>
+          <Overlay
+            target={searchBarRef.current}
+            show={isSearchFocused && retainedPuzzles.length === 1}
+            placement="bottom-start"
+          >
+            {(props) => (
+              <StyledTooltip
+                id={`${idPrefix}-single-match-tooltip`}
+                $cursorOffset={arrowOffsetForTooltip}
+                {...props}
+              >
+                Press <kbd>Enter</kbd> to go to{" "}
+                <strong>{retainedPuzzles[0]?.title}</strong>
+              </StyledTooltip>
+            )}
+          </Overlay>
         </SearchFormGroup>
       </ViewControls>
       {renderList(
@@ -929,6 +1085,9 @@ const PuzzleListPage = () => {
     huntId,
     includeDeleted: isAdmin,
   });
+
+  useTypedSubscribe(presenceForHunt, { huntId });
+
   const loading = puzzlesLoading();
 
   // Don't bother including this in loading - it's ok if they trickle in
