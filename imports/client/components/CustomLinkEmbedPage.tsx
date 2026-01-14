@@ -12,7 +12,7 @@ const CustomLinkEmbedPage = () => {
     const hunt = Hunts.findOne(huntId);
     return {
       customLinkUrl: hunt?.customLinkUrl,
-      customLinkTitle: hunt?.customLinkTitle,
+      customLinkTitle: hunt?.customLinkName,
     };
   }, [huntId]);
 
