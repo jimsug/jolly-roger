@@ -99,23 +99,20 @@ const DiscordHooks: Hookset = {
     const puzzle = (await Puzzles.findOneAsync(puzzleId))!;
     const hunt = (await Hunts.findOneAsync(puzzle.hunt))!;
     if (hunt.puzzleCreationDiscordChannel) {
-      const title = `${puzzle.title} unlocked`;
+      const title = `🐣 ${puzzle.title}`;
       const url = Meteor.absoluteUrl(
         `hunts/${puzzle.hunt}/puzzles/${puzzle._id}`,
       );
       const tagNameList = await Tags.find({
         _id: { $in: puzzle.tags },
       }).mapAsync((t) => t.name);
-      const tags = tagNameList.map((tagName) => `\`${tagName}\``).join(", ");
-      const fields =
-        tags.length > 0
-          ? [{ name: "Tags", value: tags, inline: true }]
-          : undefined;
+      const tags = tagNameList.map((tagName) => `${tagName}`).join(", ");
+      const description = tags.length > 0 ? `${tags}` : undefined;
       const messageObj = {
         embed: {
           title,
           url,
-          fields,
+          description,
         },
       };
       await bot.postMessageToChannel(
