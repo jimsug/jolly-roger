@@ -21,7 +21,8 @@ export const UserStatus = withTimestamps(
 
 const UserStatuses = new Model("jr_userstatuses", UserStatus);
 UserStatuses.addIndex({ server: 1 });
-UserStatuses.addIndex({ hunt: 1 });
+UserStatuses.addIndex({ hunt: 1, updatedAt: 1 });
+UserStatuses.addIndex({ hunt: 1, user: 1, type: 1 });
 UserStatuses.addIndex({ user: 1 });
 UserStatuses.addIndex({ type: 1 });
 UserStatuses.addIndex({ status: 1 });
