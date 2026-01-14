@@ -1,6 +1,9 @@
 import { useTracker } from "meteor/react-meteor-data";
+import { faFaucet, faReceipt } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMemo } from "react";
-import { useParams } from "react-router-dom";
+import Button from "react-bootstrap/Button";
+import { Link, useParams } from "react-router-dom";
 import styled, { useTheme } from "styled-components";
 import Hunts from "../../lib/models/Hunts";
 import { useBreadcrumb } from "../hooks/breadcrumb";
@@ -95,28 +98,21 @@ const MoreAppPage = () => {
         */}
 
         <hr />
-        <h2>Firehose</h2>
-        <p>
-          <Link
-            to={`/hunts/${huntId}/firehose`}
-          >
-            <FontAwesomeIcon icon={faFaucet} /> Firehose page
+        <h2>
+          <Link to={`/hunts/${huntId}/firehose`}>
+            <FontAwesomeIcon icon={faFaucet} /> Firehose
           </Link>
-          <br />
-          <br />
-          The firehose includes all puzzle updates, including guesses, solves and chat messages.
-        </p>
-        <h2>Guesses</h2>
+        </h2>
         <p>
-          <Link
-            to={`/hunts/${huntId}/guesses`}
-          >
+          The firehose includes all puzzle updates, including guesses, solves
+          and chat messages.
+        </p>
+        <h2>
+          <Link to={`/hunts/${huntId}/guesses`}>
             <FontAwesomeIcon icon={faReceipt} /> Guess log
           </Link>
-          <br />
-          <br />
-          The guess log includes all user guesses and their results.
-        </p>
+        </h2>
+        <p>The guess log includes all user guesses and their results.</p>
       </FirehosePageLayout>
     </FixedLayout>
   );
