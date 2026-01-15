@@ -119,21 +119,28 @@ const DiscordHooks: Hookset = {
           url,
           description,
         },
-        components: puzzle.url
-          ? [
+        components: [
+          {
+            type: 1, // ACTION_ROW
+            components: [
               {
-                type: 1, // ACTION_ROW
-                components: [
-                  {
-                    type: 2, // BUTTON
-                    style: 5, // LINK
-                    label: "🧩 Hunt page",
-                    url: puzzle.url,
-                  },
-                ],
+                type: 2, // BUTTON
+                style: 5, // LINK
+                label: "💀 Jolly Roger",
+                url,
               },
-            ]
-          : undefined,
+              ...(puzzle.url
+                ? [
+                    {
+                      type: 2, // BUTTON
+                      style: 5, // LINK
+                      label: "🧩 Hunt page",
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ],
       };
       await bot.postMessageToChannel(
         hunt.puzzleCreationDiscordChannel.id,
