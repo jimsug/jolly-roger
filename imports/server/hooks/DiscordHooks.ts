@@ -176,25 +176,30 @@ const DiscordHooks: Hookset = {
       const answers = puzzle.answers
         .map((answer) => `\`${answer}\``)
         .join(", ");
-      const answerLabel = `Answer${puzzle.expectedAnswerCount > 1 ? "s" : ""}`;
       const solvedness = computeSolvedness(puzzle);
       const color = {
         solved: 0x00ff00,
         unsolved: 0xffff00,
         noAnswers: 0,
       }[solvedness];
-      const solvedStr = {
-        solved: "solved",
-        unsolved: "partially solved",
+      const solvedEmoji = {
+        solved: "🏁",
+        unsolved: "🏳️",
         noAnswers: "",
       }[solvedness];
-      const title = `${puzzle.title} ${solvedStr}`;
+      // const solvedStr = {
+      //   solved: "Solved!",
+      //   unsolved: "Partially solved",
+      //   noAnswers: "",
+      // }[solvedness];
+      const title = `${solvedEmoji} ${puzzle.title} ${solvedEmoji}`;
+      const description = `${answers}`;
       const messageObj = {
         embed: {
           color,
           title,
           url,
-          fields: [{ name: answerLabel, value: answers, inline: true }],
+          description,
         },
       };
       await bot.postMessageToChannel(
