@@ -135,6 +135,7 @@ const DiscordHooks: Hookset = {
                       type: 2, // BUTTON
                       style: 5, // LINK
                       label: "🧩 Hunt page",
+                      url: puzzle.url,
                     },
                   ]
                 : []),
