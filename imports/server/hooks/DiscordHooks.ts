@@ -106,7 +106,12 @@ const DiscordHooks: Hookset = {
       const tagNameList = await Tags.find({
         _id: { $in: puzzle.tags },
       }).mapAsync((t) => t.name);
-      const tags = tagNameList.map((tagName) => `${tagName}`).join(", ");
+      const tags = tagNameList.map((tagName) => {
+        if (tagName.startsWith("group:")) return `📂 ${tagName.slice(6)}`;
+        if (tagName.startsWith("meta-for:")) return `⭐️ ${tagName.slice(9)}`;
+        if (tagName.startsWith("where:")) return `📍 ${tagName.slice(6)}`;
+        return tagName;
+      }).join(", ");
       const description = tags.length > 0 ? `${tags}` : undefined;
       const messageObj = {
         embed: {
