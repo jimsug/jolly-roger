@@ -124,7 +124,9 @@ function generateTurnConfig() {
   const turnCredential = process.env.TURN_CREDENTIAL;
   if (turnUsername && turnCredential) {
     return {
-      urls: turnServer,
+      urls: turnServer.includes(",")
+        ? turnServer.split(",").map((s) => s.trim())
+        : turnServer,
       username: turnUsername,
       credential: turnCredential,
     };
@@ -150,7 +152,9 @@ function generateTurnConfig() {
   const credential = hmac.digest("base64");
 
   return {
-    urls: turnServer,
+    urls: turnServer.includes(",")
+      ? turnServer.split(",").map((s) => s.trim())
+      : turnServer,
     username,
     credential,
   };

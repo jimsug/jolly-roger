@@ -94,7 +94,8 @@ number of environment variables.
 
 - `$TURN_SERVER` - the URL of a
   [TURN server](https://webrtc.org/getting-started/turn-server)
-  for robust audio chat connectivity.
+  for robust audio chat connectivity. You can specify multiple URLs here by
+  separating them with commas. (e.g. `turn:aaa:80,turn:aaa:443?transport=tcp`)
 
 - `$TURN_SECRET` - the secret needed to authenticate with `$TURN_SERVER`.
 
