@@ -111,7 +111,7 @@ const DiscordHooks: Hookset = {
         if (tagName.startsWith("meta-for:")) return `⭐️ ${tagName.slice(9)}`;
         if (tagName.startsWith("where:")) return `📍 ${tagName.slice(6)}`;
         return tagName;
-      }).join(", ");
+      }).join(" • ");
       const description = tags.length > 0 ? `${tags}` : undefined;
       const messageObj = {
         embed: {
@@ -119,6 +119,21 @@ const DiscordHooks: Hookset = {
           url,
           description,
         },
+        components: puzzle.url
+          ? [
+              {
+                type: 1, // ACTION_ROW
+                components: [
+                  {
+                    type: 2, // BUTTON
+                    style: 5, // LINK
+                    label: "🧩 Hunt page",
+                    url: puzzle.url,
+                  },
+                ],
+              },
+            ]
+          : undefined,
       };
       await bot.postMessageToChannel(
         hunt.puzzleCreationDiscordChannel.id,
