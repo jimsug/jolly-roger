@@ -1,33 +1,11 @@
+import { Meteor } from "meteor/meteor";
+import { useTracker } from "meteor/react-meteor-data";
 import React from "react";
 import { indexedById } from "../../lib/listUtils";
-import { ChatMessageType } from "../../lib/models/ChatMessages";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
-import { puzzleInterestingness } from "../../lib/puzzle-sort-and-group";
+import { sortPuzzlesByRelevanceWithinPuzzleGroup } from "../../lib/puzzle-sort-and-group";
 import PuzzleList from "./PuzzleList";
-
-function sortPuzzlesByRelevanceWithinPuzzleGroup(
-  puzzles: PuzzleType[],
-  sharedTag: TagType | undefined,
-  indexedTags: Map<string, TagType>,
-) {
-  let group: string;
-  if (sharedTag && sharedTag.name.lastIndexOf("group:", 0) === 0) {
-    group = sharedTag.name.slice("group:".length);
-  }
-  const sortedPuzzles = puzzles.slice(0);
-  sortedPuzzles.sort((a, b) => {
-    const ia = puzzleInterestingness(a, indexedTags, group);
-    const ib = puzzleInterestingness(b, indexedTags, group);
-    if (ia !== ib) {
-      return ia - ib;
-    } else {
-      // Sort puzzles by creation time otherwise.
-      return +a.createdAt - +b.createdAt;
-    }
-  });
-  return sortedPuzzles;
-}
 
 const RelatedPuzzleList = React.memo(
   ({
@@ -53,6 +31,7 @@ const RelatedPuzzleList = React.memo(
     subscribers: Record<string, Record<string, string[]>>;
     puzzleUsers: Record<string, string[]>;
   }) => {
+    const isOffsite = useTracker(() => Meteor.user()?.isOffsite ?? false, []);
     // Sort the puzzles within each tag group by interestingness.  For instance, metas
     // should probably be at the top of the group, then of the round puzzles, unsolved should
     // maybe sort above solved, and then perhaps by unlock order.
@@ -61,6 +40,7 @@ const RelatedPuzzleList = React.memo(
       relatedPuzzles,
       sharedTag,
       tagIndex,
+      isOffsite,
     );
     return (
       <PuzzleList
@@ -79,4 +59,4 @@ const RelatedPuzzleList = React.memo(
 );
 
 export default RelatedPuzzleList;
-export { RelatedPuzzleList, sortPuzzlesByRelevanceWithinPuzzleGroup };
+export { RelatedPuzzleList };

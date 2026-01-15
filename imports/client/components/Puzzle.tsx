@@ -4,7 +4,7 @@ import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDouble
 import { faAngleDown } from "@fortawesome/free-solid-svg-icons/faAngleDown";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
-import { faPenNib } from "@fortawesome/free-solid-svg-icons/faPenNib";
+import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faPhone } from "@fortawesome/free-solid-svg-icons/faPhone";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
@@ -13,6 +13,7 @@ import React, {
   type ComponentPropsWithRef,
   type FC,
   useCallback,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -65,6 +66,12 @@ const PuzzleDiv = styled.div<{
   line-height: 24px;
   padding: 4px 2px;
   margin-bottom: 4px;
+  transition: filter 0.1s ease-in-out;
+
+  &:hover {
+    filter: ${({ theme }) =>
+      theme.basicMode === "dark" ? "brightness(1.2)" : "brightness(0.95)"};
+  }
   ${mediaBreakpointDown(
     "xs",
     css`
@@ -74,16 +81,10 @@ const PuzzleDiv = styled.div<{
 `;
 
 const PuzzleNote = styled.span`
-  min-width: 4.66rem;
   align-items: center;
   justify-content: center;
   text-align: right;
   margin: 0 0 0 0.5rem;
-
-  span {
-    margin-right: 0.25rem;
-    margin-left: 0.125rem;
-  }
 `;
 
 const PuzzleColumn = styled.div`
@@ -421,31 +422,36 @@ const Puzzle = React.memo(
       );
     });
 
-    const noteTooltip = useTracker(() => {
+    const noteTooltip = useMemo(() => {
       if (!puzzle.noteContent) {
         return null;
       }
       const note = puzzle.noteContent;
 
+      const truncate = (text: string, length: number) => {
+        if (text.length <= length) return text;
+        return text.substring(0, length) + "…";
+      };
+
       const noteTT = [];
       if (note.flavor) {
         noteTT.push(
-          <div>
-            <strong>Flavor: </strong> <em>{note.flavor}</em>
+          <div key="flavor">
+            <strong>Flavor: </strong> <em>{truncate(note.flavor, 250)}</em>
           </div>,
         );
       }
       if (note.summary) {
         noteTT.push(
-          <div>
-            <strong>Summary:</strong> {note.summary}
+          <div key="summary">
+            <strong>Summary:</strong> {truncate(note.summary, 250)}
           </div>,
         );
       }
       if (note.theories) {
         noteTT.push(
-          <div>
-            <strong>Theories: </strong> <em>{note.theories}</em>
+          <div key="theories">
+            <strong>Theories: </strong> <em>{truncate(note.theories, 250)}</em>
           </div>,
         );
       }
@@ -454,18 +460,22 @@ const Puzzle = React.memo(
         return null;
       }
 
-      return (
+      const noteTooltip = (props: ComponentPropsWithRef<typeof Tooltip>) => (
         <Tooltip
           id={`puzzle-pin-message-${puzzleId}`}
-          placement="top"
+          {...props}
           style={{
             maxHeight: "9.55rem",
             borderRadius: "5px",
+            pointerEvents: "none",
+            ...props.style,
           }}
         >
           {noteTT}
         </Tooltip>
       );
+
+      return noteTooltip;
     }, [puzzleId, puzzle.noteContent]);
 
     const puzzleIsMeta = useTracker(() => {
@@ -551,7 +561,6 @@ const Puzzle = React.memo(
         </Tooltip>
       );
     }, [puzzleId, rtcUsers, activeUsers, passiveUsers]);
-
     return (
       <PuzzleDiv $solvedness={solvedness}>
         {showEditModal ? (
@@ -581,17 +590,13 @@ const Puzzle = React.memo(
         </PuzzleControlButtonsColumn>
         <PuzzleTitleColumn>
           <Link to={linkTarget}>{puzzle.title}</Link>
-          {puzzle.noteContent && noteTooltip ? (
-            <OverlayTrigger
-              placement="top"
-              overlay={noteTooltip}
-              trigger={["hover", "click"]}
-            >
+          {puzzle.noteContent && noteTooltip && (
+            <OverlayTrigger placement="top" overlay={noteTooltip}>
               <PuzzleNote>
-                <FontAwesomeIcon icon={faPenNib} />
+                <FontAwesomeIcon icon={faNoteSticky} />
               </PuzzleNote>
             </OverlayTrigger>
-          ) : null}
+          )}
         </PuzzleTitleColumn>
         <PuzzlePriorityColumn>
           {statusEmoji && statusTooltip ? (

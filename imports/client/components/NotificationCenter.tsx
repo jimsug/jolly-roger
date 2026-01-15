@@ -686,20 +686,24 @@ const ProfileMissingMessage = ({ onDismiss }: { onDismiss: () => void }) => {
   );
 };
 
+const StyledPuzzleNotificationBody = styled(Toast.Body)`
+  color: black;
+`;
+
 const PuzzleNotificationMessage = ({
   pn,
   hunt,
   puzzle,
   content,
   ephemeral,
-  className,
+  background,
 }: {
   pn: PuzzleNotificationType;
   hunt: HuntType;
   puzzle: PuzzleType;
   content: string;
   ephemeral: boolean | undefined;
-  className?: string;
+  background?: string;
 }) => {
   const id = pn._id;
   const dismiss = useCallback(
@@ -714,7 +718,7 @@ const PuzzleNotificationMessage = ({
   return (
     <Toast
       onClose={dismiss}
-      className={className}
+      bg={background}
       delay={ephemeralLingerPeriod}
       autohide={ephemeral}
     >
@@ -738,9 +742,7 @@ const PuzzleNotificationMessage = ({
           />
         )}
       </Toast.Header>
-      <Toast.Body>
-        <div>{content}</div>
-      </Toast.Body>
+      <StyledPuzzleNotificationBody>{content}</StyledPuzzleNotificationBody>
     </Toast>
   );
 };
@@ -777,7 +779,7 @@ const ChatNotificationMessage = ({
       cn.dingwords?.filter((word) => {
         const isLocallyMuted = locallyMutedWords.includes(word);
         const isProfileMuted = suppressedFromProfile.includes(word);
-        const isAllMuted = suppressedFromProfile.includes("__ALL__");
+        const isAllMuted = suppressedFromProfile.includes("__ALL__") || locallyMutedWords.includes("__ALL__");
 
         return !isLocallyMuted && !isProfileMuted && !isAllMuted;
       }) ?? [];
@@ -1068,7 +1070,7 @@ const NotificationCenter = () => {
   useSubscribe(
     activeOperatorHunts.length > 0 ? "subscribers.inc" : undefined,
     "operators",
-    Object.fromEntries(activeOperatorHunts.map((h) => [h, true])),
+    Object.fromEntries(activeOperatorHunts.map((h) => [h, "true"])),
   );
 
   const pendingAnnouncementsLoading = useTypedSubscribe(
@@ -1358,7 +1360,7 @@ const NotificationCenter = () => {
         puzzle={puzzle}
         content={pn.content}
         ephemeral={pn.ephemeral ?? false}
-        className={pn.className}
+        background={pn.background}
       />,
     );
   });
