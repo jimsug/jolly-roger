@@ -116,8 +116,22 @@ type RouterAppData = {
 
 function generateTurnConfig() {
   const turnServer = process.env.TURN_SERVER;
+  if (!turnServer) {
+    return undefined;
+  }
+
+  const turnUsername = process.env.TURN_USERNAME;
+  const turnCredential = process.env.TURN_CREDENTIAL;
+  if (turnUsername && turnCredential) {
+    return {
+      urls: turnServer,
+      username: turnUsername,
+      credential: turnCredential,
+    };
+  }
+
   const turnSecret = process.env.TURN_SECRET;
-  if (!turnServer || !turnSecret) {
+  if (!turnSecret) {
     return undefined;
   }
 

@@ -98,6 +98,12 @@ number of environment variables.
 
 - `$TURN_SECRET` - the secret needed to authenticate with `$TURN_SERVER`.
 
+- `$TURN_USERNAME` - if your `$TURN_SERVER` does not use a generated secret,
+  specify the static username here.
+
+- `$TURN_CREDENTIAL` - if using `$TURN_USERNAME`, specify the static credential
+  (password) here.
+
 Also see the other environment variables defined by
 [Meteor core](https://docs.meteor.com/environment-variables) and other packages.
 
