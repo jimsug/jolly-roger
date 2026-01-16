@@ -9,6 +9,7 @@ export default new TypedMethod<
     expectedAnswerCount: number;
     allowDuplicateUrls?: boolean;
     completedWithNoAnswer?: boolean;
+    markedComplete?: boolean;
   },
   void
 >("Puzzles.methods.update");

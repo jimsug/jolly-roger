@@ -26,6 +26,7 @@ defineMethod(updatePuzzle, {
       // during puzzle creation, to avoid duplicates when creating new puzzles.
       allowDuplicateUrls: Match.Optional(Boolean),
       completedWithNoAnswer: Match.Optional(Boolean),
+      markedComplete: Match.Optional(Boolean),
     });
 
     return arg;
@@ -38,6 +39,7 @@ defineMethod(updatePuzzle, {
     tags,
     expectedAnswerCount,
     completedWithNoAnswer,
+    markedComplete,
   }) {
     check(this.userId, String);
 
@@ -71,6 +73,7 @@ defineMethod(updatePuzzle, {
       title,
       expectedAnswerCount,
       completedWithNoAnswer,
+      markedComplete,
     });
 
     const update: Mongo.Modifier<PuzzleType> = {
@@ -85,10 +88,15 @@ defineMethod(updatePuzzle, {
     } else {
       update.$unset = { url: "" };
     }
-    if (completedWithNoAnswer) {
+    if (completedWithNoAnswer !== undefined) {
       update.$set = { ...update.$set, completedWithNoAnswer };
     } else {
-      update.$unset = { completedWithNoAnswer: "" };
+      update.$unset = { ...update.$unset, completedWithNoAnswer: "" };
+    }
+    if (markedComplete !== undefined) {
+      update.$set = { ...update.$set, markedComplete };
+    } else {
+      update.$unset = { ...update.$unset, markedComplete: "" };
     }
     await Puzzles.updateAsync(puzzleId, update);
 

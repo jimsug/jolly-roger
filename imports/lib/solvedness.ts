@@ -3,13 +3,22 @@ import type { PuzzleType } from "./models/Puzzles";
 export type Solvedness = "noAnswers" | "solved" | "unsolved";
 export const computeSolvedness = (puzzle: PuzzleType): Solvedness => {
   if (puzzle.expectedAnswerCount === 0) {
-    return puzzle.completedWithNoAnswer ? "solved" : "noAnswers";
-  } else if (
-    puzzle.answers.length < puzzle.expectedAnswerCount ||
-    puzzle.expectedAnswerCount === -1
+    if (puzzle.completedWithNoAnswer && puzzle.markedComplete) {
+      return "solved";
+    } else if (puzzle.completedWithNoAnswer && !puzzle.markedComplete) {
+      return "unsolved";
+    } else {
+      return "noAnswers";
+    }
+  }
+
+  if (
+    puzzle.markedComplete ||
+    (puzzle.expectedAnswerCount !== -1 &&
+      puzzle.answers.length >= puzzle.expectedAnswerCount)
   ) {
-    return "unsolved";
-  } else {
     return "solved";
   }
+
+  return "unsolved";
 };
