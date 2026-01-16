@@ -1,6 +1,5 @@
 import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
-import { contentFromMessage } from "../../lib/models/ChatMessages";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
@@ -50,10 +49,19 @@ defineMethod(markComplete, {
       },
     });
 
-    const message = `Puzzle was marked ${
-      markedComplete ? "complete" : "incomplete"
-    }`;
-    const content = contentFromMessage(message);
+    const content = {
+      type: "message" as const,
+      children: [
+        { text: "" },
+        {
+          type: "mention" as const,
+          userId: this.userId,
+        },
+        {
+          text: ` marked puzzle ${markedComplete ? "complete" : "incomplete"}`,
+        },
+      ],
+    };
     await sendChatMessageInternal({
       puzzleId,
       content,
