@@ -43,6 +43,7 @@ export interface PuzzleModalFormSubmitPayload {
   docType?: GdriveMimeTypesType;
   expectedAnswerCount: number;
   allowDuplicateUrls?: boolean;
+  completedWithNoAnswer?: boolean;
 }
 
 enum PuzzleModalFormSubmitState {
@@ -111,6 +112,8 @@ const PuzzleModalForm = React.forwardRef(
     const [expectedAnswerCount, setExpectedAnswerCount] = useState<number>(
       puzzle ? puzzle.expectedAnswerCount : 1,
     );
+    const [considerCompletedWithNoAnswer, setConsiderCompletedWithNoAnswer] =
+      useState<boolean | undefined>(puzzle?.completedWithNoAnswer);
     const [confirmingDuplicateUrl, setConfirmingDuplicateUrl] =
       useState<boolean>(false);
     const [allowDuplicateUrls, setAllowDuplicateUrls] = useState<
@@ -127,6 +130,10 @@ const PuzzleModalForm = React.forwardRef(
     const [tagsDirty, setTagsDirty] = useState<boolean>(false);
     const [expectedAnswerCountDirty, setExpectedAnswerCountDirty] =
       useState<boolean>(false);
+    const [
+      considerCompletedWithNoAnswerDirty,
+      setConsiderCompletedWithNoAnswerDirty,
+    ] = useState<boolean>(false);
 
     const formRef = useRef<ModalFormHandle>(null);
 
@@ -211,11 +218,26 @@ const PuzzleModalForm = React.forwardRef(
       const value = Number(string);
       setExpectedAnswerCount(value);
       setExpectedAnswerCountDirty(true);
+      if (value === 0) {
+        setConsiderCompletedWithNoAnswer(false);
+        setConsiderCompletedWithNoAnswerDirty(true);
+      } else {
+        setConsiderCompletedWithNoAnswer(undefined);
+        setConsiderCompletedWithNoAnswerDirty(true);
+      }
     }, []);
 
     const onAllowDuplicateUrlsChange = useCallback(
       (event: React.ChangeEvent<HTMLInputElement>) => {
         setAllowDuplicateUrls(event.currentTarget.checked);
+      },
+      [],
+    );
+
+    const onConsiderSolvedWithNoAnswerChange = useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        setConsiderCompletedWithNoAnswer(event.currentTarget.checked);
+        setConsiderCompletedWithNoAnswerDirty(true);
       },
       [],
     );
@@ -229,6 +251,7 @@ const PuzzleModalForm = React.forwardRef(
           url: url !== "" ? url : undefined, // Make sure we send undefined if url is falsy
           tags,
           expectedAnswerCount,
+          completedWithNoAnswer: considerCompletedWithNoAnswer,
         };
         if (docType) {
           payload.docType = docType;
@@ -260,6 +283,8 @@ const PuzzleModalForm = React.forwardRef(
             setUrlDirty(false);
             setTagsDirty(false);
             setExpectedAnswerCountDirty(false);
+            setConsiderCompletedWithNoAnswerDirty(false);
+            setConfirmingDuplicateUrl(false);
             setAllowDuplicateUrls(false);
             callback();
           }
@@ -274,6 +299,7 @@ const PuzzleModalForm = React.forwardRef(
         expectedAnswerCount,
         docType,
         allowDuplicateUrls,
+        considerCompletedWithNoAnswer,
       ],
     );
 
@@ -325,6 +351,18 @@ const PuzzleModalForm = React.forwardRef(
         return expectedAnswerCount;
       }
     }, [expectedAnswerCountDirty, puzzle, expectedAnswerCount]);
+
+    const currentConsiderCompletedWithNoAnswer = useMemo(() => {
+      if (!considerCompletedWithNoAnswerDirty && puzzle) {
+        return puzzle.completedWithNoAnswer ?? false;
+      } else {
+        return considerCompletedWithNoAnswer ?? false;
+      }
+    }, [
+      considerCompletedWithNoAnswerDirty,
+      puzzle,
+      considerCompletedWithNoAnswer,
+    ]);
 
     useImperativeHandle(forwardedRef, () => ({
       show,
@@ -591,6 +629,18 @@ const PuzzleModalForm = React.forwardRef(
               </FormText>
             </Col>
           </FormGroup>
+
+          {currentExpectedAnswerCount === 0 ? (
+            <FormCheck
+              id={`${idPrefix}-solved-with-no-answers`}
+              label="Consider solved with no answers"
+              type="checkbox"
+              checked={currentConsiderCompletedWithNoAnswer}
+              disabled={disableForm}
+              onChange={onConsiderSolvedWithNoAnswerChange}
+              className="mt-1"
+            />
+          ) : undefined}
 
           {submitState === PuzzleModalFormSubmitState.FAILED && (
             <Alert variant="danger">{errorMessage}</Alert>
