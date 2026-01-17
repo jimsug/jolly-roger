@@ -314,7 +314,7 @@ const TagBulkEditPage = () => {
     [huntId],
   );
 
-  const selectOptions: TagSelectOption[] = useTracker(
+  const selectOptions: TagSelectOption[] = React.useMemo(
     () =>
       allTags
         .map((t) => {
@@ -581,12 +581,17 @@ const TagBulkEditPage = () => {
             <Form.Label>Tag to rename</Form.Label>
             <Select
               value={
-                selectOptions.find((opt) => opt.value === selectedTag) || null
+                selectedTag
+                  ? selectOptions.find((opt) => opt.value === selectedTag) ||
+                    null
+                  : null
               }
               id={`${idPrefix}tag-rename-selected-tag`}
               options={selectOptions}
               onChange={onRenameTagChanged}
               theme={theme.reactSelectTheme}
+              isClearable
+              placeholder="Select a tag to rename..."
             />
           </Col>
           <Col xs={6}>
