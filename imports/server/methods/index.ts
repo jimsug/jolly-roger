@@ -50,6 +50,7 @@ import "./isS3Configured";
 import "./linkUserDiscordAccount";
 import "./linkUserGoogleAccount";
 import "./listDocumentSheets";
+import "./markComplete";
 import "./mediasoupAckConsumer";
 import "./mediasoupAckPeerRemoteMute";
 import "./mediasoupConnectTransport";

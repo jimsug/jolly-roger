@@ -9,7 +9,6 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { FormText } from "react-bootstrap";
 import Alert from "react-bootstrap/Alert";
 import Col from "react-bootstrap/Col";
 import FormCheck from "react-bootstrap/FormCheck";
@@ -17,6 +16,7 @@ import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
+import { FormText } from "react-bootstrap/FormText";
 import Row from "react-bootstrap/Row";
 import type { ActionMeta } from "react-select";
 import { useTheme } from "styled-components";
@@ -45,6 +45,8 @@ export interface PuzzleModalFormSubmitPayload {
   allowDuplicateUrls?: boolean;
   locked?: boolean;
   lockedSummary?: string;
+  completedWithNoAnswer?: boolean;
+  markedComplete?: boolean;
 }
 
 enum PuzzleModalFormSubmitState {
@@ -113,6 +115,8 @@ const PuzzleModalForm = React.forwardRef(
     const [expectedAnswerCount, setExpectedAnswerCount] = useState<number>(
       puzzle ? puzzle.expectedAnswerCount : 1,
     );
+    const [considerCompletedWithNoAnswer, setConsiderCompletedWithNoAnswer] =
+      useState<boolean | undefined>(puzzle?.completedWithNoAnswer);
     const [confirmingDuplicateUrl, setConfirmingDuplicateUrl] =
       useState<boolean>(false);
     const [allowDuplicateUrls, setAllowDuplicateUrls] = useState<
@@ -121,6 +125,9 @@ const PuzzleModalForm = React.forwardRef(
     const [locked, setLocked] = useState<boolean>(puzzle?.locked ?? false);
     const [lockedSummary, setLockedSummary] = useState<string>(
       puzzle?.lockedSummary ?? "",
+    );
+    const [markedComplete, setMarkedComplete] = useState<boolean>(
+      puzzle?.markedComplete ?? false,
     );
     const [submitState, setSubmitState] = useState<PuzzleModalFormSubmitState>(
       PuzzleModalFormSubmitState.IDLE,
@@ -132,6 +139,12 @@ const PuzzleModalForm = React.forwardRef(
     const [urlDirty, setUrlDirty] = useState<boolean>(false);
     const [tagsDirty, setTagsDirty] = useState<boolean>(false);
     const [expectedAnswerCountDirty, setExpectedAnswerCountDirty] =
+      useState<boolean>(false);
+    const [
+      considerCompletedWithNoAnswerDirty,
+      setConsiderCompletedWithNoAnswerDirty,
+    ] = useState<boolean>(false);
+    const [markedCompleteDirty, setMarkedCompleteDirty] =
       useState<boolean>(false);
 
     const formRef = useRef<ModalFormHandle>(null);
@@ -217,6 +230,13 @@ const PuzzleModalForm = React.forwardRef(
       const value = Number(string);
       setExpectedAnswerCount(value);
       setExpectedAnswerCountDirty(true);
+      if (value === 0) {
+        setConsiderCompletedWithNoAnswer(false);
+        setConsiderCompletedWithNoAnswerDirty(true);
+      } else {
+        setConsiderCompletedWithNoAnswer(undefined);
+        setConsiderCompletedWithNoAnswerDirty(true);
+      }
     }, []);
 
     const onAllowDuplicateUrlsChange = useCallback(
@@ -236,6 +256,22 @@ const PuzzleModalForm = React.forwardRef(
         setLockedSummary(event.currentTarget.value);
       }, []);
 
+    const onMarkedCompleteChange = useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        setMarkedComplete(event.currentTarget.checked);
+        setMarkedCompleteDirty(true);
+      },
+      [],
+    );
+
+    const onConsiderSolvedWithNoAnswerChange = useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        setConsiderCompletedWithNoAnswer(event.currentTarget.checked);
+        setConsiderCompletedWithNoAnswerDirty(true);
+      },
+      [],
+    );
+
     const onFormSubmit = useCallback(
       (callback: () => void) => {
         setSubmitState(PuzzleModalFormSubmitState.SUBMITTING);
@@ -247,6 +283,8 @@ const PuzzleModalForm = React.forwardRef(
           expectedAnswerCount,
           locked,
           lockedSummary: lockedSummary !== "" ? lockedSummary : undefined,
+          completedWithNoAnswer: considerCompletedWithNoAnswer,
+          markedComplete,
         };
         if (docType) {
           payload.docType = docType;
@@ -278,6 +316,8 @@ const PuzzleModalForm = React.forwardRef(
             setUrlDirty(false);
             setTagsDirty(false);
             setExpectedAnswerCountDirty(false);
+            setConsiderCompletedWithNoAnswerDirty(false);
+            setConfirmingDuplicateUrl(false);
             setAllowDuplicateUrls(false);
             callback();
           }
@@ -294,6 +334,8 @@ const PuzzleModalForm = React.forwardRef(
         allowDuplicateUrls,
         locked,
         lockedSummary,
+        considerCompletedWithNoAnswer,
+        markedComplete,
       ],
     );
 
@@ -347,6 +389,26 @@ const PuzzleModalForm = React.forwardRef(
         return expectedAnswerCount;
       }
     }, [expectedAnswerCountDirty, puzzle, expectedAnswerCount]);
+
+    const currentConsiderCompletedWithNoAnswer = useMemo(() => {
+      if (!considerCompletedWithNoAnswerDirty && puzzle) {
+        return puzzle.completedWithNoAnswer ?? false;
+      } else {
+        return considerCompletedWithNoAnswer ?? false;
+      }
+    }, [
+      considerCompletedWithNoAnswerDirty,
+      puzzle,
+      considerCompletedWithNoAnswer,
+    ]);
+
+    const currentMarkedComplete = useMemo(() => {
+      if (!markedCompleteDirty && puzzle) {
+        return puzzle.markedComplete ?? false;
+      } else {
+        return markedComplete;
+      }
+    }, [markedCompleteDirty, puzzle, markedComplete]);
 
     useImperativeHandle(forwardedRef, () => ({
       show,
@@ -651,6 +713,29 @@ const PuzzleModalForm = React.forwardRef(
                 />
               </Col>
             </FormGroup>
+          )}
+          {currentExpectedAnswerCount === 0 ? (
+            <FormCheck
+              id={`${idPrefix}-solved-with-no-answers`}
+              label="Allow this to be marked completed with no answers"
+              type="checkbox"
+              checked={currentConsiderCompletedWithNoAnswer}
+              disabled={disableForm}
+              onChange={onConsiderSolvedWithNoAnswerChange}
+              className="mt-1"
+            />
+          ) : undefined}
+
+          {puzzle && (
+            <FormCheck
+              id={`${idPrefix}-marked-complete`}
+              label="Marked as complete"
+              type="checkbox"
+              checked={currentMarkedComplete}
+              disabled={disableForm}
+              onChange={onMarkedCompleteChange}
+              className="mt-1"
+            />
           )}
 
           {submitState === PuzzleModalFormSubmitState.FAILED && (

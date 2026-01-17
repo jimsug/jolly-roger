@@ -27,6 +27,8 @@ defineMethod(updatePuzzle, {
       allowDuplicateUrls: Match.Optional(Boolean),
       locked: Match.Optional(Boolean),
       lockedSummary: Match.Optional(String),
+      completedWithNoAnswer: Match.Optional(Boolean),
+      markedComplete: Match.Optional(Boolean),
     });
 
     return arg;
@@ -40,6 +42,8 @@ defineMethod(updatePuzzle, {
     expectedAnswerCount,
     locked,
     lockedSummary,
+    completedWithNoAnswer,
+    markedComplete,
   }) {
     check(this.userId, String);
 
@@ -72,6 +76,8 @@ defineMethod(updatePuzzle, {
       puzzle: puzzleId,
       title,
       expectedAnswerCount,
+      completedWithNoAnswer,
+      markedComplete,
     });
 
     const update: Mongo.Modifier<PuzzleType> = {
@@ -99,6 +105,16 @@ defineMethod(updatePuzzle, {
       update.$set = { ...update.$set, url };
     } else {
       update.$unset = { url: "" };
+    }
+    if (completedWithNoAnswer !== undefined) {
+      update.$set = { ...update.$set, completedWithNoAnswer };
+    } else {
+      update.$unset = { ...update.$unset, completedWithNoAnswer: "" };
+    }
+    if (markedComplete !== undefined) {
+      update.$set = { ...update.$set, markedComplete };
+    } else {
+      update.$unset = { ...update.$unset, markedComplete: "" };
     }
     await Puzzles.updateAsync(puzzleId, update);
 

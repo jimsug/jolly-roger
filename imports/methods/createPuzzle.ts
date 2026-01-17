@@ -12,6 +12,7 @@ export default new TypedMethod<
     allowDuplicateUrls?: boolean;
     locked?: boolean;
     lockedSummary?: string;
+    completedWithNoAnswer?: boolean;
   },
   string
 >("Puzzles.methods.create");

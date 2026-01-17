@@ -10,6 +10,8 @@ export default new TypedMethod<
     allowDuplicateUrls?: boolean;
     locked?: boolean;
     lockedSummary?: string;
+    completedWithNoAnswer?: boolean;
+    markedComplete?: boolean;
   },
   void
 >("Puzzles.methods.update");
