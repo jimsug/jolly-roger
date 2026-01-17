@@ -37,7 +37,7 @@ defineMethod(providePuzzleFeedback, {
         $set: {
           hunt: puzzle.hunt,
           score,
-          comment,
+          comment: comment || undefined,
         },
       },
     );

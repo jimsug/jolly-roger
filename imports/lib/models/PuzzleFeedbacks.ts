@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { foreignKey, nonEmptyString } from "./customTypes";
+import { allowedEmptyString, foreignKey } from "./customTypes";
 import type { ModelType } from "./Model";
 import SoftDeletedModel from "./SoftDeletedModel";
 import withCommon from "./withCommon";
@@ -9,7 +9,7 @@ const PuzzleFeedback = withCommon(
     hunt: foreignKey,
     puzzle: foreignKey,
     score: z.number().int(),
-    comment: nonEmptyString.optional(),
+    comment: allowedEmptyString.optional(),
   }),
 );
 

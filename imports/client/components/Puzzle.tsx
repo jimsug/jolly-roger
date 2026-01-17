@@ -120,10 +120,12 @@ const StyledButton: FC<ComponentPropsWithRef<typeof Button>> = styled(Button)`
   /* Precedence boost needed to override bootstrap default button padding */
   && {
     /* Resize button to fit in one line-height */
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     height: 24px;
-    width: 24px;
-    padding: 0;
+    min-width: 24px;
+    padding: 0 4px;
   }
 `;
 
@@ -318,6 +320,7 @@ const Puzzle = React.memo(
       () => PuzzleFeedbacks.find({ puzzle: puzzleId }).fetch(),
       [puzzleId],
     );
+
     const myFeedback = useTracker(
       () =>
         PuzzleFeedbacks.findOne({

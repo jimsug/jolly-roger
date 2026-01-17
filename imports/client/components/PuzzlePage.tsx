@@ -2472,7 +2472,8 @@ const PuzzlePageMetadata = ({
             <Popover.Body>
               {puzzle.lockedSummary && (
                 <Alert variant="info" style={{ fontSize: "0.8rem" }}>
-                  <strong>Note: </strong> {puzzle.lockedSummary}
+                  <strong>Locked puzzle summary: </strong>{" "}
+                  {puzzle.lockedSummary}
                 </Alert>
               )}
               <PuzzleFeedbackForm
@@ -2602,7 +2603,7 @@ const PuzzlePageMetadata = ({
         </PuzzleMetadataActionRow>
         {puzzle.locked && puzzle.lockedSummary && (
           <PuzzleMetadataRow>
-            <strong>Note: </strong> {puzzle.lockedSummary}
+            <strong>Locked puzzle summary:</strong> {puzzle.lockedSummary}
           </PuzzleMetadataRow>
         )}
         <PuzzleMetadataRow>{answersElement}</PuzzleMetadataRow>
