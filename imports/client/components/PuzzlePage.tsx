@@ -2412,7 +2412,9 @@ const PuzzlePageMetadata = ({
   ) : null;
 
   let guessButton = null;
-  if (puzzle.expectedAnswerCount > 0 && !puzzle.locked) {
+
+  const renderAsLocked = puzzle.locked && hunt.allowPuzzleLocking;
+  if (puzzle.expectedAnswerCount > 0 && !renderAsLocked) {
     guessButton = hasGuessQueue ? (
       <>
         <Button variant="primary" size="sm" onClick={showGuessModal}>
@@ -2442,7 +2444,7 @@ const PuzzlePageMetadata = ({
         />
       </>
     );
-  } else if (puzzle.locked) {
+  } else if (renderAsLocked) {
     guessButton = (
       <>
         <Button
@@ -2605,7 +2607,7 @@ const PuzzlePageMetadata = ({
             {minimizeMetadataButton}
           </PuzzleMetadataButtons>
         </PuzzleMetadataActionRow>
-        {puzzle.locked && puzzle.lockedSummary && (
+        {renderAsLocked && puzzle.lockedSummary && (
           <PuzzleMetadataRow>
             <strong>Locked puzzle summary:</strong> {puzzle.lockedSummary}
           </PuzzleMetadataRow>

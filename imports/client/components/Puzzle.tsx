@@ -30,6 +30,7 @@ import Tooltip from "react-bootstrap/Tooltip";
 import { Link } from "react-router-dom";
 import styled, { css, useTheme } from "styled-components";
 import { difference, indexedById } from "../../lib/listUtils";
+import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import type { PuzzleType } from "../../lib/models/Puzzles";
@@ -264,6 +265,7 @@ const Puzzle = React.memo(
   }) => {
     const puzzleId = puzzle._id;
     const huntId = puzzle.hunt;
+    const hunt = Hunts.findOne(huntId);
 
     useSubscribeDisplayNames(huntId);
 
@@ -619,8 +621,9 @@ const Puzzle = React.memo(
         </Tooltip>
       );
     }, [puzzleId, rtcUsers, activeUsers, passiveUsers]);
+    const renderAsLocked = puzzle.locked && hunt.allowPuzzleLocking;
     return (
-      <PuzzleDiv $solvedness={solvedness} $locked={puzzle.locked}>
+      <PuzzleDiv $solvedness={solvedness} $locked={renderAsLocked}>
         {showEditModal ? (
           <PuzzleModalForm
             key={puzzle._id}
@@ -637,7 +640,7 @@ const Puzzle = React.memo(
         )}
         <PuzzleControlButtonsColumn>
           <ButtonGroup size="sm">
-            {puzzle.locked ? (
+            {renderAsLocked ? (
               <>
                 <StyledButton
                   variant={myFeedback ? "info" : theme.basicMode}
@@ -733,7 +736,7 @@ const Puzzle = React.memo(
           ) : null}
         </PuzzlePriorityColumn>
         <PuzzleMetaColumn>{puzzleIsMeta}</PuzzleMetaColumn>
-        {puzzle.locked ? (
+        {renderAsLocked ? (
           <LockedSummaryColumn title={puzzle.lockedSummary}>
             {puzzle.lockedSummary}
           </LockedSummaryColumn>
@@ -742,7 +745,7 @@ const Puzzle = React.memo(
             <SolversColumn>
               {showSolvers !== "hide" &&
               solvedness === "unsolved" &&
-              !puzzle.locked ? (
+              !renderAsLocked ? (
                 <OverlayTrigger placement="left" overlay={solversTooltip}>
                   <div style={{ cursor: "default" }}>
                     {rtcUsers.length > 0 && (
@@ -762,7 +765,7 @@ const Puzzle = React.memo(
               ) : null}
             </SolversColumn>
             <PuzzleActivityColumn>
-              {solvedness === "unsolved" && !puzzle.locked && (
+              {solvedness === "unsolved" && !renderAsLocked && (
                 <PuzzleActivity
                   huntId={puzzle.hunt}
                   puzzleId={puzzle._id}

@@ -21,6 +21,7 @@ import Row from "react-bootstrap/Row";
 import type { ActionMeta } from "react-select";
 import { useTheme } from "styled-components";
 import type { GdriveMimeTypesType } from "../../lib/GdriveMimeTypes";
+import Hunts from "../../lib/models/Hunts";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import LabelledRadioGroup from "./LabelledRadioGroup";
@@ -87,6 +88,8 @@ const PuzzleModalForm = React.forwardRef(
     },
     forwardedRef: React.Ref<PuzzleModalFormHandle>,
   ) => {
+    const hunt = Hunts.findOne(huntId);
+
     const tagNamesForIds = useCallback(
       (tagIds: string[]) => {
         const tagNames: Record<string, string> = {};
@@ -319,6 +322,9 @@ const PuzzleModalForm = React.forwardRef(
             setConsiderCompletedWithNoAnswerDirty(false);
             setConfirmingDuplicateUrl(false);
             setAllowDuplicateUrls(false);
+            setLocked(false);
+            setLockedSummary("");
+            setMarkedComplete(false);
             callback();
           }
         });
@@ -677,66 +683,71 @@ const PuzzleModalForm = React.forwardRef(
           </FormGroup>
 
           <hr />
-          <FormGroup as={Row} className="mb-3">
-            <Col xs={{ span: 9, offset: 3 }}>
-              <FormCheck
-                id={`${idPrefix}-locked`}
-                label="Locked"
-                type="checkbox"
-                disabled={disableForm}
-                checked={locked}
-                onChange={onLockedChange}
-              />
-              <FormText>
-                Locked puzzles are not visible to everyone by default. Users can
-                express interest on puzzles to be unlocked.
-              </FormText>
-            </Col>
-          </FormGroup>
+          {hunt.allowUnlockablePuzzles && (
+            <>
+              <FormGroup as={Row} className="mb-3">
+                <Col xs={{ span: 9, offset: 3 }}>
+                  <FormCheck
+                    id={`${idPrefix}-locked`}
+                    label="Locked"
+                    type="checkbox"
+                    disabled={disableForm}
+                    checked={locked}
+                    onChange={onLockedChange}
+                  />
+                  <FormText>
+                    Locked puzzles are not visible to everyone by default. Users
+                    can express interest on puzzles to be unlocked.
+                  </FormText>
+                </Col>
+              </FormGroup>
 
-          {locked && (
-            <FormGroup
-              as={Row}
-              className="mb-3"
-              controlId={`${idPrefix}-locked-summary`}
-            >
-              <FormLabel column xs={3}>
-                Locked Summary
-              </FormLabel>
-              <Col xs={9}>
-                <FormControl
-                  type="text"
-                  disabled={disableForm}
-                  onChange={onLockedSummaryChange}
-                  value={lockedSummary}
-                  placeholder="e.g. Pictures of two quizzes somewhere on campus."
-                />
-              </Col>
-            </FormGroup>
+              {locked && (
+                <FormGroup
+                  as={Row}
+                  className="mb-3"
+                  controlId={`${idPrefix}-locked-summary`}
+                >
+                  <FormLabel column xs={3}>
+                    Locked Summary
+                  </FormLabel>
+                  <Col xs={9}>
+                    <FormControl
+                      type="text"
+                      disabled={disableForm}
+                      onChange={onLockedSummaryChange}
+                      value={lockedSummary}
+                      placeholder="e.g. Pictures of two quizzes somewhere on campus."
+                    />
+                  </Col>
+                </FormGroup>
+              )}
+            </>
           )}
           {currentExpectedAnswerCount === 0 ? (
-            <FormCheck
-              id={`${idPrefix}-solved-with-no-answers`}
-              label="Allow this to be marked completed with no answers"
-              type="checkbox"
-              checked={currentConsiderCompletedWithNoAnswer}
-              disabled={disableForm}
-              onChange={onConsiderSolvedWithNoAnswerChange}
-              className="mt-1"
-            />
+            <>
+              <FormCheck
+                id={`${idPrefix}-solved-with-no-answers`}
+                label="Allow this to be marked completed with no answers"
+                type="checkbox"
+                checked={currentConsiderCompletedWithNoAnswer}
+                disabled={disableForm}
+                onChange={onConsiderSolvedWithNoAnswerChange}
+                className="mt-1"
+              />
+              {puzzle && (
+                <FormCheck
+                  id={`${idPrefix}-marked-complete`}
+                  label="Marked as complete"
+                  type="checkbox"
+                  checked={currentMarkedComplete}
+                  disabled={disableForm}
+                  onChange={onMarkedCompleteChange}
+                  className="mt-1"
+                />
+              )}
+            </>
           ) : undefined}
-
-          {puzzle && (
-            <FormCheck
-              id={`${idPrefix}-marked-complete`}
-              label="Marked as complete"
-              type="checkbox"
-              checked={currentMarkedComplete}
-              disabled={disableForm}
-              onChange={onMarkedCompleteChange}
-              className="mt-1"
-            />
-          )}
 
           {submitState === PuzzleModalFormSubmitState.FAILED && (
             <Alert variant="danger">{errorMessage}</Alert>

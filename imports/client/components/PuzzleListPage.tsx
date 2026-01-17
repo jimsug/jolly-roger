@@ -219,6 +219,7 @@ const PuzzleListView = ({
   canUpdate: boolean;
   loading: boolean;
 }) => {
+  const hunt = Hunts.findOne(huntId);
   const allPuzzles = useTracker(
     () => Puzzles.find({ hunt: huntId }).fetch(),
     [huntId],
@@ -629,6 +630,9 @@ const PuzzleListView = ({
 
   const puzzlesMatchingLockedFilter = useCallback(
     (puzzles: PuzzleType[]): PuzzleType[] => {
+      if (!hunt.allowUnlockablePuzzles) {
+        return puzzles;
+      }
       switch (lockedDisplayMode) {
         case "all":
           return puzzles;
@@ -640,7 +644,7 @@ const PuzzleListView = ({
           return puzzles;
       }
     },
-    [lockedDisplayMode],
+    [lockedDisplayMode, hunt.allowUnlockablePuzzles],
   );
 
   const matchingSearch = puzzlesMatchingSearchString(allPuzzles);
@@ -1032,40 +1036,42 @@ const PuzzleListView = ({
             </StyledToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
-        <FormGroup>
-          <FormLabel>Locked</FormLabel>
-          <ButtonToolbar>
-            <StyledToggleButtonGroup
-              type="radio"
-              name="show-locked"
-              defaultValue="all"
-              value={lockedDisplayMode}
-              onChange={setShowLockedString}
-            >
-              <ToggleButton
-                id={`${idPrefix}-locked-hide-button`}
-                variant="outline-info"
-                value="unlocked"
+        {hunt.allowUnlockablePuzzles && (
+          <FormGroup>
+            <FormLabel>Locked</FormLabel>
+            <ButtonToolbar>
+              <StyledToggleButtonGroup
+                type="radio"
+                name="show-locked"
+                defaultValue="all"
+                value={lockedDisplayMode}
+                onChange={setShowLockedString}
               >
-                Unlocked
-              </ToggleButton>
-              <ToggleButton
-                id={`${idPrefix}-locked-only-button`}
-                variant="outline-info"
-                value="locked"
-              >
-                Locked
-              </ToggleButton>
-              <ToggleButton
-                id={`${idPrefix}-locked-show-button`}
-                variant="outline-info"
-                value="all"
-              >
-                All
-              </ToggleButton>
-            </StyledToggleButtonGroup>
-          </ButtonToolbar>
-        </FormGroup>
+                <ToggleButton
+                  id={`${idPrefix}-locked-hide-button`}
+                  variant="outline-info"
+                  value="unlocked"
+                >
+                  Unlocked
+                </ToggleButton>
+                <ToggleButton
+                  id={`${idPrefix}-locked-only-button`}
+                  variant="outline-info"
+                  value="locked"
+                >
+                  Locked
+                </ToggleButton>
+                <ToggleButton
+                  id={`${idPrefix}-locked-show-button`}
+                  variant="outline-info"
+                  value="all"
+                >
+                  All
+                </ToggleButton>
+              </StyledToggleButtonGroup>
+            </ButtonToolbar>
+          </FormGroup>
+        )}
         <FormGroup>
           <FormLabel>Hunters</FormLabel>
           <ButtonToolbar>
