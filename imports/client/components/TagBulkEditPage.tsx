@@ -201,9 +201,11 @@ const TagPuzzle = React.memo(
     const solvedness = computeSolvedness(puzzle);
 
     const tagIndex = indexedById(allTags);
-    const puzzleTags = puzzle.tags.map((tagId) => {
-      return tagIndex.get(tagId);
-    });
+    const puzzleTags = puzzle.tags
+      .map((tagId) => {
+        return tagIndex.get(tagId);
+      })
+      .filter((tag): tag is TagType => tag !== undefined);
 
     return (
       <TagPuzzleDiv $solvedness={solvedness}>
@@ -292,10 +294,20 @@ const TagBulkEditPage = () => {
   const onNameChanged = useCallback<NonNullable<FormControlProps["onChange"]>>(
     (e) => {
       setNewTagName(e.currentTarget.value);
-      setDirtyRename(tagToRename?.name.trim() !== newTagName?.trim());
+      setDirtyRename(true);
     },
-    [newTagName?.trim, tagToRename?.name.trim],
+    [],
   );
+
+  // Sync newTagName with the selected tag's name
+  React.useEffect(() => {
+    if (tagToRename) {
+      setNewTagName(tagToRename.name);
+      setDirtyRename(false);
+    } else {
+      setNewTagName("");
+    }
+  }, [tagToRename]);
 
   const allTags = useTracker(
     () => Tags.find({ hunt: huntId }).fetch(),
@@ -314,8 +326,12 @@ const TagBulkEditPage = () => {
     [allTags],
   );
 
-  const onRenameTagChanged = useCallback((value: TagSelectOption) => {
-    setSelectedTag(value.value);
+  const onRenameTagChanged = useCallback((value: TagSelectOption | null) => {
+    if (value) {
+      setSelectedTag(value.value);
+    } else {
+      setSelectedTag("");
+    }
     setDirtyRename(false);
   }, []);
 
@@ -505,7 +521,6 @@ const TagBulkEditPage = () => {
     (e) => {
       e.preventDefault();
       setSubmitState(SubmitState.SUBMITTING);
-      console.log(selectedTag, newTagName, alias);
       renameTag.call(
         { tagId: selectedTag, name: newTagName, alias },
         onUpdateCallback,
@@ -565,7 +580,9 @@ const TagBulkEditPage = () => {
           <Col xs={6}>
             <Form.Label>Tag to rename</Form.Label>
             <Select
-              value={selectedTag}
+              value={
+                selectOptions.find((opt) => opt.value === selectedTag) || null
+              }
               id={`${idPrefix}tag-rename-selected-tag`}
               options={selectOptions}
               onChange={onRenameTagChanged}
