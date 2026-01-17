@@ -77,6 +77,7 @@ import "./undestroyHunt";
 import "./undestroyPuzzle";
 import "./unlinkUserDiscordAccount";
 import "./unlinkUserGoogleAccount";
+import "./markComplete";
 import "./updateHunt";
 import "./updateProfile";
 import "./updatePuzzle";

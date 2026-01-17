@@ -25,12 +25,22 @@ defineMethod(updatePuzzle, {
       // We accept this argument since it's provided by the form, but it's not checked here - only
       // during puzzle creation, to avoid duplicates when creating new puzzles.
       allowDuplicateUrls: Match.Optional(Boolean),
+      completedWithNoAnswer: Match.Optional(Boolean),
+      markedComplete: Match.Optional(Boolean),
     });
 
     return arg;
   },
 
-  async run({ puzzleId, title, url, tags, expectedAnswerCount }) {
+  async run({
+    puzzleId,
+    title,
+    url,
+    tags,
+    expectedAnswerCount,
+    completedWithNoAnswer,
+    markedComplete,
+  }) {
     check(this.userId, String);
 
     const oldPuzzle = await Puzzles.findOneAllowingDeletedAsync(puzzleId);
@@ -62,6 +72,8 @@ defineMethod(updatePuzzle, {
       puzzle: puzzleId,
       title,
       expectedAnswerCount,
+      completedWithNoAnswer,
+      markedComplete,
     });
 
     const update: Mongo.Modifier<PuzzleType> = {
@@ -75,6 +87,16 @@ defineMethod(updatePuzzle, {
       update.$set = { ...update.$set, url };
     } else {
       update.$unset = { url: "" };
+    }
+    if (completedWithNoAnswer !== undefined) {
+      update.$set = { ...update.$set, completedWithNoAnswer };
+    } else {
+      update.$unset = { ...update.$unset, completedWithNoAnswer: "" };
+    }
+    if (markedComplete !== undefined) {
+      update.$set = { ...update.$set, markedComplete };
+    } else {
+      update.$unset = { ...update.$unset, markedComplete: "" };
     }
     await Puzzles.updateAsync(puzzleId, update);
 

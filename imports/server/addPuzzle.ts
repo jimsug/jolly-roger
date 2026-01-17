@@ -15,53 +15,6 @@ import { deleteUnusedDocument, ensureDocument } from "./gdrive";
 import getOrCreateTagByName from "./getOrCreateTagByName";
 import GoogleClient from "./googleClientRefresher";
 
-async function checkForDuplicatePuzzle(huntId: string, url: string) {
-  const existingPuzzleWithUrl = await Puzzles.findOneAsync({
-    hunt: huntId,
-    url,
-  });
-  if (existingPuzzleWithUrl) {
-    throw new Meteor.Error(409, `Puzzle with URL ${url} already exists`);
-  }
-}
-
-async function createDocumentAndInsertPuzzle(
-  huntId: string,
-  title: string,
-  expectedAnswerCount: number,
-  tags: string[],
-  url: string | undefined,
-  docType: GdriveMimeTypesType,
-): Promise<string> {
-  // Look up each tag by name and map them to tag IDs.
-  const tagIds = await Promise.all(
-    tags.map(async (tagName) => {
-      return getOrCreateTagByName(huntId, tagName);
-    }),
-  );
-
-  const fullPuzzle = {
-    hunt: huntId,
-    title,
-    expectedAnswerCount,
-    _id: Random.id(),
-    tags: [...new Set(tagIds)],
-    answers: [],
-    url,
-  };
-
-  // By creating the document before we save the puzzle, we make sure nobody
-  // else has a chance to create a document with the wrong config. (This
-  // requires us to have an _id for the puzzle, which is why we generate it
-  // manually above instead of letting Meteor do it)
-  if (GoogleClient.ready() && !(await Flags.activeAsync("disable.google"))) {
-    await ensureDocument(fullPuzzle, docType);
-  }
-
-  await Puzzles.insertAsync(fullPuzzle);
-  return fullPuzzle._id;
-}
-
 export default async function addPuzzle({
   userId,
   huntId,
@@ -71,6 +24,7 @@ export default async function addPuzzle({
   docType,
   url,
   allowDuplicateUrls,
+  completedWithNoAnswer,
 }: {
   userId: string;
   huntId: string;
@@ -80,6 +34,7 @@ export default async function addPuzzle({
   expectedAnswerCount: number;
   docType: GdriveMimeTypesType;
   allowDuplicateUrls?: boolean;
+  completedWithNoAnswer?: boolean;
 }) {
   check(userId, String);
   check(huntId, String);
@@ -91,6 +46,7 @@ export default async function addPuzzle({
     Match.OneOf(...(Object.keys(GdriveMimeTypes) as GdriveMimeTypesType[])),
   );
   check(allowDuplicateUrls, Match.Optional(Boolean));
+  check(completedWithNoAnswer, Match.Optional(Boolean));
 
   const hunt = await Hunts.findOneAsync(huntId);
   if (!hunt) {
@@ -134,6 +90,7 @@ export default async function addPuzzle({
     tags: [...new Set(tagIds)],
     answers: [],
     url,
+    completedWithNoAnswer,
   };
 
   // By creating the document before we save the puzzle, we make sure nobody
