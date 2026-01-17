@@ -11,6 +11,7 @@ export default new TypedMethod<
     docType: GdriveMimeTypesType;
     allowDuplicateUrls?: boolean;
     completedWithNoAnswer?: boolean;
+    markedComplete?: boolean;
   },
   string
 >("Puzzles.methods.create");

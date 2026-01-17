@@ -18,6 +18,7 @@ defineMethod(createPuzzle, {
       ),
       allowDuplicateUrls: Match.Optional(Boolean),
       completedWithNoAnswer: Match.Optional(Boolean),
+      markedComplete: Match.Optional(Boolean),
     });
     return arg;
   },
@@ -31,6 +32,7 @@ defineMethod(createPuzzle, {
     url,
     allowDuplicateUrls,
     completedWithNoAnswer,
+    markedComplete,
   }) {
     check(this.userId, String);
 
@@ -44,6 +46,7 @@ defineMethod(createPuzzle, {
       url,
       allowDuplicateUrls,
       completedWithNoAnswer,
+      markedComplete,
     });
   },
 });
