@@ -299,6 +299,9 @@ const HuntEditPage = () => {
   const [customLinkEmbed, setCustomLinkEmbed] = useState<boolean>(
     hunt?.customLinkEmbed ?? false,
   );
+  const [allowUnlockablePuzzles, setAllowUnlockablePuzzles] = useState<boolean>(
+    hunt?.allowUnlockablePuzzles ?? false,
+  );
 
   const onNameChanged = useCallback<NonNullable<FormControlProps["onChange"]>>(
     (e) => {
@@ -450,13 +453,21 @@ const HuntEditPage = () => {
   const onCustomLinkUrlChanged = useCallback<
     NonNullable<FormControlProps["onChange"]>
   >((e) => {
-    setCustomLinkUrl(e.currentTarget.value);
+    setCustomLinkUrl(
+      e.currentTarget.value.trim().length > 0
+        ? e.currentTarget.value.trim()
+        : undefined,
+    );
   }, []);
 
   const onCustomLinkNameChanged = useCallback<
     NonNullable<FormControlProps["onChange"]>
   >((e) => {
-    setCustomLinkName(e.currentTarget.value);
+    setCustomLinkName(
+      e.currentTarget.value.trim().length > 0
+        ? e.currentTarget.value.trim()
+        : undefined,
+    );
   }, []);
 
   const onCustomLinkEmbedChanged = useCallback<
@@ -464,6 +475,13 @@ const HuntEditPage = () => {
   >((e) => {
     setCustomLinkEmbed(e.currentTarget.checked);
   }, []);
+
+  const onAllowUnlockablePuzzlesChanged = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setAllowUnlockablePuzzles(e.currentTarget.checked);
+    },
+    [],
+  );
 
   const onFormCallback = useCallback(
     (error?: Error, newHuntId?: string) => {
@@ -515,9 +533,10 @@ const HuntEditPage = () => {
         archivedHuntUrl: archivedHuntUrl === "" ? undefined : archivedHuntUrl,
         originalHuntUrlRegex:
           originalHuntUrlRegex === "" ? undefined : originalHuntUrlRegex,
-        customLinkUrl,
-        customLinkName,
+        customLinkUrl: customLinkUrl === "" ? undefined : customLinkUrl,
+        customLinkName: customLinkName === "" ? undefined : customLinkName,
         customLinkEmbed,
+        allowUnlockablePuzzles,
       };
 
       if (huntId) {
@@ -556,6 +575,7 @@ const HuntEditPage = () => {
       customLinkUrl,
       customLinkName,
       customLinkEmbed,
+      allowUnlockablePuzzles,
     ],
   );
 
@@ -734,6 +754,28 @@ const HuntEditPage = () => {
               If enabled, users can submit guesses for puzzles but operators
               must mark them as correct. If disabled, any user can enter the
               puzzle answer.
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
+          controlId={`${idPrefix}-hunt-form-has-guess-queue`}
+        >
+          <FormLabel column xs={3}>
+            Allow unlockable puzzles
+          </FormLabel>
+          <Col xs={9}>
+            <FormCheck
+              id={`${idPrefix}-hunt-form-allow-unlockable-puzzles`}
+              checked={allowUnlockablePuzzles}
+              onChange={onAllowUnlockablePuzzlesChanged}
+              disabled={disableForm}
+            />
+            <FormText>
+              If enabled, users can create puzzles that are marked as
+              unlockable. If disabled, all puzzles are created unlocked.
             </FormText>
           </Col>
         </FormGroup>
