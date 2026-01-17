@@ -49,6 +49,7 @@ import UserStatuses from "../../lib/models/UserStatuses";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import presenceForHunt from "../../lib/publications/presenceForHunt";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
+import puzzleFeedbacks from "../../lib/publications/puzzleFeedbacks";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
 import statusesForHuntUsers from "../../lib/publications/statusesForHuntUsers";
 import {
@@ -61,6 +62,7 @@ import { useBreadcrumb } from "../hooks/breadcrumb";
 import {
   useHuntPuzzleListCollapseGroups,
   useHuntPuzzleListDisplayMode,
+  useHuntPuzzleListLockedDisplayMode,
   useHuntPuzzleListShowSolved,
   useHuntPuzzleListShowSolvers,
   useOperatorActionsHiddenForHunt,
@@ -249,6 +251,8 @@ const PuzzleListView = ({
   const handleSearchBlur = useCallback(() => setIsSearchFocused(false), []);
   const [displayMode, setDisplayMode] = useHuntPuzzleListDisplayMode(huntId);
   const [showSolved, setShowSolved] = useHuntPuzzleListShowSolved(huntId);
+  const [lockedDisplayMode, setLockedDisplayMode] =
+    useHuntPuzzleListLockedDisplayMode(huntId);
   const [showSolvers, setShowSolvers] = useHuntPuzzleListShowSolvers(huntId);
   const [huntPuzzleListCollapseGroups, setHuntPuzzleListCollapseGroups] =
     useHuntPuzzleListCollapseGroups(huntId);
@@ -623,6 +627,37 @@ const PuzzleListView = ({
     [showSolved],
   );
 
+  const puzzlesMatchingLockedFilter = useCallback(
+    (puzzles: PuzzleType[]): PuzzleType[] => {
+      switch (lockedDisplayMode) {
+        case "all":
+          return puzzles;
+        case "unlocked":
+          return puzzles.filter((puzzle) => !puzzle.locked);
+        case "locked":
+          return puzzles.filter((puzzle) => puzzle.locked);
+        default:
+          return puzzles;
+      }
+    },
+    [lockedDisplayMode],
+  );
+
+  const matchingSearch = puzzlesMatchingSearchString(allPuzzles);
+  const matchingSearchAndSolved = puzzlesMatchingSolvedFilter(matchingSearch);
+  const matchingSearchAndSolvedAndLocked = puzzlesMatchingLockedFilter(
+    matchingSearchAndSolved,
+  );
+  // Normally, we'll just show matchingSearchAndSolvedAndLocked, but if that produces
+  // no results, and there *is* a solved or locked puzzle that is not being displayed due
+  // to the filters, then show that and a note that we're showing everything
+  // because no other puzzles matched.
+  const overConstrained =
+    matchingSearch.length > 0 && matchingSearchAndSolvedAndLocked.length === 0;
+  const retainedPuzzles = overConstrained
+    ? matchingSearch
+    : matchingSearchAndSolvedAndLocked;
+
   const clearSearch = useCallback(() => {
     setSearchString("");
   }, [setSearchString]);
@@ -632,6 +667,13 @@ const PuzzleListView = ({
       setShowSolved(value === "show");
     },
     [setShowSolved],
+  );
+
+  const setShowLockedString = useCallback(
+    (value: "all" | "unlocked" | "locked") => {
+      setLockedDisplayMode(value);
+    },
+    [setLockedDisplayMode],
   );
 
   const setShowSolversString = useCallback(
@@ -695,14 +737,14 @@ const PuzzleListView = ({
     (
       retainedPuzzles: PuzzleType[],
       retainedDeletedPuzzles: PuzzleType[] | undefined,
-      solvedOverConstrains: boolean,
+      overConstrained: boolean,
       allPuzzlesCount: number,
       listTitle: string,
     ) => {
-      const maybeMatchWarning = solvedOverConstrains && (
+      const maybeMatchWarning = overConstrained && (
         <Alert variant="info">
-          No matches found in unsolved puzzles; showing matches from solved
-          puzzles
+          No matches found in unsolved/unlocked puzzles; showing matches from
+          all puzzles
         </Alert>
       );
       const retainedIds = new Set(retainedPuzzles.map((puzzle) => puzzle._id));
@@ -899,17 +941,6 @@ const PuzzleListView = ({
     </>
   );
 
-  const matchingSearch = puzzlesMatchingSearchString(allPuzzles);
-  const matchingSearchAndSolved = puzzlesMatchingSolvedFilter(matchingSearch);
-  // Normally, we'll just show matchingSearchAndSolved, but if that produces
-  // no results, and there *is* a solved puzzle that is not being displayed due
-  // to the solved filter, then show that and a note that we're showing solved
-  // puzzles because no unsolved puzzles matched.
-  const solvedOverConstrains =
-    matchingSearch.length > 0 && matchingSearchAndSolved.length === 0;
-  const retainedPuzzles = solvedOverConstrains
-    ? matchingSearch
-    : matchingSearchAndSolved;
   const filterText = useTracker(() => {
     return showSolvers !== "hide"
       ? "Filter by title, answer, tag, or solver"
@@ -1002,6 +1033,40 @@ const PuzzleListView = ({
           </ButtonToolbar>
         </FormGroup>
         <FormGroup>
+          <FormLabel>Locked</FormLabel>
+          <ButtonToolbar>
+            <StyledToggleButtonGroup
+              type="radio"
+              name="show-locked"
+              defaultValue="all"
+              value={lockedDisplayMode}
+              onChange={setShowLockedString}
+            >
+              <ToggleButton
+                id={`${idPrefix}-locked-hide-button`}
+                variant="outline-info"
+                value="unlocked"
+              >
+                Unlocked
+              </ToggleButton>
+              <ToggleButton
+                id={`${idPrefix}-locked-only-button`}
+                variant="outline-info"
+                value="locked"
+              >
+                Locked
+              </ToggleButton>
+              <ToggleButton
+                id={`${idPrefix}-locked-show-button`}
+                variant="outline-info"
+                value="all"
+              >
+                All
+              </ToggleButton>
+            </StyledToggleButtonGroup>
+          </ButtonToolbar>
+        </FormGroup>
+        <FormGroup>
           <FormLabel>Hunters</FormLabel>
           <ButtonToolbar>
             <StyledToggleButtonGroup
@@ -1073,7 +1138,7 @@ const PuzzleListView = ({
       {renderList(
         retainedPuzzles,
         retainedDeletedPuzzles,
-        solvedOverConstrains,
+        overConstrained,
         allPuzzles.length,
         listTitle,
       )}
@@ -1106,6 +1171,7 @@ const PuzzleListPage = () => {
 
   // Don't bother including this in loading - it's ok if they trickle in
   useTypedSubscribe(puzzleActivityForHunt, { huntId });
+  useTypedSubscribe(puzzleFeedbacks, { huntId });
   return loading ? (
     <span>loading...</span>
   ) : (

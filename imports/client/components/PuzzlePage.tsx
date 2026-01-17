@@ -18,6 +18,7 @@ import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
 import { faReplyAll } from "@fortawesome/free-solid-svg-icons/faReplyAll";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import EmojiPicker, { EmojiStyle } from "emoji-picker-react";
 import type { ComponentPropsWithRef, FC, MouseEvent } from "react";
@@ -43,6 +44,7 @@ import FormText from "react-bootstrap/FormText";
 import InputGroup from "react-bootstrap/InputGroup";
 import Modal from "react-bootstrap/Modal";
 import Offcanvas from "react-bootstrap/Offcanvas";
+import Overlay from "react-bootstrap/Overlay";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Popover from "react-bootstrap/Popover";
 import Row from "react-bootstrap/Row";
@@ -70,6 +72,7 @@ import type { GuessType } from "../../lib/models/Guesses";
 import Guesses from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
+import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
@@ -84,6 +87,7 @@ import {
   userMayWritePuzzlesForHunt,
 } from "../../lib/permission_stubs";
 import chatMessagesForPuzzle from "../../lib/publications/chatMessagesForPuzzle";
+import puzzleFeedbacks from "../../lib/publications/puzzleFeedbacks";
 import puzzleForPuzzlePage from "../../lib/publications/puzzleForPuzzlePage";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import { computeSolvedness } from "../../lib/solvedness";
@@ -128,8 +132,10 @@ import MinimizedChatInfo from "./MinimizedChatInfo";
 import type { ModalFormHandle } from "./ModalForm";
 import ModalForm from "./ModalForm";
 import PuzzleAnswer from "./PuzzleAnswer";
+import PuzzleFeedbackForm from "./PuzzleFeedbackForm";
 import type { PuzzleModalFormSubmitPayload } from "./PuzzleModalForm";
 import PuzzleModalForm from "./PuzzleModalForm";
+import PuzzleUnlockModal from "./PuzzleUnlockModal";
 import SplitPaneMinus from "./SplitPaneMinus";
 import Breakable from "./styling/Breakable";
 import { MonospaceFontFamily } from "./styling/constants";
@@ -2253,6 +2259,27 @@ const PuzzlePageMetadata = ({
     [huntId, puzzleId],
   );
 
+  useTypedSubscribe(puzzleFeedbacks, { huntId });
+  const feedbacks = useTracker(
+    () => PuzzleFeedbacks.find({ puzzle: puzzleId }).fetch(),
+    [puzzleId],
+  );
+  const myFeedback = useTracker(
+    () =>
+      PuzzleFeedbacks.findOne({
+        puzzle: puzzleId,
+        createdBy: Meteor.userId()!,
+      }),
+    [puzzleId],
+  );
+  const [showInterestPopover, setShowInterestPopover] = useState(false);
+  const [showUnlockModal, setShowUnlockModal] = useState(false);
+  const interestButtonRef = useRef<HTMLButtonElement>(null);
+
+  const totalScore = useMemo(() => {
+    return feedbacks.reduce((acc, f) => acc + f.score, 0);
+  }, [feedbacks]);
+
   const editModalRef = useRef<React.ElementRef<typeof PuzzleModalForm>>(null);
   const guessModalRef = useRef<React.ElementRef<typeof PuzzleGuessModal>>(null);
   const answerModalRef =
@@ -2302,6 +2329,14 @@ const PuzzlePageMetadata = ({
     if (editModalRef.current) {
       editModalRef.current.show();
     }
+  }, []);
+
+  const toggleInterestPopover = useCallback(() => {
+    setShowInterestPopover((v) => !v);
+  }, []);
+
+  const showUnlock = useCallback(() => {
+    setShowUnlockModal(true);
   }, []);
 
   const tagsById = indexedById(allTags);
@@ -2375,7 +2410,7 @@ const PuzzlePageMetadata = ({
   ) : null;
 
   let guessButton = null;
-  if (puzzle.expectedAnswerCount > 0) {
+  if (puzzle.expectedAnswerCount > 0 && !puzzle.locked) {
     guessButton = hasGuessQueue ? (
       <>
         <Button variant="primary" size="sm" onClick={showGuessModal}>
@@ -2402,6 +2437,65 @@ const PuzzlePageMetadata = ({
           ref={answerModalRef}
           puzzle={puzzle}
           guesses={guesses}
+        />
+      </>
+    );
+  } else if (puzzle.locked) {
+    guessButton = (
+      <>
+        <Button
+          variant="info"
+          size="sm"
+          ref={interestButtonRef}
+          onClick={toggleInterestPopover}
+        >
+          <FontAwesomeIcon icon={faKey} />
+          {myFeedback ? " Update interest" : " I'm interested"}
+          {totalScore > 0 && (
+            <>
+              {" "}
+              <Badge bg="light" text="dark">
+                {totalScore}
+              </Badge>
+            </>
+          )}
+        </Button>
+        <Overlay
+          show={showInterestPopover}
+          target={interestButtonRef.current}
+          placement="bottom"
+          rootClose
+          onHide={() => setShowInterestPopover(false)}
+        >
+          <Popover id={`interest-popover-${puzzleId}`}>
+            <Popover.Header as="h3">Express Interest</Popover.Header>
+            <Popover.Body>
+              {puzzle.lockedSummary && (
+                <Alert variant="info" style={{ fontSize: "0.8rem" }}>
+                  <strong>Note: </strong> {puzzle.lockedSummary}
+                </Alert>
+              )}
+              <PuzzleFeedbackForm
+                puzzleId={puzzleId}
+                initialScore={myFeedback?.score}
+                initialComment={myFeedback?.comment}
+                canWithdraw={!!myFeedback}
+                onSuccess={() => setShowInterestPopover(false)}
+              />
+            </Popover.Body>
+          </Popover>
+        </Overlay>
+        {canUpdate && (
+          <Button variant="danger" size="sm" onClick={showUnlock}>
+            <FontAwesomeIcon icon={faUnlock} /> Unlock
+          </Button>
+        )}
+        <PuzzleUnlockModal
+          show={showUnlockModal}
+          onHide={() => setShowUnlockModal(false)}
+          puzzle={puzzle}
+          feedbacks={feedbacks}
+          displayNames={displayNames}
         />
       </>
     );
@@ -2506,6 +2600,11 @@ const PuzzlePageMetadata = ({
             {minimizeMetadataButton}
           </PuzzleMetadataButtons>
         </PuzzleMetadataActionRow>
+        {puzzle.locked && puzzle.lockedSummary && (
+          <PuzzleMetadataRow>
+            <strong>Note: </strong> {puzzle.lockedSummary}
+          </PuzzleMetadataRow>
+        )}
         <PuzzleMetadataRow>{answersElement}</PuzzleMetadataRow>
         {tagsOnSeparateRow /* Render tags on separate row if they wrapped */ && (
           <PuzzleMetadataRow>{tagListElement}</PuzzleMetadataRow>

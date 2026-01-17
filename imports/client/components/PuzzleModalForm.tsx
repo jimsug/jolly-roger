@@ -43,6 +43,8 @@ export interface PuzzleModalFormSubmitPayload {
   docType?: GdriveMimeTypesType;
   expectedAnswerCount: number;
   allowDuplicateUrls?: boolean;
+  locked?: boolean;
+  lockedSummary?: string;
 }
 
 enum PuzzleModalFormSubmitState {
@@ -116,6 +118,10 @@ const PuzzleModalForm = React.forwardRef(
     const [allowDuplicateUrls, setAllowDuplicateUrls] = useState<
       boolean | undefined
     >(puzzle ? undefined : false);
+    const [locked, setLocked] = useState<boolean>(puzzle?.locked ?? false);
+    const [lockedSummary, setLockedSummary] = useState<string>(
+      puzzle?.lockedSummary ?? "",
+    );
     const [submitState, setSubmitState] = useState<PuzzleModalFormSubmitState>(
       PuzzleModalFormSubmitState.IDLE,
     );
@@ -219,6 +225,16 @@ const PuzzleModalForm = React.forwardRef(
       },
       [],
     );
+    const onLockedChange = useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        setLocked(event.currentTarget.checked);
+      },
+      [],
+    );
+    const onLockedSummaryChange: NonNullable<FormControlProps["onChange"]> =
+      useCallback((event) => {
+        setLockedSummary(event.currentTarget.value);
+      }, []);
 
     const onFormSubmit = useCallback(
       (callback: () => void) => {
@@ -229,6 +245,8 @@ const PuzzleModalForm = React.forwardRef(
           url: url !== "" ? url : undefined, // Make sure we send undefined if url is falsy
           tags,
           expectedAnswerCount,
+          locked,
+          lockedSummary: lockedSummary !== "" ? lockedSummary : undefined,
         };
         if (docType) {
           payload.docType = docType;
@@ -274,6 +292,8 @@ const PuzzleModalForm = React.forwardRef(
         expectedAnswerCount,
         docType,
         allowDuplicateUrls,
+        locked,
+        lockedSummary,
       ],
     );
 
@@ -289,6 +309,8 @@ const PuzzleModalForm = React.forwardRef(
       setTags([]);
       setExpectedAnswerCount(1);
       setDocType("spreadsheet");
+      setLocked(false);
+      setLockedSummary("");
     }, []);
 
     const currentTitle = useMemo(() => {
@@ -437,10 +459,10 @@ const PuzzleModalForm = React.forwardRef(
           setTitleDirty(false);
         }
         setLastAutoPopulatedTitle(formattedTitle);
-      } catch (error) {
+      } catch {
         // console.debug("Invalid URL, probably there's no URL:", error);
       }
-    }, [url]);
+    }, [url, lastAutoPopulatedTitle, title]);
 
     const allowDuplicateUrlsCheckbox =
       !puzzle && allowDuplicateUrls !== undefined && confirmingDuplicateUrl ? (
@@ -591,6 +613,45 @@ const PuzzleModalForm = React.forwardRef(
               </FormText>
             </Col>
           </FormGroup>
+
+          <hr />
+          <FormGroup as={Row} className="mb-3">
+            <Col xs={{ span: 9, offset: 3 }}>
+              <FormCheck
+                id={`${idPrefix}-locked`}
+                label="Locked"
+                type="checkbox"
+                disabled={disableForm}
+                checked={locked}
+                onChange={onLockedChange}
+              />
+              <FormText>
+                Locked puzzles are not visible to everyone by default. Users can
+                express interest on puzzles to be unlocked.
+              </FormText>
+            </Col>
+          </FormGroup>
+
+          {locked && (
+            <FormGroup
+              as={Row}
+              className="mb-3"
+              controlId={`${idPrefix}-locked-summary`}
+            >
+              <FormLabel column xs={3}>
+                Locked Summary
+              </FormLabel>
+              <Col xs={9}>
+                <FormControl
+                  type="text"
+                  disabled={disableForm}
+                  onChange={onLockedSummaryChange}
+                  value={lockedSummary}
+                  placeholder="e.g. Pictures of two quizzes somewhere on campus."
+                />
+              </Col>
+            </FormGroup>
+          )}
 
           {submitState === PuzzleModalFormSubmitState.FAILED && (
             <Alert variant="danger">{errorMessage}</Alert>
