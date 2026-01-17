@@ -8,6 +8,8 @@ export default new TypedMethod<
     tags: string[];
     expectedAnswerCount: number;
     allowDuplicateUrls?: boolean;
+    completedWithNoAnswer?: boolean;
+    markedComplete?: boolean;
   },
   void
 >("Puzzles.methods.update");

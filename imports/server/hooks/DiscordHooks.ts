@@ -99,24 +99,49 @@ const DiscordHooks: Hookset = {
     const puzzle = (await Puzzles.findOneAsync(puzzleId))!;
     const hunt = (await Hunts.findOneAsync(puzzle.hunt))!;
     if (hunt.puzzleCreationDiscordChannel) {
-      const title = `${puzzle.title} unlocked`;
+      const title = `🐣 ${puzzle.title}`;
       const url = Meteor.absoluteUrl(
         `hunts/${puzzle.hunt}/puzzles/${puzzle._id}`,
       );
       const tagNameList = await Tags.find({
         _id: { $in: puzzle.tags },
       }).mapAsync((t) => t.name);
-      const tags = tagNameList.map((tagName) => `\`${tagName}\``).join(", ");
-      const fields =
-        tags.length > 0
-          ? [{ name: "Tags", value: tags, inline: true }]
-          : undefined;
+      const tags = tagNameList.map((tagName) => {
+        if (tagName.startsWith("group:")) return `📂 ${tagName.slice(6)}`;
+        if (tagName.startsWith("meta-for:")) return `⭐️ ${tagName.slice(9)}`;
+        if (tagName.startsWith("where:")) return `📍 ${tagName.slice(6)}`;
+        return tagName;
+      }).join(" • ");
+      const description = tags.length > 0 ? `${tags}` : undefined;
       const messageObj = {
         embed: {
           title,
           url,
-          fields,
+          description,
         },
+        components: [
+          {
+            type: 1, // ACTION_ROW
+            components: [
+              {
+                type: 2, // BUTTON
+                style: 5, // LINK
+                label: "💀 Jolly Roger",
+                url,
+              },
+              ...(puzzle.url
+                ? [
+                    {
+                      type: 2, // BUTTON
+                      style: 5, // LINK
+                      label: "🧩 Hunt page",
+                      url: puzzle.url,
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ],
       };
       await bot.postMessageToChannel(
         hunt.puzzleCreationDiscordChannel.id,
@@ -179,25 +204,30 @@ const DiscordHooks: Hookset = {
       const answers = puzzle.answers
         .map((answer) => `\`${answer}\``)
         .join(", ");
-      const answerLabel = `Answer${puzzle.expectedAnswerCount > 1 ? "s" : ""}`;
       const solvedness = computeSolvedness(puzzle);
       const color = {
         solved: 0x00ff00,
         unsolved: 0xffff00,
         noAnswers: 0,
       }[solvedness];
-      const solvedStr = {
-        solved: "solved",
-        unsolved: "partially solved",
+      const solvedEmoji = {
+        solved: "🏁",
+        unsolved: "🏳️",
         noAnswers: "",
       }[solvedness];
-      const title = `${puzzle.title} ${solvedStr}`;
+      // const solvedStr = {
+      //   solved: "Solved!",
+      //   unsolved: "Partially solved",
+      //   noAnswers: "",
+      // }[solvedness];
+      const title = `${solvedEmoji} ${puzzle.title} ${solvedEmoji}`;
+      const description = `${answers}`;
       const messageObj = {
         embed: {
           color,
           title,
           url,
-          fields: [{ name: answerLabel, value: answers, inline: true }],
+          description,
         },
       };
       await bot.postMessageToChannel(

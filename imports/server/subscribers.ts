@@ -24,7 +24,9 @@ const contextMatcher = Match.Where(
       return false;
     }
 
-    return Object.values(val).every((v) => Match.test(v, String));
+    return Object.values(val).every(
+      (v) => Match.test(v, String) || Match.test(v, Boolean),
+    );
   },
 );
 

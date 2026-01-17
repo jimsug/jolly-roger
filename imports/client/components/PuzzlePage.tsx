@@ -22,7 +22,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import EmojiPicker, { EmojiStyle } from "emoji-picker-react";
 import type { ComponentPropsWithRef, FC, MouseEvent } from "react";
 import React, {
-  type ReactElement,
   useCallback,
   useEffect,
   useId,
@@ -46,12 +45,9 @@ import Modal from "react-bootstrap/Modal";
 import Offcanvas from "react-bootstrap/Offcanvas";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Popover from "react-bootstrap/Popover";
-import ProgressBar from "react-bootstrap/ProgressBar";
 import Row from "react-bootstrap/Row";
 import Tab from "react-bootstrap/Tab";
 import Tabs from "react-bootstrap/Tabs";
-import Toast from "react-bootstrap/Toast";
-import ToastContainer from "react-bootstrap/ToastContainer";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import Tooltip from "react-bootstrap/Tooltip";
@@ -96,6 +92,7 @@ import addPuzzleTag from "../../methods/addPuzzleTag";
 import createChatImageUpload from "../../methods/createChatImageUpload";
 import createGuess from "../../methods/createGuess";
 import ensurePuzzleDocument from "../../methods/ensurePuzzleDocument";
+import markComplete from "../../methods/markComplete";
 import removeChatMessage from "../../methods/removeChatMessage";
 import removePuzzleAnswer from "../../methods/removePuzzleAnswer";
 import removePuzzleTag from "../../methods/removePuzzleTag";
@@ -507,12 +504,15 @@ const buttonPulseAnimation = keyframes`
   }
 `;
 
-const PuzzleMetadata = styled.div`
+const PuzzleMetadata = styled.div<{ $solvedWithNoAnswers?: boolean }>`
   flex: none;
   padding: ${PUZZLE_PAGE_PADDING - 2}px 8px;
   border-bottom: 1px solid #dadce0;
   z-index: 10;
-  background-color: ${({ theme }) => theme.colors.background};
+  background-color: ${({ theme, $solvedWithNoAnswers }) =>
+    $solvedWithNoAnswers
+      ? theme.colors.solvedness.solved
+      : theme.colors.background};
 
   .resource-selector-pulse {
     animation: ${buttonPulseAnimation} 1s 2;
@@ -2216,6 +2216,43 @@ const ChatSection = React.forwardRef(
 const ChatSectionMemo = React.memo(ChatSection);
 const AttachmentsMemo = React.memo(AttachmentsSection);
 
+const MarkCompleteConfirmationModal = React.forwardRef(
+  (
+    {
+      puzzle,
+      onConfirm,
+    }: {
+      puzzle: PuzzleType;
+      onConfirm: (callback: (err?: Error) => void) => void;
+    },
+    forwardedRef: React.Ref<ModalFormHandle>,
+  ) => {
+    const isMarked = puzzle.markedComplete;
+    return (
+      <ModalForm
+        ref={forwardedRef}
+        title={
+          isMarked ? "Unmark puzzle as complete?" : "Mark puzzle as complete?"
+        }
+        submitLabel={isMarked ? "Unmark complete" : "Mark complete"}
+        submitStyle={isMarked ? "warning" : "primary"}
+        onSubmit={onConfirm}
+      >
+        <p>
+          Are you sure you want to {isMarked ? "unmark" : "mark"}{" "}
+          <strong>{puzzle.title}</strong> as complete?
+        </p>
+        {!isMarked && (
+          <p>
+            This puzzle is configured to allow completion even without any
+            answers.
+          </p>
+        )}
+      </ModalForm>
+    );
+  },
+);
+
 const PuzzlePageMetadata = ({
   isMinimized,
   puzzle,
@@ -2261,6 +2298,7 @@ const PuzzlePageMetadata = ({
   const guessModalRef = useRef<React.ElementRef<typeof PuzzleGuessModal>>(null);
   const answerModalRef =
     useRef<React.ElementRef<typeof PuzzleAnswerModal>>(null);
+  const markCompleteModalRef = useRef<ModalFormHandle>(null);
   const onCreateTag = useCallback(
     (tagName: string) => {
       addPuzzleTag.call({ puzzleId, tagName });
@@ -2290,6 +2328,16 @@ const PuzzlePageMetadata = ({
     [puzzleId],
   );
 
+  const onMarkComplete = useCallback(
+    (callback: (err?: Error) => void) => {
+      markComplete.call(
+        { puzzleId, markedComplete: !puzzle.markedComplete },
+        callback,
+      );
+    },
+    [puzzleId, puzzle.markedComplete],
+  );
+
   const showGuessModal = useCallback(() => {
     if (guessModalRef.current) {
       guessModalRef.current.show();
@@ -2299,6 +2347,12 @@ const PuzzlePageMetadata = ({
   const showAnswerModal = useCallback(() => {
     if (answerModalRef.current) {
       answerModalRef.current.show();
+    }
+  }, []);
+
+  const showMarkCompleteModal = useCallback(() => {
+    if (markCompleteModalRef.current) {
+      markCompleteModalRef.current.show();
     }
   }, []);
 
@@ -2409,6 +2463,23 @@ const PuzzlePageMetadata = ({
         />
       </>
     );
+  } else if (puzzle.completedWithNoAnswer) {
+    guessButton = (
+      <>
+        <Button
+          variant={puzzle.markedComplete ? "success" : "primary"}
+          size="sm"
+          onClick={showMarkCompleteModal}
+        >
+          {puzzle.markedComplete ? "Marked complete" : "Mark complete"}
+        </Button>
+        <MarkCompleteConfirmationModal
+          ref={markCompleteModalRef}
+          puzzle={puzzle}
+          onConfirm={onMarkComplete}
+        />
+      </>
+    );
   }
 
   // State and logic for conditional tag rendering
@@ -2483,7 +2554,11 @@ const PuzzlePageMetadata = ({
 
   return !isMinimized ? (
     <div>
-      <PuzzleMetadata>
+      <PuzzleMetadata
+        $solvedWithNoAnswers={
+          puzzle.completedWithNoAnswer && puzzle.markedComplete
+        }
+      >
         <PuzzleModalForm
           key={puzzleId}
           ref={editModalRef}
@@ -3526,7 +3601,9 @@ const PuzzlePage = React.memo(() => {
     }
   };
   const [tickerQueue, setTickerQueue] = useState<TickerToastType[]>([]);
-  const [messagesWhileMinimized, setMessagesWhileMinimized] = useState<string[]>([]);
+  const [messagesWhileMinimized, setMessagesWhileMinimized] = useState<
+    string[]
+  >([]);
   const [isTickerHovered, setIsTickerHovered] = useState(false);
   const tickerHoverTimeout = useRef<NodeJS.Timeout | null>(null);
 
@@ -3661,58 +3738,63 @@ const PuzzlePage = React.memo(() => {
     }, 500);
   }, []);
 
-const dismissTickerMessage = useCallback(
-  (id: string, auto: boolean) => {
-    setTickerQueue((prev) => prev.filter((m) => m.id !== id));
-    if (!auto) {
-      setMessagesWhileMinimized((prev) => prev.filter((mid) => mid !== id));
-    }
-
-    if ("BroadcastChannel" in window) {
-      const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
-      channel.postMessage({ type: "DISMISS_TICKER", id });
-      channel.close();
-    }
-  },
-  [puzzleId],
-);
-
-const handleRestoreFromTicker = useCallback(
-  (messageId: string) => {
-    setIsChatMinimized(false);
-    setTickerQueue([]);
-    setMessagesWhileMinimized([]);
-    setIsTickerHovered(false);
-
-    if ("BroadcastChannel" in window) {
-      // Fixes the stuck hover state
-
-      // Broadcast the "Clear All" command
-      const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
-      channel.postMessage({ type: "CLEAR_QUEUE" });
-      channel.close();
-    }
-
-    setSidebarWidth(lastSidebarWidth);
-    setTimeout(() => {
-      if (chatSectionRef.current) {
-        chatSectionRef.current.scrollHistoryToTarget();
-        chatSectionRef.current.scrollToMessage(messageId, () => {
-          setPulsingMessageId(messageId);
-        });
+  const dismissTickerMessage = useCallback(
+    (id: string, auto: boolean) => {
+      setTickerQueue((prev) => prev.filter((m) => m.id !== id));
+      if (!auto) {
+        setMessagesWhileMinimized((prev) => prev.filter((mid) => mid !== id));
+        if ("BroadcastChannel" in window) {
+          const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
+          channel.postMessage({ type: "DISMISS_TICKER", id });
+          channel.close();
+        } else {
+          if ("BroadcastChannel" in window) {
+            const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
+            channel.postMessage({ type: "DISMISS_TICKER_AUTO", id });
+            channel.close();
+          }
+        }
       }
-    }, 100);
-  },
-  [lastSidebarWidth, puzzleId], // Added puzzleId to dependencies
-);
+    },
+    [puzzleId],
+  );
 
-const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
+  const handleRestoreFromTicker = useCallback(
+    (messageId: string) => {
+      setIsChatMinimized(false);
+      setTickerQueue([]);
+      setMessagesWhileMinimized([]);
+      setIsTickerHovered(false);
+
+      if ("BroadcastChannel" in window) {
+        // Fixes the stuck hover state
+
+        // Broadcast the "Clear All" command
+        const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
+        channel.postMessage({ type: "CLEAR_QUEUE" });
+        channel.close();
+      }
+
+      setSidebarWidth(lastSidebarWidth);
+      setTimeout(() => {
+        if (chatSectionRef.current) {
+          chatSectionRef.current.scrollHistoryToTarget();
+          chatSectionRef.current.scrollToMessage(messageId, () => {
+            setPulsingMessageId(messageId);
+          });
+        }
+      }, 100);
+    },
+    [lastSidebarWidth, puzzleId], // Added puzzleId to dependencies
+  );
+
+  const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
   const puzzlesLoading = puzzlesSubscribe();
   const puzzles = useTracker(() => {
     return puzzlesLoading ? [] : Puzzles.find({ hunt: huntId }).fetch();
   }, [puzzlesLoading, huntId]);
 
-// Sort by created at so that the "first" document always has consistent meaning
+  // Sort by created at so that the "first" document always has consistent meaning
   const allDocs = useTracker(
     () =>
       puzzleDataLoading
@@ -3806,7 +3888,7 @@ const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
       }
       return nextMinimized;
     });
-  }, [sidebarWidth, lastSidebarWidth]);
+  }, [sidebarWidth, lastSidebarWidth, puzzleId]);
 
   const [pulsingMessageId, setPulsingMessageId] = useState<string | null>(null);
 
@@ -3864,6 +3946,8 @@ const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
         // Remove a specific message (Syncs the stack)
         setTickerQueue((prev) => prev.filter((m) => m.id !== id));
         setMessagesWhileMinimized((prev) => prev.filter((mid) => mid !== id));
+      } else if (type === "DISMISS_TICKER_AUTO") {
+        setTickerQueue((prev) => prev.filter((m) => m.id !== id));
       } else if (type === "CLEAR_QUEUE") {
         // Clear everything (Syncs the restore action)
         setTickerQueue([]);
