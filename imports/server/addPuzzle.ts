@@ -71,8 +71,6 @@ export default async function addPuzzle({
   docType,
   url,
   allowDuplicateUrls,
-  locked,
-  lockedSummary,
   completedWithNoAnswer,
   markedComplete,
 }: {
@@ -84,8 +82,6 @@ export default async function addPuzzle({
   expectedAnswerCount: number;
   docType: GdriveMimeTypesType;
   allowDuplicateUrls?: boolean;
-  locked?: boolean;
-  lockedSummary?: string;
   completedWithNoAnswer?: boolean;
   markedComplete?: boolean;
 }) {
@@ -99,8 +95,6 @@ export default async function addPuzzle({
     Match.OneOf(...(Object.keys(GdriveMimeTypes) as GdriveMimeTypesType[])),
   );
   check(allowDuplicateUrls, Match.Optional(Boolean));
-  check(locked, Match.Optional(Boolean));
-  check(lockedSummary, Match.Optional(String));
   check(completedWithNoAnswer, Match.Optional(Boolean));
   check(markedComplete, Match.Optional(Boolean));
 
@@ -146,8 +140,6 @@ export default async function addPuzzle({
     tags: [...new Set(tagIds)],
     answers: [],
     url,
-    locked,
-    lockedSummary,
     completedWithNoAnswer,
     markedComplete,
   };
@@ -194,9 +186,7 @@ export default async function addPuzzle({
   // Run any puzzle-creation hooks, like creating a default document
   // attachment or announcing the puzzle to Slack.
   Meteor.defer(() => {
-    if (!fullPuzzle.locked) {
-      void GlobalHooks.runPuzzleCreatedHooks(fullPuzzle._id);
-    }
+    void GlobalHooks.runPuzzleCreatedHooks(fullPuzzle._id);
   });
 
   return fullPuzzle._id;
