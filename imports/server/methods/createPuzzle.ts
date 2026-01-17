@@ -20,6 +20,7 @@ defineMethod(createPuzzle, {
       locked: Match.Optional(Boolean),
       lockedSummary: Match.Optional(String),
       completedWithNoAnswer: Match.Optional(Boolean),
+      markedComplete: Match.Optional(Boolean),
     });
     return arg;
   },
@@ -35,6 +36,7 @@ defineMethod(createPuzzle, {
     locked,
     lockedSummary,
     completedWithNoAnswer,
+    markedComplete,
   }) {
     check(this.userId, String);
 
@@ -50,6 +52,7 @@ defineMethod(createPuzzle, {
       locked,
       lockedSummary,
       completedWithNoAnswer,
+      markedComplete,
     });
   },
 });

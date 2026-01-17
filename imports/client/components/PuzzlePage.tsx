@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg-icons/faLightbulb";
 import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons/faAngleDoubleDown";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faArrowDown } from "@fortawesome/free-solid-svg-icons/faArrowDown";
@@ -12,6 +13,7 @@ import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalL
 import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
+import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
 import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
 import { faPaperPlane } from "@fortawesome/free-solid-svg-icons/faPaperPlane";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
@@ -2449,7 +2451,9 @@ const PuzzlePageMetadata = ({
           ref={interestButtonRef}
           onClick={toggleInterestPopover}
         >
-          <FontAwesomeIcon icon={faKey} />
+          <FontAwesomeIcon
+            icon={myFeedback ? faLightbulbSolid : faLightbulbRegular}
+          />
           {myFeedback ? " Update interest" : " I'm interested"}
           {totalScore > 0 && (
             <>

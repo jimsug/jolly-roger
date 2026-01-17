@@ -1,9 +1,10 @@
 import { useTracker } from "meteor/react-meteor-data";
 import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
+import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg-icons/faLightbulb";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faAngleDown } from "@fortawesome/free-solid-svg-icons/faAngleDown";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
-import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
+import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
 import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faPhone } from "@fortawesome/free-solid-svg-icons/faPhone";
@@ -646,7 +647,9 @@ const Puzzle = React.memo(
                     myFeedback ? "Update interest..." : "I'm interested..."
                   }
                 >
-                  <FontAwesomeIcon icon={faKey} />
+                  <FontAwesomeIcon
+                    icon={myFeedback ? faLightbulbSolid : faLightbulbRegular}
+                  />
                   {totalScore > 0 && (
                     <>
                       {" "}

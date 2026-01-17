@@ -55,6 +55,26 @@ defineMethod(unlockPuzzle, {
 
     await Puzzles.updateAsync(puzzleId, update);
 
+    const content = {
+      type: "message" as const,
+      children: [
+        { text: "" },
+        {
+          type: "mention" as const,
+          userId: this.userId,
+        },
+        {
+          text: ` unlocked this puzzle`,
+        },
+      ],
+    };
+
+    await sendChatMessageInternal({
+      puzzleId,
+      content,
+      sender: undefined,
+    });
+
     // Run any puzzle update hooks if needed
     Meteor.defer(() => {
       void GlobalHooks.runPuzzleCreatedHooks(puzzleId, puzzle);

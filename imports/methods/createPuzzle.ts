@@ -13,6 +13,7 @@ export default new TypedMethod<
     locked?: boolean;
     lockedSummary?: string;
     completedWithNoAnswer?: boolean;
+    markedComplete?: boolean;
   },
   string
 >("Puzzles.methods.create");
