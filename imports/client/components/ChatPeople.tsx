@@ -42,7 +42,6 @@ import {
   PeopleListDiv,
 } from "./styling/PeopleComponents";
 
-
 const ACTIVE_SLACK_MS = 1 * 60 * 1000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -279,6 +278,8 @@ const ChatPeople = ({
         status,
       });
     });
+
+    viewersAcc.sort((a, b) => b.status.localeCompare(a.status));
 
     return {
       unknown: unknownCount,
