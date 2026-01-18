@@ -9,6 +9,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { FormText } from "react-bootstrap";
 import Alert from "react-bootstrap/Alert";
 import Col from "react-bootstrap/Col";
 import FormCheck from "react-bootstrap/FormCheck";
@@ -16,12 +17,10 @@ import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
-import FormText from "react-bootstrap/FormText";
 import Row from "react-bootstrap/Row";
 import type { ActionMeta } from "react-select";
 import { useTheme } from "styled-components";
 import type { GdriveMimeTypesType } from "../../lib/GdriveMimeTypes";
-import Hunts from "../../lib/models/Hunts";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import LabelledRadioGroup from "./LabelledRadioGroup";
@@ -44,8 +43,6 @@ export interface PuzzleModalFormSubmitPayload {
   docType?: GdriveMimeTypesType;
   expectedAnswerCount: number;
   allowDuplicateUrls?: boolean;
-  locked?: boolean;
-  lockedSummary?: string;
   completedWithNoAnswer?: boolean;
   markedComplete?: boolean;
 }
@@ -88,8 +85,6 @@ const PuzzleModalForm = React.forwardRef(
     },
     forwardedRef: React.Ref<PuzzleModalFormHandle>,
   ) => {
-    const hunt = Hunts.findOne(huntId);
-
     const tagNamesForIds = useCallback(
       (tagIds: string[]) => {
         const tagNames: Record<string, string> = {};
@@ -125,10 +120,6 @@ const PuzzleModalForm = React.forwardRef(
     const [allowDuplicateUrls, setAllowDuplicateUrls] = useState<
       boolean | undefined
     >(puzzle ? undefined : false);
-    const [locked, setLocked] = useState<boolean>(puzzle?.locked ?? false);
-    const [lockedSummary, setLockedSummary] = useState<string>(
-      puzzle?.lockedSummary ?? "",
-    );
     const [markedComplete, setMarkedComplete] = useState<boolean>(
       puzzle?.markedComplete ?? false,
     );
@@ -248,16 +239,6 @@ const PuzzleModalForm = React.forwardRef(
       },
       [],
     );
-    const onLockedChange = useCallback(
-      (event: React.ChangeEvent<HTMLInputElement>) => {
-        setLocked(event.currentTarget.checked);
-      },
-      [],
-    );
-    const onLockedSummaryChange: NonNullable<FormControlProps["onChange"]> =
-      useCallback((event) => {
-        setLockedSummary(event.currentTarget.value);
-      }, []);
 
     const onMarkedCompleteChange = useCallback(
       (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -284,8 +265,6 @@ const PuzzleModalForm = React.forwardRef(
           url: url !== "" ? url : undefined, // Make sure we send undefined if url is falsy
           tags,
           expectedAnswerCount,
-          locked,
-          lockedSummary: lockedSummary !== "" ? lockedSummary : undefined,
           completedWithNoAnswer: considerCompletedWithNoAnswer,
           markedComplete,
         };
@@ -322,9 +301,6 @@ const PuzzleModalForm = React.forwardRef(
             setConsiderCompletedWithNoAnswerDirty(false);
             setConfirmingDuplicateUrl(false);
             setAllowDuplicateUrls(false);
-            setLocked(false);
-            setLockedSummary("");
-            setMarkedComplete(false);
             callback();
           }
         });
@@ -338,8 +314,6 @@ const PuzzleModalForm = React.forwardRef(
         expectedAnswerCount,
         docType,
         allowDuplicateUrls,
-        locked,
-        lockedSummary,
         considerCompletedWithNoAnswer,
         markedComplete,
       ],
@@ -357,8 +331,6 @@ const PuzzleModalForm = React.forwardRef(
       setTags([]);
       setExpectedAnswerCount(1);
       setDocType("spreadsheet");
-      setLocked(false);
-      setLockedSummary("");
     }, []);
 
     const currentTitle = useMemo(() => {
@@ -527,10 +499,10 @@ const PuzzleModalForm = React.forwardRef(
           setTitleDirty(false);
         }
         setLastAutoPopulatedTitle(formattedTitle);
-      } catch {
+      } catch (error) {
         // console.debug("Invalid URL, probably there's no URL:", error);
       }
-    }, [url, lastAutoPopulatedTitle, title]);
+    }, [url]);
 
     const allowDuplicateUrlsCheckbox =
       !puzzle && allowDuplicateUrls !== undefined && confirmingDuplicateUrl ? (
@@ -682,72 +654,29 @@ const PuzzleModalForm = React.forwardRef(
             </Col>
           </FormGroup>
 
-          <hr />
-          {hunt.allowUnlockablePuzzles && (
-            <>
-              <FormGroup as={Row} className="mb-3">
-                <Col xs={{ span: 9, offset: 3 }}>
-                  <FormCheck
-                    id={`${idPrefix}-locked`}
-                    label="Locked"
-                    type="checkbox"
-                    disabled={disableForm}
-                    checked={locked}
-                    onChange={onLockedChange}
-                  />
-                  <FormText>
-                    Locked puzzles are not visible to everyone by default. Users
-                    can express interest on puzzles to be unlocked.
-                  </FormText>
-                </Col>
-              </FormGroup>
-
-              {locked && (
-                <FormGroup
-                  as={Row}
-                  className="mb-3"
-                  controlId={`${idPrefix}-locked-summary`}
-                >
-                  <FormLabel column xs={3}>
-                    Locked Summary
-                  </FormLabel>
-                  <Col xs={9}>
-                    <FormControl
-                      type="text"
-                      disabled={disableForm}
-                      onChange={onLockedSummaryChange}
-                      value={lockedSummary}
-                      placeholder="e.g. Pictures of two quizzes somewhere on campus."
-                    />
-                  </Col>
-                </FormGroup>
-              )}
-            </>
-          )}
           {currentExpectedAnswerCount === 0 ? (
-            <>
-              <FormCheck
-                id={`${idPrefix}-solved-with-no-answers`}
-                label="Allow this to be marked completed with no answers"
-                type="checkbox"
-                checked={currentConsiderCompletedWithNoAnswer}
-                disabled={disableForm}
-                onChange={onConsiderSolvedWithNoAnswerChange}
-                className="mt-1"
-              />
-              {puzzle && (
-                <FormCheck
-                  id={`${idPrefix}-marked-complete`}
-                  label="Marked as complete"
-                  type="checkbox"
-                  checked={currentMarkedComplete}
-                  disabled={disableForm}
-                  onChange={onMarkedCompleteChange}
-                  className="mt-1"
-                />
-              )}
-            </>
+            <FormCheck
+              id={`${idPrefix}-solved-with-no-answers`}
+              label="Allow this to be marked completed with no answers"
+              type="checkbox"
+              checked={currentConsiderCompletedWithNoAnswer}
+              disabled={disableForm}
+              onChange={onConsiderSolvedWithNoAnswerChange}
+              className="mt-1"
+            />
           ) : undefined}
+
+          {puzzle && (
+            <FormCheck
+              id={`${idPrefix}-marked-complete`}
+              label="Marked as complete"
+              type="checkbox"
+              checked={currentMarkedComplete}
+              disabled={disableForm}
+              onChange={onMarkedCompleteChange}
+              className="mt-1"
+            />
+          )}
 
           {submitState === PuzzleModalFormSubmitState.FAILED && (
             <Alert variant="danger">{errorMessage}</Alert>

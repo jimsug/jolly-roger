@@ -38,8 +38,6 @@ const Puzzle = withCommon(
       })
       .optional(),
     noteUpdateTs: z.date().optional(),
-    locked: z.boolean().optional(),
-    lockedSummary: nonEmptyString.optional(),
   }),
 );
 

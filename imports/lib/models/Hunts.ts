@@ -68,8 +68,6 @@ const EditableHunt = z.object({
   customLinkUrl: nonEmptyString.url().optional(),
   customLinkName: nonEmptyString.optional(),
   customLinkEmbed: z.boolean().default(false).optional(),
-  // If set, this enables unlockable puzzles functionality
-  allowUnlockablePuzzles: z.boolean().default(false).optional(),
 });
 export type EditableHuntType = z.infer<typeof EditableHunt>;
 const Hunt = withCommon(EditableHunt);
@@ -102,7 +100,6 @@ export const HuntPattern = {
   customLinkUrl: Match.Optional(String),
   customLinkName: Match.Optional(String),
   customLinkEmbed: Match.Optional(Boolean),
-  allowUnlockablePuzzles: Match.Optional(Boolean),
 };
 
 const Hunts = new SoftDeletedModel("jr_hunts", Hunt);

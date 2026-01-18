@@ -19,7 +19,6 @@ import "./pendingGuessesForSelf";
 import "./pinnedMessagesForPuzzleList";
 import "./presenceForHunt";
 import "./puzzleActivityForHunt";
-import "./puzzleFeedbacks";
 import "./puzzleForPuzzlePage";
 import "./puzzleNotificationsForSelf";
 import "./puzzlesForHunt";
