@@ -25,6 +25,8 @@ defineMethod(updatePuzzle, {
       // We accept this argument since it's provided by the form, but it's not checked here - only
       // during puzzle creation, to avoid duplicates when creating new puzzles.
       allowDuplicateUrls: Match.Optional(Boolean),
+      locked: Match.Optional(Boolean),
+      lockedSummary: Match.Optional(String),
       completedWithNoAnswer: Match.Optional(Boolean),
       markedComplete: Match.Optional(Boolean),
     });
@@ -38,6 +40,8 @@ defineMethod(updatePuzzle, {
     url,
     tags,
     expectedAnswerCount,
+    locked,
+    lockedSummary,
     completedWithNoAnswer,
     markedComplete,
   }) {
@@ -83,6 +87,20 @@ defineMethod(updatePuzzle, {
         tags: [...new Set(tagIds)],
       },
     };
+    if (locked !== undefined) {
+      if (locked) {
+        update.$set!.locked = true;
+      } else {
+        update.$unset = { ...update.$unset, locked: "" };
+      }
+    }
+    if (lockedSummary !== undefined) {
+      if (lockedSummary) {
+        update.$set!.lockedSummary = lockedSummary;
+      } else {
+        update.$unset = { ...update.$unset, lockedSummary: "" };
+      }
+    }
     if (url) {
       update.$set = { ...update.$set, url };
     } else {
