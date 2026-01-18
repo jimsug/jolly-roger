@@ -108,7 +108,7 @@ const ViewerPersonBox = ({
       overlay={
         <Tooltip id={id}>
           {name}
-          {status === "online" ? "" : ` (${status})`}
+          {status && status !== "online" ? ` (${status})` : ""}
         </Tooltip>
       }
     >
@@ -121,7 +121,7 @@ const ViewerPersonBox = ({
             size={44}
           />
           {children}
-          <ActivityDot $status={status} />
+          {status && <ActivityDot $status={status} />}
         </div>
       </PeopleItemDiv>
     </OverlayTrigger>
