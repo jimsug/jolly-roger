@@ -621,7 +621,8 @@ const Puzzle = React.memo(
         </Tooltip>
       );
     }, [puzzleId, rtcUsers, activeUsers, passiveUsers]);
-    const renderAsLocked = puzzle.locked && hunt.allowPuzzleLocking;
+    const renderAsLocked = puzzle.locked && hunt.allowUnlockablePuzzles;
+    console.log(puzzle.locked, hunt.allowPuzzleLocking);
     return (
       <PuzzleDiv $solvedness={solvedness} $locked={renderAsLocked}>
         {showEditModal ? (

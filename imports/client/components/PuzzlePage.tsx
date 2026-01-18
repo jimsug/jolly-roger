@@ -2413,7 +2413,7 @@ const PuzzlePageMetadata = ({
 
   let guessButton = null;
 
-  const renderAsLocked = puzzle.locked && hunt.allowPuzzleLocking;
+  const renderAsLocked = puzzle.locked && hunt.allowUnlockablePuzzles;
   if (puzzle.expectedAnswerCount > 0 && !renderAsLocked) {
     guessButton = hasGuessQueue ? (
       <>
