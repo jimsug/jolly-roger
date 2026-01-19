@@ -10,6 +10,10 @@ export default new TypedMethod<
     expectedAnswerCount: number;
     docType: GdriveMimeTypesType;
     allowDuplicateUrls?: boolean;
+    locked?: boolean;
+    lockedSummary?: string;
+    completedWithNoAnswer?: boolean;
+    markedComplete?: boolean;
   },
   string
 >("Puzzles.methods.create");

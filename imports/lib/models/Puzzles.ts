@@ -23,6 +23,8 @@ const Puzzle = withCommon(
     url: z.string().url().optional(),
     answers: answer.array(),
     expectedAnswerCount: z.number().int().min(-1),
+    completedWithNoAnswer: z.boolean().optional(),
+    markedComplete: z.boolean().optional(),
     replacedBy: foreignKey.optional(),
     noteContent: z
       .object({
@@ -36,6 +38,8 @@ const Puzzle = withCommon(
       })
       .optional(),
     noteUpdateTs: z.date().optional(),
+    locked: z.boolean().optional(),
+    lockedSummary: nonEmptyString.optional(),
   }),
 );
 

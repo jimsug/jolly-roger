@@ -8,6 +8,10 @@ export default new TypedMethod<
     tags: string[];
     expectedAnswerCount: number;
     allowDuplicateUrls?: boolean;
+    locked?: boolean;
+    lockedSummary?: string;
+    completedWithNoAnswer?: boolean;
+    markedComplete?: boolean;
   },
   void
 >("Puzzles.methods.update");

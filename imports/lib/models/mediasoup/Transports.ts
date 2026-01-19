@@ -20,7 +20,7 @@ const Transport = withCommon(
     dtlsParameters: nonEmptyString, // JSON-encoded
     turnConfig: z
       .object({
-        urls: nonEmptyString,
+        urls: z.union([nonEmptyString, z.array(nonEmptyString)]),
         username: nonEmptyString,
         credential: nonEmptyString,
       })

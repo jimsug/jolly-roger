@@ -36,7 +36,7 @@ defineMethod(renameTag, {
         { $addToSet: { aliases: tag.name } },
       );
     }
-    if (existingTag) {
+    if (existingTag?._id !== tagId) {
       Logger.info("Merging tag", { tag: tagId, existingTag: existingTag._id });
       await Puzzles.updateAsync(
         { tags: tagId },

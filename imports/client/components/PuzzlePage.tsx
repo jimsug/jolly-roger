@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg-icons/faLightbulb";
 import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons/faAngleDoubleDown";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faArrowDown } from "@fortawesome/free-solid-svg-icons/faArrowDown";
@@ -12,17 +13,18 @@ import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalL
 import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
+import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
 import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
 import { faPaperPlane } from "@fortawesome/free-solid-svg-icons/faPaperPlane";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
 import { faReplyAll } from "@fortawesome/free-solid-svg-icons/faReplyAll";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import EmojiPicker, { EmojiStyle } from "emoji-picker-react";
 import type { ComponentPropsWithRef, FC, MouseEvent } from "react";
 import React, {
-  type ReactElement,
   useCallback,
   useEffect,
   useId,
@@ -44,14 +46,12 @@ import FormText from "react-bootstrap/FormText";
 import InputGroup from "react-bootstrap/InputGroup";
 import Modal from "react-bootstrap/Modal";
 import Offcanvas from "react-bootstrap/Offcanvas";
+import Overlay from "react-bootstrap/Overlay";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Popover from "react-bootstrap/Popover";
-import ProgressBar from "react-bootstrap/ProgressBar";
 import Row from "react-bootstrap/Row";
 import Tab from "react-bootstrap/Tab";
 import Tabs from "react-bootstrap/Tabs";
-import Toast from "react-bootstrap/Toast";
-import ToastContainer from "react-bootstrap/ToastContainer";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import Tooltip from "react-bootstrap/Tooltip";
@@ -74,6 +74,7 @@ import type { GuessType } from "../../lib/models/Guesses";
 import Guesses from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
+import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
@@ -88,6 +89,7 @@ import {
   userMayWritePuzzlesForHunt,
 } from "../../lib/permission_stubs";
 import chatMessagesForPuzzle from "../../lib/publications/chatMessagesForPuzzle";
+import puzzleFeedbacks from "../../lib/publications/puzzleFeedbacks";
 import puzzleForPuzzlePage from "../../lib/publications/puzzleForPuzzlePage";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import { computeSolvedness } from "../../lib/solvedness";
@@ -132,8 +134,10 @@ import MinimizedChatInfo from "./MinimizedChatInfo";
 import type { ModalFormHandle } from "./ModalForm";
 import ModalForm from "./ModalForm";
 import PuzzleAnswer from "./PuzzleAnswer";
+import PuzzleFeedbackForm from "./PuzzleFeedbackForm";
 import type { PuzzleModalFormSubmitPayload } from "./PuzzleModalForm";
 import PuzzleModalForm from "./PuzzleModalForm";
+import PuzzleUnlockModal from "./PuzzleUnlockModal";
 import SplitPaneMinus from "./SplitPaneMinus";
 import Breakable from "./styling/Breakable";
 import { MonospaceFontFamily } from "./styling/constants";
@@ -2257,6 +2261,27 @@ const PuzzlePageMetadata = ({
     [huntId, puzzleId],
   );
 
+  useTypedSubscribe(puzzleFeedbacks, { huntId });
+  const feedbacks = useTracker(
+    () => PuzzleFeedbacks.find({ puzzle: puzzleId }).fetch(),
+    [puzzleId],
+  );
+  const myFeedback = useTracker(
+    () =>
+      PuzzleFeedbacks.findOne({
+        puzzle: puzzleId,
+        createdBy: Meteor.userId()!,
+      }),
+    [puzzleId],
+  );
+  const [showInterestPopover, setShowInterestPopover] = useState(false);
+  const [showUnlockModal, setShowUnlockModal] = useState(false);
+  const interestButtonRef = useRef<HTMLButtonElement>(null);
+
+  const totalScore = useMemo(() => {
+    return feedbacks.reduce((acc, f) => acc + f.score, 0);
+  }, [feedbacks]);
+
   const editModalRef = useRef<React.ElementRef<typeof PuzzleModalForm>>(null);
   const guessModalRef = useRef<React.ElementRef<typeof PuzzleGuessModal>>(null);
   const answerModalRef =
@@ -2306,6 +2331,14 @@ const PuzzlePageMetadata = ({
     if (editModalRef.current) {
       editModalRef.current.show();
     }
+  }, []);
+
+  const toggleInterestPopover = useCallback(() => {
+    setShowInterestPopover((v) => !v);
+  }, []);
+
+  const showUnlock = useCallback(() => {
+    setShowUnlockModal(true);
   }, []);
 
   const tagsById = indexedById(allTags);
@@ -2379,7 +2412,9 @@ const PuzzlePageMetadata = ({
   ) : null;
 
   let guessButton = null;
-  if (puzzle.expectedAnswerCount > 0) {
+
+  const renderAsLocked = puzzle.locked && hunt.allowUnlockablePuzzles;
+  if (puzzle.expectedAnswerCount > 0 && !renderAsLocked) {
     guessButton = hasGuessQueue ? (
       <>
         <Button variant="primary" size="sm" onClick={showGuessModal}>
@@ -2406,6 +2441,68 @@ const PuzzlePageMetadata = ({
           ref={answerModalRef}
           puzzle={puzzle}
           guesses={guesses}
+        />
+      </>
+    );
+  } else if (renderAsLocked) {
+    guessButton = (
+      <>
+        <Button
+          variant="info"
+          size="sm"
+          ref={interestButtonRef}
+          onClick={toggleInterestPopover}
+        >
+          <FontAwesomeIcon
+            icon={myFeedback ? faLightbulbSolid : faLightbulbRegular}
+          />
+          {myFeedback ? " Update interest" : " I'm interested"}
+          {totalScore > 0 && (
+            <>
+              {" "}
+              <Badge bg="light" text="dark">
+                {totalScore}
+              </Badge>
+            </>
+          )}
+        </Button>
+        <Overlay
+          show={showInterestPopover}
+          target={interestButtonRef.current}
+          placement="bottom"
+          rootClose
+          onHide={() => setShowInterestPopover(false)}
+        >
+          <Popover id={`interest-popover-${puzzleId}`}>
+            <Popover.Header as="h3">Express Interest</Popover.Header>
+            <Popover.Body>
+              {puzzle.lockedSummary && (
+                <Alert variant="info" style={{ fontSize: "0.8rem" }}>
+                  <strong>Locked puzzle summary: </strong>{" "}
+                  {puzzle.lockedSummary}
+                </Alert>
+              )}
+              <PuzzleFeedbackForm
+                puzzleId={puzzleId}
+                initialScore={myFeedback?.score}
+                initialComment={myFeedback?.comment}
+                canWithdraw={!!myFeedback}
+                onSuccess={() => setShowInterestPopover(false)}
+              />
+            </Popover.Body>
+          </Popover>
+        </Overlay>
+        {canUpdate && (
+          <Button variant="danger" size="sm" onClick={showUnlock}>
+            <FontAwesomeIcon icon={faUnlock} /> Unlock
+          </Button>
+        )}
+        <PuzzleUnlockModal
+          show={showUnlockModal}
+          onHide={() => setShowUnlockModal(false)}
+          puzzle={puzzle}
+          feedbacks={feedbacks}
+          displayNames={displayNames}
         />
       </>
     );
@@ -2510,6 +2607,11 @@ const PuzzlePageMetadata = ({
             {minimizeMetadataButton}
           </PuzzleMetadataButtons>
         </PuzzleMetadataActionRow>
+        {renderAsLocked && puzzle.lockedSummary && (
+          <PuzzleMetadataRow>
+            <strong>Locked puzzle summary:</strong> {puzzle.lockedSummary}
+          </PuzzleMetadataRow>
+        )}
         <PuzzleMetadataRow>{answersElement}</PuzzleMetadataRow>
         {tagsOnSeparateRow /* Render tags on separate row if they wrapped */ && (
           <PuzzleMetadataRow>{tagListElement}</PuzzleMetadataRow>
@@ -3526,7 +3628,9 @@ const PuzzlePage = React.memo(() => {
     }
   };
   const [tickerQueue, setTickerQueue] = useState<TickerToastType[]>([]);
-  const [messagesWhileMinimized, setMessagesWhileMinimized] = useState<string[]>([]);
+  const [messagesWhileMinimized, setMessagesWhileMinimized] = useState<
+    string[]
+  >([]);
   const [isTickerHovered, setIsTickerHovered] = useState(false);
   const tickerHoverTimeout = useRef<NodeJS.Timeout | null>(null);
 
@@ -3661,58 +3765,63 @@ const PuzzlePage = React.memo(() => {
     }, 500);
   }, []);
 
-const dismissTickerMessage = useCallback(
-  (id: string, auto: boolean) => {
-    setTickerQueue((prev) => prev.filter((m) => m.id !== id));
-    if (!auto) {
-      setMessagesWhileMinimized((prev) => prev.filter((mid) => mid !== id));
-    }
-
-    if ("BroadcastChannel" in window) {
-      const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
-      channel.postMessage({ type: "DISMISS_TICKER", id });
-      channel.close();
-    }
-  },
-  [puzzleId],
-);
-
-const handleRestoreFromTicker = useCallback(
-  (messageId: string) => {
-    setIsChatMinimized(false);
-    setTickerQueue([]);
-    setMessagesWhileMinimized([]);
-    setIsTickerHovered(false);
-
-    if ("BroadcastChannel" in window) {
-      // Fixes the stuck hover state
-
-      // Broadcast the "Clear All" command
-      const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
-      channel.postMessage({ type: "CLEAR_QUEUE" });
-      channel.close();
-    }
-
-    setSidebarWidth(lastSidebarWidth);
-    setTimeout(() => {
-      if (chatSectionRef.current) {
-        chatSectionRef.current.scrollHistoryToTarget();
-        chatSectionRef.current.scrollToMessage(messageId, () => {
-          setPulsingMessageId(messageId);
-        });
+  const dismissTickerMessage = useCallback(
+    (id: string, auto: boolean) => {
+      setTickerQueue((prev) => prev.filter((m) => m.id !== id));
+      if (!auto) {
+        setMessagesWhileMinimized((prev) => prev.filter((mid) => mid !== id));
+        if ("BroadcastChannel" in window) {
+          const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
+          channel.postMessage({ type: "DISMISS_TICKER", id });
+          channel.close();
+        } else {
+          if ("BroadcastChannel" in window) {
+            const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
+            channel.postMessage({ type: "DISMISS_TICKER_AUTO", id });
+            channel.close();
+          }
+        }
       }
-    }, 100);
-  },
-  [lastSidebarWidth, puzzleId], // Added puzzleId to dependencies
-);
+    },
+    [puzzleId],
+  );
 
-const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
+  const handleRestoreFromTicker = useCallback(
+    (messageId: string) => {
+      setIsChatMinimized(false);
+      setTickerQueue([]);
+      setMessagesWhileMinimized([]);
+      setIsTickerHovered(false);
+
+      if ("BroadcastChannel" in window) {
+        // Fixes the stuck hover state
+
+        // Broadcast the "Clear All" command
+        const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
+        channel.postMessage({ type: "CLEAR_QUEUE" });
+        channel.close();
+      }
+
+      setSidebarWidth(lastSidebarWidth);
+      setTimeout(() => {
+        if (chatSectionRef.current) {
+          chatSectionRef.current.scrollHistoryToTarget();
+          chatSectionRef.current.scrollToMessage(messageId, () => {
+            setPulsingMessageId(messageId);
+          });
+        }
+      }, 100);
+    },
+    [lastSidebarWidth, puzzleId], // Added puzzleId to dependencies
+  );
+
+  const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
   const puzzlesLoading = puzzlesSubscribe();
   const puzzles = useTracker(() => {
     return puzzlesLoading ? [] : Puzzles.find({ hunt: huntId }).fetch();
   }, [puzzlesLoading, huntId]);
 
-// Sort by created at so that the "first" document always has consistent meaning
+  // Sort by created at so that the "first" document always has consistent meaning
   const allDocs = useTracker(
     () =>
       puzzleDataLoading
@@ -3806,7 +3915,7 @@ const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
       }
       return nextMinimized;
     });
-  }, [sidebarWidth, lastSidebarWidth]);
+  }, [sidebarWidth, lastSidebarWidth, puzzleId]);
 
   const [pulsingMessageId, setPulsingMessageId] = useState<string | null>(null);
 
@@ -3864,6 +3973,8 @@ const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
         // Remove a specific message (Syncs the stack)
         setTickerQueue((prev) => prev.filter((m) => m.id !== id));
         setMessagesWhileMinimized((prev) => prev.filter((mid) => mid !== id));
+      } else if (type === "DISMISS_TICKER_AUTO") {
+        setTickerQueue((prev) => prev.filter((m) => m.id !== id));
       } else if (type === "CLEAR_QUEUE") {
         // Clear everything (Syncs the restore action)
         setTickerQueue([]);
