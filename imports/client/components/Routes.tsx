@@ -10,6 +10,7 @@ import { darkTheme, lightTheme } from "../theme";
 import AllProfileListPage from "./AllProfileListPage";
 import AnnouncementsPage from "./AnnouncementsPage";
 import { AuthenticatedPage, UnauthenticatedPage } from "./authentication";
+import CustomLinkEmbedPage from "./CustomLinkEmbedPage";
 import EnrollForm from "./EnrollForm";
 import FirehosePage from "./FirehosePage";
 import FirstUserForm from "./FirstUserForm";
@@ -20,16 +21,17 @@ import HuntersApp from "./HuntersApp";
 import HuntListApp from "./HuntListApp";
 import HuntListPage from "./HuntListPage";
 import HuntProfileListPage from "./HuntProfileListPage";
+import HuntPurgePage from "./HuntPurgePage";
 import HuntTagManagerPage from "./HuntTagManagerPage";
 import JoinHunt from "./JoinHunt";
 import Loading from "./Loading";
 import LoginForm from "./LoginForm";
+import MoreAppPage from "./MoreAppPage";
 import PasswordResetForm from "./PasswordResetForm";
 import ProfilePage from "./ProfilePage";
 import PuzzleListPage from "./PuzzleListPage";
 import PuzzlePage from "./PuzzlePage";
 import RootRedirector from "./RootRedirector";
-import UserHistoryPage from "./UserHistoryPage";
 import UserInvitePage from "./UserInvitePage";
 import UsersApp from "./UsersApp";
 
@@ -61,8 +63,11 @@ export const AuthenticatedRouteList: RouteObject[] = [
           },
           { path: "puzzles/:puzzleId", element: <PuzzlePage /> },
           { path: "puzzles", element: <PuzzleListPage /> },
-          { path: "tags", element: <HuntTagManagerPage /> },
           { path: "edit", element: <HuntEditPage /> },
+          { path: "more", element: <MoreAppPage /> },
+          { path: "tags", element: <HuntTagManagerPage /> },
+          { path: "purge", element: <HuntPurgePage /> },
+          { path: "custom-link", element: <CustomLinkEmbedPage /> },
           { path: "", element: <Navigate to="puzzles" replace /> },
         ],
       },
@@ -79,7 +84,6 @@ export const AuthenticatedRouteList: RouteObject[] = [
     ],
   },
   { path: "/setup", element: <SetupPage /> },
-  { path: "/myhistory", element: <UserHistoryPage /> },
   { path: "/rtcdebug", element: <RTCDebugPage /> },
 ].map((r) => {
   return {

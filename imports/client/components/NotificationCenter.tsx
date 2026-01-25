@@ -945,7 +945,7 @@ const BookmarkNotificationMessage = ({
           <Dropdown.Menu align="end">
             <Dropdown.Item
               onClick={() => {
-                disableBookmark();
+                void disableBookmark();
               }}
             >
               Unbookmark this puzzle

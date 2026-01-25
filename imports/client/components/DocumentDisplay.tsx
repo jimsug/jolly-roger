@@ -18,7 +18,7 @@ const StyledDeepLink = styled.a`
   white-space: nowrap;
 `;
 
-const StyledIframe = styled.iframe`
+export const StyledIframe = styled.iframe`
   /* Workaround for unusual sizing behavior of iframes in iOS Safari:
    * Width and height need to be specified in absolute values then adjusted by min and max */
   width: 0;

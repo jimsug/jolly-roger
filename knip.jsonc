@@ -47,7 +47,12 @@
     // Dynamically imported in Routes.tsx
     "imports/client/components/HuntPurgePage.tsx",
     "imports/client/components/InvitedUserList.tsx",
-    "imports/client/components/MoreAppPage.tsx"
+    "imports/client/components/MoreAppPage.tsx",
+    // User history feature (connected via Routes in later commits)
+    "imports/client/ActivityHistorySummaries.ts",
+    "imports/client/components/ContributionGraph.tsx",
+    "imports/client/components/UserHistoryPage.tsx",
+    "imports/client/PuzzleHistorySummaries.ts"
   ],
   "tags": ["-lintignore"]
 }
