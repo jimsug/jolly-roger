@@ -6,16 +6,26 @@ import MeteorUsers from "./models/MeteorUsers";
 import type { Selector } from "./models/Model";
 import type { User } from "./models/User";
 
+function huntHasDefaultRole(
+  hunt: Partial<Pick<HuntType, "defaultRoles">>,
+  role: string,
+): boolean {
+  return hunt.defaultRoles?.includes(role) ?? false;
+}
+
 function isOperatorForHunt(
   user: Pick<Meteor.User, "roles">,
-  hunt: Pick<HuntType, "_id">,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">>,
 ): boolean {
-  return user.roles?.[hunt._id]?.includes("operator") ?? false;
+  return (
+    huntHasDefaultRole(hunt, "operator") ||
+    (user.roles?.[hunt._id]?.includes("operator") ?? false)
+  );
 }
 
 export function listAllRolesForHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): string[] {
   if (!user?.roles || !hunt) {
     return [];
@@ -26,7 +36,7 @@ export function listAllRolesForHunt(
 
 export function userIsOperatorForHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -54,7 +64,7 @@ export function huntsUserIsOperatorFor(
 }
 
 export function queryOperatorsForHunt(
-  hunt: Pick<HuntType, "_id">,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">>,
 ): Selector<z.output<typeof User>> {
   return {
     [`roles.${hunt._id}`]: "operator",
@@ -77,10 +87,6 @@ export function userMayAddUsersToHunt(
     return true;
   }
 
-  if (isOperatorForHunt(user, hunt)) {
-    return true;
-  }
-
   // You can only add users to a hunt if you're already a member of said hunt.
   const joinedHunts = user.hunts;
   if (!joinedHunts) {
@@ -96,7 +102,7 @@ export function userMayAddUsersToHunt(
 
 export function userMayUpdateHuntInvitationCode(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -106,17 +112,13 @@ export function userMayUpdateHuntInvitationCode(
     return true;
   }
 
-  if (isOperatorForHunt(user, hunt)) {
-    return true;
-  }
-
   return false;
 }
 
 // Admins and operators may add announcements to a hunt.
 export function userMayAddAnnouncementToHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -135,7 +137,7 @@ export function userMayAddAnnouncementToHunt(
 
 export function userMayMakeOperatorForHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -154,7 +156,7 @@ export function userMayMakeOperatorForHunt(
 
 export function userMaySeeUserInfoForHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -173,7 +175,7 @@ export function userMaySeeUserInfoForHunt(
 
 export function userMayBulkAddToHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -254,7 +256,7 @@ export function userMayConfigureAssets(
 
 export function userMayUpdateGuessesForHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -270,7 +272,7 @@ export function userMayUpdateGuessesForHunt(
 
 export function userMayWritePuzzlesForHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -292,7 +294,7 @@ export function userMayCreateHunt(
 
 export function userMayUpdateHunt(
   user: Pick<Meteor.User, "roles"> | null | undefined,
-  _hunt: Pick<HuntType, "_id"> | null | undefined,
+  _hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   // TODO: make this driven by if you're an operator of the hunt in question
   return isAdmin(user);
@@ -300,7 +302,7 @@ export function userMayUpdateHunt(
 
 export function userMayJoinCallsForHunt(
   user: Pick<Meteor.User, "roles" | "hunts"> | null | undefined,
-  hunt: Pick<HuntType, "_id"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> & Partial<Pick<HuntType, "defaultRoles">> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;

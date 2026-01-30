@@ -26,8 +26,8 @@ declare module "meteor/meteor" {
       isOffsite?: boolean;
       dingwordsOpenMatch?: boolean;
       dingwordsMatchOnce?: string[];
-      dingwordsMatchedOnce?: Record<string, Record<string, string[]>>;
-      suppressedDingwords?: Record<string, Record<string, string[]>>;
+      dingwordsMatchedOnce?: Record<string, Record<string, string[]>>; // hunt -> puzzle -> "used" words
+      suppressedDingwords?: Record<string, Record<string, string[]>>; // hunt -> puzzle -> "used" words
     }
   }
 }

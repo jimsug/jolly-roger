@@ -50,8 +50,23 @@ const EditableHunt = z.object({
   // If provided, then members of the hunt who have also linked their Discord
   // profile will be added to this role.
   memberDiscordRole: SavedDiscordObjectFields.optional(),
-  allowUnlockablePuzzles: z.boolean().optional(),
-  isArchived: z.boolean().optional(),
+  // If true, this hunt will be displayed below other hunts
+  isArchived: z.boolean().default(false),
+  // If set, this is an array of "default roles" for the hunt
+  defaultRoles: nonEmptyString.array().default([]),
+  // If set, this is a string that will be parsed as Markdown and displayed on the More page
+  moreInfo: nonEmptyString.optional(),
+  // If set, this is a string that specifies the base URL for the archived hunt
+  archivedHuntUrl: nonEmptyString.url().optional(),
+  // If set, this is a string that defines a regex pattern for the original hunt URL
+  originalHuntUrlRegex: nonEmptyString.optional(),
+  // If set, this is a boolean that enables/disables showing puzzle pages in Jolly Roger
+  allowPuzzleEmbed: z.boolean().default(false).optional(),
+  customLinkUrl: nonEmptyString.url().optional(),
+  customLinkName: nonEmptyString.optional(),
+  customLinkEmbed: z.boolean().default(false).optional(),
+  // If set, this enables unlockable puzzles functionality
+  allowUnlockablePuzzles: z.boolean().default(false),
 });
 export type EditableHuntType = z.infer<typeof EditableHunt>;
 const Hunt = withCommon(EditableHunt);
@@ -70,13 +85,21 @@ export const HuntPattern = {
   termsOfUse: Match.Optional(String),
   submitTemplate: Match.Optional(String),
   homepageUrl: Match.Optional(String),
+  puzzleCreationDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
   announcementDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
   puzzleHooksDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
-  puzzleCreationDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
   firehoseDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
   memberDiscordRole: Match.Optional(SavedDiscordObjectPattern),
-  allowUnlockablePuzzles: Match.Optional(Boolean),
   isArchived: Match.Optional(Boolean),
+  allowPuzzleEmbed: Match.Optional(Boolean),
+  defaultRoles: [String] as [StringConstructor],
+  moreInfo: Match.Optional(String),
+  archivedHuntUrl: Match.Optional(String),
+  originalHuntUrlRegex: Match.Optional(String),
+  customLinkUrl: Match.Optional(String),
+  customLinkName: Match.Optional(String),
+  customLinkEmbed: Match.Optional(Boolean),
+  allowUnlockablePuzzles: Match.Optional(Boolean),
 };
 
 const Hunts = new SoftDeletedModel("jr_hunts", Hunt);

@@ -58,6 +58,8 @@ import "./mediasoupSetProducerPaused";
 import "./postAnnouncement";
 import "./promoteOperator";
 import "./provisionFirstUser";
+import "./purgeHunt";
+import "./purgeHuntDocumentCache";
 import "./removePuzzleAnswer";
 import "./removePuzzleTag";
 import "./replenishDocumentCache";
