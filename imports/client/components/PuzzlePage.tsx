@@ -1139,7 +1139,7 @@ const PuzzlePageMetadata = ({
 
   const documentLink =
     document && !isDesktop ? (
-      <DocumentDisplay document={document} displayMode="link" user={selfUser} />
+      <DocumentDisplay document={document} displayMode="link" user={selfUser} isShown />
     ) : null;
 
   const editButton = canUpdate ? (
@@ -1921,6 +1921,7 @@ const PuzzlePageMultiplayerDocument = React.memo(
           document={document}
           displayMode="embed"
           user={selfUser}
+          isShown
         />
       );
     }

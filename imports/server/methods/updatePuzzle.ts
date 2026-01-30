@@ -26,6 +26,9 @@ defineMethod(updatePuzzle, {
       // during puzzle creation, to avoid duplicates when creating new puzzles.
       allowDuplicateUrls: Match.Optional(Boolean),
       completedWithNoAnswer: Match.Optional(Boolean),
+      locked: Match.Optional(Boolean),
+      lockedSummary: Match.Optional(String),
+      markedComplete: Match.Optional(Boolean),
     });
 
     return arg;
@@ -38,6 +41,9 @@ defineMethod(updatePuzzle, {
     tags,
     expectedAnswerCount,
     completedWithNoAnswer,
+    locked,
+    lockedSummary,
+    markedComplete,
   }) {
     check(this.userId, String);
 
@@ -95,6 +101,21 @@ defineMethod(updatePuzzle, {
       update.$set = { ...update.$set, completedWithNoAnswer };
     } else {
       update.$unset = { completedWithNoAnswer: "" };
+    }
+    if (locked) {
+      update.$set = { ...update.$set, locked };
+    } else {
+      update.$unset = { locked: "" };
+    }
+    if (lockedSummary) {
+      update.$set = { ...update.$set, lockedSummary };
+    } else {
+      update.$unset = { lockedSummary: "" };
+    }
+    if (markedComplete) {
+      update.$set = { ...update.$set, markedComplete };
+    } else {
+      update.$unset = { markedComplete: "" };
     }
     await Puzzles.updateAsync(puzzleId, update);
 

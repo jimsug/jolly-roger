@@ -1,10 +1,16 @@
 import { useTracker } from "meteor/react-meteor-data";
 import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
+import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg-icons/faLightbulb";
+import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
+import { faAngleDown } from "@fortawesome/free-solid-svg-icons/faAngleDown";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
+import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
 import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faPhone } from "@fortawesome/free-solid-svg-icons/faPhone";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, {
   type ComponentPropsWithRef,
@@ -14,15 +20,19 @@ import React, {
   useRef,
   useState,
 } from "react";
+import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
+import Overlay from "react-bootstrap/Overlay";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
+import Popover from "react-bootstrap/Popover";
 import Tooltip from "react-bootstrap/Tooltip";
 import { Link } from "react-router-dom";
 import styled, { css, useTheme } from "styled-components";
 import { difference, indexedById } from "../../lib/listUtils";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
+import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import type { User } from "../../lib/models/User";
@@ -38,8 +48,10 @@ import BookmarkButton from "./BookmarkButton";
 import PuzzleActivity from "./PuzzleActivity";
 import PuzzleAnswer from "./PuzzleAnswer";
 import PuzzleDeleteModal from "./PuzzleDeleteModal";
+import PuzzleFeedbackForm from "./PuzzleFeedbackForm";
 import type { PuzzleModalFormSubmitPayload } from "./PuzzleModalForm";
 import PuzzleModalForm from "./PuzzleModalForm";
+import PuzzleUnlockModal from "./PuzzleUnlockModal";
 import { mediaBreakpointDown } from "./styling/responsive";
 import TagList from "./TagList";
 
@@ -173,6 +185,43 @@ const TagListColumn = styled(TagList)`
   )}
 `;
 
+const PuzzleMetaColumn = styled(PuzzleColumn)`
+  padding: 0 2px;
+  display: inline-block;
+  flex: 1.5;
+  font-size: 1.1rem;
+  margin: -2px -4px -2px 0;
+  ${mediaBreakpointDown(
+    "xs",
+    css`
+      flex: 0 0 100%;
+    `,
+  )}
+`;
+
+const PuzzlePriorityColumn = styled(PuzzleColumn)`
+  padding: 0 2px;
+  display: inline-block;
+  flex: 1;
+  margin: -2px -4px -2px 0;
+  ${mediaBreakpointDown(
+    "xs",
+    css`
+      flex: 0 0 100%;
+    `,
+  )}
+`;
+
+const LockedSummaryColumn = styled(PuzzleColumn)`
+  flex: 5;
+  font-style: italic;
+  font-size: 0.9rem;
+  color: ${({ theme }) => theme.colors.muted};
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
 const SolversColumn = styled(PuzzleColumn)`
   padding: 0 2px;
   display: inline-block;
@@ -266,6 +315,37 @@ const Puzzle = React.memo(
         setRenderDeleteModal(true);
       }
     }, [renderDeleteModal]);
+    const [showUnlockModal, setShowUnlockModal] = useState<boolean>(false);
+    const [showInterestPopover, setShowInterestPopover] =
+      useState<boolean>(false);
+    const interestButtonRef = useRef<HTMLButtonElement>(null);
+
+    const feedbacks = useTracker(
+      () => PuzzleFeedbacks.find({ puzzle: puzzleId }).fetch(),
+      [puzzleId],
+    );
+
+    const myFeedback = useTracker(
+      () =>
+        PuzzleFeedbacks.findOne({
+          puzzle: puzzleId,
+          createdBy: Meteor.userId()!,
+        }),
+      [puzzleId],
+    );
+
+    const onShowUnlockModal = useCallback(() => {
+      setShowUnlockModal(true);
+    }, []);
+
+    const toggleInterestPopover = useCallback(() => {
+      setShowInterestPopover((v) => !v);
+    }, []);
+
+    const totalScore = useMemo(() => {
+      return feedbacks.reduce((acc, f) => acc + f.score, 0);
+    }, [feedbacks]);
+
     const theme = useTheme();
 
     const editButtons = useMemo(() => {
@@ -325,6 +405,31 @@ const Puzzle = React.memo(
         tagIndex.get(tagId)?.name === "stuck" ||
         tagIndex.get(tagId)?.name === "is:stuck",
     );
+    const statusEmoji = useTracker(() => {
+      if (isHighPriority) {
+        return <FontAwesomeIcon icon={faAngleDoubleUp} color="red" />;
+      } else if (isLowPriority) {
+        return <FontAwesomeIcon icon={faAngleDown} />;
+      } else {
+        return null;
+      }
+    }, [isHighPriority, isLowPriority]);
+
+    const statusTooltipText = useTracker(() => {
+      if (isHighPriority) {
+        return "High priority";
+      } else if (isLowPriority) {
+        return "Low priority";
+      } else {
+        return null;
+      }
+    }, [isHighPriority, isLowPriority]);
+
+    const statusTooltip = statusEmoji ? (
+      <Tooltip id={`puzzle-status-tooltip-${puzzleId}`}>
+        <span>{statusTooltipText}</span>
+      </Tooltip>
+    ) : null;
 
     // Now that we're putting those tags elsewhere, we're going to suppress them as well
     // but only the ones that are displayed
@@ -434,6 +539,26 @@ const Puzzle = React.memo(
       return noteTooltip;
     }, [puzzleId, puzzle.noteContent]);
 
+    const puzzleIsMeta = useTracker(() => {
+      if (isMetameta) {
+        return (
+          <Badge pill bg="warning" text="dark">
+            <FontAwesomeIcon icon={faStar} />
+            Metameta
+          </Badge>
+        );
+      } else if (isMeta) {
+        return (
+          <Badge pill bg="warning" text="dark">
+            <FontAwesomeIcon icon={faStar} />
+            Meta
+          </Badge>
+        );
+      } else {
+        return null;
+      }
+    }, [isMeta, isMetameta]);
+
     const rtcUsers = useTracker(
       () =>
         rtcViewers
@@ -483,16 +608,21 @@ const Puzzle = React.memo(
         <Tooltip id={`solvers-tooltip-${puzzleId}`}>
           {showRtc && (
             <div style={{ textAlign: "left" }}>
-              <strong>Callers: </strong>{" "}
+              <FontAwesomeIcon icon={faPhone} fixedWidth />{" "}
               {rtcUsers.map((u) => u.displayName).join(", ")}
             </div>
           )}
-          {allViewerUsers && (
+          {showActive && (
             <div style={{ textAlign: "left" }}>
-              <strong>Viewers: </strong>{" "}
-              {allViewerUsers
-                .map((u) => u.displayName + (u.isPassive ? " (passive)" : ""))
-                .join(", ")}
+              <FontAwesomeIcon icon={faEye} fixedWidth />{" "}
+              {activeUsers.map((u) => u.displayName).join(", ")}
+            </div>
+          )}
+          {showPassive && (
+            <div
+              style={{ textAlign: "left", fontStyle: "italic", opacity: 0.8 }}
+            >
+              {passiveUsers.map((u) => u.displayName).join(", ")}
             </div>
           )}
         </Tooltip>
@@ -517,12 +647,73 @@ const Puzzle = React.memo(
         )}
         <PuzzleControlButtonsColumn>
           <ButtonGroup size="sm">
-            <BookmarkButton
-              puzzleId={puzzle._id}
-              bookmarked={bookmarked}
-              as={StyledButton}
-              variant={theme.basicMode}
-            />
+            {renderAsLocked ? (
+              <>
+                <StyledButton
+                  variant={myFeedback ? "info" : theme.basicMode}
+                  ref={interestButtonRef}
+                  onClick={toggleInterestPopover}
+                  title={
+                    myFeedback ? "Update interest..." : "I'm interested..."
+                  }
+                >
+                  <FontAwesomeIcon
+                    icon={myFeedback ? faLightbulbSolid : faLightbulbRegular}
+                  />
+                  {totalScore > 0 && (
+                    <>
+                      {" "}
+                      <Badge bg="light" text="dark">
+                        {totalScore}
+                      </Badge>
+                    </>
+                  )}
+                </StyledButton>
+                <Overlay
+                  show={showInterestPopover}
+                  target={interestButtonRef.current}
+                  placement="right"
+                  rootClose
+                  onHide={() => setShowInterestPopover(false)}
+                >
+                  <Popover id={`interest-popover-${puzzleId}`}>
+                    <Popover.Header as="h3">Express Interest</Popover.Header>
+                    <Popover.Body>
+                      <PuzzleFeedbackForm
+                        puzzleId={puzzleId}
+                        initialScore={myFeedback?.score}
+                        initialComment={myFeedback?.comment}
+                        canWithdraw={!!myFeedback}
+                        onSuccess={() => setShowInterestPopover(false)}
+                      />
+                    </Popover.Body>
+                  </Popover>
+                </Overlay>
+                {showEdit && (
+                  <StyledButton
+                    variant="danger"
+                    onClick={onShowUnlockModal}
+                    title="Unlock puzzle..."
+                  >
+                    <FontAwesomeIcon icon={faUnlock} />
+                  </StyledButton>
+                )}
+                <PuzzleUnlockModal
+                  show={showUnlockModal}
+                  onHide={() => setShowUnlockModal(false)}
+                  puzzle={puzzle}
+                  feedbacks={feedbacks}
+                  displayNames={indexedDisplayNames()}
+                />
+              </>
+            ) : (
+              <BookmarkButton
+                puzzleId={puzzle._id}
+                bookmarked={bookmarked}
+                as={StyledButton}
+                variant={theme.basicMode}
+              />
+            )}
             {showEdit && editButtons}
           </ButtonGroup>
         </PuzzleControlButtonsColumn>
@@ -536,39 +727,61 @@ const Puzzle = React.memo(
             </OverlayTrigger>
           )}
         </PuzzleTitleColumn>
-
-        <SolversColumn>
-          {showSolvers !== "hide" &&
-          solvedness === "unsolved" &&
-          !renderAsLocked ? (
-            <OverlayTrigger placement="left" overlay={solversTooltip}>
-              <div style={{ cursor: "default" }}>
-                {rtcUsers.length > 0 && (
-                  <SolverRow>
-                    <FontAwesomeIcon icon={faPhone} fixedWidth />
-                    <AvatarStack users={rtcUsers} tooltip={<div />} />
-                  </SolverRow>
-                )}
-                {allViewerUsers.length > 0 && (
-                  <SolverRow>
-                    <FontAwesomeIcon icon={faEye} fixedWidth />
-                    <AvatarStack users={allViewerUsers} tooltip={<div />} />
-                  </SolverRow>
-                )}
-              </div>
+        <PuzzlePriorityColumn>
+          {statusEmoji && statusTooltip ? (
+            <OverlayTrigger placement="top" overlay={statusTooltip}>
+              <span>{statusEmoji}</span>
             </OverlayTrigger>
           ) : null}
-        </SolversColumn>
-        <PuzzleActivityColumn>
-          {solvedness === "unsolved" && !renderAsLocked && (
-            <PuzzleActivity
-              huntId={puzzle.hunt}
-              puzzleId={puzzle._id}
-              unlockTime={puzzle.createdAt}
-            />
-          )}
-        </PuzzleActivityColumn>
-
+          {isStuck ? (
+            <OverlayTrigger
+              placement="top"
+              overlay={<Tooltip id={`stuck-tt-${puzzleId}`}>Stuck</Tooltip>}
+            >
+              <span>🤷</span>
+            </OverlayTrigger>
+          ) : null}
+        </PuzzlePriorityColumn>
+        <PuzzleMetaColumn>{puzzleIsMeta}</PuzzleMetaColumn>
+        {renderAsLocked ? (
+          <LockedSummaryColumn title={puzzle.lockedSummary}>
+            {puzzle.lockedSummary}
+          </LockedSummaryColumn>
+        ) : (
+          <>
+            <SolversColumn>
+              {showSolvers !== "hide" &&
+              solvedness === "unsolved" &&
+              !renderAsLocked ? (
+                <OverlayTrigger placement="left" overlay={solversTooltip}>
+                  <div style={{ cursor: "default" }}>
+                    {rtcUsers.length > 0 && (
+                      <SolverRow>
+                        <FontAwesomeIcon icon={faPhone} fixedWidth />
+                        <AvatarStack users={rtcUsers} tooltip={<div />} />
+                      </SolverRow>
+                    )}
+                    {allViewerUsers.length > 0 && (
+                      <SolverRow>
+                        <FontAwesomeIcon icon={faEye} fixedWidth />
+                        <AvatarStack users={allViewerUsers} tooltip={<div />} />
+                      </SolverRow>
+                    )}
+                  </div>
+                </OverlayTrigger>
+              ) : null}
+            </SolversColumn>
+            <PuzzleActivityColumn>
+              {solvedness === "unsolved" && !renderAsLocked && (
+                <PuzzleActivity
+                  huntId={puzzle.hunt}
+                  puzzleId={puzzle._id}
+                  unlockTime={puzzle.createdAt}
+                />
+              )}
+            </PuzzleActivityColumn>
+          </>
+        )}
         <PuzzleLinkColumn>
           {puzzle.url ? (
             <span>

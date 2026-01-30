@@ -1,9 +1,11 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import { faBullhorn } from "@fortawesome/free-solid-svg-icons/faBullhorn";
-import { faFaucet } from "@fortawesome/free-solid-svg-icons/faFaucet";
+import { faDisplay } from "@fortawesome/free-solid-svg-icons/faDisplay";
+import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
+import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalLinkAlt";
 import { faMap } from "@fortawesome/free-solid-svg-icons/faMap";
-import { faReceipt } from "@fortawesome/free-solid-svg-icons/faReceipt";
+import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faTags } from "@fortawesome/free-solid-svg-icons/faTags";
 import { faUsers } from "@fortawesome/free-solid-svg-icons/faUsers";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -12,6 +14,7 @@ import { NavLink, useParams } from "react-router-dom";
 import styled, { css } from "styled-components";
 import Hunts from "../../lib/models/Hunts";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
+import type { Theme } from "../theme";
 import { mediaBreakpointDown } from "./styling/responsive";
 
 const JRLinkList = styled(Nav)`
@@ -33,7 +36,7 @@ const JRLinkList = styled(Nav)`
   )}
 `;
 
-const StyledPuzzleListLinkAnchor = styled(NavLink)`
+const StyledPuzzleListLinkAnchor = styled(NavLink)<{ theme: Theme }>`
   display: flex;
   align-items: center;
   justify-content: center;
@@ -46,7 +49,6 @@ const StyledPuzzleListLinkAnchor = styled(NavLink)`
   &:hover {
     color: ${({ theme }) => theme.colors.text};
     text-decoration: none;
-    opacity: 0.8;
   }
 
   ${mediaBreakpointDown(
@@ -145,9 +147,10 @@ const HuntNav = () => {
     };
   }, [hunt]);
   if (huntId && hunt) {
-    const huntLink = hunt.homepageUrl && (
+    const huntUrl = hunt.archivedHuntUrl ?? hunt.homepageUrl;
+    const huntLink = huntUrl && (
       <HuntLinkAnchor
-        to={hunt.homepageUrl}
+        to={huntUrl}
         target="_blank"
         rel="noopener noreferrer"
         title="Open the hunt homepage"
@@ -165,16 +168,25 @@ const HuntNav = () => {
           <MenuIcon icon={faBullhorn} />
           <StyledPuzzleListLinkLabel>Announcements</StyledPuzzleListLinkLabel>
         </StyledPuzzleListLinkAnchor>
-
-        <StyledPuzzleListLinkAnchor
-          to={`/hunts/${huntId}/guesses`}
-          title={hunt.hasGuessQueue ? "Guess queue" : "Answer log"}
-        >
-          <MenuIcon icon={faReceipt} />
-          <StyledPuzzleListLinkLabel>
-            {hunt.hasGuessQueue ? "Guesses" : "Answers"}
-          </StyledPuzzleListLinkLabel>
-        </StyledPuzzleListLinkAnchor>
+        {hunt.customLinkName ? (
+          <StyledPuzzleListLinkAnchor
+            to={
+              hunt.customLinkEmbed
+                ? `/hunts/${huntId}/custom-link`
+                : hunt.customLinkUrl!
+            }
+            title={hunt.customLinkName}
+            target={hunt.customLinkEmbed ? undefined : "_blank"}
+            rel={hunt.customLinkEmbed ? undefined : "noopener noreferrer"}
+          >
+            <MenuIcon
+              icon={hunt.customLinkEmbed ? faDisplay : faExternalLinkAlt}
+            />
+            <StyledPuzzleListLinkLabel>
+              {hunt.customLinkName}
+            </StyledPuzzleListLinkLabel>
+          </StyledPuzzleListLinkAnchor>
+        ) : null}
 
         <StyledPuzzleListLinkAnchor
           to={`/hunts/${huntId}/hunters`}
@@ -184,22 +196,28 @@ const HuntNav = () => {
           <StyledPuzzleListLinkLabel>Hunters</StyledPuzzleListLinkLabel>
         </StyledPuzzleListLinkAnchor>
 
-        <StyledPuzzleListLinkAnchor to={`/hunts/${huntId}/tags`} title="Tags">
-          <MenuIcon icon={faTags} />
-          <StyledPuzzleListLinkLabel>Tags</StyledPuzzleListLinkLabel>
-        </StyledPuzzleListLinkAnchor>
-
-        {/* Show firehose link only to operators */}
+        {/* Show firehose and tag manager links only to operators */}
         {canUpdate && (
           <StyledPuzzleListLinkAnchor
-            to={`/hunts/${huntId}/firehose`}
-            title="Firehose"
+            to={`/hunts/${huntId}/notes`}
+            title="Notes"
           >
-            <MenuIcon icon={faFaucet} />
-            <StyledPuzzleListLinkLabel>Firehose</StyledPuzzleListLinkLabel>
+            <MenuIcon icon={faNoteSticky} />
+            <StyledPuzzleListLinkLabel>Notes</StyledPuzzleListLinkLabel>
+          </StyledPuzzleListLinkAnchor>
+        )}
+        {canUpdate && (
+          <StyledPuzzleListLinkAnchor to={`/hunts/${huntId}/tags`} title="Tags">
+            <MenuIcon icon={faTags} />
+            <StyledPuzzleListLinkLabel>Tags</StyledPuzzleListLinkLabel>
           </StyledPuzzleListLinkAnchor>
         )}
         {huntLink}
+
+        <StyledPuzzleListLinkAnchor to={`/hunts/${huntId}/more`} title="More">
+          <MenuIcon icon={faEllipsisH} />
+          <StyledPuzzleListLinkLabel>More</StyledPuzzleListLinkLabel>
+        </StyledPuzzleListLinkAnchor>
       </JRLinkList>
     );
   } else {

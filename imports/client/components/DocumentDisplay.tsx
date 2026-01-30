@@ -1,15 +1,20 @@
 import type { Meteor } from "meteor/meteor";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faFileAlt } from "@fortawesome/free-solid-svg-icons/faFileAlt";
+import { faFilePen } from "@fortawesome/free-solid-svg-icons/faFilePen";
 import { faTable } from "@fortawesome/free-solid-svg-icons/faTable";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import styled from "styled-components";
 import type { DocumentType } from "../../lib/models/Documents";
+import type { Theme } from "../theme";
+import CopyToClipboardButton from "./CopyToClipboardButton";
 
 interface DocumentDisplayProps {
   document: DocumentType;
   displayMode: "link" | "embed" | "copy";
   user: Meteor.User;
+  isShown: boolean;
 }
 
 const StyledDeepLink = styled.a`
@@ -18,7 +23,7 @@ const StyledDeepLink = styled.a`
   white-space: nowrap;
 `;
 
-export const StyledIframe = styled.iframe`
+export const StyledIframe = styled.iframe<{ $isShown?: boolean }>`
   /* Workaround for unusual sizing behavior of iframes in iOS Safari:
    * Width and height need to be specified in absolute values then adjusted by min and max */
   width: 0;
@@ -32,9 +37,10 @@ export const StyledIframe = styled.iframe`
   border: 0;
   padding-bottom: env(safe-area-inset-bottom, 0);
   background-color: #f1f3f4;
+  z-index: ${({ $isShown }) => ($isShown ? 1 : -1)};
 `;
 
-export const DocumentMessage = styled.span`
+export const DocumentMessage = styled.span<{ theme: Theme }>`
   display: block;
   width: 100%;
   height: 100%;
@@ -45,6 +51,7 @@ const GoogleDocumentDisplay = ({
   document,
   displayMode,
   user,
+  isShown,
 }: DocumentDisplayProps) => {
   let url: string;
   let title: string;
@@ -52,7 +59,7 @@ const GoogleDocumentDisplay = ({
   // If the user has linked their Google account, try to force usage of that specific account.
   // Otherwise, they may open the document anonymously. If the user isn't signed in, they will be
   // redirected to the default account in their browser session anyway.
-  const authUserParam = user.googleAccount
+  const authUserParam = user?.googleAccount
     ? `authuser=${user.googleAccount}&`
     : "";
   switch (document.value.type) {
@@ -66,6 +73,11 @@ const GoogleDocumentDisplay = ({
       title = "Doc";
       icon = faFileAlt;
       break;
+    case "drawing":
+      url = `https://docs.google.com/drawings/d/${document.value.id}/edit?ui=2&rm=embedded`;
+      title = "Drawing";
+      icon = faFilePen;
+      break;
     default:
       return (
         <DocumentMessage>
@@ -76,6 +88,17 @@ const GoogleDocumentDisplay = ({
   }
 
   switch (displayMode) {
+    case "copy":
+      return (
+        <CopyToClipboardButton
+          variant="link"
+          tooltipPlacement="right"
+          text={url}
+          size="sm"
+        >
+          <FontAwesomeIcon fixedWidth icon={faCopy} />
+        </CopyToClipboardButton>
+      );
     case "link":
       return (
         <StyledDeepLink href={url} target="_blank" rel="noreferrer noopener">
@@ -84,7 +107,14 @@ const GoogleDocumentDisplay = ({
       );
     case "embed":
       /* To workaround iOS Safari iframe behavior, scrolling should be "no" */
-      return <StyledIframe title="document" scrolling="no" src={url} />;
+      return (
+        <StyledIframe
+          title="document"
+          scrolling="no"
+          src={url}
+          $isShown={isShown}
+        />
+      );
     default:
       return (
         <DocumentMessage>Unknown displayMode {displayMode}</DocumentMessage>
@@ -96,6 +126,7 @@ const DocumentDisplay = ({
   document,
   displayMode,
   user,
+  isShown,
 }: DocumentDisplayProps) => {
   switch (document.provider) {
     case "google":
@@ -104,6 +135,7 @@ const DocumentDisplay = ({
           document={document}
           displayMode={displayMode}
           user={user}
+          isShown={isShown}
         />
       );
     default:

@@ -9,6 +9,9 @@ export default new TypedMethod<
     expectedAnswerCount: number;
     allowDuplicateUrls?: boolean;
     completedWithNoAnswer?: boolean;
+    locked?: boolean;
+    lockedSummary?: string;
+    markedComplete?: boolean;
   },
   void
 >("Puzzles.methods.update");

@@ -2,6 +2,17 @@ import type { SetStateAction } from "react";
 import { useCallback } from "react";
 import { useLocalStorage } from "usehooks-ts";
 
+export const useNotesPageViewMode = () => {
+  return useLocalStorage<"list" | "table" | "fullwidth">(
+    "notesPageViewMode",
+    "list",
+  );
+};
+
+export const useNotesPageShowSolved = () => {
+  return useLocalStorage<boolean>("notesPageShowSolved", false);
+};
+
 export type AppThemeState = "dark" | "light" | "auto";
 export const useAppThemeState = () => {
   return useLocalStorage<AppThemeState>("appTheme", "auto");
@@ -50,10 +61,13 @@ export type PuzzleListState = {
 const defaultPuzzleListState = () => {
   return {
     displayMode: "group",
-    showSolved: true,
+    showSolved: false,
+    lockedDisplayMode: "all",
+    showSolvers: "viewers",
     collapseGroups: {},
   } as PuzzleListState;
 };
+
 export const useHuntPuzzleListState = (huntId: string) => {
   const [puzzleListView, setPuzzleListView] = useLocalStorage<
     Record<string /* huntId */, PuzzleListState>
@@ -114,6 +128,29 @@ export const useHuntPuzzleListShowSolved = (huntId: string) => {
             showSolved:
               typeof update === "function"
                 ? update(prevView.showSolved)
+                : update,
+          };
+          return newView;
+        });
+      },
+      [setHuntPuzzleListView],
+    ),
+  ] as const;
+};
+
+export const useHuntPuzzleListLockedDisplayMode = (huntId: string) => {
+  const [huntPuzzleListView, setHuntPuzzleListView] =
+    useHuntPuzzleListState(huntId);
+  return [
+    huntPuzzleListView.lockedDisplayMode,
+    useCallback(
+      (update: SetStateAction<"all" | "unlocked" | "locked">) => {
+        setHuntPuzzleListView((prevView) => {
+          const newView = {
+            ...prevView,
+            lockedDisplayMode:
+              typeof update === "function"
+                ? update(prevView.lockedDisplayMode)
                 : update,
           };
           return newView;
