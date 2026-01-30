@@ -24,6 +24,10 @@ declare module "meteor/meteor" {
       phoneNumber?: string;
       dingwords?: string[];
       isOffsite?: boolean;
+      dingwordsOpenMatch?: boolean;
+      dingwordsMatchOnce?: string[];
+      dingwordsMatchedOnce?: Record<string, Record<string, string[]>>;
+      suppressedDingwords?: Record<string, Record<string, string[]>>;
     }
   }
 }
@@ -56,6 +60,10 @@ export const User = z.object({
   discordAccount: DiscordAccount.optional(),
   phoneNumber: nonEmptyString.optional(),
   dingwords: nonEmptyString.array().optional(),
+  dingwordsOpenMatch: z.boolean().optional(),
+  suppressedDingwords: z
+    .record(z.string(), z.record(z.string(), nonEmptyString.array()))
+    .optional(),
   isOffsite: z.boolean().optional(),
 });
 validateSchema(User);
@@ -69,4 +77,6 @@ export type ProfileFields =
   | "phoneNumber"
   | "dingwords"
   | "isOffsite"
-  | "hunts";
+  | "hunts"
+  | "dingwordsOpenMatch"
+  | "suppressedDingwords";

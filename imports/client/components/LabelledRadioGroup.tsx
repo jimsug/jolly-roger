@@ -27,7 +27,7 @@ const LabelledRadio = ({
 }: {
   group: string;
   value: string;
-  label: string;
+  label: React.ReactNode;
   defaultChecked: boolean;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }) => {
@@ -55,7 +55,7 @@ const LabelledRadioGroup = ({
   help,
 }: {
   header: string;
-  options: { label: string; value: string }[];
+  options: { label: React.ReactNode; value: string }[];
   onChange: (value: string) => void;
   initialValue: string;
   help: string;

@@ -43,6 +43,7 @@ const EditableHunt = z.object({
   // channel name (for local presentation) to which we should post puzzle
   // create/solve messages as the server-configured Discord bot.
   puzzleHooksDiscordChannel: SavedDiscordObjectFields.optional(),
+  puzzleCreationDiscordChannel: SavedDiscordObjectFields.optional(),
   // If provided, then any message sent in chat for a puzzle associated with
   // this hunt will be mirrored to the specified Discord channel.
   firehoseDiscordChannel: SavedDiscordObjectFields.optional(),
@@ -51,7 +52,6 @@ const EditableHunt = z.object({
   memberDiscordRole: SavedDiscordObjectFields.optional(),
   allowUnlockablePuzzles: z.boolean().optional(),
   isArchived: z.boolean().optional(),
-  puzzleCreationDiscordChannel: SavedDiscordObjectFields.optional(),
 });
 export type EditableHuntType = z.infer<typeof EditableHunt>;
 const Hunt = withCommon(EditableHunt);
@@ -72,6 +72,7 @@ export const HuntPattern = {
   homepageUrl: Match.Optional(String),
   announcementDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
   puzzleHooksDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
+  puzzleCreationDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
   firehoseDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
   memberDiscordRole: Match.Optional(SavedDiscordObjectPattern),
   allowUnlockablePuzzles: Match.Optional(Boolean),

@@ -183,35 +183,37 @@ class UserPuzzleHistoryAggregator {
     collectionsToObserve.forEach(
       ({ collection, query, fields, handler, removedHandler }) => {
         this.handles.push(
-          (collection as any).find(query, { fields }).observeChanges({
-            added: (id: string, docFields: any) => {
-              const puzzleId =
-                docFields.puzzle ?? (docFields as { call?: string }).call;
-              if (
-                puzzleId &&
-                !this.involvedPuzzleIds.has(puzzleId) &&
-                collection !== Puzzles &&
-                collection !== Hunts &&
-                collection !== Tags
-              ) {
-                this.involvedPuzzleIds.add(puzzleId);
-                this.addPuzzleObserver(puzzleId);
-              }
-              handler(id, docFields);
-            },
-            changed: handler,
-            removed: (id: string, docFields: any) => {
-              if (removedHandler) {
-                removedHandler(id, docFields);
-              } else {
+          (collection as any)
+            .find(query, { fields: fields as any })
+            .observeChanges({
+              added: (id: string, docFields: any) => {
                 const puzzleId =
                   docFields.puzzle ?? (docFields as { call?: string }).call;
-                if (puzzleId) {
-                  void this.recomputePuzzleSummary(puzzleId);
+                if (
+                  puzzleId &&
+                  !this.involvedPuzzleIds.has(puzzleId) &&
+                  collection !== Puzzles &&
+                  collection !== Hunts &&
+                  collection !== Tags
+                ) {
+                  this.involvedPuzzleIds.add(puzzleId);
+                  this.addPuzzleObserver(puzzleId);
                 }
-              }
-            },
-          }),
+                handler(id, docFields);
+              },
+              changed: handler,
+              removed: (id: string, docFields: any) => {
+                if (removedHandler) {
+                  removedHandler(id, docFields);
+                } else {
+                  const puzzleId =
+                    docFields.puzzle ?? (docFields as { call?: string }).call;
+                  if (puzzleId) {
+                    void this.recomputePuzzleSummary(puzzleId);
+                  }
+                }
+              },
+            }),
         );
       },
     );

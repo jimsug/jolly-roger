@@ -246,5 +246,6 @@ definePublication(ActivitySummaryForUser, {
       aggregatedCounts.clear();
       docToAggregateMap.clear();
     });
+    return undefined;
   },
 });

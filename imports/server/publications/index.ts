@@ -18,6 +18,7 @@ import "./pendingAnnouncementsForSelf";
 import "./pendingGuessesForSelf";
 import "./presenceForHunt";
 import "./puzzleActivityForHunt";
+import "./puzzleNotificationsForSelf";
 import "./puzzleForPuzzlePage";
 import "./puzzlesForHunt";
 import "./puzzlesForPuzzleList";

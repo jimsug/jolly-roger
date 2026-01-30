@@ -7,7 +7,7 @@ import Button from "react-bootstrap/Button";
 import Form from "react-bootstrap/Form";
 import { useParams } from "react-router-dom";
 import ReactTextareaAutosize from "react-textarea-autosize";
-import styled from "styled-components";
+import styled, { useTheme } from "styled-components";
 import Announcements from "../../lib/models/Announcements";
 import Hunts from "../../lib/models/Hunts";
 import { userMayAddAnnouncementToHunt } from "../../lib/permission_stubs";
@@ -72,6 +72,7 @@ const AnnouncementFormInput = ({
 
   const disabled = submitState === AnnouncementFormSubmitState.SUBMITTING;
   const id = useId();
+  const theme = useTheme();
 
   return (
     <BoundedForm>
@@ -84,6 +85,7 @@ const AnnouncementFormInput = ({
           displayName={`${selfDisplayName} (preview)`}
           message={message}
           createdAt={new Date()}
+          theme={theme}
         />
       )}
       <Form.Group className="mb-2" controlId={id}>
@@ -116,6 +118,7 @@ const AnnouncementFormInput = ({
 
 const AnnouncementsPage = () => {
   const huntId = useParams<"huntId">().huntId!;
+  const theme = useTheme();
   useBreadcrumb({
     title: "Announcements",
     path: `/hunts/${huntId}/announcements`,
@@ -173,6 +176,7 @@ const AnnouncementsPage = () => {
               createdAt={announcement.createdAt}
               displayName={displayNames.get(announcement.createdBy) ?? "???"}
               message={announcement.message}
+              theme={theme}
             />
           );
         })}

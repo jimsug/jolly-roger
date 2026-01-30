@@ -19,7 +19,8 @@ const profileFields: Record<ProfileFields, 1> = {
   discordAccount: 1,
   phoneNumber: 1,
   dingwords: 1,
-
+  dingwordsOpenMatch: 1,
+  suppressedDingwords: 1,
   isOffsite: 1,
   hunts: 1,
 };

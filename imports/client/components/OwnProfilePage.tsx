@@ -6,6 +6,7 @@ import { useCallback, useId, useMemo, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import Container from "react-bootstrap/Container";
+import FormCheck from "react-bootstrap/FormCheck";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
@@ -25,6 +26,7 @@ import APIKeysTable from "./APIKeysTable";
 import AudioConfig from "./AudioConfig";
 import Avatar from "./Avatar";
 import GoogleLinkBlock from "./GoogleLinkBlock";
+import LabelledRadioGroup from "./LabelledRadioGroup";
 
 enum DiscordLinkBlockLinkState {
   IDLE = "idle",
@@ -36,10 +38,7 @@ type DiscordLinkBlockState =
   | {
       state: DiscordLinkBlockLinkState.IDLE | DiscordLinkBlockLinkState.LINKING;
     }
-  | {
-      state: DiscordLinkBlockLinkState.ERROR;
-      error: Error;
-    };
+  | { state: DiscordLinkBlockLinkState.ERROR; error: Error };
 
 const DiscordLinkBlock = ({ user }: { user: Meteor.User }) => {
   const [state, setState] = useState<DiscordLinkBlockState>({
@@ -226,6 +225,12 @@ const OwnProfilePage = ({
   const [dingwordsFlat, setDingwordsFlat] = useState<string>(
     initialUser.dingwords ? initialUser.dingwords.join(",") : "",
   );
+  const [dingwordsOpenMatch, setDingwordsOpenMatch] = useState<boolean>(
+    initialUser.dingwordsOpenMatch ?? false,
+  );
+  const [isOffsite, setIsOffsite] = useState<boolean>(
+    initialUser.isOffsite ?? false,
+  );
   const [submitState, setSubmitState] = useState<OwnProfilePageSubmitState>(
     OwnProfilePageSubmitState.IDLE,
   );
@@ -248,6 +253,17 @@ const OwnProfilePage = ({
       setDingwordsFlat(e.currentTarget.value);
     }, []);
 
+  const handleDingwordsModeChange = useCallback((newMode: string) => {
+    setDingwordsOpenMatch(newMode === "open");
+  }, []);
+
+  const handleIsOffsiteChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setIsOffsite(e.currentTarget.checked);
+    },
+    [],
+  );
+
   const handleSaveForm = useCallback(() => {
     const trimmedDisplayName = displayName.trim();
     if (trimmedDisplayName === "") {
@@ -267,6 +283,8 @@ const OwnProfilePage = ({
       displayName: trimmedDisplayName,
       phoneNumber: phoneNumber !== "" ? phoneNumber : undefined,
       dingwords,
+      dingwordsOpenMatch,
+      isOffsite,
     };
     updateProfile.call(newProfile, (error) => {
       if (error) {
@@ -276,7 +294,7 @@ const OwnProfilePage = ({
         setSubmitState(OwnProfilePageSubmitState.SUCCESS);
       }
     });
-  }, [dingwordsFlat, displayName, phoneNumber]);
+  }, [dingwordsFlat, dingwordsOpenMatch, displayName, phoneNumber, isOffsite]);
 
   const dismissAlert = useCallback(() => {
     setSubmitState(OwnProfilePageSubmitState.IDLE);
@@ -299,19 +317,6 @@ const OwnProfilePage = ({
           disabled
         />
       </FormGroup>
-      {submitState === OwnProfilePageSubmitState.SUBMITTING ? (
-        <Alert variant="info">Saving...</Alert>
-      ) : null}
-      {submitState === OwnProfilePageSubmitState.SUCCESS ? (
-        <Alert variant="success" dismissible onClose={dismissAlert}>
-          Saved changes.
-        </Alert>
-      ) : null}
-      {submitState === OwnProfilePageSubmitState.ERROR ? (
-        <Alert variant="danger" dismissible onClose={dismissAlert}>
-          Saving failed: {submitError}
-        </Alert>
-      ) : null}
 
       <GoogleLinkBlock user={initialUser} />
 
@@ -340,21 +345,75 @@ const OwnProfilePage = ({
       </FormGroup>
 
       <FormGroup className="mb-3" controlId={`${idPrefix}-dingwords`}>
-        <FormLabel>Dingwords (experimental)</FormLabel>
+        <FormLabel>Dingwords (comma-separated)</FormLabel>
         <FormControl
           type="text"
           value={dingwordsFlat}
           disabled={shouldDisableForm}
           onChange={handleDingwordsChange}
-          placeholder="cryptic,biology,chemistry"
+          placeholder="e.g. cryptic, akari, REO Speedwagon lyrics"
         />
         <FormText>
-          Get an in-app notification if anyone sends a chat message containing
-          one of your comma-separated, case-insensitive dingwords as a
-          substring. This feature is experimental and may be disabled without
-          notice.
+          If anyone sends a chat message, or adds a tag, that contains one of
+          your dingwords, you&apos;ll get a notification. Separate dingwords by
+          commas. Spaces are allowed.
         </FormText>
       </FormGroup>
+
+      <FormGroup className="mb-3" controlId={`${idPrefix}-dingwords-open`}>
+        <FormLabel>Dingwords matching mode</FormLabel>
+        <LabelledRadioGroup
+          header=""
+          options={[
+            {
+              value: "exact",
+              label: (
+                <>
+                  <strong>Match precisely:</strong> dingwords and -phrases must
+                  match the typed text <em>exactly</em> in order to trigger an
+                  alert.
+                </>
+              ),
+            },
+            {
+              value: "open",
+              label: (
+                <>
+                  <strong>Match start:</strong> dingwords and -phrases only need
+                  to match the <em>start</em> of a typed word or phrase. For
+                  example, the dingword <code>logic</code> would match
+                  &quot;logic&quot;, &quot;logician&quot;, and
+                  &quot;logical&quot;, but not &quot;illogical&quot;.
+                </>
+              ),
+            },
+          ]}
+          initialValue={dingwordsOpenMatch ? "open" : "exact"}
+          help=""
+          onChange={handleDingwordsModeChange}
+        />
+      </FormGroup>
+      <FormGroup className="mb-3" controlId={`${idPrefix}-is-offsite`}>
+        <FormLabel>Are you hunting remotely?</FormLabel>
+        <FormCheck
+          checked={isOffsite}
+          onChange={handleIsOffsiteChange}
+          label="I'm hunting remotely"
+        />
+      </FormGroup>
+      {submitState === "submitting" ? (
+        <Alert variant="info">Saving...</Alert>
+      ) : null}
+      {submitState === "success" ? (
+        <Alert variant="success" dismissible onClose={dismissAlert}>
+          Saved changes.
+        </Alert>
+      ) : null}
+      {submitState === "error" ? (
+        <Alert variant="danger" dismissible onClose={dismissAlert}>
+          Saving failed: {submitError}
+        </Alert>
+      ) : null}
 
       <ActionButtonRow>
         <FormGroup className="mb-3">

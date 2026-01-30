@@ -16,6 +16,7 @@ defineMethod(setGuessState, {
       guessId: String,
       state: Match.OneOf(...GuessStates.options),
       additionalNotes: Match.Optional(String),
+      correctAnswer: Match.Optional(String),
     });
     return arg;
   },
