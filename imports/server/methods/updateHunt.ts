@@ -1,7 +1,7 @@
 import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import Logger from "../../Logger";
-import type { HuntType } from "../../lib/models/Hunts";
+import type { EditableHuntType, HuntType } from "../../lib/models/Hunts";
 import Hunts, { HuntPattern } from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import { checkAdmin } from "../../lib/permission_stubs";
@@ -13,7 +13,7 @@ import defineMethod from "./defineMethod";
 defineMethod(updateHunt, {
   validate(arg) {
     check(arg, { huntId: String, value: HuntPattern });
-    return arg;
+    return arg as { huntId: string; value: EditableHuntType };
   },
 
   async run({ huntId, value }) {

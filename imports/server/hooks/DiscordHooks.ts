@@ -56,8 +56,11 @@ async function renderChatMessageContent(
       if (nodeIsRoleMention(child)) {
         return ` @${child.roleId} `;
       }
-      const user = await MeteorUsers.findOneAsync(child.userId);
-      return ` @${user?.displayName ?? child.userId} `;
+      if (child.type === "mention") {
+        const user = await MeteorUsers.findOneAsync(child.userId);
+        return ` @${user?.displayName ?? child.userId} `;
+      }
+      return "";
     }),
   );
 

@@ -61,7 +61,13 @@ defineMethod(updatePuzzle, {
     // Look up each tag by name and map them to tag IDs.
     const tagIds = await Promise.all(
       tags.map(async (tagName) => {
-        return getOrCreateTagByName(oldPuzzle.hunt, tagName);
+        const huntId = oldPuzzle.hunt;
+        if (!huntId) throw new Meteor.Error(500, "Puzzle has no hunt");
+        return getOrCreateTagByName(
+          this.userId!,
+          huntId as unknown as string,
+          tagName,
+        );
       }),
     );
 

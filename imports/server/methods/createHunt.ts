@@ -1,10 +1,10 @@
 import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import Logger from "../../Logger";
-import Hunts, { HuntPattern } from "../../lib/models/Hunts";
+import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import { addUserToRole, checkAdmin } from "../../lib/permission_stubs";
-import createHunt from "../../methods/createHunt";
+import createHunt, { CreateHuntPayloadSchema } from "../../methods/createHunt";
 import addUsersToDiscordRole from "../addUsersToDiscordRole";
 import { ensureHuntFolder } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
@@ -25,7 +25,7 @@ const DEFAULT_TAGS = [
 
 defineMethod(createHunt, {
   validate(arg) {
-    check(arg, HuntPattern);
+    check(arg, CreateHuntPayloadSchema);
     return arg;
   },
 
@@ -35,11 +35,13 @@ defineMethod(createHunt, {
 
     Logger.info("Creating a new hunt", arg);
 
-    const huntId = await Hunts.insertAsync(arg);
+    const { initialTags, ...huntData } = arg;
+
+    const huntId = await Hunts.insertAsync(huntData as any);
     await addUserToRole(this.userId, huntId, "operator");
 
     for (const tag of DEFAULT_TAGS) {
-      await getOrCreateTagByName(huntId, tag);
+      await getOrCreateTagByName(this.userId, huntId, tag);
     }
 
     Meteor.defer(async () => {
@@ -48,9 +50,11 @@ defineMethod(createHunt, {
         await MeteorUsers.find({ hunts: huntId }).fetchAsync()
       ).map((u) => u._id);
       await addUsersToDiscordRole(userIds, huntId);
-      await ensureHuntFolder({ _id: huntId, name: arg.name });
+      await ensureHuntFolder({ _id: huntId, name: arg.name as string });
     });
 
     return huntId;
   },
 });
+
+export default { DEFAULT_TAGS };

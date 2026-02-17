@@ -87,7 +87,7 @@ const TagManagerTagListColumn = styled(TagList)`
 const RenameTagSection = ({ huntId }: { huntId: string }) => {
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [submitState, setSubmitState] = useState<SubmitState>(SubmitState.IDLE);
-
+  const [alias, setAlias] = useState<boolean>(false);
   const [selectedTagId, setSelectedTagId] = useState<string>("");
   const [newTagName, setNewTagName] = useState<string>("");
 
@@ -139,12 +139,19 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
     [],
   );
 
+  const onAliasChanged = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setAlias(e.target.checked);
+    },
+    [],
+  );
+
   const onFormSubmit = useCallback<NonNullable<FormProps["onSubmit"]>>(
     (e) => {
       e.preventDefault();
       setSubmitState(SubmitState.SUBMITTING);
       renameTag.call(
-        { tagId: selectedTagId, name: newTagName },
+        { tagId: selectedTagId, name: newTagName, alias: alias },
         (error?: Error) => {
           if (error) {
             setSubmitState(SubmitState.FAILED);
@@ -152,11 +159,14 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
           } else {
             setSubmitState(SubmitState.SUCCESS);
             setErrorMessage("");
+            setSelectedTagId("");
+            setNewTagName("");
+            setAlias(false);
           }
         },
       );
     },
-    [selectedTagId, newTagName],
+    [selectedTagId, newTagName, alias],
   );
 
   const isNameDirtied = tagToRename?.name.trim() !== newTagName.trim();
@@ -206,13 +216,21 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
               />
             </FormGroup>
           </Col>
-          <Col xs={2}>
-            <FormGroup className="mb-3">
+
+          <FormGroup as={Row} className="mb-3">
+            <Col xs={10}>
+              <Form.Check
+                type="checkbox"
+                label="This is an alias of the new tag name"
+                onChange={onAliasChanged}
+              />
+            </Col>
+            <Col xs={2}>
               <Button variant="primary" type="submit" disabled={disableRename}>
                 Rename
               </Button>
-            </FormGroup>
-          </Col>
+            </Col>
+          </FormGroup>
         </Row>
       </Form>
     </section>

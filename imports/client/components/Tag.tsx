@@ -1,5 +1,8 @@
+import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faAlignJustify } from "@fortawesome/free-solid-svg-icons/faAlignJustify";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Modifier, ModifierArguments, Padding } from "@popperjs/core";
@@ -73,6 +76,7 @@ const TagDiv = styled.div<{
   $isMetaFor: boolean;
   $isNeeds: boolean;
   $isPriority: boolean;
+  $isLocation?: boolean;
 }>`
   display: inline-flex;
   align-items: center;
@@ -121,17 +125,22 @@ const TagDiv = styled.div<{
   ${({ $isMetaFor }) =>
     $isMetaFor &&
     css`
-      background-color: #ffb0b0;
+      background-color: #ff0;
     `}
   ${({ $isNeeds }) =>
     $isNeeds &&
     css`
-      background-color: #ff4040;
+      background-color: #ffc0cb;
     `}
   ${({ $isPriority }) =>
     $isPriority &&
     css`
       background-color: #aaf;
+    `}
+  ${({ $isLocation }) =>
+    $isLocation &&
+    css`
+      background-color: #aaffc3;
     `}
 `;
 
@@ -318,13 +327,34 @@ const Tag = (props: TagProps) => {
   const isMetaFor = name.lastIndexOf("meta-for:", 0) === 0;
   const isNeeds = name.lastIndexOf("needs:", 0) === 0;
   const isPriority = name.lastIndexOf("priority:", 0) === 0;
+  const isLocation =
+    name.lastIndexOf("location:", 0) === 0 ||
+    name.lastIndexOf("loc:") === 0 ||
+    name.lastIndexOf("where:") === 0;
 
   // Browsers won't word-break on hyphens, so suggest
   // Use wbr instead of zero-width space to make copy-paste reasonable
   const nameWithBreaks: (string | React.JSX.Element)[] = [];
   name.split(":").forEach((part, i, arr) => {
     const withColon = i < arr.length - 1;
-    nameWithBreaks.push(`${part}${withColon ? ":" : ""}`);
+    if (isGroup && i === 0) {
+      nameWithBreaks.push(
+        <FontAwesomeIcon icon={faFolderOpen} key="group-${i}" />,
+        "\u00A0",
+      );
+    } else if (isMetaFor && i === 0) {
+      nameWithBreaks.push(
+        <FontAwesomeIcon icon={faStar} key="meta-for-${i}" />,
+        "\u00A0",
+      );
+    } else if (isLocation && i === 0) {
+      nameWithBreaks.push(
+        <FontAwesomeIcon icon={faMapPin} key="where-${i}" />,
+        "\u00A0",
+      );
+    } else {
+      nameWithBreaks.push(`${part}${withColon ? ":" : ""}`);
+    }
     if (withColon) {
       nameWithBreaks.push(<wbr key={`wbr-${i}-${part}`} />);
     }
@@ -355,6 +385,7 @@ const Tag = (props: TagProps) => {
       $isMetaFor={isMetaFor}
       $isNeeds={isNeeds}
       $isPriority={isPriority}
+      $isLocation={isLocation}
     >
       {title}
       {props.onRemove && (

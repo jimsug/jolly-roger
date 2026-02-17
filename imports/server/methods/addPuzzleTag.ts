@@ -3,6 +3,7 @@ import { Meteor } from "meteor/meteor";
 import Logger from "../../Logger";
 import Puzzles from "../../lib/models/Puzzles";
 import addPuzzleTag from "../../methods/addPuzzleTag";
+import GlobalHooks from "../GlobalHooks";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
 
@@ -35,7 +36,7 @@ defineMethod(addPuzzleTag, {
     }
 
     const huntId = puzzle.hunt;
-    const tagId = await getOrCreateTagByName(huntId, tagName);
+    const tagId = await getOrCreateTagByName(this.userId, huntId, tagName);
 
     Logger.info("Tagging puzzle", { puzzle: puzzleId, tag: tagName });
     await Puzzles.updateAsync(
@@ -48,5 +49,7 @@ defineMethod(addPuzzleTag, {
         },
       },
     );
+
+    await GlobalHooks.runTagAddedHooks(puzzleId, tagId, this.userId);
   },
 });

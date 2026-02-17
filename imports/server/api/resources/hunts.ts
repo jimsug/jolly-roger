@@ -71,6 +71,8 @@ hunts.get(
 hunts.post(
   "/:huntId/puzzles",
   expressAsyncWrapper(async (req, res) => {
+    const userId = Meteor.userId();
+    check(userId, String);
     check(req.params.huntId, String);
     check(req.body, {
       title: String,

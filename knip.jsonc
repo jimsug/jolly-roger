@@ -29,5 +29,13 @@
     // Used by test suite
     "playwright"
   ],
+  "ignore": [
+    // Meteor publications and methods are registered dynamically at runtime
+    "imports/lib/publications/**",
+    "imports/methods/**",
+    "imports/server/publications/**",
+    "imports/server/methods/**",
+    "imports/server/api/resources/**"
+  ],
   "tags": ["-lintignore"]
 }

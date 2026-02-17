@@ -37,7 +37,7 @@ async function createDocumentAndInsertPuzzle(
   // Look up each tag by name and map them to tag IDs.
   const tagIds = await Promise.all(
     tags.map(async (tagName) => {
-      return getOrCreateTagByName(huntId, tagName);
+      return getOrCreateTagByName(Meteor.userId()!, huntId, tagName);
     }),
   );
 

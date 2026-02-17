@@ -7,8 +7,11 @@ export interface Theme {
   basicMode: string;
   colors: {
     background: string;
+    backgroundHover: string;
     text: string;
+    textSecondary: string;
     border: string;
+    borderHover: string;
     primary: string;
     secondary: string;
     callStateIcon: string;
@@ -29,6 +32,8 @@ export interface Theme {
     autocompleteBackground: string;
     autocompleteShadow: string;
     matchCandidateSelectedBackground: string;
+    multiValueBackground: string;
+    multiValueRemoveHover: string;
     documentMessageBackground: string;
     avatarInitialText: string;
     avatarInitialBackground: string;
@@ -88,8 +93,11 @@ export const lightTheme: Theme = {
   basicMode: "light",
   colors: {
     background: "var(--bs-body-bg)",
+    backgroundHover: "var(--bs-tertiary-bg)",
     text: "var(--bs-body-color)",
+    textSecondary: "var(--bs-secondary-color)",
     border: "var(--bs-border-color)",
+    borderHover: "var(--bs-border-color-translucent)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
     callStateIcon: "#dc3545",
@@ -110,6 +118,8 @@ export const lightTheme: Theme = {
     autocompleteBackground: "white",
     autocompleteShadow: "0 1px 5px rgb(0 0 0 / 20%)",
     matchCandidateSelectedBackground: "#e0ecfc",
+    multiValueBackground: "#e0e0e0",
+    multiValueRemoveHover: "#ffbdad",
     documentMessageBackground: "#ddf",
     avatarInitialText: "#ffffff",
     avatarInitialBackground: "#000000",
@@ -197,8 +207,11 @@ export const darkTheme: Theme = {
   basicMode: "dark",
   colors: {
     background: "var(--bs-dark-bg-subtle)",
+    backgroundHover: "var(--bs-dark-border-subtle)",
     text: "var(--bs-body-color)",
+    textSecondary: "var(--bs-secondary-color)",
     border: "var(--bs-border-color)",
+    borderHover: "var(--bs-border-color-translucent)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
     callStateIcon: "#f8d7da",
@@ -219,6 +232,8 @@ export const darkTheme: Theme = {
     autocompleteBackground: "#333",
     autocompleteShadow: "0 1px 5px rgb(255 255 255 / 20%)",
     matchCandidateSelectedBackground: "#444",
+    multiValueBackground: "#444",
+    multiValueRemoveHover: "#662222",
     documentMessageBackground: "#333",
     avatarInitialText: "#ffffff",
     avatarInitialBackground: "#000000",
