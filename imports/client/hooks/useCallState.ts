@@ -109,7 +109,7 @@ export type CallState = (
 export type Action =
   | { type: "request-capture" }
   | { type: "capture-error"; error: Error }
-  | { type: "join-call"; audioState: AudioState }
+  | { type: "join-call"; audioState: AudioState; initialMute?: boolean }
   | { type: "set-device"; device: types.Device | undefined }
   | {
       type: "set-transport";

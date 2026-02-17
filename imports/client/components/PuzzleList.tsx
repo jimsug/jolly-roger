@@ -1,7 +1,12 @@
 import React from "react";
+import styled from "styled-components";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import Puzzle from "./Puzzle";
+
+const StyledPuzzleListDiv = styled.div`
+  margin-bottom: 1em;
+`;
 
 const PuzzleList = React.memo(
   ({
@@ -9,8 +14,10 @@ const PuzzleList = React.memo(
     bookmarked,
     allTags,
     canUpdate,
+    showSolvers,
     suppressTags,
     segmentAnswers,
+    subscribers,
   }: {
     // The puzzles to show in this list
     puzzles: PuzzleType[];
@@ -18,15 +25,18 @@ const PuzzleList = React.memo(
     // All tags for this hunt, including those not used by any puzzles
     allTags: TagType[];
     canUpdate: boolean;
+    showSolvers: "viewers" | "hide" | "active";
     suppressTags?: string[];
     segmentAnswers?: boolean;
+    subscribers?: Record<string, Record<string, string[]>>;
   }) => {
     // This component just renders the puzzles provided, in order.
     // Adjusting order based on tags, tag groups, etc. is to be done at
     // a higher layer.
     return (
-      <div>
+      <StyledPuzzleListDiv className="puzzle-list">
         {puzzles.map((puzzle) => {
+          const puzzleId = puzzle._id;
           return (
             <Puzzle
               key={puzzle._id}
@@ -36,10 +46,16 @@ const PuzzleList = React.memo(
               canUpdate={canUpdate}
               suppressTags={suppressTags}
               segmentAnswers={segmentAnswers}
+              showSolvers={showSolvers}
+              subscribers={
+                subscribers && puzzleId in subscribers
+                  ? subscribers[puzzleId] ?? null
+                  : null
+              }
             />
           );
         })}
-      </div>
+      </StyledPuzzleListDiv>
     );
   },
 );

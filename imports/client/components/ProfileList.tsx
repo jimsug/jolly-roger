@@ -1,12 +1,14 @@
 import { Meteor } from "meteor/meteor";
-import { useTracker } from "meteor/react-meteor-data";
+import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { MouseEvent } from "react";
 import React, {
   useCallback,
+  useEffect,
   useId,
   useImperativeHandle,
   useMemo,
@@ -16,6 +18,7 @@ import React, {
 import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
+import ButtonGroup from "react-bootstrap/ButtonGroup";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
@@ -25,21 +28,29 @@ import InputGroup from "react-bootstrap/InputGroup";
 import ListGroup from "react-bootstrap/ListGroup";
 import ListGroupItem from "react-bootstrap/ListGroupItem";
 import Modal from "react-bootstrap/Modal";
+import OverlayTrigger from "react-bootstrap/OverlayTrigger";
+import Tooltip from "react-bootstrap/Tooltip";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import styled from "styled-components";
+import { shortCalendarTimeFormat } from "../../lib/calendarTimeFormat";
 import { formatDiscordName } from "../../lib/discord";
 import isAdmin from "../../lib/isAdmin";
 import type { HuntType } from "../../lib/models/Hunts";
+import MeteorUsers from "../../lib/models/MeteorUsers";
+import Puzzles from "../../lib/models/Puzzles";
 import { userIsOperatorForHunt } from "../../lib/permission_stubs";
+import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import clearHuntInvitationCode from "../../methods/clearHuntInvitationCode";
 import demoteOperator from "../../methods/demoteOperator";
 import generateHuntInvitationCode from "../../methods/generateHuntInvitationCode";
 import promoteOperator from "../../methods/promoteOperator";
 import syncHuntDiscordRole from "../../methods/syncHuntDiscordRole";
 import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
+import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import Avatar from "./Avatar";
 import CopyToClipboardButton from "./CopyToClipboardButton";
+import RelativeTime from "./RelativeTime";
 
 const ProfilesSummary = styled.div`
   text-align: right;
@@ -73,6 +84,10 @@ const OperatorBox = styled.div`
   }
 `;
 
+const StatusDiv = styled.div`
+  margin-left: 0.5rem;
+`;
+
 const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
   padding: 0;
   vertical-align: baseline;
@@ -81,6 +96,19 @@ const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
 type ModalHandle = {
   show(): void;
 };
+
+export interface UserStatusSummary {
+  status: {
+    status: "offline" | "online" | "away";
+    at: Date | null;
+  };
+  puzzleStatus: {
+    source: string | null;
+    at: Date | null;
+    puzzle: string | null;
+    status?: string | undefined;
+  };
+}
 
 const ConfirmationModal = React.forwardRef(
   (
@@ -360,6 +388,173 @@ const DisableInvitationLinkModal = ({
   );
 };
 
+const UserStatusBadge = React.memo(
+  ({
+    statusObj,
+    huntId,
+    huntPuzzles,
+  }: {
+    statusObj: UserStatusSummary | null;
+    huntId: string | undefined;
+    huntPuzzles: Record<string, string>;
+  }) => {
+    const [lastSeen, setLastSeen] = useState<Date | null>(
+      statusObj?.status?.at || null,
+    );
+    const [lastPuzzle, setLastPuzzle] = useState<Date | null>(
+      statusObj?.puzzleStatus?.at || null,
+    );
+    const [timeNow, setTimeNow] = useState<Date | null>(new Date());
+
+    useEffect(() => {
+      // Re-initialize state when statusObj changes
+      setLastSeen(statusObj?.status?.at || null);
+      setLastPuzzle(statusObj?.puzzleStatus?.at || null);
+
+      const intervalId = setInterval(() => {
+        // We need to update local state if statusObj changed props?
+        // actually if statusObj changed, this effect runs and resets state.
+        // But if time passes, we want re-render. setting timeNow triggers re-render.
+        setTimeNow(new Date());
+      }, 60 * 1000);
+
+      return () => clearInterval(intervalId);
+    }, [statusObj]);
+
+    const statusDisplay = useMemo(() => {
+      if (!huntId) {
+        return null; // we don't show statuses on the all list
+      }
+
+      if (!statusObj) {
+        // we should display users as offline if we don't have data on them
+        return (
+          <StatusDiv>
+            <OverlayTrigger
+              placement="top"
+              overlay={<Tooltip>Offline</Tooltip>}
+            >
+              <ButtonGroup size="sm">
+                <Button variant="outline-secondary">Offline</Button>
+              </ButtonGroup>
+            </OverlayTrigger>
+          </StatusDiv>
+        );
+      }
+
+      const now = timeNow ? timeNow.getTime() : Date.now();
+      const statusDebounceThreshold = new Date(now - 2 * 60 * 1000);
+      const relativeDebounceThreshold = new Date(now - 60 * 1000);
+
+      if (!lastSeen) {
+        return null;
+      }
+      const lastStatusRecently =
+        lastSeen && lastSeen >= statusDebounceThreshold;
+      const lastPuzzleRecently =
+        lastPuzzle && lastPuzzle >= statusDebounceThreshold;
+      const puzzleCountdownDebounce =
+        lastPuzzle && lastPuzzle >= relativeDebounceThreshold;
+      const lastSeenRecently = lastStatusRecently || lastPuzzleRecently;
+      const userStatus = statusObj?.status?.status;
+      const puzzleStatus = statusObj?.puzzleStatus?.status;
+      const puzzleId = statusObj?.puzzleStatus?.puzzle;
+      const puzzleName = puzzleId ? huntPuzzles[puzzleId] : null;
+      let statusString = "Online";
+      if (userStatus === "offline" && !lastSeenRecently) {
+        statusString = "Offline";
+      } else if (userStatus === "away" && !lastSeenRecently) {
+        statusString = "Away";
+      }
+
+      const puzzleLabel = (
+        <span>
+          <strong>
+            <FontAwesomeIcon icon={faPuzzlePiece} fixedWidth />
+            &nbsp;
+            {puzzleName && puzzleName.length > 25
+              ? `${puzzleName.slice(0, 25)}...`
+              : puzzleName}
+          </strong>
+          {puzzleStatus !== "online" &&
+          lastPuzzle &&
+          !puzzleCountdownDebounce ? (
+            <span>
+              {" "}
+              <RelativeTime
+                date={lastPuzzle}
+                minimumUnit="second"
+                maxElements={1}
+              />
+            </span>
+          ) : null}{" "}
+        </span>
+      );
+      const tooltip = (
+        <span>
+          {" "}
+          {statusString}
+          {userStatus !== "online" ? (
+            <span>
+              , last seen: {shortCalendarTimeFormat(lastSeen)}&nbsp;(
+              <RelativeTime
+                date={lastSeen}
+                minimumUnit="second"
+                maxElements={1}
+              />
+              )
+            </span>
+          ) : null}
+          {puzzleStatus !== "online" && lastPuzzle
+            ? `, last active on puzzle: ${shortCalendarTimeFormat(lastPuzzle)}`
+            : lastPuzzle
+              ? ", currently active on puzzle"
+              : null}
+        </span>
+      );
+
+      return (
+        <StatusDiv>
+          <OverlayTrigger
+            placement="top"
+            overlay={<Tooltip>{tooltip}</Tooltip>}
+          >
+            <ButtonGroup size="sm">
+              <Button
+                variant={
+                  statusString === "Online"
+                    ? "success"
+                    : statusString === "Away"
+                      ? "warning"
+                      : "secondary"
+                }
+              >
+                {" "}
+                {/* Button JSX */}
+                {statusString === "Online" ? (
+                  <strong>{statusString}</strong>
+                ) : (
+                  <span>{statusString}</span>
+                )}
+              </Button>
+              {puzzleId ? (
+                <Button
+                  variant="dark"
+                  href={`/hunts/${huntId}/puzzles/${puzzleId}`}
+                >
+                  {puzzleLabel}
+                </Button>
+              ) : null}
+            </ButtonGroup>
+          </OverlayTrigger>
+        </StatusDiv>
+      );
+    }, [statusObj, lastSeen, lastPuzzle, huntPuzzles, timeNow, huntId]);
+
+    return statusDisplay;
+  },
+);
+
 const ProfileList = ({
   hunt,
   canInvite,
@@ -369,6 +564,7 @@ const ProfileList = ({
   users,
   roles,
   invitationCode,
+  userStatuses,
 }: {
   hunt?: HuntType;
   canInvite?: boolean;
@@ -378,6 +574,7 @@ const ProfileList = ({
   users: Meteor.User[];
   roles?: Record<string, string[]>;
   invitationCode?: string;
+  userStatuses?: Record<string, UserStatusSummary>;
 }) => {
   const [searchString, setSearchString] = useState<string>("");
 
@@ -599,9 +796,53 @@ const ProfileList = ({
   const searchId = useId();
 
   const matching = users.filter(matcher);
+
+  const huntId = hunt?._id;
+
+  const huntPuzzlesStatus = useTypedSubscribe(puzzlesForHunt, {
+    huntId: huntId || "",
+  });
+  const huntPuzzlesLoading = huntPuzzlesStatus();
+
+  const huntPuzzles: Record<string, string> = useTracker(
+    () =>
+      huntPuzzlesLoading || !huntId
+        ? {}
+        : Puzzles.find({ hunt: huntId })
+            .fetch()
+            .reduce((arr: Record<string, string>, puz) => {
+              arr[puz._id] = puz.title;
+              return arr;
+            }, {}),
+    [huntId, huntPuzzlesLoading],
+  );
+
+  const loadInvites = useSubscribe("invitedUsers");
+
+  const invitesLoading = loadInvites();
+
+  const title = useTracker(() => {
+    if (huntId || invitesLoading) {
+      return <h1>List of hunters</h1>;
+    }
+
+    const invitees = MeteorUsers.find({
+      "services.password.enroll": { $exists: true },
+    });
+
+    return (
+      <h1>
+        List of hunters{" "}
+        <Badge as={Link} to="invited" bg="info">
+          Invited <Badge bg="secondary">{invitees.count()}</Badge>
+        </Badge>
+      </h1>
+    );
+  }, [huntId, invitesLoading]);
+
   return (
     <div>
-      <h1>List of hunters</h1>
+      {title}
       <ProfilesSummary>Total hunters: {users.length}</ProfilesSummary>
 
       {syncDiscordButton}
@@ -631,23 +872,28 @@ const ProfileList = ({
         {inviteToHuntItem}
         {matching.map((user) => {
           const name = user.displayName ?? "<no name provided>";
+          const userStatus = userStatuses?.[user._id];
+
           return (
-            <ListGroupItem
-              key={user._id}
-              action
-              as={Link}
-              to={
-                hunt
-                  ? `/hunts/${hunt._id}/hunters/${user._id}`
-                  : `/users/${user._id}`
-              }
-              className="p-1"
-            >
+            <ListGroupItem key={user._id} className="p-1">
               <ListItemContainer>
                 <ImageBlock>
                   <Avatar {...user} size={40} />
                 </ImageBlock>
-                {name}
+                <Link
+                  to={
+                    hunt
+                      ? `/hunts/${hunt._id}/hunters/${user._id}`
+                      : `/users/${user._id}`
+                  }
+                >
+                  {name}
+                </Link>
+                <UserStatusBadge
+                  statusObj={userStatus ?? null}
+                  huntId={huntId}
+                  huntPuzzles={huntPuzzles}
+                />
                 {hunt && canMakeOperator && (
                   <OperatorControls hunt={hunt} user={user} />
                 )}

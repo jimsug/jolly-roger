@@ -1,11 +1,11 @@
 import { check } from "meteor/check";
 import MeteorUsers from "../../lib/models/MeteorUsers";
-import Tags from "../../lib/models/Tags";
-import tagsForHunt from "../../lib/publications/tagsForHunt";
+import presenceForHunt from "../../lib/publications/presenceForHunt";
+import Subscribers from "../models/Subscribers";
 import definePublication from "./definePublication";
 
-definePublication(tagsForHunt, {
-  validate(arg: unknown) {
+definePublication(presenceForHunt, {
+  validate(arg) {
     check(arg, {
       huntId: String,
     });
@@ -22,8 +22,8 @@ definePublication(tagsForHunt, {
       return [];
     }
 
-    return Tags.findAllowingDeleted({
-      hunt: huntId,
+    return Subscribers.find({
+      "context.hunt": huntId,
     });
   },
 });

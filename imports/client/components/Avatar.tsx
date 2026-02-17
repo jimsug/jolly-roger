@@ -1,5 +1,5 @@
 import React from "react";
-import styled from "styled-components";
+import styled, { css } from "styled-components";
 import { getAvatarCdnUrl } from "../../lib/discord";
 import type { DiscordAccountType } from "../../lib/models/DiscordAccount";
 
@@ -13,10 +13,12 @@ const DiscordAvatarInner = ({
   size,
   displayName,
   discordAccount,
+  onError,
 }: {
   size: number;
   displayName?: string;
   discordAccount: DiscordAccountType;
+  onError: () => void;
 }) => {
   const urls = Array.from(Array(3), (_, i) =>
     getAvatarCdnUrl(discordAccount, (i + 1) * size),
@@ -26,7 +28,9 @@ const DiscordAvatarInner = ({
   }
   const srcSet = urls.map((url, i) => `${url} ${i + 1}x`).join(", ");
   const alt = `${displayName ?? "Anonymous user"}'s Discord avatar`;
-  return <AvatarImg alt={alt} src={urls[0]} srcSet={srcSet} />;
+  return (
+    <AvatarImg alt={alt} src={urls[0]} srcSet={srcSet} onError={onError} />
+  );
 };
 
 const AvatarInitial = styled.div`
@@ -87,6 +91,7 @@ const AvatarContainer = styled.div<{
   $size: number;
   $inline: boolean;
   $isSelf: boolean;
+  $rounded: boolean;
 }>`
   width: ${({ $size }) => $size}px;
   height: ${({ $size }) => $size}px;
@@ -98,6 +103,12 @@ const AvatarContainer = styled.div<{
     $isSelf ? `0 0 4px ${theme.colors.avatarSelfShadow}` : "none"};
   border: ${({ $isSelf, theme }) =>
     $isSelf ? `0.5px solid ${theme.colors.avatarSelfBorder}` : "none"};
+  ${({ $rounded }) =>
+    $rounded &&
+    css`
+      border-radius: 50%;
+      overflow: hidden;
+    `}
 `;
 
 const Avatar = React.memo(
@@ -109,6 +120,7 @@ const Avatar = React.memo(
     discordAccount,
     className,
     isSelf = false,
+    rounded = false,
   }: {
     size: number;
     inline?: boolean;
@@ -117,23 +129,30 @@ const Avatar = React.memo(
     discordAccount?: DiscordAccountType;
     className?: string;
     isSelf?: boolean;
+    rounded?: boolean;
   }) => {
-    const content =
-      discordAccount && getAvatarCdnUrl(discordAccount) ? (
-        <DiscordAvatarInner
-          size={size}
-          displayName={displayName}
-          discordAccount={discordAccount}
-        />
-      ) : (
-        <DefaultAvatarInner _id={_id} displayName={displayName} />
-      );
+    const [imgFailed, setImgFailed] = React.useState(false);
+
+    const showDiscordAvatar =
+      discordAccount && getAvatarCdnUrl(discordAccount) && !imgFailed;
+
+    const content = showDiscordAvatar ? (
+      <DiscordAvatarInner
+        size={size}
+        displayName={displayName}
+        discordAccount={discordAccount}
+        onError={() => setImgFailed(true)}
+      />
+    ) : (
+      <DefaultAvatarInner _id={_id} displayName={displayName} />
+    );
     return (
       <AvatarContainer
         className={className}
         $size={size}
         $inline={inline ?? false}
         $isSelf={isSelf}
+        $rounded={rounded}
       >
         {content}
       </AvatarContainer>

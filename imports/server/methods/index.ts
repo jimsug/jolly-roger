@@ -58,6 +58,7 @@ import "./renameTag";
 import "./sendChatMessage";
 import "./setFeatureFlag";
 import "./setGuessState";
+import "./setUserStatus";
 import "./syncHuntDiscordRole";
 import "./undestroyHunt";
 import "./undestroyPuzzle";

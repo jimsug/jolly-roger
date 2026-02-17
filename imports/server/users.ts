@@ -4,7 +4,7 @@ import type { Subscription } from "meteor/meteor";
 import { Meteor } from "meteor/meteor";
 import type { Mongo } from "meteor/mongo";
 import Logger from "../Logger";
-import { GLOBAL_SCOPE } from "../lib/isAdmin";
+import isAdmin, { GLOBAL_SCOPE } from "../lib/isAdmin";
 import Hunts from "../lib/models/Hunts";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import type { ProfileFields } from "../lib/models/User";
@@ -19,6 +19,9 @@ const profileFields: Record<ProfileFields, 1> = {
   discordAccount: 1,
   phoneNumber: 1,
   dingwords: 1,
+
+  isOffsite: 1,
+  hunts: 1,
 };
 
 // This overrides the default set of fields that are published to the
@@ -27,7 +30,7 @@ Accounts.setDefaultPublishFields({
   username: 1,
   emails: 1,
   roles: 1,
-  hunts: 1,
+
   huntTermsAcceptedAt: 1,
   ...profileFields,
 });
@@ -160,7 +163,7 @@ Meteor.publish("allProfiles", async function () {
         {
           projection: {
             "emails.address": 1,
-            hunts: 1,
+
             ...profileFields,
           },
         },
@@ -192,7 +195,7 @@ Meteor.publish("huntProfiles", async function (huntId: unknown) {
         {
           projection: {
             "emails.address": 1,
-            hunts: 1,
+
             ...profileFields,
           },
         },
@@ -221,7 +224,7 @@ Meteor.publish("profile", async function (userId: unknown) {
         {
           projection: {
             "emails.address": 1,
-            hunts: 1,
+
             ...profileFields,
           },
         },
@@ -256,4 +259,35 @@ Meteor.publish("huntRoles", async function (huntId: unknown) {
       },
     );
   });
+});
+
+Meteor.publish("invitedUsers", async function () {
+  if (!this.userId) {
+    return [];
+  }
+
+  if (!isAdmin(await MeteorUsers.findOneAsync(this.userId))) {
+    return [];
+  }
+
+  await republishOnUserChange(this, { "services.password.enroll": 1 }, (_u) => {
+    return MeteorUsers.find(
+      { "services.password.enroll.reason": "enroll" },
+      // Currently, because this is limited to admins only, we don't check that
+      // the user has access to the hunt(s) that the invitation(s) were issued
+      // for.
+      // If this is ever enabled for non-admins, we will need to limit the
+      // hunt(s) that invites are returned for.
+      {
+        fields: {
+          "services.password.enroll.email": 1,
+          "services.password.enroll.when": 1,
+
+          ...profileFields,
+        },
+      },
+    );
+  });
+
+  return undefined;
 });

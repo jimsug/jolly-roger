@@ -7,11 +7,11 @@ import {
   ACTIVITY_GRANULARITY,
   ACTIVITY_SEGMENTS,
 } from "../../lib/config/activityTracking";
+import CallActivities from "../../lib/models/CallActivities";
 import ChatMessages from "../../lib/models/ChatMessages";
 import DocumentActivities from "../../lib/models/DocumentActivities";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
 import roundedTime from "../../lib/roundedTime";
-import CallActivities from "../models/CallActivities";
 import definePublication from "./definePublication";
 
 class ActivityBucket {

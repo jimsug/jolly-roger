@@ -8,6 +8,7 @@
 
 import { check, Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
+import MeteorUsers from "../lib/models/MeteorUsers";
 import { registerPeriodicCleanupHook, serverId } from "./garbage-collection";
 import Subscribers from "./models/Subscribers";
 
@@ -18,7 +19,7 @@ async function cleanupHook(deadServer: string) {
 registerPeriodicCleanupHook(cleanupHook);
 
 const contextMatcher = Match.Where(
-  (val: unknown): val is Record<string, string | boolean> => {
+  (val: unknown): val is Record<string, string> => {
     if (!Match.test(val, Object)) {
       return false;
     }
@@ -132,32 +133,203 @@ Meteor.publish("subscribers.fetch", async function (name) {
     return [];
   }
 
-  const users: Record<string, number> = {};
+  // Map<UserId, Map<DocId, { visible, updatedAt }>>
+  const userMap = new Map<
+    string,
+    Map<string, { visible: boolean; updatedAt: Date }>
+  >();
+
+  const updateClient = (user: string) => {
+    const publicationId = `${name}:${user}`;
+    const docs = userMap.get(user);
+
+    if (!docs || docs.size === 0) {
+      this.removed("subscribers", publicationId);
+      return;
+    }
+
+    // Aggregation Logic:
+    // 1. Visible if ANY connection is visible.
+    // 2. updatedAt is the MAX updatedAt across connections.
+    let isAnyVisible = false;
+    let maxUpdatedAt = 0;
+
+    for (const d of docs.values()) {
+      if (d.visible) isAnyVisible = true;
+      if (d.updatedAt.getTime() > maxUpdatedAt) {
+        maxUpdatedAt = d.updatedAt.getTime();
+      }
+    }
+
+    const payload = {
+      name,
+      user,
+      visible: isAnyVisible,
+      updatedAt: new Date(maxUpdatedAt),
+    };
+
+    // We store a '_sent' flag on the Map object itself to know if we need to Add or Change
+    const state = docs as any;
+    if (state._sent) {
+      this.changed("subscribers", publicationId, payload);
+    } else {
+      this.added("subscribers", publicationId, payload);
+      state._sent = true;
+    }
+  };
 
   const cursor = Subscribers.find({ name });
   const handle = await cursor.observeAsync({
     added: (doc) => {
       const { user } = doc;
-
-      if (!Object.hasOwn(users, user)) {
-        users[user] = 0;
-        this.added("subscribers", `${name}:${user}`, { name, user });
+      if (!userMap.has(user)) {
+        userMap.set(user, new Map());
       }
 
-      users[user]! += 1;
+      const visible = doc.context?.visible === "visible";
+      const updatedAt = doc.updatedAt || new Date();
+
+      userMap.get(user)!.set(doc._id, { visible, updatedAt });
+      updateClient(user);
+    },
+
+    changed: (doc) => {
+      const { user } = doc;
+      if (userMap.has(user)) {
+        const docs = userMap.get(user)!;
+        if (docs.has(doc._id)) {
+          const visible = doc.context?.visible === "visible";
+          const updatedAt = doc.updatedAt || new Date();
+          docs.set(doc._id, { visible, updatedAt });
+          updateClient(user);
+        }
+      }
     },
 
     removed: (doc) => {
       const { user } = doc;
+      if (userMap.has(user)) {
+        const docs = userMap.get(user)!;
+        docs.delete(doc._id);
 
-      users[user]! -= 1;
-      if (users[user] === 0) {
-        delete users[user];
-        this.removed("subscribers", `${name}:${user}`);
+        if (docs.size === 0) {
+          updateClient(user); // Sends 'removed'
+          userMap.delete(user);
+        } else {
+          updateClient(user); // Sends 'changed'
+        }
       }
     },
   });
+
   this.onStop(() => handle.stop());
   this.ready();
   return undefined;
+});
+
+// this is the unsafe version of the above
+Meteor.publish("subscribers.fetchAll", async function (hunt) {
+  check(hunt, String);
+  if (!this.userId) {
+    throw new Meteor.Error(401, "Not logged in");
+  }
+  const user = await MeteorUsers.findOneAsync(this.userId);
+  if (!user?.hunts?.includes(hunt)) {
+    throw new Meteor.Error(403, "Not a member of this hunt");
+  }
+
+  // 1. We track DETAILED state per document, grouped by the "Aggregate Key"
+  // Map<Key, Map<DocId, { visible, updatedAt }>>
+  const state = new Map();
+
+  const updateClient = (key: string, name: string, user: string) => {
+    const docs = state.get(key);
+
+    if (!docs || docs.size === 0) {
+      this.removed("subscribers", key);
+      return;
+    }
+
+    // 2. Recalculate the "Best" state for this user
+    let bestUpdatedAt = 0;
+    let isAnyVisible = false;
+
+    for (const docState of docs.values()) {
+      if (docState.updatedAt && docState.updatedAt.getTime() > bestUpdatedAt) {
+        bestUpdatedAt = docState.updatedAt.getTime();
+      }
+
+      if (docState.visible === "visible") {
+        isAnyVisible = true;
+      }
+    }
+
+    const payload = {
+      name,
+      user,
+      updatedAt: new Date(bestUpdatedAt),
+      visible: isAnyVisible,
+    };
+
+    // 3. Send to client (Added if new, Changed if exists)
+    if (docs._sent) {
+      this.changed("subscribers", key, payload);
+    } else {
+      this.added("subscribers", key, payload);
+      docs._sent = true;
+    }
+  };
+
+  const cursor = Subscribers.find({ "context.hunt": hunt });
+
+  const handle = await cursor.observeAsync({
+    added: (doc) => {
+      const key = `${doc.name}:${doc.user}`;
+
+      if (!state.has(key)) {
+        state.set(key, new Map());
+      }
+
+      const docState = {
+        visible: doc.context?.visible, // Capture the visibility
+        updatedAt: doc.updatedAt,
+      };
+
+      state.get(key).set(doc._id, docState);
+      updateClient(key, doc.name, doc.user);
+    },
+
+    changed: (doc) => {
+      const key = `${doc.name}:${doc.user}`;
+      if (state.has(key)) {
+        const group = state.get(key);
+        if (group.has(doc._id)) {
+          const docState = {
+            visible: doc.context?.visible,
+            updatedAt: doc.updatedAt,
+          };
+          group.set(doc._id, docState);
+          updateClient(key, doc.name, doc.user);
+        }
+      }
+    },
+
+    removed: (doc) => {
+      const key = `${doc.name}:${doc.user}`;
+      if (state.has(key)) {
+        const group = state.get(key);
+        group.delete(doc._id);
+
+        if (group.size === 0) {
+          updateClient(key, doc.name, doc.user);
+          state.delete(key);
+        } else {
+          updateClient(key, doc.name, doc.user);
+        }
+      }
+    },
+  });
+
+  this.onStop(() => handle.stop());
+  this.ready();
 });

@@ -291,7 +291,6 @@ const AnswerRemoveButton: FC<ComponentPropsWithRef<typeof Button>> = styled(
     padding: 0;
   }
 `;
-
 const PuzzleMetadataFloatingButton = styled(Button)`
   position: absolute;
   top: 8px;
@@ -909,7 +908,6 @@ const ChatSection = React.forwardRef(
       huntId,
       callState,
       callDispatch,
-      joinCall,
       selfUser,
     }: {
       chatDataLoading: boolean;
@@ -919,7 +917,6 @@ const ChatSection = React.forwardRef(
       huntId: string;
       callState: CallState;
       callDispatch: React.Dispatch<Action>;
-      joinCall: () => void;
       selfUser: Meteor.User;
     },
     forwardedRef: React.Ref<ChatSectionHandle>,
@@ -981,7 +978,6 @@ const ChatSection = React.forwardRef(
           onHeightChange={scrollHistoryToTarget}
           callState={callState}
           callDispatch={callDispatch}
-          joinCall={joinCall}
         />
         <ChatHistoryMemo
           ref={historyRef}
@@ -2020,12 +2016,24 @@ const PuzzlePage = React.memo(() => {
   const huntId = useParams<"huntId">().huntId!;
   const puzzleId = useParams<"puzzleId">().puzzleId!;
   const idPrefix = useId();
+  const [isVisible, setIsVisible] = useState(document.visibilityState);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsVisible(document.visibilityState);
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   // Add the current user to the collection of people viewing this puzzle.
   const subscribersTopic = `puzzle:${puzzleId}`;
   useSubscribe("subscribers.inc", subscribersTopic, {
     puzzle: puzzleId,
     hunt: huntId,
+    visible: isVisible,
   });
 
   // Get the _list_ of subscribers to this puzzle and the _count_ of subscribers
@@ -2087,7 +2095,7 @@ const PuzzlePage = React.memo(() => {
   }, [puzzleId, chatDataLoading]);
 
   // Sort by created at so that the "first" document always has consistent meaning
-  const document = useTracker(
+  const puzzleDocument = useTracker(
     () =>
       puzzleDataLoading
         ? undefined
@@ -2236,7 +2244,7 @@ const PuzzlePage = React.memo(() => {
     <PuzzlePageMetadata
       puzzle={activePuzzle}
       bookmarked={bookmarked}
-      document={document}
+      document={puzzleDocument}
       displayNames={displayNames}
       isDesktop={isDesktop}
       selfUser={selfUser}
@@ -2256,7 +2264,6 @@ const PuzzlePage = React.memo(() => {
       puzzleId={puzzleId}
       callState={callState}
       callDispatch={dispatch}
-      joinCall={joinCall}
       selfUser={selfUser}
     />
   );
@@ -2366,7 +2373,7 @@ const PuzzlePage = React.memo(() => {
               {metadata}
               {showMetadataButton}
               <PuzzlePageMultiplayerDocument
-                document={document}
+                document={puzzleDocument}
                 selfUser={selfUser}
               />
               {debugPane}

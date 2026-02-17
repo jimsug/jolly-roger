@@ -1,6 +1,6 @@
 import { Meteor } from "meteor/meteor";
-import { useTracker } from "meteor/react-meteor-data";
-import React, { useCallback, useMemo } from "react";
+import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import React, { useCallback, useEffect, useMemo } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import ButtonToolbar from "react-bootstrap/ButtonToolbar";
@@ -16,6 +16,7 @@ import {
 import huntForHuntApp from "../../lib/publications/huntForHuntApp";
 import acceptUserHuntTerms from "../../methods/acceptUserHuntTerms";
 import addHuntUser from "../../methods/addHuntUser";
+import setUserStatus from "../../methods/setUserStatus";
 import undestroyHunt from "../../methods/undestroyHunt";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import useDocumentTitle from "../hooks/useDocumentTitle";
@@ -109,9 +110,29 @@ const HuntMemberError = React.memo(
 
 const HuntApp = React.memo(() => {
   const huntId = useParams<"huntId">().huntId!;
-
   const huntLoading = useTypedSubscribe(huntForHuntApp, { huntId });
   const loading = huntLoading();
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const status = document.visibilityState === "visible" ? "online" : "away";
+      setUserStatus.call({ hunt: huntId, type: "status", status: status });
+    };
+    handleVisibilityChange();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      setUserStatus.call({ hunt: huntId, type: "status", status: "offline" });
+    };
+  }, [huntId]);
+
+  useSubscribe(
+    "userStatus.inc",
+    huntId,
+    "status",
+    document.visibilityState === "visible" ? "online" : "away",
+  );
 
   const hunt = useTracker(() => Hunts.findOneAllowingDeleted(huntId), [huntId]);
   const { member, canUndestroy, canJoin, mustAcceptTerms } = useTracker(() => {

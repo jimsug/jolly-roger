@@ -23,6 +23,7 @@ declare module "meteor/meteor" {
       discordAccount?: DiscordAccountType;
       phoneNumber?: string;
       dingwords?: string[];
+      isOffsite?: boolean;
     }
   }
 }
@@ -55,12 +56,17 @@ export const User = z.object({
   discordAccount: DiscordAccount.optional(),
   phoneNumber: nonEmptyString.optional(),
   dingwords: nonEmptyString.array().optional(),
+  isOffsite: z.boolean().optional(),
 });
 validateSchema(User);
+
+export type User = z.infer<typeof User>;
 
 export type ProfileFields =
   | "displayName"
   | "googleAccount"
   | "discordAccount"
   | "phoneNumber"
-  | "dingwords";
+  | "dingwords"
+  | "isOffsite"
+  | "hunts";

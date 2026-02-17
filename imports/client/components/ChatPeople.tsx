@@ -27,7 +27,9 @@ import type { Action, CallState } from "../hooks/useCallState";
 import { CallJoinState } from "../hooks/useCallState";
 import useSubscribeAvatars from "../hooks/useSubscribeAvatars";
 import { Subscribers } from "../subscribers";
+import type { Theme } from "../theme";
 import { trace } from "../tracing";
+import { PREFERRED_AUDIO_DEVICE_STORAGE_KEY } from "./AudioConfig";
 import Avatar from "./Avatar";
 import CallSection from "./CallSection";
 import { PuzzlePagePadding } from "./styling/constants";
@@ -40,11 +42,15 @@ import {
   PeopleListDiv,
 } from "./styling/PeopleComponents";
 
+const ACTIVE_SLACK_MS = 1 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
 interface ViewerSubscriber {
   user: string;
   name: string | undefined;
   discordAccount: DiscordAccountType | undefined;
   tab: string | undefined;
+  status: "online" | "idle" | "away";
 }
 
 interface PersonBoxProps extends ViewerSubscriber {
@@ -52,11 +58,34 @@ interface PersonBoxProps extends ViewerSubscriber {
   popperBoundaryRef: React.RefObject<HTMLElement | null>;
 }
 
+const ActivityDot = styled.div<{ $status: "online" | "idle" | "away" }>`
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 0;
+  border: 2px solid ${({ theme }) => theme.colors.chatterSectionBackground};
+  background-color: ${({ $status }) => {
+    // biome-ignore lint/style/useDefaultSwitchClause: These are exhaustive cases
+    switch ($status) {
+      case "online":
+        return "#28a745"; // Success green
+      case "idle":
+        return "#ffc107"; // Warning yellow
+      case "away":
+        return "#6c757d"; // Secondary grey
+    }
+  }};
+  z-index: 1;
+`;
+
 const ViewerPersonBox = ({
   user,
   name,
   discordAccount,
   children,
+  status,
   popperBoundaryRef,
 }: PersonBoxProps) => {
   const id = useId();
@@ -76,16 +105,24 @@ const ViewerPersonBox = ({
           },
         ],
       }}
-      overlay={<Tooltip id={id}>{name}</Tooltip>}
+      overlay={
+        <Tooltip id={id}>
+          {name}
+          {status && status !== "online" ? ` (${status})` : ""}
+        </Tooltip>
+      }
     >
       <PeopleItemDiv>
-        <Avatar
-          _id={user}
-          displayName={name}
-          discordAccount={discordAccount}
-          size={44}
-        />
-        {children}
+        <div style={{ position: "relative" }}>
+          <Avatar
+            _id={user}
+            displayName={name}
+            discordAccount={discordAccount}
+            size={44}
+          />
+          {children}
+          {status && <ActivityDot $status={status} />}
+        </div>
       </PeopleItemDiv>
     </OverlayTrigger>
   );
@@ -96,7 +133,7 @@ const PeopleListHeader = styled(ChatterSubsectionHeader)`
   text-indent: -1rem;
 `;
 
-const ChatterSection = styled.section`
+const ChatterSection = styled.section<{ theme: Theme }>`
   flex: 0;
   background-color: ${({ theme }) => theme.colors.chatterSectionBackground};
   font-size: 12px;
@@ -113,7 +150,6 @@ const ChatPeople = ({
   onHeightChange,
   callState,
   callDispatch,
-  joinCall,
 }: {
   huntId: string;
   puzzleId: string;
@@ -121,8 +157,9 @@ const ChatPeople = ({
   onHeightChange: () => void;
   callState: CallState;
   callDispatch: React.Dispatch<Action>;
-  joinCall: () => void;
 }) => {
+  const [error, setError] = useState<string>("");
+  const [pushedToTalk, setPushedToTalk] = useState<boolean>(false);
   const chatterRef = useRef<HTMLDivElement>(null);
 
   const { audioControls, audioState } = callState;
@@ -206,6 +243,7 @@ const ChatPeople = ({
         name: user.displayName,
         discordAccount: user.discordAccount,
         tab: p.tab,
+        status: "online",
       });
       rtcViewerIndex[user._id] = true;
     });
@@ -222,13 +260,30 @@ const ChatPeople = ({
         return;
       }
 
+      let status: "online" | "idle" | "away" = "online";
+      const userLastSeen = s.updatedAt
+        ? Date.now() - s.updatedAt.getTime()
+        : Infinity;
+      if (s.visible) {
+        status = "online";
+      } else if (!s.visible && userLastSeen < ACTIVE_SLACK_MS) {
+        status = "online";
+      } else if (!s.visible && userLastSeen < IDLE_TIMEOUT_MS) {
+        status = "idle";
+      } else {
+        status = "away";
+      }
+
       viewersAcc.push({
         user: s.user,
         name: user.displayName,
         discordAccount: user.discordAccount,
         tab: undefined,
+        status,
       });
     });
+
+    viewersAcc.sort((a, b) => b.status.localeCompare(a.status));
 
     return {
       unknown: unknownCount,
@@ -250,6 +305,158 @@ const ChatPeople = ({
   }, []);
 
   const { muted, deafened } = audioControls;
+
+  const maybePushToTalk = useCallback(
+    (e: KeyboardEvent) => {
+      if (
+        e.ctrlKey &&
+        e.key === " " &&
+        e.type === "keydown" &&
+        !pushedToTalk &&
+        muted &&
+        !e.repeat
+      ) {
+        e.preventDefault();
+        setPushedToTalk(true);
+        callDispatch({ type: "toggle-mute" });
+      } else if (
+        e.key === " " &&
+        e.type === "keyup" &&
+        pushedToTalk &&
+        !muted
+      ) {
+        e.preventDefault();
+        callDispatch({ type: "toggle-mute" });
+        setPushedToTalk(false);
+      }
+    },
+    [callDispatch, muted, pushedToTalk],
+  );
+
+  useEffect(() => {
+    if (callState.callState === CallJoinState.IN_CALL) {
+      window.addEventListener("keydown", maybePushToTalk);
+      window.addEventListener("keyup", maybePushToTalk);
+
+      return () => {
+        window.removeEventListener("keydown", maybePushToTalk);
+        window.removeEventListener("keyup", maybePushToTalk);
+        if (pushedToTalk) {
+          setPushedToTalk(false);
+        }
+      };
+    } else {
+      window.removeEventListener("keydown", maybePushToTalk);
+      window.removeEventListener("keyup", maybePushToTalk);
+
+      if (pushedToTalk) {
+        setPushedToTalk(false);
+      }
+
+      return () => {};
+    }
+  }, [callState.callState, maybePushToTalk, pushedToTalk]);
+
+  const joinCall = useCallback(() => {
+    void (async () => {
+      trace("ChatPeople joinCall");
+      if (navigator.mediaDevices) {
+        callDispatch({ type: "request-capture" });
+        const preferredAudioDeviceId =
+          localStorage.getItem(PREFERRED_AUDIO_DEVICE_STORAGE_KEY) ?? undefined;
+        // Get the user media stream.
+        const mediaStreamConstraints = {
+          audio: {
+            echoCancellation: { ideal: true },
+            autoGainControl: { ideal: true },
+            noiseSuppression: { ideal: true },
+            deviceId: preferredAudioDeviceId,
+          },
+          // TODO: conditionally allow video if enabled by feature flag?
+        };
+
+        let mediaSource: MediaStream;
+        try {
+          mediaSource = await navigator.mediaDevices.getUserMedia(
+            mediaStreamConstraints,
+          );
+        } catch (e) {
+          setError(`Couldn't get local microphone: ${(e as Error).message}`);
+          callDispatch({ type: "capture-error", error: e as Error });
+          return;
+        }
+
+        const AudioContext =
+          window.AudioContext ||
+          (window as { webkitAudioContext?: AudioContext }).webkitAudioContext;
+        const audioContext = new AudioContext();
+
+        callDispatch({
+          type: "join-call",
+          audioState: {
+            mediaSource,
+            audioContext,
+          },
+        });
+      } else {
+        const msg =
+          "Couldn't get local microphone: browser denies access on non-HTTPS origins";
+        setError(msg);
+        callDispatch({ type: "capture-error", error: new Error(msg) });
+      }
+    })();
+  }, [callDispatch]);
+
+  const joinMuted = useCallback(() => {
+    void (async () => {
+      trace("ChatPeople joinCall");
+      if (navigator.mediaDevices) {
+        callDispatch({ type: "request-capture" });
+        const preferredAudioDeviceId =
+          localStorage.getItem(PREFERRED_AUDIO_DEVICE_STORAGE_KEY) ?? undefined;
+        // Get the user media stream.
+        const mediaStreamConstraints = {
+          audio: {
+            echoCancellation: { ideal: true },
+            autoGainControl: { ideal: true },
+            noiseSuppression: { ideal: true },
+            deviceId: preferredAudioDeviceId,
+          },
+          // TODO: conditionally allow video if enabled by feature flag?
+        };
+
+        let mediaSource: MediaStream;
+        try {
+          mediaSource = await navigator.mediaDevices.getUserMedia(
+            mediaStreamConstraints,
+          );
+        } catch (e) {
+          setError(`Couldn't get local microphone: ${(e as Error).message}`);
+          callDispatch({ type: "capture-error", error: e as Error });
+          return;
+        }
+
+        const AudioContext =
+          window.AudioContext ||
+          (window as { webkitAudioContext?: AudioContext }).webkitAudioContext;
+        const audioContext = new AudioContext();
+
+        callDispatch({
+          type: "join-call",
+          audioState: {
+            mediaSource,
+            audioContext,
+          },
+          initialMute: true,
+        });
+      } else {
+        const msg =
+          "Couldn't get local microphone: browser denies access on non-HTTPS origins";
+        setError(msg);
+        callDispatch({ type: "capture-error", error: new Error(msg) });
+      }
+    })();
+  }, [callDispatch]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies(disabled): We want the parent to re-render when anything might have changed our rendered size
   useLayoutEffect(() => {
@@ -293,12 +500,18 @@ const ChatPeople = ({
       case CallJoinState.REQUESTING_STREAM: {
         const joinLabel =
           rtcViewers.length > 0 ? "Join audio call" : "Start audio call";
+        const joinMutedButton = rtcViewers.length > 0 && (
+          <AVButton variant="secondary" size="sm" onClick={joinMuted}>
+            Join muted
+          </AVButton>
+        );
         return (
           <>
             <AVActions>
               <AVButton variant="primary" size="sm" onClick={joinCall}>
                 {joinLabel}
               </AVButton>
+              {joinMutedButton}
             </AVActions>
             <ChatterSubsection>
               <PeopleListHeader onClick={toggleCallersExpanded}>
@@ -340,7 +553,7 @@ const ChatPeople = ({
           />
         );
       case CallJoinState.STREAM_ERROR:
-        return <div>{`ERROR GETTING MIC: ${callState.error?.message}`}</div>;
+        return <div>{`ERROR GETTING MIC: ${error}`}</div>;
       default:
         // Unreachable.  TypeScript knows this, but eslint doesn't.
         return <div />;

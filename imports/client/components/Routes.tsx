@@ -29,6 +29,7 @@ import ProfilePage from "./ProfilePage";
 import PuzzleListPage from "./PuzzleListPage";
 import PuzzlePage from "./PuzzlePage";
 import RootRedirector from "./RootRedirector";
+import UserHistoryPage from "./UserHistoryPage";
 import UserInvitePage from "./UserInvitePage";
 import UsersApp from "./UsersApp";
 
@@ -78,6 +79,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
     ],
   },
   { path: "/setup", element: <SetupPage /> },
+  { path: "/myhistory", element: <UserHistoryPage /> },
   { path: "/rtcdebug", element: <RTCDebugPage /> },
 ].map((r) => {
   return {
