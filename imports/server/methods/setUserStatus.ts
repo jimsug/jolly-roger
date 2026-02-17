@@ -10,7 +10,7 @@ defineMethod(setUserStatus, {
       hunt: String,
       type: String,
       status: String,
-      puzzle: Match.Maybe(String),
+      puzzle: Match.Optional(String),
     });
 
     return {

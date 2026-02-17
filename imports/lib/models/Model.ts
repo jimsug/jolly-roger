@@ -9,6 +9,7 @@ type CreateIndexesOptions = NpmModuleMongodb.CreateIndexesOptions;
 type Document = NpmModuleMongodb.Document;
 type IndexDirection = NpmModuleMongodb.IndexDirection;
 type IndexSpecification = NpmModuleMongodb.IndexSpecification;
+type ClientSession = NpmModuleMongodb.ClientSession;
 
 export type Selector<T extends Document> =
   | Mongo.Selector<T>
@@ -448,6 +449,7 @@ class Model<
     doc: z.input<this["schema"]>,
     options: {
       bypassSchema?: boolean | undefined;
+      session?: ClientSession | undefined;
     } = {},
   ): Promise<z.output<IdSchema>> {
     const { bypassSchema } = options;
@@ -457,9 +459,10 @@ class Model<
         raw = { ...doc, _id: this.collection._makeNewID() };
       }
       try {
-        await this.collection
-          .rawCollection()
-          .insertOne(raw, { bypassDocumentValidation: true });
+        await this.collection.rawCollection().insertOne(raw, {
+          bypassDocumentValidation: true,
+          session: options.session,
+        });
         return raw._id;
       } catch (e) {
         formatValidationError(e);

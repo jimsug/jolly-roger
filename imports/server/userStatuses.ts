@@ -4,8 +4,8 @@ import UserStatuses from "../lib/models/UserStatuses";
 import { registerPeriodicCleanupHook, serverId } from "./garbage-collection";
 
 // Clean up leaked subscribers from dead servers periodically.
-async function cleanupHook(deadServer: string) {
-  await UserStatuses.removeAsync({ server: deadServer });
+async function cleanupHook(deadServers: string[]) {
+  await UserStatuses.removeAsync({ server: { $in: deadServers } });
 }
 registerPeriodicCleanupHook(cleanupHook);
 // user status tracking

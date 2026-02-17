@@ -51,6 +51,7 @@ const EditableHunt = z.object({
   memberDiscordRole: SavedDiscordObjectFields.optional(),
   allowUnlockablePuzzles: z.boolean().optional(),
   isArchived: z.boolean().optional(),
+  puzzleCreationDiscordChannel: SavedDiscordObjectFields.optional(),
 });
 export type EditableHuntType = z.infer<typeof EditableHunt>;
 const Hunt = withCommon(EditableHunt);
@@ -74,6 +75,7 @@ export const HuntPattern = {
   firehoseDiscordChannel: Match.Optional(SavedDiscordObjectPattern),
   memberDiscordRole: Match.Optional(SavedDiscordObjectPattern),
   allowUnlockablePuzzles: Match.Optional(Boolean),
+  isArchived: Match.Optional(Boolean),
 };
 
 const Hunts = new SoftDeletedModel("jr_hunts", Hunt);

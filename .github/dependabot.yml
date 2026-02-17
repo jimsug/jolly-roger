@@ -33,10 +33,6 @@ updates:
           - "slate"
           - "slate-history"
           - "slate-react"
-      stylelint:
-        patterns:
-          - "stylelint"
-          - "stylelint-*"
       typescript-eslint:
         patterns:
           - "typescript-eslint"

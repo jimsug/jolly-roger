@@ -27,7 +27,11 @@
     // Detected and used by mongodb
     "aws4",
     // Used by test suite
-    "playwright"
+    "playwright",
+    // Used by extension build
+    "zip-webpack-plugin",
+    // Used in later commits (chat reactions)
+    "emoji-picker-react"
   ],
   "ignore": [
     // Meteor publications and methods are registered dynamically at runtime
@@ -35,7 +39,11 @@
     "imports/methods/**",
     "imports/server/publications/**",
     "imports/server/methods/**",
-    "imports/server/api/resources/**"
+    "imports/server/api/resources/**",
+    // Extension is a separate project with its own build
+    "extension/**",
+    // Used by API routes
+    "imports/server/findPuzzles.ts"
   ],
   "tags": ["-lintignore"]
 }

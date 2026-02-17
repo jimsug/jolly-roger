@@ -25,7 +25,15 @@ class HooksRegistry {
   async runAnnouncementHooks(announcementId: string) {
     for (const hook of this.registeredHooks) {
       if (hook.onAnnouncement) {
-        await hook.onAnnouncement(announcementId);
+        try {
+          await hook.onAnnouncement(announcementId);
+        } catch (error) {
+          Logger.error("Error while running hook", {
+            hook: "onAnnouncement",
+            hookSet: hook.name,
+            error,
+          });
+        }
       }
     }
   }
@@ -122,6 +130,26 @@ class HooksRegistry {
         } catch (error) {
           Logger.error("Error while running hook", {
             hook: "onAddPuzzleTag",
+            hookSet: hook.name,
+            error,
+          });
+        }
+      }
+    }
+  }
+
+  async runTagRemovedHooks(
+    puzzleId: string,
+    tagId: string,
+    removingUserId: string,
+  ) {
+    for (const hook of this.registeredHooks) {
+      if (hook.onRemovePuzzleTag) {
+        try {
+          await hook.onRemovePuzzleTag(puzzleId, tagId, removingUserId);
+        } catch (error) {
+          Logger.error("Error while running hook", {
+            hook: "onRemovePuzzleTag",
             hookSet: hook.name,
             error,
           });

@@ -47,6 +47,13 @@ interface Hookset {
     tagId: string,
     addingUserId: string,
   ) => void | Promise<void>;
+
+  // Triggered when a tag is removed from a puzzle
+  onRemovePuzzleTag?: (
+    puzzleId: string,
+    tagName: string,
+    removingUserId: string,
+  ) => void | Promise<void>;
 }
 
 export default Hookset;

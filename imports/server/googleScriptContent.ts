@@ -23,7 +23,7 @@ async function loadFile(
       throw new Error(`Unknown file type: ${extension}`);
   }
 
-  const absolutePath = Assets.absoluteFilePath(
+  const absolutePath = (Assets as any).absoluteFilePath(
     path.join("google-script", name),
   )!;
   const source = (

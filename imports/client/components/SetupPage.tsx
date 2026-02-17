@@ -39,6 +39,7 @@ import configureGoogleScriptUrl from "../../methods/configureGoogleScriptUrl";
 import configureListS3Buckets from "../../methods/configureListS3Buckets";
 import configureOrganizeGoogleDrive from "../../methods/configureOrganizeGoogleDrive";
 import configureS3ImageBucket from "../../methods/configureS3ImageBucket";
+import configureServerSettings from "../../methods/configureServerSettings";
 import configureTeamName from "../../methods/configureTeamName";
 import generateUploadToken from "../../methods/generateUploadToken";
 import setFeatureFlag from "../../methods/setFeatureFlag";
@@ -46,6 +47,7 @@ import type { DiscordGuildType } from "../discord";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import lookupUrl from "../lookupUrl";
+import type { Theme } from "../theme";
 import ActionButtonRow from "./ActionButtonRow";
 
 const PageContainer = styled.div`
@@ -56,8 +58,8 @@ const Section = styled.section`
   margin-bottom: 24px;
 `;
 
-const SectionHeader = styled.h1`
-  background-color: ${({ theme }) => theme.colors.setupPageHeaderBackground};
+const SectionHeader = styled.h1<{ theme: Theme }>`
+  background-color: ${({ theme }) => theme.colors.secondary};
   font-size: 18px;
   border-bottom: 1px solid black;
   margin-bottom: 16px;
@@ -769,6 +771,96 @@ const GoogleScriptForm = ({
   );
 };
 
+const ServerSettings = () => {
+  const idPrefix = useId();
+  const initialConfig = useTracker(
+    () => Settings.findOne({ name: "server.settings" }),
+    [],
+  );
+
+  const [defaultHuntTags, setDefaultHuntTags] = useState<string>(
+    initialConfig?.value.defaultHuntTags ??
+      "is:meta, is:metameta, is:runaround, priority:high, priority:low, group:events, needs:extraction, needs:onsite",
+  );
+
+  const [submitState, setSubmitState] = useState<SubmitState>(SubmitState.IDLE);
+  const [submitError, setSubmitError] = useState<string>("");
+
+  const dismissAlert = useCallback(() => {
+    setSubmitState(SubmitState.IDLE);
+  }, []);
+
+  const shouldDisableForm = submitState === "submitting";
+
+  const saveConfig = useCallback(
+    (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      setSubmitState(SubmitState.SUBMITTING);
+      configureServerSettings.call({ defaultHuntTags }, (err) => {
+        if (err) {
+          setSubmitState(SubmitState.ERROR);
+          setSubmitError(err.message);
+        } else {
+          setSubmitState(SubmitState.SUCCESS);
+        }
+      });
+    },
+    [defaultHuntTags],
+  );
+
+  const onTagsChange: NonNullable<FormControlProps["onChange"]> = useCallback(
+    (e) => {
+      setDefaultHuntTags(e.currentTarget.value);
+    },
+    [],
+  );
+
+  return (
+    // biome-ignore lint/correctness/useUniqueElementIds: anchor link
+    <Section id="instance">
+      <SectionHeader>Server settings</SectionHeader>
+
+      <form onSubmit={saveConfig}>
+        {submitState === "submitting" ? (
+          <Alert variant="info">Saving...</Alert>
+        ) : null}
+        {submitState === "success" ? (
+          <Alert variant="success" dismissible onClose={dismissAlert}>
+            Saved changes.
+          </Alert>
+        ) : null}
+        {submitState === "error" ? (
+          <Alert variant="danger" dismissible onClose={dismissAlert}>
+            Saving failed: {submitError}
+          </Alert>
+        ) : null}
+        <FormGroup className="mb-3">
+          <FormLabel htmlFor={`${idPrefix}-default-new-hunt-tags`}>
+            Default new hunt tags
+          </FormLabel>
+          <FormControl
+            id={`${idPrefix}-default-new-hunt-tags`}
+            aria-describedby={`${idPrefix}-default-new-hunt-tags-description`}
+            type="text"
+            value={defaultHuntTags}
+            disabled={shouldDisableForm}
+            onChange={onTagsChange}
+          />
+          <FormText id={`${idPrefix}-default-new-hunt-tags-description`}>
+            A comma-separated list of default tags that new hunts are created
+            with.
+          </FormText>
+        </FormGroup>
+        <ActionButtonRow>
+          <Button type="submit" variant="primary" disabled={shouldDisableForm}>
+            Save
+          </Button>
+        </ActionButtonRow>
+      </form>
+    </Section>
+  );
+};
+
 const FeatureToggle = ({
   enabled,
   onToggleEnabled,
@@ -1138,7 +1230,7 @@ const S3ImageBucketForm = ({
         </Alert>
       ) : null}
       <FormGroup className="mb-3">
-        <FormLabel htmlFor="jr-setup-edit-s3-image-bucket">S3 bucket</FormLabel>
+        <FormLabel>S3 bucket</FormLabel>
         <Creatable
           isDisabled={shouldDisableForm}
           isClearable
@@ -2311,13 +2403,13 @@ const CircuitBreaker = styled.div`
   margin-bottom: 16px;
 `;
 
-const CircuitBreakerRow = styled.div`
+const CircuitBreakerRow = styled.div<{ theme: Theme }>`
   display: flex;
   flex-direction: row;
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: 8px;
-  background: ${(props) => props.theme.colors.setupPageCircuitBreakerHeaderBackground};
+  background: ${({ theme }) => theme.colors.background};
   padding-top: 4px;
   padding-bottom: 4px;
   padding-right: 4px;
@@ -2515,6 +2607,7 @@ const SetupPage = () => {
 
   return (
     <PageContainer>
+      <ServerSettings />
       <GoogleIntegrationSection />
       <AWSIntegrationSection />
       <EmailConfigSection />

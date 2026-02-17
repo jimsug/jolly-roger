@@ -36,6 +36,8 @@
     "./.meteor/local/bundler-cache/**",
     "./packages/**",
     "./eslint.config.mts",
-    "./eslint/**"
-  ]
+    "./eslint/**",
+    "extension"
+  ],
+  "include": ["**/*", ".vscode/typings/**/*.d.ts"]
 }

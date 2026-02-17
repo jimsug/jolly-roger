@@ -24,6 +24,7 @@ const Puzzle = withCommon(
     answers: answer.array(),
     expectedAnswerCount: z.number().int().nonnegative(),
     completedWithNoAnswer: z.boolean().optional(),
+    markedComplete: z.boolean().optional(),
     replacedBy: foreignKey.optional(),
     noteContent: z.record(z.string(), z.any()).optional(),
     locked: z.boolean().optional(),

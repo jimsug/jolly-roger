@@ -13,8 +13,8 @@ import { registerPeriodicCleanupHook, serverId } from "./garbage-collection";
 import Subscribers from "./models/Subscribers";
 
 // Clean up leaked subscribers from dead servers periodically.
-async function cleanupHook(deadServer: string) {
-  await Subscribers.removeAsync({ server: deadServer });
+async function cleanupHook(deadServers: string[]) {
+  await Subscribers.removeAsync({ server: { $in: deadServers } });
 }
 registerPeriodicCleanupHook(cleanupHook);
 
@@ -30,9 +30,9 @@ const contextMatcher = Match.Where(
   },
 );
 
-Meteor.publish("subscribers.inc", async function (name, context) {
+Meteor.publish("subscribers", async function (name: string, context) {
   check(name, String);
-  check(context, contextMatcher);
+  check(context, Match.Optional(contextMatcher));
 
   if (!this.userId) {
     return [];
@@ -71,11 +71,17 @@ Meteor.publish("subscribers.counts", async function (q: Record<string, any>) {
     query[`context.${k}`] = v;
   });
 
-  let initialized = false;
+  // We have a problem here: we want to publish a count of users that
+  // supply a given name/context. But this is not a reactive JOIN.
+  //
+  // Because we want to support any number of contexts, we can't just
+  // make a collection of "counts" that we update.
+  //
+  // So we'll tail the subscribers collection and maintain an
+  // in-memory map of counts.
   const counters: Record<string, Record<string, number>> = {};
-
-  const cursor = Subscribers.find(query);
-  const handle = await cursor.observeAsync({
+  let initialized = false;
+  const handle = await Subscribers.find(query).observeAsync({
     added: (doc) => {
       const { name, user } = doc;
       if (!Object.hasOwn(counters, name)) {

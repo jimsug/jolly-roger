@@ -5,6 +5,8 @@ import chaiAsPromised from "chai-as-promised";
 
 chai.use(chaiAsPromised);
 
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
 import "./unit/imports/lib/calendarTimeFormat";
 import "./unit/imports/lib/puzzle-sort-and-group";
 import "./unit/imports/lib/relativeTimeFormat";
