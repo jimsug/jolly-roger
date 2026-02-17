@@ -1,8 +1,11 @@
 import { z } from "zod";
-import { foreignKey, nonEmptyString } from "./customTypes";
+import { foreignKey } from "./customTypes";
+import { GoogleDocumentValueSchema } from "./GoogleDocSchema";
 import type { ModelType } from "./Model";
 import SoftDeletedModel from "./SoftDeletedModel";
 import withCommon from "./withCommon";
+
+export const DOCUMENT_TYPES = ["spreadsheet", "document", "drawing"];
 
 const DocumentSchema = withCommon(
   z
@@ -14,11 +17,7 @@ const DocumentSchema = withCommon(
       z.discriminatedUnion("provider", [
         z.object({
           provider: z.literal("google"),
-          value: z.object({
-            type: z.enum(["spreadsheet", "document"]),
-            id: nonEmptyString,
-            folder: nonEmptyString.optional(),
-          }),
+          value: GoogleDocumentValueSchema,
         }),
       ]),
     ),

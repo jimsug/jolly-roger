@@ -184,7 +184,7 @@ class UserPuzzleHistoryAggregator {
       ({ collection, query, fields, handler, removedHandler }) => {
         this.handles.push(
           (collection as any).find(query, { fields }).observeChanges({
-            added: (id: any, docFields: any) => {
+            added: (id: string, docFields: any) => {
               const puzzleId =
                 docFields.puzzle ?? (docFields as { call?: string }).call;
               if (
@@ -200,7 +200,7 @@ class UserPuzzleHistoryAggregator {
               handler(id, docFields);
             },
             changed: handler,
-            removed: (id: any, docFields: any) => {
+            removed: (id: string, docFields: any) => {
               if (removedHandler) {
                 removedHandler(id, docFields);
               } else {

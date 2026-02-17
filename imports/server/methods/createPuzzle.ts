@@ -17,7 +17,10 @@ defineMethod(createPuzzle, {
         ...(Object.keys(GdriveMimeTypes) as GdriveMimeTypesType[]),
       ),
       allowDuplicateUrls: Match.Optional(Boolean),
+      locked: Match.Optional(Boolean),
+      lockedSummary: Match.Optional(String),
       completedWithNoAnswer: Match.Optional(Boolean),
+      markedComplete: Match.Optional(Boolean),
     });
     return arg;
   },
@@ -30,10 +33,15 @@ defineMethod(createPuzzle, {
     docType,
     url,
     allowDuplicateUrls,
+    locked,
+    lockedSummary,
     completedWithNoAnswer,
+    markedComplete,
   }) {
     check(this.userId, String);
+
     return addPuzzle({
+      userId: this.userId,
       huntId,
       title,
       tags,
@@ -41,7 +49,10 @@ defineMethod(createPuzzle, {
       docType,
       url,
       allowDuplicateUrls,
+      locked,
+      lockedSummary,
       completedWithNoAnswer,
+      markedComplete,
     });
   },
 });

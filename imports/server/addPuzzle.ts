@@ -1,5 +1,6 @@
 import { check, Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
+import { MongoInternals } from "meteor/mongo";
 import { Random } from "meteor/random";
 import Flags from "../Flags";
 import Logger from "../Logger";
@@ -10,10 +11,9 @@ import MeteorUsers from "../lib/models/MeteorUsers";
 import Puzzles from "../lib/models/Puzzles";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import GlobalHooks from "./GlobalHooks";
-import { ensureDocument } from "./gdrive";
+import { deleteUnusedDocument, ensureDocument } from "./gdrive";
 import getOrCreateTagByName from "./getOrCreateTagByName";
 import GoogleClient from "./googleClientRefresher";
-import withLock from "./withLock";
 
 async function checkForDuplicatePuzzle(huntId: string, url: string) {
   const existingPuzzleWithUrl = await Puzzles.findOneAsync({
@@ -25,46 +25,8 @@ async function checkForDuplicatePuzzle(huntId: string, url: string) {
   }
 }
 
-async function createDocumentAndInsertPuzzle(
-  huntId: string,
-  title: string,
-  expectedAnswerCount: number,
-  tags: string[],
-  url: string | undefined,
-  docType: GdriveMimeTypesType,
-  completedWithNoAnswer: boolean | undefined,
-): Promise<string> {
-  // Look up each tag by name and map them to tag IDs.
-  const tagIds = await Promise.all(
-    tags.map(async (tagName) => {
-      return getOrCreateTagByName(Meteor.userId()!, huntId, tagName);
-    }),
-  );
-
-  const fullPuzzle = {
-    hunt: huntId,
-    title,
-    expectedAnswerCount,
-    _id: Random.id(),
-    tags: [...new Set(tagIds)],
-    answers: [],
-    url,
-    completedWithNoAnswer,
-  };
-
-  // By creating the document before we save the puzzle, we make sure nobody
-  // else has a chance to create a document with the wrong config. (This
-  // requires us to have an _id for the puzzle, which is why we generate it
-  // manually above instead of letting Meteor do it)
-  if (GoogleClient.ready() && !(await Flags.activeAsync("disable.google"))) {
-    await ensureDocument(fullPuzzle, docType);
-  }
-
-  await Puzzles.insertAsync(fullPuzzle);
-  return fullPuzzle._id;
-}
-
 export default async function addPuzzle({
+  userId,
   huntId,
   title,
   tags,
@@ -72,8 +34,12 @@ export default async function addPuzzle({
   docType,
   url,
   allowDuplicateUrls,
+  locked,
+  lockedSummary,
   completedWithNoAnswer,
+  markedComplete,
 }: {
+  userId: string;
   huntId: string;
   title: string;
   url?: string;
@@ -81,10 +47,11 @@ export default async function addPuzzle({
   expectedAnswerCount: number;
   docType: GdriveMimeTypesType;
   allowDuplicateUrls?: boolean;
+  locked?: boolean;
+  lockedSummary?: string;
   completedWithNoAnswer?: boolean;
+  markedComplete?: boolean;
 }) {
-  const userId = Meteor.userId();
-
   check(userId, String);
   check(huntId, String);
   check(url, Match.Optional(String));
@@ -95,7 +62,10 @@ export default async function addPuzzle({
     Match.OneOf(...(Object.keys(GdriveMimeTypes) as GdriveMimeTypesType[])),
   );
   check(allowDuplicateUrls, Match.Optional(Boolean));
+  check(locked, Match.Optional(Boolean));
+  check(lockedSummary, Match.Optional(String));
   check(completedWithNoAnswer, Match.Optional(Boolean));
+  check(markedComplete, Match.Optional(Boolean));
 
   const hunt = await Hunts.findOneAsync(huntId);
   if (!hunt) {
@@ -111,6 +81,12 @@ export default async function addPuzzle({
     );
   }
 
+  // Look up each tag by name and map them to tag IDs.
+  const tagIds = await Promise.all(
+    tags.map(async (tagName) => {
+      return getOrCreateTagByName(userId, huntId, tagName);
+    }),
+  );
   // Before we do any writes, try an opportunistic check for duplicates. If a
   // puzzle with this URL already exists, we can short-circuit without
   // creating tags or the Google Doc. We'll still need to repeat this check
@@ -124,41 +100,67 @@ export default async function addPuzzle({
     title,
   });
 
-  let puzzleId = "";
-  if (!url) {
-    puzzleId = await createDocumentAndInsertPuzzle(
-      huntId,
-      title,
-      expectedAnswerCount,
-      tags,
-      url,
-      docType,
-      completedWithNoAnswer,
-    );
-  } else {
-    // With a lock, look for a puzzle with the same URL. If present, we reject the insertion
-    // unless the client overrides it.
-    await withLock(`hunts:${huntId}:puzzle-url:${url}`, async () => {
-      if (!allowDuplicateUrls) {
-        await checkForDuplicatePuzzle(huntId, url);
+  const fullPuzzle = {
+    createdBy: userId,
+    hunt: huntId,
+    title,
+    expectedAnswerCount,
+    _id: Random.id(),
+    tags: [...new Set(tagIds)],
+    answers: [],
+    url,
+    locked,
+    lockedSummary,
+    completedWithNoAnswer,
+    markedComplete,
+  };
+
+  // By creating the document before we save the puzzle, we make sure nobody
+  // else has a chance to create a document with the wrong config. (This
+  // requires us to have an _id for the puzzle, which is why we generate it
+  // manually above instead of letting Meteor do it)
+  if (GoogleClient.ready() && !(await Flags.activeAsync("disable.google"))) {
+    await ensureDocument(userId, fullPuzzle, docType);
+  }
+
+  // In a transaction, look for a puzzle with the same URL. If present, we
+  // reject the insertion unless the client overrides it.
+  const client = MongoInternals.defaultRemoteCollectionDriver().mongo.client;
+  const session = client.startSession();
+  try {
+    await session.withTransaction(async () => {
+      if (url) {
+        const existingPuzzleWithUrl = await Puzzles.collection
+          .rawCollection()
+          .findOne({ url }, { session });
+        if (existingPuzzleWithUrl && !allowDuplicateUrls) {
+          throw new Meteor.Error(409, `Puzzle with URL ${url} already exists`);
+        }
       }
-      puzzleId = await createDocumentAndInsertPuzzle(
-        huntId,
-        title,
-        expectedAnswerCount,
-        tags,
-        url,
-        docType,
-        completedWithNoAnswer,
-      );
+      await Puzzles.insertAsync(fullPuzzle);
     });
+  } catch (error) {
+    // In the case of any error, try to delete the document we created before the transaction.
+    // If that fails too, let the original error propagate.
+    try {
+      await deleteUnusedDocument(fullPuzzle);
+    } catch (deleteError) {
+      Logger.warn("Unable to clean up document on failed puzzle creation", {
+        error: deleteError,
+      });
+    }
+    throw error;
+  } finally {
+    await session.endSession();
   }
 
   // Run any puzzle-creation hooks, like creating a default document
   // attachment or announcing the puzzle to Slack.
   Meteor.defer(() => {
-    void GlobalHooks.runPuzzleCreatedHooks(puzzleId);
+    if (!fullPuzzle.locked) {
+      void GlobalHooks.runPuzzleCreatedHooks(fullPuzzle._id);
+    }
   });
 
-  return puzzleId;
+  return fullPuzzle._id;
 }

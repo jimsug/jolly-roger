@@ -4,6 +4,7 @@ import Flags from "../Flags";
 import Logger from "../Logger";
 import type { GdriveMimeTypesType } from "../lib/GdriveMimeTypes";
 import GdriveMimeTypes from "../lib/GdriveMimeTypes";
+import CachedDocuments from "../lib/models/CachedDocuments";
 import Documents from "../lib/models/Documents";
 import FolderPermissions from "../lib/models/FolderPermissions";
 import Hunts from "../lib/models/Hunts";
@@ -44,7 +45,7 @@ async function createFolder(name: string, parentId?: string) {
   return folder.data.id!;
 }
 
-async function createDocument(
+export async function createDocument(
   name: string,
   type: GdriveMimeTypesType,
   parentId?: string,
@@ -64,26 +65,54 @@ async function createDocument(
         (
           | { name: "gdrive.template.document" }
           | { name: "gdrive.template.spreadsheet" }
+          | { name: "gdrive.template.drawing" }
         ));
   const mimeType = GdriveMimeTypes[type];
   const parents = parentId ? [parentId] : undefined;
 
-  const file = await (template
-    ? GoogleClient.drive.files.copy({
-        fileId: template.value.id,
-        requestBody: { name, mimeType, parents },
-      })
-    : GoogleClient.drive.files.create({
-        requestBody: { name, mimeType, parents },
-      }));
+  let fileId: string;
+  try {
+    const file = await (template
+      ? GoogleClient.drive.files.copy({
+          fileId: template.value.id,
+          requestBody: { name, mimeType, parents },
+        })
+      : GoogleClient.drive.files.create({
+          requestBody: { name, mimeType, parents },
+        }));
 
-  const fileId = file.data.id!;
+    fileId = file.data.id!;
+  } catch (err) {
+    Logger.error(`GDRIVE ERROR: Failed to create/copy file`, {
+      name,
+      type,
+      err,
+    });
+    throw err;
+  }
 
-  await GoogleClient.drive.permissions.create({
-    fileId,
-    requestBody: { role: "writer", type: "anyone" },
-  });
+  try {
+    await GoogleClient.drive.permissions.create({
+      fileId,
+      requestBody: { role: "writer", type: "anyone" },
+    });
+  } catch (err) {
+    // We log this but don't necessarily throw, because the file exists
+    // and can be fixed manually if needed.
+    Logger.error(`GDRIVE ERROR: Failed to set permissions`, { fileId, err });
+  }
+
   return fileId;
+}
+
+export async function deleteDocument(id: string) {
+  await checkClientOk();
+  if (!GoogleClient.drive)
+    throw new Meteor.Error(500, "Google integration is disabled");
+
+  await GoogleClient.drive.files.delete({
+    fileId: id,
+  });
 }
 
 export async function moveDocument(id: string, newParentId: string) {
@@ -111,7 +140,7 @@ export async function huntFolderName(huntName: string) {
 }
 
 export async function puzzleDocumentName(puzzleTitle: string) {
-  return `${puzzleTitle}: ${await getTeamName()}`;
+  return `↔️ ${puzzleTitle}`;
 }
 
 export async function renameDocument(id: string, name: string) {
@@ -255,40 +284,87 @@ export async function ensureHuntFolderPermission(
 }
 
 export async function ensureDocument(
+  userId: string,
   puzzle: {
     _id: string;
     title: string;
     hunt: string;
   },
   type: GdriveMimeTypesType = "spreadsheet",
+  additionalDocument = false,
 ) {
   const hunt = await Hunts.findOneAllowingDeletedAsync(puzzle.hunt);
   const folderId = hunt ? await ensureHuntFolder(hunt) : undefined;
 
   let doc = await Documents.findOneAsync({ puzzle: puzzle._id });
-  if (!doc) {
+  if (!doc || (additionalDocument && doc.value.type !== type)) {
     await checkClientOk();
 
     await withLock(`puzzle:${puzzle._id}:documents`, async () => {
       doc = await Documents.findOneAsync({ puzzle: puzzle._id });
-      if (!doc) {
-        Logger.info("Creating missing document for puzzle", {
-          puzzle: puzzle._id,
-        });
+      if (!doc || (additionalDocument && doc.value.type !== type)) {
+        const cachedDoc = await CachedDocuments.collection
+          .rawCollection()
+          .findOneAndUpdate(
+            {
+              hunt: puzzle.hunt,
+              "value.type": type,
+              status: "available",
+            },
+            { $set: { status: "claimed" } },
+            { sort: { createdAt: 1 }, returnDocument: "after" },
+          );
 
-        const googleDocId = await createDocument(
-          await puzzleDocumentName(puzzle.title),
-          type,
-          folderId,
-        );
+        let googleDocId: string;
+
+        if (cachedDoc) {
+          googleDocId = cachedDoc.value.id;
+
+          const newName = await puzzleDocumentName(puzzle.title);
+          Meteor.defer(async () => {
+            try {
+              await renameDocument(googleDocId, newName);
+            } catch (err) {
+              Logger.warn("Failed to rename cached document", {
+                googleDocId,
+                err,
+              });
+            }
+          });
+
+          // Remove the claimed record using the document's _id
+          await CachedDocuments.removeAsync(cachedDoc._id);
+        } else {
+          googleDocId = await createDocument(
+            await puzzleDocumentName(puzzle.title),
+            type,
+            folderId,
+          );
+        }
+
+        const googleValue = cachedDoc
+          ? {
+              type: cachedDoc.value.type,
+              id: cachedDoc.value.id,
+              folder: cachedDoc.value.folder,
+            }
+          : {
+              type,
+              id: googleDocId,
+              folder: folderId,
+            };
+
         const newDoc = {
+          createdBy: userId,
           hunt: puzzle.hunt,
           puzzle: puzzle._id,
           provider: "google" as const,
-          value: { type, id: googleDocId, folder: folderId },
+          value: googleValue,
         };
-        const docId = await Documents.insertAsync(newDoc);
-        doc = (await Documents.findOneAsync(docId))!;
+        const docId = await Documents.insertAsync(newDoc as any);
+        doc = await Documents.findOneAsync(docId, {
+          sort: { createdTimestamp: -1 },
+        })!;
       }
     });
   }
@@ -302,4 +378,17 @@ export async function ensureDocument(
   }
 
   return doc!;
+}
+
+export async function deleteUnusedDocument(puzzle: { _id: string }) {
+  const doc = await Documents.findOneAsync({ puzzle: puzzle._id });
+  if (!doc) {
+    return;
+  }
+
+  await checkClientOk();
+  await withLock(`puzzle:${puzzle._id}:documents`, async () => {
+    await deleteDocument(doc.value.id);
+    await Documents.removeAsync(doc._id);
+  });
 }

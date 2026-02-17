@@ -87,6 +87,7 @@ hunts.post(
 
     try {
       const id = await addPuzzle({
+        userId,
         huntId: req.params.huntId,
         ...req.body,
       });

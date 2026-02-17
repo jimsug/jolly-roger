@@ -2,6 +2,7 @@ import BookmarkNotificationHooks from "./hooks/BookmarkNotificationHooks";
 import ChatHooks from "./hooks/ChatHooks";
 import ChatNotificationHooks from "./hooks/ChatNotificationHooks";
 import DiscordHooks from "./hooks/DiscordHooks";
+import DocumentCacheHooks from "./hooks/DocumentCacheHooks";
 import HooksRegistry from "./hooks/HooksRegistry";
 import TagCleanupHooks from "./hooks/TagCleanupHooks";
 import TagHooks from "./hooks/TagHooks";
@@ -15,5 +16,6 @@ GlobalHooks.addHookSet(TagCleanupHooks);
 GlobalHooks.addHookSet(ChatHooks);
 GlobalHooks.addHookSet(BookmarkNotificationHooks);
 GlobalHooks.addHookSet(TagHooks);
+GlobalHooks.addHookSet(DocumentCacheHooks);
 
 export default GlobalHooks;

@@ -106,7 +106,7 @@ defineMethod(updatePuzzle, {
     if (oldPuzzle.title !== title) {
       Meteor.defer(
         Meteor.bindEnvironment(async () => {
-          const doc = await ensureDocument({
+          const doc = await ensureDocument(this.userId!, {
             _id: puzzleId,
             title,
             hunt: oldPuzzle.hunt,

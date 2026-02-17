@@ -50,6 +50,7 @@ const EditableHunt = z.object({
   // profile will be added to this role.
   memberDiscordRole: SavedDiscordObjectFields.optional(),
   allowUnlockablePuzzles: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
 });
 export type EditableHuntType = z.infer<typeof EditableHunt>;
 const Hunt = withCommon(EditableHunt);

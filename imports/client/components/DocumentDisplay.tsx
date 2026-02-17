@@ -8,7 +8,7 @@ import type { DocumentType } from "../../lib/models/Documents";
 
 interface DocumentDisplayProps {
   document: DocumentType;
-  displayMode: "link" | "embed";
+  displayMode: "link" | "embed" | "copy";
   user: Meteor.User;
 }
 

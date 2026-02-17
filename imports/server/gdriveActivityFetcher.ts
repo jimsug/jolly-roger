@@ -10,6 +10,7 @@ import DocumentActivities from "../lib/models/DocumentActivities";
 import Documents from "../lib/models/Documents";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import Settings from "../lib/models/Settings";
+import UserStatuses from "../lib/models/UserStatuses";
 import roundedTime from "../lib/roundedTime";
 import GoogleClient from "./googleClientRefresher";
 import ignoringDuplicateKeyErrors from "./ignoringDuplicateKeyErrors";
@@ -57,6 +58,19 @@ async function recordDriveChanges(
           puzzle: document.puzzle,
           user: user?._id,
         });
+        await UserStatuses.upsertAsync(
+          {
+            user: user?._id,
+            type: "puzzleStatus",
+            hunt: document.hunt,
+          },
+          {
+            $set: {
+              status: "document",
+              puzzle: document.puzzle,
+            },
+          },
+        );
       });
     }
   }
