@@ -259,7 +259,7 @@ const NotesPuzzle = React.memo(
     const noteRelativeTime = useTracker(() => {
       return puzzle.noteUpdateTs ? (
         <RelativeTime
-          date={puzzle.noteUpdateTs}
+          date={puzzle.noteUpdateTs ?? new Date()}
           minimumUnit="minute"
           maxElements={2}
         />

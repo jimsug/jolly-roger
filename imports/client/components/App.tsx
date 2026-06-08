@@ -3,6 +3,8 @@ import { useTracker } from "meteor/react-meteor-data";
 import Bugsnag from "@bugsnag/js";
 import { faExclamationTriangle } from "@fortawesome/free-solid-svg-icons/faExclamationTriangle";
 import { faMoon } from "@fortawesome/free-solid-svg-icons/faMoon";
+import { faPencilAlt } from "@fortawesome/free-solid-svg-icons/faPencilAlt";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { faSun } from "@fortawesome/free-solid-svg-icons/faSun";
 import { faUser } from "@fortawesome/free-solid-svg-icons/faUser";
 import { faWandMagicSparkles } from "@fortawesome/free-solid-svg-icons/faWandMagicSparkles";
@@ -29,8 +31,14 @@ import type { StackFrame } from "stacktrace-js";
 import StackTrace from "stacktrace-js";
 import styled, { css, useTheme } from "styled-components";
 import isAdmin from "../../lib/isAdmin";
+import Hunts from "../../lib/models/Hunts";
+import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import { useBreadcrumbItems } from "../hooks/breadcrumb";
-import { type AppThemeState, useAppThemeState } from "../hooks/persisted-state";
+import {
+  type AppThemeState,
+  useAppThemeState,
+  useOperatorActionsHiddenForHunt,
+} from "../hooks/persisted-state";
 import lookupUrl from "../lookupUrl";
 import ConnectionStatus from "./ConnectionStatus";
 import HuntNav from "./HuntNav";
@@ -118,16 +126,14 @@ const ErrorFallback = ({
   error,
   clearError,
 }: {
-  error: unknown;
+  error: Error;
   clearError: () => void;
 }) => {
   const [frames, setFrames] = useState<StackFrame[] | undefined>(undefined);
 
   useEffect(() => {
     void (async () => {
-      if (error instanceof Error) {
-        setFrames(await StackTrace.fromError(error));
-      }
+      setFrames(await StackTrace.fromError(error));
     })();
   }, [error]);
 
@@ -152,10 +158,12 @@ const ErrorFallback = ({
         </p>
 
         <pre>
-          {error instanceof Error ? error.message : String(error)}
-          {"\n"}
           {frames ? (
-            frames.map((f) => `    ${f.toString()}`).join("\n")
+            <>
+              {error.message}
+              {"\n"}
+              {frames.map((f) => `    ${f.toString()}`).join("\n")}
+            </>
           ) : (
             <Loading inline />
           )}
@@ -202,6 +210,14 @@ const AppNavbar = ({
 }) => {
   const userId = useTracker(() => Meteor.userId()!, []);
   const huntId = useParams<"huntId">().huntId!;
+  const hunt = useTracker(
+    () => (huntId ? Hunts.findOne(huntId) : undefined),
+    [huntId],
+  );
+  const canAdd = useTracker(
+    () => (hunt ? userMayWritePuzzlesForHunt(Meteor.user(), hunt) : false),
+    [hunt],
+  );
 
   const displayName = useTracker(
     () => Meteor.user()?.displayName ?? "<no name given>",
@@ -230,14 +246,21 @@ const AppNavbar = ({
             const last = index === crumbs.length - 1;
             if (last) {
               return (
-                <BreadcrumbItem key={crumb.path} aria-current="page">
+                <BreadcrumbItem
+                  key={crumb.path}
+                  aria-current="page"
+                  title={crumb.hoverText}
+                  aria-label={crumb.hoverText}
+                >
                   {crumb.title}
                 </BreadcrumbItem>
               );
             } else {
               return (
-                <BreadcrumbItem key={crumb.path}>
-                  <Link to={crumb.path}>{crumb.title}</Link>
+                <BreadcrumbItem key={crumb.path} title={crumb.hoverText}>
+                  <Link to={crumb.path} aria-label={crumb.hoverText}>
+                    {crumb.title}
+                  </Link>
                 </BreadcrumbItem>
               );
             }
@@ -262,6 +285,14 @@ const AppNavbar = ({
   }, [setAppTheme]);
 
   const theme = useTheme();
+
+  const [operatorActionsHidden, setOperatorActionsHidden] =
+    useOperatorActionsHiddenForHunt(huntId ?? "");
+
+  const toggleOperatorMode = useCallback(() => {
+    setOperatorActionsHidden(!operatorActionsHidden);
+  }, [operatorActionsHidden, setOperatorActionsHidden]);
+
   return (
     <NavbarInset
       variant="light"
@@ -312,7 +343,6 @@ const AppNavbar = ({
             <DropdownItem eventKey="3" onClick={logout}>
               Sign out
             </DropdownItem>
-            <Dropdown.Divider />
             <DropdownHeader>Theme</DropdownHeader>
             <DropdownItem onClick={setAutoMode} active={appTheme === "auto"}>
               <FontAwesomeIcon icon={faWandMagicSparkles} fixedWidth /> Auto
@@ -323,6 +353,38 @@ const AppNavbar = ({
             <DropdownItem onClick={setDarkMode} active={appTheme === "dark"}>
               <FontAwesomeIcon icon={faMoon} fixedWidth /> Dark mode
             </DropdownItem>
+            {huntId && canAdd && (
+              <>
+                <Dropdown.Divider />
+                <DropdownHeader>{hunt?.name}</DropdownHeader>
+                <DropdownItem
+                  onClick={toggleOperatorMode}
+                  className="d-flex align-items-center"
+                >
+                  <FontAwesomeIcon
+                    icon={operatorActionsHidden ? faStar : faPencilAlt}
+                    fixedWidth
+                    className="me-2"
+                    style={{ fontSize: "1.1rem" }}
+                  />
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      lineHeight: "1.2",
+                    }}
+                  >
+                    <span>
+                      Switch to {operatorActionsHidden ? "Deputy" : "Solver"}
+                    </span>
+                    <span className="text-muted" style={{ fontSize: "0.7rem" }}>
+                      Currently in {operatorActionsHidden ? "Solver" : "Deputy"}{" "}
+                      mode
+                    </span>
+                  </div>
+                </DropdownItem>
+              </>
+            )}
           </DropdownMenu>
         </Dropdown>
       </Nav>
