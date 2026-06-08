@@ -49,7 +49,7 @@ const PuzzleList = React.memo(
               showSolvers={showSolvers}
               subscribers={
                 subscribers && puzzleId in subscribers
-                  ? subscribers[puzzleId] ?? null
+                  ? (subscribers[puzzleId] ?? null)
                   : null
               }
             />

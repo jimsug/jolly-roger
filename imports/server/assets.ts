@@ -33,7 +33,9 @@ const hashes = [
   "mstile-150x150.png",
   "safari-pinned-tab.svg",
 ].map(async (assetName) => {
-  const assetPath = (Assets as any).absoluteFilePath(`default-branding/${assetName}`)!;
+  const assetPath = (Assets as any).absoluteFilePath(
+    `default-branding/${assetName}`,
+  )!;
   const data = await fs.readFile(assetPath);
   const id = crypto.createHash("sha256").update(data).digest("hex");
   const md5 = crypto.createHash("md5").update(data).digest("hex");

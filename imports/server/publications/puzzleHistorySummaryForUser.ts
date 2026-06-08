@@ -447,7 +447,7 @@ class UserPuzzleHistoryAggregator {
     );
     if (Object.keys(cleanedFields).length > 0) {
       this.subscriptions.forEach((sub) =>
-        sub.changed("puzzleHistorySummaries", id, cleanedFields),
+        sub.changed("puzzleHistorySummaries", id, cleanedFields as any),
       );
     }
   }

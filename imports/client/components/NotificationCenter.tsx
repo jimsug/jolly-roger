@@ -48,6 +48,7 @@ import bookmarkNotificationsForSelf from "../../lib/publications/bookmarkNotific
 import pendingAnnouncementsForSelf from "../../lib/publications/pendingAnnouncementsForSelf";
 import pendingGuessesForSelf from "../../lib/publications/pendingGuessesForSelf";
 import puzzleNotificationsForSelf from "../../lib/publications/puzzleNotificationsForSelf";
+import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import bookmarkPuzzle from "../../methods/bookmarkPuzzle";
 import configureEnsureGoogleScript from "../../methods/configureEnsureGoogleScript";
 import dismissAllDingsForPuzzle from "../../methods/dismissAllDingsForPuzzle";
@@ -781,7 +782,7 @@ const ChatNotificationMessage = ({
 
   const handleDismissAll = useCallback(() => {
     const dismissUntil = new Date();
-    dismissAllDingsForPuzzle.call({
+    void dismissAllDingsForPuzzle.call({
       puzzle: cn.puzzle,
       hunt: cn.hunt,
       dismissUntil,
@@ -791,7 +792,7 @@ const ChatNotificationMessage = ({
   const handleSuppressDingwords = useCallback(
     (dingword: string) => {
       const dismissUntil = new Date();
-      suppressDingwordsForPuzzle.call({
+      void suppressDingwordsForPuzzle.call({
         puzzle: cn.puzzle,
         hunt: cn.hunt,
         dingword,
@@ -803,10 +804,26 @@ const ChatNotificationMessage = ({
   );
 
   const dismiss = useCallback(
-    () => dismissChatNotification.call({ chatNotificationId: id }),
+    () => void dismissChatNotification.call({ chatNotificationId: id }),
     [id],
   );
 
+  const puzzleSubscribe = useTypedSubscribe(puzzlesForHunt, {
+    huntId: hunt._id,
+  });
+  const puzzleLoading = puzzleSubscribe();
+
+  const puzzleData = useTracker(() => {
+    return puzzleLoading
+      ? new Map<string, PuzzleType>()
+      : Puzzles.find({ hunt: hunt._id })
+          .fetch()
+          .reduce((mp, p) => {
+            return mp.set(p._id, p);
+          }, new Map<string, PuzzleType>());
+  }, [hunt._id, puzzleLoading]);
+
+  // const _senderDisplayName = displayNames.get(cn.sender) ?? "???";
   const [showSettings, setShowSettings] = useState(false);
   const toggleSettings = () => {
     setShowSettings(!showSettings);
@@ -871,6 +888,7 @@ const ChatNotificationMessage = ({
             message={cn.content}
             displayNames={displayNames}
             selfUserId={selfUserId}
+            puzzleData={puzzleData}
             roles={roles}
           />
         </div>

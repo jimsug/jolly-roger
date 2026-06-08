@@ -19,6 +19,9 @@ export interface Theme {
     warning: string;
     info: string;
     success: string;
+    linkColor: string;
+    linkHoverColor: string;
+
     callStateIcon: string;
     mutedIconBorder: string;
     deafenedIconBorder: string;
@@ -124,13 +127,15 @@ export const lightTheme: Theme = {
   basicMode: "light",
   colors: {
     background: "var(--bs-body-bg)",
-    backgroundHover: "var(--bs-tertiary-bg)",
     text: "var(--bs-body-color)",
-    textSecondary: "var(--bs-secondary-color)",
     border: "var(--bs-border-color)",
-    borderHover: "var(--bs-border-color-translucent)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
+    linkColor: "var(--bs-link-color)",
+    linkHoverColor: "var(--bs-link-hover-color)",
+    borderHover: "#dee2e6",
+    backgroundHover: "#e9ecef",
+    textSecondary: "#6c757d",
     muted: "#6c757d",
     danger: "var(--bs-danger)",
     warning: "var(--bs-warning)",
@@ -269,13 +274,15 @@ export const darkTheme: Theme = {
   basicMode: "dark",
   colors: {
     background: "var(--bs-dark-bg-subtle)",
-    backgroundHover: "var(--bs-dark-border-subtle)",
     text: "var(--bs-body-color)",
-    textSecondary: "var(--bs-secondary-color)",
     border: "var(--bs-border-color)",
-    borderHover: "var(--bs-border-color-translucent)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
+    linkColor: "#6fa8dc",
+    linkHoverColor: "#9fc5e8",
+    borderHover: "#555",
+    backgroundHover: "#444",
+    textSecondary: "#aaa",
     muted: "#6c757d",
     danger: "var(--bs-danger)",
     warning: "var(--bs-warning)",

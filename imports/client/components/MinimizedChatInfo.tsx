@@ -6,16 +6,17 @@ import { faPhone } from "@fortawesome/free-solid-svg-icons/faPhone";
 import { faPhoneSlash } from "@fortawesome/free-solid-svg-icons/faPhoneSlash";
 import { faUsers } from "@fortawesome/free-solid-svg-icons/faUsers";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import React, { useId, useMemo } from "react";
+import React, { useId } from "react";
 import Button from "react-bootstrap/Button";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Tooltip from "react-bootstrap/Tooltip";
 import styled from "styled-components";
-import Flags from "../../Flags";
 import Peers from "../../lib/models/mediasoup/Peers";
 import type { Action, CallState } from "../hooks/useCallState";
 import { CallJoinState } from "../hooks/useCallState";
 import { Subscribers } from "../subscribers";
+import { trace } from "../tracing";
+import { PREFERRED_AUDIO_DEVICE_STORAGE_KEY } from "./AudioConfig";
 
 const MinimizedChatInfoContainer = styled.div`
   position: absolute;
@@ -31,8 +32,9 @@ const MinimizedChatInfoContainer = styled.div`
   gap: 8px;
   background-color: ${({ theme }) => theme.colors.chatterSectionBackground};
   padding: 4px 2px;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 8px 8px 0;
   z-index: 10;
+  width: 38px;
 `;
 
 const InfoPill = styled.div`
@@ -42,7 +44,7 @@ const InfoPill = styled.div`
   font-size: 12px;
 `;
 
-const SquareIconButton = styled(Button)`
+const VoiceButton = styled(Button)`
   font-size: 12px;
   padding: 0;
   width: 28px;
@@ -50,6 +52,22 @@ const SquareIconButton = styled(Button)`
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+`;
+
+const NotificationBadge = styled.span`
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background-color:${({ theme }) => theme.colors.danger};
+  color: white;
+  border-radius: 4px;
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 14px;
+  min-width: 14px;
+  text-align: center;
+  font-weight: bold;
 `;
 
 const MinimizedChatInfo = ({
@@ -57,19 +75,17 @@ const MinimizedChatInfo = ({
   puzzleId,
   callState,
   callDispatch,
-  joinCall,
   onRestore,
+  missedMessages,
 }: {
   huntId: string;
   puzzleId: string;
   callState: CallState;
   callDispatch: React.Dispatch<Action>;
-  joinCall: () => void;
   onRestore: () => void;
+  missedMessages?: number;
 }) => {
   const subscriberTopic = `puzzle:${puzzleId}`;
-  const rtcDisabled = useTracker(() => Flags.active("disable.webrtc"), []);
-
   const { callers, viewers } = useTracker(() => {
     const callerIds = Peers.find(
       { hunt: huntId, call: puzzleId },
@@ -93,6 +109,54 @@ const MinimizedChatInfo = ({
     };
   }, [huntId, puzzleId, subscriberTopic]);
 
+  const joinCall = React.useCallback(() => {
+    void (async () => {
+      trace("MinimizedChatInfo joinCall");
+      if (navigator.mediaDevices) {
+        callDispatch({ type: "request-capture" });
+        const preferredAudioDeviceId =
+          localStorage.getItem(PREFERRED_AUDIO_DEVICE_STORAGE_KEY) ?? undefined;
+        const mediaStreamConstraints = {
+          audio: {
+            echoCancellation: { ideal: true },
+            autoGainControl: { ideal: true },
+            noiseSuppression: { ideal: true },
+            deviceId: preferredAudioDeviceId,
+          },
+        };
+
+        let mediaSource: MediaStream;
+        try {
+          mediaSource = await navigator.mediaDevices.getUserMedia(
+            mediaStreamConstraints,
+          );
+        } catch (e) {
+          // TODO: Show an error to the user
+          callDispatch({ type: "capture-error", error: e as Error });
+          return;
+        }
+
+        const AudioContext =
+          window.AudioContext ||
+          (window as { webkitAudioContext?: AudioContext }).webkitAudioContext;
+        const audioContext = new AudioContext();
+
+        callDispatch({
+          type: "join-call",
+          audioState: {
+            mediaSource,
+            audioContext,
+          },
+        });
+      } else {
+        const msg =
+          "Couldn't get local microphone: browser denies access on non-HTTPS origins";
+        // TODO: show an error to the user
+        callDispatch({ type: "capture-error", error: new Error(msg) });
+      }
+    })();
+  }, [callDispatch]);
+
   const onToggleMute = React.useCallback(() => {
     callDispatch({ type: "toggle-mute" });
   }, [callDispatch]);
@@ -103,64 +167,13 @@ const MinimizedChatInfo = ({
 
   const { muted } = callState.audioControls;
 
-  const tooltipText = useMemo(() => {
-    const viewersString = `${viewers === 0 ? "No" : viewers} ${viewers !== 1 ? "viewers" : "viewer"}`;
-    const callersString = `${callers === 0 ? "no" : callers} ${callers !== 1 ? "callers" : "caller"}`;
-    return rtcDisabled
-      ? viewersString
-      : `${viewersString} and ${callersString}`;
-  }, [rtcDisabled, callers, viewers]);
+  const tooltipText = useTracker(() => {
+    return `${viewers === 0 ? "No" : viewers} ${viewers !== 1 ? "viewers" : "viewer"} and ${callers === 0 ? "no" : callers} ${
+      callers !== 1 ? "callers" : "caller"
+    }`;
+  }, [callers, viewers]);
 
   const idPrefix = useId();
-
-  const callButtons =
-    callState.callState === CallJoinState.IN_CALL ? (
-      <>
-        <OverlayTrigger
-          placement="right"
-          overlay={
-            <Tooltip id={`${idPrefix}-mini-mute`}>
-              {muted ? "Unmute" : "Mute"}
-            </Tooltip>
-          }
-        >
-          <SquareIconButton
-            variant={muted ? "secondary" : "light"}
-            onClick={onToggleMute}
-          >
-            <FontAwesomeIcon icon={muted ? faMicrophoneSlash : faMicrophone} />
-          </SquareIconButton>
-        </OverlayTrigger>
-
-        <OverlayTrigger
-          placement="right"
-          overlay={
-            <Tooltip id={`${idPrefix}-mini-leave-call`}>Leave call</Tooltip>
-          }
-        >
-          <SquareIconButton variant="danger" onClick={onLeaveCall}>
-            <FontAwesomeIcon icon={faPhoneSlash} />
-          </SquareIconButton>
-        </OverlayTrigger>
-      </>
-    ) : (
-      <OverlayTrigger
-        placement="right"
-        overlay={
-          <Tooltip id={`${idPrefix}-mini-join-call`}>
-            {callers > 0 ? "Join audio call" : "Start audio call"}
-          </Tooltip>
-        }
-      >
-        <SquareIconButton
-          variant="primary"
-          onClick={joinCall}
-          title={callers > 0 ? "Join audio call" : "Start audio call"}
-        >
-          <FontAwesomeIcon icon={faPhone} />
-        </SquareIconButton>
-      </OverlayTrigger>
-    );
 
   return (
     <MinimizedChatInfoContainer>
@@ -170,9 +183,14 @@ const MinimizedChatInfo = ({
           <Tooltip id={`${idPrefix}-mini-restore`}>Restore Chat</Tooltip>
         }
       >
-        <SquareIconButton onClick={onRestore} style={{ marginBottom: "4px" }}>
+        <VoiceButton onClick={onRestore} style={{ marginBottom: "4px" }}>
           <FontAwesomeIcon icon={faChevronRight} />
-        </SquareIconButton>
+          {(missedMessages ?? 0) > 0 && (
+            <NotificationBadge>
+              {(missedMessages ?? 0) > 9 ? "9+" : missedMessages}
+            </NotificationBadge>
+          )}
+        </VoiceButton>
       </OverlayTrigger>
       <OverlayTrigger
         placement="right"
@@ -183,15 +201,61 @@ const MinimizedChatInfo = ({
             <FontAwesomeIcon icon={faUsers} />
             {viewers}
           </InfoPill>
-          {!rtcDisabled && (
-            <InfoPill>
-              <FontAwesomeIcon icon={faPhone} />
-              {callers}
-            </InfoPill>
-          )}
+          <InfoPill>
+            <FontAwesomeIcon icon={faPhone} />
+            {callers}
+          </InfoPill>
         </div>
       </OverlayTrigger>
-      {rtcDisabled ? null : callButtons}
+      {callState.callState === CallJoinState.IN_CALL ? (
+        <>
+          <OverlayTrigger
+            placement="right"
+            overlay={
+              <Tooltip id={`${idPrefix}-mini-mute`}>
+                {muted ? "Unmute" : "Mute"}
+              </Tooltip>
+            }
+          >
+            <VoiceButton
+              variant={muted ? "secondary" : "light"}
+              onClick={onToggleMute}
+            >
+              <FontAwesomeIcon
+                icon={muted ? faMicrophoneSlash : faMicrophone}
+              />
+            </VoiceButton>
+          </OverlayTrigger>
+
+          <OverlayTrigger
+            placement="right"
+            overlay={
+              <Tooltip id={`${idPrefix}-mini-leave-call`}>Leave call</Tooltip>
+            }
+          >
+            <VoiceButton variant="danger" onClick={onLeaveCall}>
+              <FontAwesomeIcon icon={faPhoneSlash} />
+            </VoiceButton>
+          </OverlayTrigger>
+        </>
+      ) : (
+        <OverlayTrigger
+          placement="right"
+          overlay={
+            <Tooltip id={`${idPrefix}-mini-join-call`}>
+              {callers > 0 ? "Join audio call" : "Start audio call"}
+            </Tooltip>
+          }
+        >
+          <VoiceButton
+            variant="primary"
+            onClick={joinCall}
+            title={callers > 0 ? "Join audio call" : "Start audio call"}
+          >
+            <FontAwesomeIcon icon={faPhone} />
+          </VoiceButton>
+        </OverlayTrigger>
+      )}
     </MinimizedChatInfoContainer>
   );
 };

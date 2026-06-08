@@ -1,8 +1,22 @@
 import { z } from "zod";
-import { allowedEmptyString, foreignKey } from "./customTypes";
+import { allowedEmptyString, foreignKey, nonEmptyString } from "./customTypes";
 import type { ModelType } from "./Model";
 import SoftDeletedModel from "./SoftDeletedModel";
 import withCommon from "./withCommon";
+
+export interface ChatAttachmentType {
+  url: string;
+  filename: string;
+  mimeType: string;
+  size?: number;
+}
+
+const ChatAttachment = z.object({
+  url: nonEmptyString,
+  filename: nonEmptyString,
+  mimeType: nonEmptyString,
+  size: z.number().optional(),
+});
 
 const UserMentionBlock = z.object({
   type: z.literal("mention"),
@@ -22,6 +36,12 @@ const ImageBlock = z.object({
 });
 export type ChatMessageImageNodeType = z.infer<typeof ImageBlock>;
 
+const PuzzleBlock = z.object({
+  type: z.literal("puzzle"),
+  puzzleId: foreignKey,
+});
+export type ChatMessagePuzzleNodeType = z.infer<typeof PuzzleBlock>;
+
 const TextBlock = z.object({
   text: allowedEmptyString,
 });
@@ -31,6 +51,7 @@ const ContentNode = z.union([
   UserMentionBlock,
   RoleMentionBlock,
   ImageBlock,
+  PuzzleBlock,
   TextBlock,
 ]);
 export type ChatMessageContentNodeType = z.infer<typeof ContentNode>;
@@ -59,6 +80,10 @@ const ChatMessage = withCommon(
     sender: foreignKey.optional(),
     // The date this message was sent.  Used for ordering chats in the log.
     timestamp: z.date(),
+    pinTs: z.date().nullable().optional(),
+    parentId: foreignKey.nullable().optional(),
+    // Not really a foreign key, since this is always another message when present
+    attachments: ChatAttachment.array().optional(),
   }),
 );
 const ChatMessages = new SoftDeletedModel("jr_chatmessages", ChatMessage);

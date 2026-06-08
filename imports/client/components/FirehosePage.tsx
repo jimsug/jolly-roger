@@ -51,6 +51,7 @@ interface MessageProps {
   msg: ChatMessageType;
   displayNames: Map<string, string>;
   puzzle: PuzzleType | undefined;
+  puzzleNames: Map<string, string>;
 }
 
 const PreWrapSpan = styled.span`
@@ -62,6 +63,7 @@ const PreWrapSpan = styled.span`
 function asFlatString(
   chatMessage: ChatMessageType,
   displayNames: Map<string, string>,
+  puzzleNames: Map<string, string>,
 ): string {
   return chatMessage.content.children
     .map((child) => {
@@ -71,50 +73,55 @@ function asFlatString(
         return ` @${child.roleId} `;
       } else if (nodeIsImage(child)) {
         return `[image]`;
-      } else {
+      } else if ("type" in child && child.type === "puzzle") {
+        return ` [puzzle: ${puzzleNames.get(child.puzzleId) ?? child.puzzleId}] `;
+      } else if ("text" in child) {
         return child.text;
       }
+      return "";
     })
     .join(" ");
 }
 
-const Message = React.memo(({ msg, displayNames, puzzle }: MessageProps) => {
-  const ts = shortCalendarTimeFormat(msg.timestamp);
-  const displayName = msg.sender
-    ? (displayNames.get(msg.sender) ?? "???")
-    : "jolly-roger";
-  const messageText = asFlatString(msg, displayNames);
-  const hasNewline = messageText.includes("\n");
-  return (
-    <div>
-      <span>
-        [{ts}] [
-        {puzzle !== undefined ? (
-          <>
-            <span>{`${puzzle.deleted ? "deleted: " : ""}`}</span>
-            <a
-              href={`/hunts/${msg.hunt}/puzzles/${msg.puzzle}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {puzzle.title}
-            </a>
-          </>
+const Message = React.memo(
+  ({ msg, displayNames, puzzle, puzzleNames }: MessageProps) => {
+    const ts = shortCalendarTimeFormat(msg.timestamp);
+    const displayName = msg.sender
+      ? (displayNames.get(msg.sender) ?? "???")
+      : "jolly-roger";
+    const messageText = asFlatString(msg, displayNames, puzzleNames);
+    const hasNewline = messageText.includes("\n");
+    return (
+      <div>
+        <span>
+          [{ts}] [
+          {puzzle !== undefined ? (
+            <>
+              <span>{`${puzzle.deleted ? "deleted: " : ""}`}</span>
+              <a
+                href={`/hunts/${msg.hunt}/puzzles/${msg.puzzle}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {puzzle.title}
+              </a>
+            </>
+          ) : (
+            <span>deleted: no data</span>
+          )}
+          {"] "}
+          {displayName}
+          {": "}
+        </span>
+        {hasNewline ? (
+          <PreWrapSpan>{messageText}</PreWrapSpan>
         ) : (
-          <span>deleted: no data</span>
+          <span>{messageText}</span>
         )}
-        {"] "}
-        {displayName}
-        {": "}
-      </span>
-      {hasNewline ? (
-        <PreWrapSpan>{messageText}</PreWrapSpan>
-      ) : (
-        <span>{messageText}</span>
-      )}
-    </div>
-  );
-});
+      </div>
+    );
+  },
+);
 
 const MessagesPane = styled.div`
   overflow-y: scroll;
@@ -124,40 +131,6 @@ const MessagesPane = styled.div`
     border-bottom: 1px solid black;
   }
 `;
-
-// Could probably move to imports/client/search some day.
-// Still in this file for now since we use asFlatString.
-function compileChatMessageMatcher(
-  puzzles: Map<string, PuzzleType>,
-  displayNames: Map<string, string>,
-  searchKeys: string[],
-): (c: ChatMessageType) => boolean {
-  // Given a set of puzzles, display names, and search keys,
-  // compileChatMessageMatcher returns a function that, given a chat message,
-  // returns true if all search keys match that message in some way, and
-  // false if any of the search keys cannot be found.
-  const lowerSearchKeys = searchKeys.map((key) => key.toLowerCase());
-  return (chatMessage) => {
-    const haystackString = asFlatString(
-      chatMessage,
-      displayNames,
-    ).toLowerCase();
-    const senderDisplayName = (
-      chatMessage.sender
-        ? (displayNames.get(chatMessage.sender) ?? "")
-        : "jolly-roger"
-    ).toLowerCase();
-    const puzzleName =
-      puzzles.get(chatMessage.puzzle)?.title.toLowerCase() ?? "";
-    return lowerSearchKeys.every((key) => {
-      return (
-        haystackString.includes(key) ||
-        senderDisplayName.includes(key) ||
-        puzzleName.includes(key)
-      );
-    });
-  };
-}
 
 const FirehosePage = () => {
   const huntId = useParams<"huntId">().huntId!;
@@ -183,6 +156,13 @@ const FirehosePage = () => {
         : Puzzles.findAllowingDeleted({ hunt: huntId }).fetch(),
     [loading, huntId],
   );
+  const puzzleNames = useTracker(() => {
+    return (
+      allPuzzles?.reduce((mp, p) => {
+        return mp.set(p._id, p.title);
+      }, new Map<string, string>()) ?? new Map<string, string>()
+    );
+  });
   const puzzles = useMemo(() => {
     if (!allPuzzles) {
       return new Map<string, PuzzleType>();
@@ -231,6 +211,37 @@ const FirehosePage = () => {
     setSearchString("");
   }, [setSearchString]);
 
+  const compileMatcher = useCallback(
+    (searchKeys: string[]): ((c: ChatMessageType) => boolean) => {
+      // Given a list a search keys, compileMatcher returns a function that,
+      // given a chat message, returns true if all search keys match that message in
+      // some way, and false if any of the search keys cannot be found.
+      const lowerSearchKeys = searchKeys.map((key) => key.toLowerCase());
+      return (chatMessage) => {
+        const haystackString = asFlatString(
+          chatMessage,
+          displayNames,
+          puzzleNames,
+        ).toLowerCase();
+        const senderDisplayName = (
+          chatMessage.sender
+            ? (displayNames.get(chatMessage.sender) ?? "")
+            : "jolly-roger"
+        ).toLowerCase();
+        const puzzleName =
+          puzzles.get(chatMessage.puzzle)?.title.toLowerCase() ?? "";
+        return lowerSearchKeys.every((key) => {
+          return (
+            haystackString.includes(key) ||
+            senderDisplayName.includes(key) ||
+            puzzleName.includes(key)
+          );
+        });
+      };
+    },
+    [displayNames, puzzles, puzzleNames],
+  );
+
   const filteredChats = useCallback(
     (allChatMessages: ChatMessageType[]) => {
       const searchKeys = searchString.split(" ");
@@ -242,17 +253,13 @@ const FirehosePage = () => {
         const searchKeysWithEmptyKeysRemoved = searchKeys.filter((key) => {
           return key.length > 0;
         });
-        const isInteresting = compileChatMessageMatcher(
-          puzzles,
-          displayNames,
-          searchKeysWithEmptyKeysRemoved,
-        );
+        const isInteresting = compileMatcher(searchKeysWithEmptyKeysRemoved);
         interestingChatMessages = allChatMessages.filter(isInteresting);
       }
 
       return interestingChatMessages;
     },
-    [searchString, puzzles, displayNames],
+    [searchString, compileMatcher],
   );
 
   const [shouldScrollBottom, setShouldScrollBottom] = useState<boolean>(true);
@@ -346,6 +353,7 @@ const FirehosePage = () => {
                 msg={msg}
                 puzzle={puzzles.get(msg.puzzle)}
                 displayNames={displayNames}
+                puzzleNames={puzzleNames}
               />
             );
           })}

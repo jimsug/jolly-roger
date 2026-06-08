@@ -1,13 +1,37 @@
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faCaretRight } from "@fortawesome/free-solid-svg-icons/faCaretRight";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useCallback, useEffect, useRef, useState } from "react";
+import Badge from "react-bootstrap/Badge";
+import Button from "react-bootstrap/Button";
 import styled from "styled-components";
 import type { TagType } from "../../lib/models/Tags";
 import type { PuzzleGroup } from "../../lib/puzzle-sort-and-group";
+import { computeSolvedness } from "../../lib/solvedness";
 import { useHuntPuzzleListCollapseGroup } from "../hooks/persisted-state";
+import type { Theme } from "../theme";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import Tag from "./Tag";
+
+const AddButton = styled(Button)<{ theme: Theme }>`
+  display: inline;
+  align-items: center;
+  margin: 2px 4px 2px 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  vertical-align: top;
+`;
+
+const GroupInfoDiv = styled(Badge)<{ theme: Theme }>`
+  display: inline-flex;
+  align-items: center;
+  line-height: 24px;
+  margin: 2px 4px 2px 0;
+  padding: 0 6px;
+  border-radius: 4px;
+  vertical-align: top;
+`;
 
 export const PuzzleGroupDiv = styled.div`
   &:not(:last-child) {
@@ -52,6 +76,7 @@ const RelatedPuzzleGroup = ({
   trackPersistentExpand,
   showSolvers,
   subscribers,
+  addPuzzleCallback,
 }: {
   huntId: string;
   group: PuzzleGroup;
@@ -65,7 +90,17 @@ const RelatedPuzzleGroup = ({
   trackPersistentExpand: boolean;
   showSolvers: "viewers" | "hide" | "active";
   subscribers: Record<string, Record<string, string[]>>;
+  addPuzzleCallback: (initialTags: string[]) => void;
 }) => {
+  const openAddPuzzleModalWithTags = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      const initialTags = suppressedTagIds;
+      addPuzzleCallback(initialTags);
+    },
+    [addPuzzleCallback, suppressedTagIds],
+  );
+
   const [persistentCollapsed, setPersistentCollapsed] =
     useHuntPuzzleListCollapseGroup(
       huntId,
@@ -99,6 +134,17 @@ const RelatedPuzzleGroup = ({
     allSuppressedTagIds.push(sharedTag._id);
   }
 
+  const solvablePuzzles = relatedPuzzles.filter(
+    (p) => computeSolvedness(p) === "unsolved",
+  ).length;
+  const solvedPuzzles = relatedPuzzles.filter(
+    (p) => computeSolvedness(p) === "solved",
+  ).length;
+
+  let solveText = null;
+  if (solvablePuzzles > 0 && solvablePuzzles > solvedPuzzles) {
+    solveText = `${solvablePuzzles} out of ${solvedPuzzles + solvablePuzzles} puzzle${solvedPuzzles + solvablePuzzles > 1 ? "s" : ""} unsolved`;
+  }
   return (
     <PuzzleGroupDiv>
       <PuzzleGroupHeader onClick={toggleCollapse}>
@@ -107,7 +153,19 @@ const RelatedPuzzleGroup = ({
           icon={collapsed ? faCaretRight : faCaretDown}
         />
         {sharedTag ? (
-          <Tag tag={sharedTag} linkToSearch={false} popoverRelated={false} />
+          <>
+            <Tag tag={sharedTag} linkToSearch={false} popoverRelated={false} />
+            {solveText && (
+              <GroupInfoDiv bg="secondary">{solveText}</GroupInfoDiv>
+            )}
+            <AddButton
+              size="sm"
+              variant="outline-secondary"
+              onClick={openAddPuzzleModalWithTags}
+            >
+              <FontAwesomeIcon icon={faPlus} /> add puzzle here
+            </AddButton>
+          </>
         ) : (
           <NoSharedTagLabel>{noSharedTagLabel}</NoSharedTagLabel>
         )}
@@ -145,7 +203,7 @@ const RelatedPuzzleGroup = ({
                 trackPersistentExpand={trackPersistentExpand}
                 showSolvers={showSolvers}
                 subscribers={subscribers}
-    
+                addPuzzleCallback={addPuzzleCallback}
               />
             );
           })}

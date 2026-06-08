@@ -3,6 +3,7 @@ import { contentFromMessage } from "../lib/models/ChatMessages";
 import type { GuessType } from "../lib/models/Guesses";
 import Guesses from "../lib/models/Guesses";
 import Puzzles from "../lib/models/Puzzles";
+import { answerify } from "../model-helpers";
 import GlobalHooks from "./GlobalHooks";
 import sendChatMessageInternal from "./sendChatMessageInternal";
 
@@ -10,13 +11,20 @@ export default async function transitionGuess(
   guess: GuessType,
   newState: GuessType["state"],
   additionalNotes?: string,
+  correctAnswer?: string,
 ) {
   if (newState === guess.state) return;
+
+  let guessText = guess.guess;
+  if (correctAnswer) {
+    guessText = answerify(correctAnswer);
+  }
 
   const update: Mongo.Modifier<GuessType> = {
     $set: {
       state: newState,
       additionalNotes,
+      guess: guessText,
     },
   };
   if (!additionalNotes) {
@@ -35,7 +43,10 @@ export default async function transitionGuess(
       stateDescription = `as ${newState}`;
       break;
   }
-  const message = `Guess \`${guess.guess}\` was marked ${stateDescription}${
+  if (correctAnswer) {
+    stateDescription = `as correct with changes (submitted as \`${guess.guess}\`)`;
+  }
+  const message = `Guess \`${guessText}\` was marked ${stateDescription}${
     additionalNotes ? `: ${additionalNotes}` : ""
   }`;
   const content = contentFromMessage(message);
@@ -53,7 +64,7 @@ export default async function transitionGuess(
       },
       {
         $addToSet: {
-          answers: guess.guess,
+          answers: guessText,
         },
       },
     );

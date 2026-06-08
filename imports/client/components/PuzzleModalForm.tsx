@@ -16,10 +16,12 @@ import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
+import FormText from "react-bootstrap/FormText";
 import Row from "react-bootstrap/Row";
 import type { ActionMeta } from "react-select";
 import { useTheme } from "styled-components";
 import type { GdriveMimeTypesType } from "../../lib/GdriveMimeTypes";
+import Hunts from "../../lib/models/Hunts";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import LabelledRadioGroup from "./LabelledRadioGroup";
@@ -42,7 +44,10 @@ export interface PuzzleModalFormSubmitPayload {
   docType?: GdriveMimeTypesType;
   expectedAnswerCount: number;
   allowDuplicateUrls?: boolean;
+  locked?: boolean;
+  lockedSummary?: string;
   completedWithNoAnswer?: boolean;
+  markedComplete?: boolean;
 }
 
 enum PuzzleModalFormSubmitState {
@@ -54,6 +59,12 @@ enum PuzzleModalFormSubmitState {
 export type PuzzleModalFormHandle = {
   reset: () => void;
   show: () => void;
+  populateForm: (data: {
+    title: string;
+    url: string;
+    tagIds: string[] | null;
+  }) => void;
+  submitForm: () => void;
 };
 
 const PuzzleModalForm = React.forwardRef(
@@ -77,6 +88,8 @@ const PuzzleModalForm = React.forwardRef(
     },
     forwardedRef: React.Ref<PuzzleModalFormHandle>,
   ) => {
+    const hunt = Hunts.findOne(huntId);
+
     const tagNamesForIds = useCallback(
       (tagIds: string[]) => {
         const tagNames: Record<string, string> = {};
@@ -93,6 +106,12 @@ const PuzzleModalForm = React.forwardRef(
     const [tags, setTags] = useState<string[]>(
       puzzle ? tagNamesForIds(puzzle.tags) : [],
     );
+    const [functionTags, setFunctionTags] = useState<string[]>(
+      puzzle ? tags.filter((x) => x.includes(":")) : [],
+    );
+    const [contentTags, setContentTags] = useState<string[]>(
+      puzzle ? tags.filter((x) => !x.includes(":")) : [],
+    );
     const [docType, setDocType] = useState<GdriveMimeTypesType | undefined>(
       puzzle ? undefined : "spreadsheet",
     );
@@ -106,19 +125,30 @@ const PuzzleModalForm = React.forwardRef(
     const [allowDuplicateUrls, setAllowDuplicateUrls] = useState<
       boolean | undefined
     >(puzzle ? undefined : false);
+    const [locked, setLocked] = useState<boolean>(puzzle?.locked ?? false);
+    const [lockedSummary, setLockedSummary] = useState<string>(
+      puzzle?.lockedSummary ?? "",
+    );
+    const [markedComplete, setMarkedComplete] = useState<boolean>(
+      puzzle?.markedComplete ?? false,
+    );
     const [submitState, setSubmitState] = useState<PuzzleModalFormSubmitState>(
       PuzzleModalFormSubmitState.IDLE,
     );
     const [errorMessage, setErrorMessage] = useState<string>("");
     const [titleDirty, setTitleDirty] = useState<boolean>(false);
+    const [lastAutoPopulatedTitle, setLastAutoPopulatedTitle] =
+      useState<string>("");
     const [urlDirty, setUrlDirty] = useState<boolean>(false);
-    const [tagsDirty, setTagsDirty] = useState<boolean>(false);
+    const [, setTagsDirty] = useState<boolean>(false);
     const [expectedAnswerCountDirty, setExpectedAnswerCountDirty] =
       useState<boolean>(false);
     const [
       considerCompletedWithNoAnswerDirty,
       setConsiderCompletedWithNoAnswerDirty,
     ] = useState<boolean>(false);
+    const [markedCompleteDirty, setMarkedCompleteDirty] =
+      useState<boolean>(false);
 
     const formRef = useRef<ModalFormHandle>(null);
 
@@ -136,7 +166,35 @@ const PuzzleModalForm = React.forwardRef(
       [],
     );
 
-    const onTagsChange = useCallback(
+    const onFunctionTagsChange = useCallback(
+      (
+        value: readonly TagSelectOption[],
+        action: ActionMeta<TagSelectOption>,
+      ) => {
+        let newTags: string[] = [];
+        switch (action.action) {
+          case "clear":
+          case "deselect-option":
+          case "pop-value":
+          case "remove-value":
+          case "select-option":
+            newTags = value.map((v) => v.value);
+            break;
+          case "create-option":
+            newTags = value.map((v) => v.label);
+            break;
+          default:
+            return;
+        }
+
+        setFunctionTags(newTags);
+        setTags(contentTags.concat(newTags));
+        setTagsDirty(true);
+      },
+      [contentTags],
+    );
+
+    const onContentTagsChange = useCallback(
       (
         value: readonly TagSelectOption[],
         action: ActionMeta<TagSelectOption>,
@@ -144,21 +202,24 @@ const PuzzleModalForm = React.forwardRef(
         let newTags = [];
         switch (action.action) {
           case "clear":
-          case "create-option":
           case "deselect-option":
           case "pop-value":
           case "remove-value":
           case "select-option":
             newTags = value.map((v) => v.value);
             break;
+          case "create-option":
+            newTags = value.map((v) => v.label);
+            break;
           default:
             return;
         }
 
-        setTags(newTags);
+        setContentTags(newTags);
+        setTags(functionTags.concat(newTags));
         setTagsDirty(true);
       },
-      [],
+      [functionTags],
     );
 
     const onDocTypeChange = useCallback((newValue: string) => {
@@ -187,6 +248,24 @@ const PuzzleModalForm = React.forwardRef(
       },
       [],
     );
+    const onLockedChange = useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        setLocked(event.currentTarget.checked);
+      },
+      [],
+    );
+    const onLockedSummaryChange: NonNullable<FormControlProps["onChange"]> =
+      useCallback((event) => {
+        setLockedSummary(event.currentTarget.value);
+      }, []);
+
+    const onMarkedCompleteChange = useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        setMarkedComplete(event.currentTarget.checked);
+        setMarkedCompleteDirty(true);
+      },
+      [],
+    );
 
     const onConsiderSolvedWithNoAnswerChange = useCallback(
       (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -205,7 +284,10 @@ const PuzzleModalForm = React.forwardRef(
           url: url !== "" ? url : undefined, // Make sure we send undefined if url is falsy
           tags,
           expectedAnswerCount,
+          locked,
+          lockedSummary: lockedSummary !== "" ? lockedSummary : undefined,
           completedWithNoAnswer: considerCompletedWithNoAnswer,
+          markedComplete,
         };
         if (docType) {
           payload.docType = docType;
@@ -240,6 +322,9 @@ const PuzzleModalForm = React.forwardRef(
             setConsiderCompletedWithNoAnswerDirty(false);
             setConfirmingDuplicateUrl(false);
             setAllowDuplicateUrls(false);
+            setLocked(false);
+            setLockedSummary("");
+            setMarkedComplete(false);
             callback();
           }
         });
@@ -253,7 +338,10 @@ const PuzzleModalForm = React.forwardRef(
         expectedAnswerCount,
         docType,
         allowDuplicateUrls,
+        locked,
+        lockedSummary,
         considerCompletedWithNoAnswer,
+        markedComplete,
       ],
     );
 
@@ -269,6 +357,8 @@ const PuzzleModalForm = React.forwardRef(
       setTags([]);
       setExpectedAnswerCount(1);
       setDocType("spreadsheet");
+      setLocked(false);
+      setLockedSummary("");
     }, []);
 
     const currentTitle = useMemo(() => {
@@ -290,14 +380,6 @@ const PuzzleModalForm = React.forwardRef(
       }
     }, [urlDirty, puzzle, url]);
 
-    const currentTags = useMemo(() => {
-      if (!tagsDirty && puzzle) {
-        return tagNamesForIds(puzzle.tags);
-      } else {
-        return tags;
-      }
-    }, [tagsDirty, puzzle, tagNamesForIds, tags]);
-
     const currentExpectedAnswerCount = useMemo(() => {
       if (!expectedAnswerCountDirty && puzzle) {
         return puzzle.expectedAnswerCount;
@@ -318,8 +400,35 @@ const PuzzleModalForm = React.forwardRef(
       considerCompletedWithNoAnswer,
     ]);
 
+    const currentMarkedComplete = useMemo(() => {
+      if (!markedCompleteDirty && puzzle) {
+        return puzzle.markedComplete ?? false;
+      } else {
+        return markedComplete;
+      }
+    }, [markedCompleteDirty, puzzle, markedComplete]);
+
     useImperativeHandle(forwardedRef, () => ({
       show,
+      populateForm: (data: {
+        title: string;
+        url: string;
+        tagIds: string[] | null;
+      }) => {
+        setTitle(data.title);
+        setUrl(data.url);
+        if (data.tagIds) {
+          const preTags = tagNamesForIds([...new Set(data.tagIds)]);
+          setTags(preTags);
+          setContentTags(preTags.filter((x) => !x.includes(":")));
+          setFunctionTags(preTags.filter((x) => x.includes(":")));
+        }
+      },
+      submitForm: () => {
+        if (formRef.current) {
+          formRef.current.submit();
+        }
+      },
       reset,
     }));
 
@@ -338,7 +447,19 @@ const PuzzleModalForm = React.forwardRef(
       .filter(Boolean)
       .map((t) => {
         return { value: t, label: t };
+      })
+      .sort((a, b) => {
+        const aLower = a.label.toLowerCase();
+        const bLower = b.label.toLowerCase();
+        return aLower.localeCompare(bLower);
       });
+
+    const functionSelectOptions: TagSelectOption[] = selectOptions.filter((x) =>
+      x.label.includes(":"),
+    );
+    const contentSelectOptions: TagSelectOption[] = selectOptions.filter(
+      (x) => !x.label.includes(":"),
+    );
 
     const idPrefix = useId();
 
@@ -362,12 +483,46 @@ const PuzzleModalForm = React.forwardRef(
                 },
               ]}
               initialValue={docType}
-              help="This can't be changed once a puzzle has been created. Unless you're absolutely sure, use a spreadsheet. We only expect to use documents for administrivia."
+              help=""
               onChange={onDocTypeChange}
             />
+            <FormText>
+              You can attach other documents later, but this one will be opened
+              by default.
+            </FormText>
           </Col>
         </FormGroup>
       ) : null;
+
+    useEffect(() => {
+      // This tries to guess the puzzle title based on the URL entered
+      // To keep things simple, we only populate the title if the title
+      // is currently blank,
+      try {
+        const urlObject = new URL(url);
+        const pathname = urlObject.pathname.replace(/^\/|\/$/g, "");
+        if (!pathname) return;
+        const pathParts = pathname.split("/");
+        const lastPart = pathParts[pathParts.length - 1] ?? "";
+        const decodedLastPart = decodeURI(lastPart);
+        const formattedTitle = (
+          decodedLastPart.includes("_")
+            ? decodedLastPart.replace(/_/g, " ")
+            : decodedLastPart.replace(/-/g, " ")
+        ).replace(
+          /\w\S*/g,
+          (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase(),
+        );
+
+        if (title === lastAutoPopulatedTitle || title === "") {
+          setTitle(formattedTitle);
+          setTitleDirty(false);
+        }
+        setLastAutoPopulatedTitle(formattedTitle);
+      } catch {
+        // console.debug("Invalid URL, probably there's no URL:", error);
+      }
+    }, [url, lastAutoPopulatedTitle, title]);
 
     const allowDuplicateUrlsCheckbox =
       !puzzle && allowDuplicateUrls !== undefined && confirmingDuplicateUrl ? (
@@ -434,29 +589,64 @@ const PuzzleModalForm = React.forwardRef(
               {allowDuplicateUrlsCheckbox}
             </Col>
           </FormGroup>
+          <hr />
+          <FormGroup
+            as={Row}
+            className="mb-3"
+            controlId={`${idPrefix}-new-puzzle-tags-function`}
+          >
+            <FormLabel column xs={3}>
+              Functional Tags
+            </FormLabel>
+            <Col xs={9}>
+              <Creatable
+                theme={theme.reactSelectTheme}
+                options={functionSelectOptions}
+                isMulti
+                placeholder="Type to search/create"
+                isDisabled={disableForm}
+                onChange={onFunctionTagsChange}
+                value={functionTags.map((t) => {
+                  return { label: t, value: t };
+                })}
+              />
+              <FormText>
+                Tags with a prefix, like <code>group:</code>,{" "}
+                <code>meta-for:</code>, <code>priority:</code>, or{" "}
+                <code>where:</code> (e.g. <code>priority:high</code>;{" "}
+                <code>where:Sydney</code>)
+              </FormText>
+            </Col>
+          </FormGroup>
 
           <FormGroup
             as={Row}
             className="mb-3"
-            controlId={`${idPrefix}-new-puzzle-tags`}
+            controlId={`${idPrefix}-new-puzzle-tags-content`}
           >
             <FormLabel column xs={3}>
-              Tags
+              Content Tags
             </FormLabel>
             <Col xs={9}>
               <Creatable
-                id={`${idPrefix}-new-puzzle-tags`}
                 theme={theme.reactSelectTheme}
-                options={selectOptions}
+                options={contentSelectOptions}
                 isMulti
+                placeholder="Type to search/create"
                 isDisabled={disableForm}
-                onChange={onTagsChange}
-                value={currentTags.map((t) => {
+                onChange={onContentTagsChange}
+                value={contentTags.map((t) => {
                   return { label: t, value: t };
                 })}
               />
+              <FormText>
+                Tags that describe the mechanics, content, or skills (e.g.{" "}
+                <code>cryptic</code>; <code>Pokémon</code>;{" "}
+                <code>writing stuff</code>)
+              </FormText>
             </Col>
           </FormGroup>
+          <hr />
 
           {docTypeSelector}
 
@@ -474,22 +664,81 @@ const PuzzleModalForm = React.forwardRef(
                 disabled={disableForm}
                 onChange={onExpectedAnswerCountChange}
                 value={currentExpectedAnswerCount}
-                min={0}
+                min={-1}
                 step={1}
               />
+              <FormText>
+                For non-puzzle items, set to <code>0</code>. If answer count is
+                unknown, set to <code>-1</code>.
+              </FormText>
             </Col>
           </FormGroup>
 
+          <hr />
+          {hunt?.allowUnlockablePuzzles && (
+            <>
+              <FormGroup as={Row} className="mb-3">
+                <Col xs={{ span: 9, offset: 3 }}>
+                  <FormCheck
+                    id={`${idPrefix}-locked`}
+                    label="Locked"
+                    type="checkbox"
+                    disabled={disableForm}
+                    checked={locked}
+                    onChange={onLockedChange}
+                  />
+                  <FormText>
+                    Locked puzzles are not visible to everyone by default. Users
+                    can express interest on puzzles to be unlocked.
+                  </FormText>
+                </Col>
+              </FormGroup>
+
+              {locked && (
+                <FormGroup
+                  as={Row}
+                  className="mb-3"
+                  controlId={`${idPrefix}-locked-summary`}
+                >
+                  <FormLabel column xs={3}>
+                    Locked Summary
+                  </FormLabel>
+                  <Col xs={9}>
+                    <FormControl
+                      type="text"
+                      disabled={disableForm}
+                      onChange={onLockedSummaryChange}
+                      value={lockedSummary}
+                      placeholder="e.g. Pictures of two quizzes somewhere on campus."
+                    />
+                  </Col>
+                </FormGroup>
+              )}
+            </>
+          )}
           {currentExpectedAnswerCount === 0 ? (
-            <FormCheck
-              id={`${idPrefix}-solved-with-no-answers`}
-              label="Consider solved with no answers"
-              type="checkbox"
-              checked={currentConsiderCompletedWithNoAnswer}
-              disabled={disableForm}
-              onChange={onConsiderSolvedWithNoAnswerChange}
-              className="mt-1"
-            />
+            <>
+              <FormCheck
+                id={`${idPrefix}-solved-with-no-answers`}
+                label="Allow this to be marked completed with no answers"
+                type="checkbox"
+                checked={currentConsiderCompletedWithNoAnswer}
+                disabled={disableForm}
+                onChange={onConsiderSolvedWithNoAnswerChange}
+                className="mt-1"
+              />
+              {puzzle && (
+                <FormCheck
+                  id={`${idPrefix}-marked-complete`}
+                  label="Marked as complete"
+                  type="checkbox"
+                  checked={currentMarkedComplete}
+                  disabled={disableForm}
+                  onChange={onMarkedCompleteChange}
+                  className="mt-1"
+                />
+              )}
+            </>
           ) : undefined}
 
           {submitState === PuzzleModalFormSubmitState.FAILED && (

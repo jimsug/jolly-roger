@@ -2,6 +2,7 @@ import React from "react";
 import styled, { css } from "styled-components";
 import { getAvatarCdnUrl } from "../../lib/discord";
 import type { DiscordAccountType } from "../../lib/models/DiscordAccount";
+import type { Theme } from "../theme";
 
 const AvatarImg = styled.img`
   display: block;
@@ -33,7 +34,7 @@ const DiscordAvatarInner = ({
   );
 };
 
-const AvatarInitial = styled.div`
+const AvatarInitial = styled.div<{ theme: Theme }>`
   width: 100%;
   height: 100%;
   display: flex;
@@ -92,6 +93,7 @@ const AvatarContainer = styled.div<{
   $inline: boolean;
   $isSelf: boolean;
   $rounded: boolean;
+  theme: Theme;
 }>`
   width: ${({ $size }) => $size}px;
   height: ${({ $size }) => $size}px;
@@ -121,6 +123,7 @@ const Avatar = React.memo(
     className,
     isSelf = false,
     rounded = false,
+    title,
   }: {
     size: number;
     inline?: boolean;
@@ -130,6 +133,7 @@ const Avatar = React.memo(
     className?: string;
     isSelf?: boolean;
     rounded?: boolean;
+    title?: string;
   }) => {
     const [imgFailed, setImgFailed] = React.useState(false);
 
@@ -153,6 +157,7 @@ const Avatar = React.memo(
         $inline={inline ?? false}
         $isSelf={isSelf}
         $rounded={rounded}
+        title={title}
       >
         {content}
       </AvatarContainer>

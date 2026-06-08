@@ -15,7 +15,7 @@ defineMethod(unlockPuzzle, {
       puzzleId: String,
       url: Match.Optional(String),
     });
-    return arg;
+    return arg as unknown as { puzzleId: string; url?: string };
   },
 
   async run({ puzzleId, url }) {

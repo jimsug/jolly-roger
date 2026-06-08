@@ -21,7 +21,7 @@ defineMethod(setGuessState, {
     return arg;
   },
 
-  async run({ guessId, state, additionalNotes }) {
+  async run({ guessId, state, additionalNotes, correctAnswer }) {
     check(this.userId, String);
 
     const guess = await Guesses.findOneAsync(guessId);
@@ -47,7 +47,8 @@ defineMethod(setGuessState, {
       guess: guess._id,
       state,
       additionalNotes,
+      correctAnswer,
     });
-    await transitionGuess(guess, state, additionalNotes);
+    await transitionGuess(guess, state, additionalNotes, correctAnswer);
   },
 });

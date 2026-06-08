@@ -12,12 +12,12 @@ definePublication(statusesForHuntUsers, {
 
   async run({ huntId }) {
     if (!this.userId) {
-      return [];
+      return undefined;
     }
 
     const user = await MeteorUsers.findOneAsync(this.userId);
     if (!user?.hunts?.includes(huntId)) {
-      return [];
+      return undefined;
     }
 
     const recencyThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);

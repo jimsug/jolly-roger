@@ -27,7 +27,7 @@ const AvatarItem = styled.div<{
   $isPassive?: boolean;
 }>`
   margin-right: -${({ $overlap }) => $overlap}px;
-  border: 4px solid
+  border: 2px solid
     ${({ theme, $isPassive }) =>
       $isPassive ? theme.colors.warning : theme.colors.success};
   border-radius: 50%;
@@ -38,7 +38,7 @@ const AvatarItem = styled.div<{
   opacity: ${({ $isPassive }) => ($isPassive ? 0.8 : 1)};
 
   &:hover {
-    transform: translateX(-1px);
+    transform: translateY(-2px);
     z-index: 10;
     margin-right: 4px;
     box-shadow: 0 4px 8px rgb(0 0 0 / 20%);

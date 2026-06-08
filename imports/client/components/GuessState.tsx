@@ -37,7 +37,20 @@ const GuessState = ({
 }) => {
   const theme = useTheme();
   const iconColor = (state: GuessType["state"]) => {
-    return theme.colors.guess[state].icon;
+    switch (state) {
+      case "correct":
+        return theme.colors.guessColorCorrectIcon;
+      case "intermediate":
+        return theme.colors.guessColorIntermediateIcon;
+      case "incorrect":
+        return theme.colors.guessColorIncorrectIcon;
+      case "rejected":
+        return theme.colors.guessColorRejectedIcon;
+      case "pending":
+        return theme.colors.guessColorPendingIcon;
+      default:
+        return "#fff";
+    }
   };
 
   const tooltipId = useId();

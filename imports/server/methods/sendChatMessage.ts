@@ -1,19 +1,41 @@
 import { check, Match } from "meteor/check";
+import ChatMessages, {
+  type ChatAttachmentType,
+} from "../../lib/models/ChatMessages";
 import sendChatMessage from "../../methods/sendChatMessage";
 import sendChatMessageInternal from "../sendChatMessageInternal";
 import defineMethod from "./defineMethod";
+
+const ChatAttachmentPattern = Match.ObjectIncluding({
+  url: String,
+  filename: String,
+  mimeType: String,
+  size: Match.Optional(Number),
+});
 
 defineMethod(sendChatMessage, {
   validate(arg) {
     check(arg, {
       puzzleId: String,
       content: String,
+      parentId: Match.Optional(Match.OneOf(String, null)),
+      attachments: Match.Optional([ChatAttachmentPattern]),
     });
 
     return arg;
   },
 
-  async run({ puzzleId, content }: { puzzleId: string; content: string }) {
+  async run({
+    puzzleId,
+    content,
+    parentId = null,
+    attachments = [],
+  }: {
+    puzzleId: string;
+    content: string;
+    parentId?: string | null;
+    attachments?: ChatAttachmentType[] | null;
+  }) {
     check(this.userId, String);
     const contentObj = JSON.parse(content);
     check(contentObj, {
@@ -39,10 +61,42 @@ defineMethod(sendChatMessage, {
       ],
     });
 
+    let isPinned = false;
+
+    const firstChild = contentObj.children[0];
+    if (
+      "children" in contentObj &&
+      contentObj.children.length > 0 &&
+      firstChild &&
+      "text" in firstChild
+    ) {
+      if (firstChild.text.match(/^\s*\/(un)?pin\s*$/i)) {
+        const puzzle = puzzleId;
+        await ChatMessages.updateAsync(
+          {
+            puzzle,
+            pinTs: { $ne: null },
+          },
+          {
+            $set: {
+              pinTs: null,
+            },
+          },
+        );
+        return;
+      } else if (firstChild.text.match(/^\s*\/pin\s+\S+/i)) {
+        isPinned = true;
+        firstChild.text = firstChild.text.replace(/^\s*\/pin\s+/i, "");
+      }
+    }
+
     await sendChatMessageInternal({
       puzzleId,
       content: contentObj,
       sender: this.userId,
+      pinTs: isPinned ? new Date() : null,
+      parentId: parentId ?? null,
+      attachments,
     });
   },
 });

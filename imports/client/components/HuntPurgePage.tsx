@@ -53,11 +53,6 @@ const PurgeForm = React.forwardRef(
       setIsShown(false);
     }, []);
 
-    useImperativeHandle(forwardedRef, () => ({
-      show,
-      hide,
-    }));
-
     useEffect(() => {
       dontTryToHide.current = false;
       return () => {
@@ -67,8 +62,8 @@ const PurgeForm = React.forwardRef(
 
     const { onSubmit } = props;
     const submit = useCallback(
-      (e: React.FormEvent) => {
-        e.preventDefault();
+      (e?: React.FormEvent) => {
+        e?.preventDefault();
         onSubmit(() => {
           if (!dontTryToHide.current) {
             hide();
@@ -77,6 +72,12 @@ const PurgeForm = React.forwardRef(
       },
       [onSubmit, hide],
     );
+
+    useImperativeHandle(forwardedRef, () => ({
+      show,
+      hide,
+      submit,
+    }));
 
     const submitLabel = props.submitLabel ?? "Save";
     const submitStyle = props.submitStyle ?? "primary";

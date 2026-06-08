@@ -26,8 +26,6 @@ import mediasoupAckPeerRemoteMute from "../../methods/mediasoupAckPeerRemoteMute
 import mediasoupConnectTransport from "../../methods/mediasoupConnectTransport";
 import mediasoupSetPeerState from "../../methods/mediasoupSetPeerState";
 import mediasoupSetProducerPaused from "../../methods/mediasoupSetProducerPaused";
-import { PREFERRED_AUDIO_DEVICE_STORAGE_KEY } from "../components/AudioConfig";
-import { trace } from "../tracing";
 import useBlockUpdate from "./useBlockUpdate";
 
 const logger = defaultLogger.child({ label: "useCallState" });
@@ -102,8 +100,8 @@ export type CallState = (
   // after a server disconnection (rather than a user hang-up) since the state
   // there shouldn't be considered to have changed.
   allowInitialPeerStateNotification: boolean;
+  initialMuted?: boolean;
   remoteMutedBy: string | undefined;
-  error: Error | undefined;
 };
 
 export type Action =
@@ -155,7 +153,6 @@ const INITIAL_STATE: CallState = {
   peerStreams: new Map<string, MediaStream>(),
   allowInitialPeerStateNotification: false,
   remoteMutedBy: undefined,
-  error: undefined,
 };
 
 function reducer(state: CallState, action: Action): CallState {
@@ -164,22 +161,21 @@ function reducer(state: CallState, action: Action): CallState {
     case "request-capture":
       return { ...state, callState: CallJoinState.REQUESTING_STREAM };
     case "capture-error":
-      return {
-        ...state,
-        callState: CallJoinState.STREAM_ERROR,
-        error: action.error,
-      };
+      return { ...state, callState: CallJoinState.STREAM_ERROR };
     case "join-call":
+      action.audioState.mediaSource?.getAudioTracks().forEach((track) => {
+        track.enabled = !(action.initialMute ?? false);
+      });
       return {
         ...state,
         callState: CallJoinState.IN_CALL,
         audioState: action.audioState,
         audioControls: {
-          muted: false,
+          muted: action.initialMute ?? false,
           deafened: false,
         },
         allowInitialPeerStateNotification: true,
-        error: undefined,
+        initialMuted: action.initialMute ?? false,
       };
     case "set-device":
       return {
@@ -281,7 +277,7 @@ function reducer(state: CallState, action: Action): CallState {
         switch (action.selfPeer.initialPeerState) {
           case "active":
             audioControls = {
-              muted: false,
+              muted: state.initialMuted ?? false,
               deafened: false,
             };
             break;
@@ -501,11 +497,7 @@ const useCallState = ({
   huntId: string;
   puzzleId: string;
   tabId: string;
-}): {
-  state: CallState;
-  dispatch: React.Dispatch<Action>;
-  joinCall: () => void;
-} => {
+}): [CallState, React.Dispatch<Action>] => {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
 
   // If we're currently in a call, block code pushes
@@ -1174,59 +1166,7 @@ const useCallState = ({
     };
   }, [cleanupConsumer]);
 
-  const joinCall = useCallback(() => {
-    void (async () => {
-      trace("useCallState joinCall");
-      if (navigator.mediaDevices) {
-        dispatch({ type: "request-capture" });
-        const preferredAudioDeviceId =
-          localStorage.getItem(PREFERRED_AUDIO_DEVICE_STORAGE_KEY) ?? undefined;
-        // Get the user media stream.
-        const mediaStreamConstraints = {
-          audio: {
-            echoCancellation: { ideal: true },
-            autoGainControl: { ideal: true },
-            noiseSuppression: { ideal: true },
-            deviceId: preferredAudioDeviceId,
-          },
-          // TODO: conditionally allow video if enabled by feature flag?
-        };
-
-        let mediaSource: MediaStream;
-        try {
-          mediaSource = await navigator.mediaDevices.getUserMedia(
-            mediaStreamConstraints,
-          );
-        } catch (e) {
-          dispatch({ type: "capture-error", error: e as Error });
-          return;
-        }
-
-        const AudioContext =
-          window.AudioContext ||
-          (window as { webkitAudioContext?: AudioContext }).webkitAudioContext;
-        const audioContext = new AudioContext();
-
-        dispatch({
-          type: "join-call",
-          audioState: {
-            mediaSource,
-            audioContext,
-          },
-        });
-      } else {
-        const msg =
-          "Couldn't get local microphone: browser denies access on non-HTTPS origins";
-        dispatch({ type: "capture-error", error: new Error(msg) });
-      }
-    })();
-  }, []);
-
-  return {
-    state,
-    dispatch,
-    joinCall,
-  };
+  return [state, dispatch];
 };
 
 export default useCallState;

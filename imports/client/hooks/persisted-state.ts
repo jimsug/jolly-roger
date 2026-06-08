@@ -18,6 +18,10 @@ export const useAppThemeState = () => {
   return useLocalStorage<AppThemeState>("appTheme", "auto");
 };
 
+export const usePersistedSidebarWidth = () => {
+  return useLocalStorage<number>("persistentSidebarWidth", 250);
+};
+
 export type OperatorActionsHiddenState = Record<string /* huntId */, boolean>;
 
 export const useOperatorActionsHidden = () => {
@@ -61,9 +65,8 @@ export type PuzzleListState = {
 const defaultPuzzleListState = () => {
   return {
     displayMode: "group",
-    showSolved: false,
-    lockedDisplayMode: "all",
     showSolvers: "viewers",
+    showSolved: false,
     collapseGroups: {},
   } as PuzzleListState;
 };
@@ -138,29 +141,6 @@ export const useHuntPuzzleListShowSolved = (huntId: string) => {
   ] as const;
 };
 
-export const useHuntPuzzleListLockedDisplayMode = (huntId: string) => {
-  const [huntPuzzleListView, setHuntPuzzleListView] =
-    useHuntPuzzleListState(huntId);
-  return [
-    huntPuzzleListView.lockedDisplayMode,
-    useCallback(
-      (update: SetStateAction<"all" | "unlocked" | "locked">) => {
-        setHuntPuzzleListView((prevView) => {
-          const newView = {
-            ...prevView,
-            lockedDisplayMode:
-              typeof update === "function"
-                ? update(prevView.lockedDisplayMode)
-                : update,
-          };
-          return newView;
-        });
-      },
-      [setHuntPuzzleListView],
-    ),
-  ] as const;
-};
-
 export const useHuntPuzzleListShowSolvers = (huntId: string) => {
   const [huntPuzzleListView, setHuntPuzzleListView] =
     useHuntPuzzleListState(huntId);
@@ -174,6 +154,29 @@ export const useHuntPuzzleListShowSolvers = (huntId: string) => {
             showSolvers:
               typeof update === "function"
                 ? update(prevView.showSolvers)
+                : update,
+          };
+          return newView;
+        });
+      },
+      [setHuntPuzzleListView],
+    ),
+  ] as const;
+};
+
+export const useHuntPuzzleListLockedDisplayMode = (huntId: string) => {
+  const [huntPuzzleListView, setHuntPuzzleListView] =
+    useHuntPuzzleListState(huntId);
+  return [
+    huntPuzzleListView.lockedDisplayMode,
+    useCallback(
+      (update: SetStateAction<"all" | "unlocked" | "locked">) => {
+        setHuntPuzzleListView((prevView) => {
+          const newView = {
+            ...prevView,
+            lockedDisplayMode:
+              typeof update === "function"
+                ? update(prevView.lockedDisplayMode)
                 : update,
           };
           return newView;

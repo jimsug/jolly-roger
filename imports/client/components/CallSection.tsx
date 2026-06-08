@@ -363,8 +363,6 @@ const PeerBox = ({
 
   const { muted, deafened } = peer;
 
-  const tooltipId = useId();
-
   const [isLocalMuted, setIsLocalMuted] = useState(false);
 
   const toggleLocalMute = useCallback(() => {
@@ -376,6 +374,8 @@ const PeerBox = ({
       audioRef.current.muted = isLocalMuted;
     }
   }, [isLocalMuted, audioRef, stream]);
+
+  const tooltipId = useId();
 
   return (
     <>
@@ -483,19 +483,25 @@ const Callers = ({
   const callerCount = otherPeers.length + 1; // +1 for self
   const chatterRef = useRef<HTMLDivElement>(null);
 
-  const peerBoxes = otherPeers.map((peer) => {
-    const stream = peerStreams.get(peer._id);
-    return (
-      <PeerBox
-        key={peer._id}
-        selfDeafened={deafened}
-        audioContext={audioContext}
-        peer={peer}
-        popperBoundaryRef={chatterRef}
-        stream={stream}
-      />
-    );
-  });
+  const peerBoxes = otherPeers
+    .map((peer) => {
+      const stream = peerStreams.get(peer._id);
+      return (
+        <PeerBox
+          key={peer._id}
+          selfDeafened={deafened}
+          audioContext={audioContext}
+          peer={peer}
+          popperBoundaryRef={chatterRef}
+          stream={stream}
+        />
+      );
+    })
+    .sort((a, b) => {
+      const aMuted = a.props.peer.muted ? 0 : 1;
+      const bMuted = b.props.peer.muted ? 0 : 1;
+      return aMuted > bMuted ? -1 : 1;
+    });
 
   return (
     <ChatterSubsection ref={chatterRef}>
@@ -630,7 +636,11 @@ const CallSection = ({
       {joiningCallAlert}
       <Overlay
         target={muteRef.current}
-        show={callState.allowInitialPeerStateNotification && muted}
+        show={
+          callState.allowInitialPeerStateNotification &&
+          muted &&
+          !callState.initialMuted
+        }
         placement="bottom"
       >
         <Tooltip id={`${idPrefix}-muted-on-join-notification`}>

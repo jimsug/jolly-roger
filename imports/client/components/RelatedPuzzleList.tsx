@@ -1,3 +1,5 @@
+import { Meteor } from "meteor/meteor";
+import { useTracker } from "meteor/react-meteor-data";
 import React from "react";
 import { indexedById } from "../../lib/listUtils";
 import type { PuzzleType } from "../../lib/models/Puzzles";
@@ -27,6 +29,7 @@ const RelatedPuzzleList = React.memo(
     segmentAnswers?: boolean;
     subscribers: Record<string, Record<string, string[]>>;
   }) => {
+    const isOffsite = useTracker(() => Meteor.user()?.isOffsite ?? false, []);
     // Sort the puzzles within each tag group by interestingness.  For instance, metas
     // should probably be at the top of the group, then of the round puzzles, unsolved should
     // maybe sort above solved, and then perhaps by unlock order.
@@ -35,6 +38,7 @@ const RelatedPuzzleList = React.memo(
       relatedPuzzles,
       sharedTag,
       tagIndex,
+      isOffsite,
     );
     return (
       <PuzzleList

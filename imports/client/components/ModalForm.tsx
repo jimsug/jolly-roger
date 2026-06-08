@@ -1,3 +1,5 @@
+import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, {
   useCallback,
   useEffect,
@@ -30,6 +32,7 @@ interface ModalFormProps {
 export type ModalFormHandle = {
   show: () => void;
   hide: () => void;
+  submit: () => void;
 };
 
 const ModalForm = React.forwardRef(
@@ -45,11 +48,6 @@ const ModalForm = React.forwardRef(
       setIsShown(false);
     }, []);
 
-    useImperativeHandle(forwardedRef, () => ({
-      show,
-      hide,
-    }));
-
     useEffect(() => {
       dontTryToHide.current = false;
       return () => {
@@ -59,8 +57,8 @@ const ModalForm = React.forwardRef(
 
     const { onSubmit } = props;
     const submit = useCallback(
-      (e: React.FormEvent) => {
-        e.preventDefault();
+      (e?: React.FormEvent) => {
+        e?.preventDefault();
         onSubmit(() => {
           // For delete forms, it's possible that the component gets
           // deleted and unmounted before the callback gets called.
@@ -71,6 +69,12 @@ const ModalForm = React.forwardRef(
       },
       [onSubmit, hide],
     );
+
+    useImperativeHandle(forwardedRef, () => ({
+      show,
+      hide,
+      submit,
+    }));
 
     const submitLabel = props.submitLabel ?? "Save";
     const submitStyle = props.submitStyle ?? "primary";
@@ -83,6 +87,9 @@ const ModalForm = React.forwardRef(
           </Modal.Header>
           <Modal.Body>{props.children}</Modal.Body>
           <Modal.Footer>
+            {props.submitDisabled && (
+              <FontAwesomeIcon icon={faPuzzlePiece} spin />
+            )}
             <Button
               variant="light"
               onClick={hide}

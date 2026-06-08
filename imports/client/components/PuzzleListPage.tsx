@@ -1,11 +1,17 @@
 import { Meteor } from "meteor/meteor";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { faCircle } from "@fortawesome/free-regular-svg-icons/faCircle";
+import { faClock } from "@fortawesome/free-regular-svg-icons/faClock";
+import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
+import { faEyeSlash } from "@fortawesome/free-regular-svg-icons/faEyeSlash";
+import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
-import { faEye } from "@fortawesome/free-solid-svg-icons/faEye";
-import { faEyeSlash } from "@fortawesome/free-solid-svg-icons/faEyeSlash";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
+import { faPencilAlt } from "@fortawesome/free-solid-svg-icons/faPencilAlt";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   type ComponentPropsWithRef,
@@ -15,6 +21,7 @@ import {
   useId,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
@@ -24,10 +31,13 @@ import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
 import InputGroup from "react-bootstrap/InputGroup";
+import Overlay from "react-bootstrap/Overlay";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
-import { useParams, useSearchParams } from "react-router-dom";
+import Tooltip from "react-bootstrap/Tooltip";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import styled, { css } from "styled-components";
+import isAdmin from "../../lib/isAdmin";
 import { sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import Hunts from "../../lib/models/Hunts";
@@ -39,6 +49,7 @@ import UserStatuses from "../../lib/models/UserStatuses";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import presenceForHunt from "../../lib/publications/presenceForHunt";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
+import puzzleFeedbacks from "../../lib/publications/puzzleFeedbacks";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
 import statusesForHuntUsers from "../../lib/publications/statusesForHuntUsers";
 import {
@@ -47,9 +58,11 @@ import {
 } from "../../lib/puzzle-sort-and-group";
 import { computeSolvedness } from "../../lib/solvedness";
 import createPuzzle from "../../methods/createPuzzle";
+import { useBreadcrumb } from "../hooks/breadcrumb";
 import {
   useHuntPuzzleListCollapseGroups,
   useHuntPuzzleListDisplayMode,
+  useHuntPuzzleListLockedDisplayMode,
   useHuntPuzzleListShowSolved,
   useHuntPuzzleListShowSolvers,
   useOperatorActionsHiddenForHunt,
@@ -58,7 +71,7 @@ import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
 import useSubscribeAvatars from "../hooks/useSubscribeAvatars";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
-import { compilePuzzleMatcher } from "../search";
+import indexedDisplayNames from "../indexedDisplayNames";
 import { Subscribers } from "../subscribers";
 import HuntNav from "./HuntNav";
 import { userStatusesToLastSeen } from "./HuntProfileListPage";
@@ -74,7 +87,7 @@ import { mediaBreakpointDown } from "./styling/responsive";
 
 const ViewControls = styled.div<{ $canAdd?: boolean }>`
   display: grid;
-  grid-template-columns: auto auto auto 1fr;
+  grid-template-columns: auto auto auto auto 1fr;
   align-items: end;
   gap: 1em;
   margin-bottom: 1em;
@@ -174,6 +187,27 @@ const HuntNavWrapper = styled.div`
   )}
 `;
 
+const ONE_PUZZLE_TOOLTIP_ARROW_MAX = 120;
+
+const StyledTooltip = styled(Tooltip)<{ $cursorOffset: number }>`
+  & .tooltip-arrow {
+    position: absolute !important;
+    transform: none !important;
+    left: ${(props) => props.$cursorOffset}px !important;
+    max-width: calc(100% - 10px);
+  }
+`;
+
+const getTextWidth = (text: string, font: string) => {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.font = font;
+    return context.measureText(text).width;
+  }
+  return 0;
+};
+
 const PuzzleListView = ({
   huntId,
   canAdd,
@@ -185,6 +219,7 @@ const PuzzleListView = ({
   canUpdate: boolean;
   loading: boolean;
 }) => {
+  const hunt = Hunts.findOne(huntId);
   const allPuzzles = useTracker(
     () => Puzzles.find({ hunt: huntId }).fetch(),
     [huntId],
@@ -202,27 +237,59 @@ const PuzzleListView = ({
 
   const deletedPuzzles = useTracker(
     () =>
-      !canUpdate || loading
+      !isAdmin || loading
         ? undefined
         : Puzzles.findDeleted({ hunt: huntId }).fetch(),
-    [canUpdate, huntId, loading],
+    [huntId, loading],
   );
 
   const [searchParams, setSearchParams] = useSearchParams();
   const searchString = searchParams.get("q") ?? "";
   const addModalRef = useRef<PuzzleModalFormHandle>(null);
   const searchBarRef = useRef<HTMLInputElement>(null);
+  const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
+  const handleSearchFocus = useCallback(() => setIsSearchFocused(true), []);
+  const handleSearchBlur = useCallback(() => setIsSearchFocused(false), []);
   const [displayMode, setDisplayMode] = useHuntPuzzleListDisplayMode(huntId);
   const [showSolved, setShowSolved] = useHuntPuzzleListShowSolved(huntId);
+  const [lockedDisplayMode, setLockedDisplayMode] =
+    useHuntPuzzleListLockedDisplayMode(huntId);
   const [showSolvers, setShowSolvers] = useHuntPuzzleListShowSolvers(huntId);
   const [huntPuzzleListCollapseGroups, setHuntPuzzleListCollapseGroups] =
     useHuntPuzzleListCollapseGroups(huntId);
+  const [cursorOffset, setCursorOffset] = useState<number>(10);
+
   const expandAllGroups = useCallback(() => {
     setHuntPuzzleListCollapseGroups({});
   }, [setHuntPuzzleListCollapseGroups]);
   const canExpandAllGroups =
     displayMode === "group" &&
     Object.values(huntPuzzleListCollapseGroups).some((collapsed) => collapsed);
+
+  const updateCursorPosition = useCallback(() => {
+    const input = searchBarRef.current;
+    if (!input) return;
+
+    const selectionStart = input.selectionStart || 0;
+    const text = input.value.substring(0, selectionStart);
+
+    // Get the computed font style to ensure accurate measurement
+    const computedStyle = window.getComputedStyle(input);
+    const font = `${computedStyle.fontWeight} ${computedStyle.fontSize} ${computedStyle.fontFamily}`;
+    const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+
+    // Measure text and add padding
+    const textWidth = getTextWidth(text, font);
+
+    // We add paddingLeft to align with where the text actually starts.
+    // We clamp it slightly so the arrow doesn't look weird at the very start (0px).
+    setCursorOffset(Math.max(6, textWidth + paddingLeft));
+  }, []);
+
+  const arrowOffsetForTooltip = Math.min(
+    ONE_PUZZLE_TOOLTIP_ARROW_MAX,
+    cursorOffset,
+  );
 
   const [operatorActionsHidden, setOperatorActionsHidden] =
     useOperatorActionsHiddenForHunt(huntId);
@@ -276,8 +343,9 @@ const PuzzleListView = ({
     useCallback(
       (e) => {
         setSearchString(e.currentTarget.value);
+        updateCursorPosition();
       },
-      [setSearchString],
+      [setSearchString, updateCursorPosition],
     );
   const subscribersLoading = useSubscribe("subscribers.fetchAll", huntId);
   const callMembersLoading = useSubscribe("mediasoup:metadataAll", huntId);
@@ -293,7 +361,9 @@ const PuzzleListView = ({
 
   const statusArgs = useMemo(() => ({ huntId }), [huntId]);
   const statusesSubscribe = useTypedSubscribe(statusesForHuntUsers, statusArgs); // also the statuses for users
+
   const statusesLoading = statusesSubscribe();
+  const displayNames = useTracker(() => indexedDisplayNames(), []);
 
   const puzzleUsers: Record<string, string[]> = useTracker(() => {
     if (subscriptionsLoading || statusesLoading) {
@@ -302,21 +372,22 @@ const PuzzleListView = ({
     const puzzleUserStatuses = userStatusesToLastSeen(
       UserStatuses.find({ hunt: huntId }).fetch(),
     );
-    const mappedUsers = Object.entries(puzzleUserStatuses).reduce<
-      Record<string, string[]>
-    >((acc, k) => {
-      const [userId, statusInfo] = k;
-      const puzzleId = statusInfo.puzzleStatus.puzzle;
-      if (!puzzleId) {
+    const mappedUsers = Object.entries(puzzleUserStatuses).reduce(
+      (acc, k) => {
+        const [userId, statusInfo] = k;
+        const puzzleId = statusInfo.puzzleStatus.puzzle;
+        if (!puzzleId) {
+          return acc;
+        }
+        if (!acc[puzzleId]) {
+          acc[puzzleId] = [userId];
+        } else {
+          acc[puzzleId].push(userId);
+        }
         return acc;
-      }
-      if (!acc[puzzleId]) {
-        acc[puzzleId] = [userId];
-      } else {
-        acc[puzzleId].push(userId);
-      }
-      return acc;
-    }, {});
+      },
+      {} as Record<string, string[]>,
+    );
 
     return mappedUsers;
   }, [subscriptionsLoading, statusesLoading, huntId]);
@@ -424,6 +495,7 @@ const PuzzleListView = ({
       bestLocations.forEach((loc) => {
         ensurePuzzle(loc.puzzleId);
         const pData = nextPuzzleSubs[loc.puzzleId];
+        if (!pData) return;
 
         if (!pData || pData.rtcViewers.includes(uid)) return;
 
@@ -435,6 +507,7 @@ const PuzzleListView = ({
         }
       });
     });
+
     return nextPuzzleSubs;
   }, [subscriptionsLoading, huntId]);
 
@@ -450,6 +523,84 @@ const PuzzleListView = ({
     }
   }, [searchString]);
 
+  const compileMatcher = useCallback(
+    (searchKeys: string[]): ((p: PuzzleType) => boolean) => {
+      const tagNames: Record<string, string> = {};
+      allTags.forEach((t) => {
+        tagNames[t._id] = t.name.toLowerCase();
+      });
+      const lowerSearchKeys = searchKeys.map((key) => key.toLowerCase());
+      return function (puzzle) {
+        const titleWords = puzzle.title.toLowerCase().split(" ");
+        return lowerSearchKeys.every((key) => {
+          // Every key should match at least one of the following:
+          // * prefix of word in title
+          // * substring of any answer
+          // * substring of any tag
+          if (titleWords.some((word) => word.startsWith(key))) {
+            return true;
+          }
+
+          if (
+            puzzle.answers.some((answer) => {
+              return answer.toLowerCase().includes(key);
+            })
+          ) {
+            return true;
+          }
+
+          const tagMatch = puzzle.tags.some((tagId) => {
+            const tagName = tagNames[tagId];
+            return tagName?.includes(key);
+          });
+
+          if (tagMatch) {
+            return true;
+          }
+          if (showSolvers === "viewers") {
+            const matchingViewers =
+              puzzle._id in puzzleSubscribers
+                ? puzzleSubscribers[puzzle._id]?.activeViewers.some(
+                    (userId) => {
+                      const user = tagNames[userId] || displayNames.get(userId);
+                      return user?.toLowerCase().includes(key);
+                    },
+                  ) ||
+                  puzzleSubscribers[puzzle._id]?.passiveViewers.some(
+                    (userId) => {
+                      const user = tagNames[userId] || displayNames.get(userId);
+                      return user?.toLowerCase().includes(key);
+                    },
+                  ) ||
+                  puzzleSubscribers[puzzle._id]?.rtcViewers.some((userId) => {
+                    const user = tagNames[userId] || displayNames.get(userId);
+                    return user?.toLowerCase().includes(key);
+                  })
+                : false;
+            if (matchingViewers) {
+              return matchingViewers;
+            }
+          }
+          if (showSolvers !== "hide") {
+            const matchingCallers =
+              puzzle._id in puzzleSubscribers
+                ? puzzleSubscribers[puzzle._id]?.rtcViewers.some((userId) => {
+                    const user = tagNames[userId] || displayNames.get(userId);
+                    return user?.toLowerCase().includes(key);
+                  })
+                : false;
+            if (matchingCallers) {
+              return matchingCallers;
+            }
+          }
+
+          return false;
+        });
+      };
+    },
+    [allTags, puzzleSubscribers, showSolvers, displayNames],
+  );
+
   const puzzlesMatchingSearchString = useCallback(
     (puzzles: PuzzleType[]): PuzzleType[] => {
       const searchKeys = searchString.split(" ");
@@ -460,14 +611,11 @@ const PuzzleListView = ({
         const searchKeysWithEmptyKeysRemoved = searchKeys.filter((key) => {
           return key.length > 0;
         });
-        const isInteresting = compilePuzzleMatcher(
-          allTags,
-          searchKeysWithEmptyKeysRemoved,
-        );
+        const isInteresting = compileMatcher(searchKeysWithEmptyKeysRemoved);
         return puzzles.filter(isInteresting);
       }
     },
-    [searchString, allTags],
+    [searchString, compileMatcher],
   );
 
   const puzzlesMatchingSolvedFilter = useCallback(
@@ -486,6 +634,40 @@ const PuzzleListView = ({
     [showSolved],
   );
 
+  const puzzlesMatchingLockedFilter = useCallback(
+    (puzzles: PuzzleType[]): PuzzleType[] => {
+      if (!hunt?.allowUnlockablePuzzles) {
+        return puzzles;
+      }
+      switch (lockedDisplayMode) {
+        case "all":
+          return puzzles;
+        case "unlocked":
+          return puzzles.filter((puzzle) => !puzzle.locked);
+        case "locked":
+          return puzzles.filter((puzzle) => puzzle.locked);
+        default:
+          return puzzles;
+      }
+    },
+    [lockedDisplayMode, hunt?.allowUnlockablePuzzles],
+  );
+
+  const matchingSearch = puzzlesMatchingSearchString(allPuzzles);
+  const matchingSearchAndSolved = puzzlesMatchingSolvedFilter(matchingSearch);
+  const matchingSearchAndSolvedAndLocked = puzzlesMatchingLockedFilter(
+    matchingSearchAndSolved,
+  );
+  // Normally, we'll just show matchingSearchAndSolvedAndLocked, but if that produces
+  // no results, and there *is* a solved or locked puzzle that is not being displayed due
+  // to the filters, then show that and a note that we're showing everything
+  // because no other puzzles matched.
+  const overConstrained =
+    matchingSearch.length > 0 && matchingSearchAndSolvedAndLocked.length === 0;
+  const retainedPuzzles = overConstrained
+    ? matchingSearch
+    : matchingSearchAndSolvedAndLocked;
+
   const clearSearch = useCallback(() => {
     setSearchString("");
   }, [setSearchString]);
@@ -495,6 +677,13 @@ const PuzzleListView = ({
       setShowSolved(value === "show");
     },
     [setShowSolved],
+  );
+
+  const setShowLockedString = useCallback(
+    (value: "all" | "unlocked" | "locked") => {
+      setLockedDisplayMode(value);
+    },
+    [setLockedDisplayMode],
   );
 
   const setShowSolversString = useCallback(
@@ -507,24 +696,69 @@ const PuzzleListView = ({
   const showAddModal = useCallback(() => {
     if (addModalRef.current) {
       addModalRef.current.show();
+      addModalRef.current.populateForm({
+        title: "",
+        url: "",
+        tagIds: [],
+      });
     }
   }, []);
+
+  const showAddModalWithTags = useCallback((initialTags: string[]) => {
+    if (addModalRef.current) {
+      addModalRef.current.show();
+      addModalRef.current.populateForm({
+        title: "",
+        url: "",
+        tagIds: initialTags,
+      });
+    }
+  }, []);
+
+  const navigate = useNavigate();
+
+  const bookmarkTitle = searchParams.get("title") ?? "";
+  const bookmarkURL = searchParams.get("url") ?? "";
+
+  useEffect(() => {
+    if (bookmarkURL) {
+      const existingPuzzle = Puzzles.findOne({
+        url: { $regex: `^${bookmarkURL}` },
+      });
+      if (existingPuzzle) {
+        navigate(`./${existingPuzzle._id}`);
+      } else if (addModalRef) {
+        addModalRef.current?.show();
+        addModalRef.current?.populateForm({
+          title: bookmarkTitle,
+          url: bookmarkURL,
+          tagIds: null,
+        });
+        setSearchParams((prev: URLSearchParams) => {
+          prev.delete("url");
+          prev.delete("title");
+          return prev;
+        });
+      }
+    }
+  }, [bookmarkTitle, bookmarkURL, navigate, setSearchParams]);
 
   const renderList = useCallback(
     (
       retainedPuzzles: PuzzleType[],
       retainedDeletedPuzzles: PuzzleType[] | undefined,
-      solvedOverConstrains: boolean,
+      overConstrained: boolean,
       allPuzzlesCount: number,
+      listTitle: string,
     ) => {
-      const maybeMatchWarning = solvedOverConstrains && (
+      const maybeMatchWarning = overConstrained && (
         <Alert variant="info">
-          No matches found in unsolved puzzles; showing matches from solved
-          puzzles
+          No matches found in unsolved/unlocked puzzles; showing matches from
+          all puzzles
         </Alert>
       );
       const retainedIds = new Set(retainedPuzzles.map((puzzle) => puzzle._id));
-      const filterMessage = `Showing ${retainedPuzzles.length} of ${allPuzzlesCount} items`;
+      const filterMessage = `Showing ${retainedPuzzles.length} of ${allPuzzlesCount} rows`;
 
       const bookmarkedPuzzles = retainedPuzzles.filter((puzzle) =>
         bookmarked.has(puzzle._id),
@@ -562,7 +796,7 @@ const PuzzleListView = ({
                 trackPersistentExpand={searchString === ""}
                 showSolvers={showSolvers}
                 subscribers={puzzleSubscribers}
-
+                addPuzzleCallback={showAddModalWithTags}
               />
             );
           });
@@ -593,23 +827,29 @@ const PuzzleListView = ({
               canUpdate={canUpdate}
               showSolvers={showSolvers}
               subscribers={puzzleSubscribers}
-
             />
           );
           listControls = null;
           break;
         }
       }
+
       return (
         <div>
           {maybeMatchWarning}
           <PuzzleListToolbar>
             <div>{listControls}</div>
             <div>{filterMessage}</div>
+            <div>
+              <FontAwesomeIcon icon={faFolderOpen} key="legend-group" /> =
+              group; <FontAwesomeIcon icon={faStar} key="legend-meta" /> = meta
+              for; <FontAwesomeIcon icon={faMapPin} key="legend-where" /> =
+              where
+            </div>
           </PuzzleListToolbar>
           {bookmarkedPuzzles.length > 0 && (
             <PuzzleGroupDiv>
-              <div>Bookmarked</div>
+              <h5>Bookmarked</h5>
               <RelatedPuzzleList
                 key="bookmarked"
                 relatedPuzzles={bookmarkedPuzzles}
@@ -620,8 +860,8 @@ const PuzzleListView = ({
                 suppressedTagIds={[]}
                 showSolvers={showSolvers}
                 subscribers={puzzleSubscribers}
-
               />
+              <h5>{listTitle}</h5>
             </PuzzleGroupDiv>
           )}
           {listComponent}
@@ -639,7 +879,7 @@ const PuzzleListView = ({
               trackPersistentExpand={searchString !== ""}
               subscribers={puzzleSubscribers}
               showSolvers={showSolvers}
-
+              addPuzzleCallback={showAddModalWithTags}
             />
           )}
         </div>
@@ -655,6 +895,7 @@ const PuzzleListView = ({
       puzzleSubscribers,
       puzzleUsers,
       huntId,
+      showAddModalWithTags,
       canExpandAllGroups,
       expandAllGroups,
       searchString,
@@ -672,7 +913,7 @@ const PuzzleListView = ({
         onSubmit={onAdd}
       />
       <OperatorActionsFormGroup>
-        <FormLabel>Operator Interface</FormLabel>
+        <FormLabel>View</FormLabel>
         <ButtonToolbar>
           <StyledToggleButtonGroup
             type="radio"
@@ -686,14 +927,14 @@ const PuzzleListView = ({
               variant="outline-info"
               value="hide"
             >
-              Off
+              <FontAwesomeIcon icon={faPencilAlt} key="view-solver" /> Solver
             </ToggleButton>
             <ToggleButton
               id={`${idPrefix}-operator-actions-show-button`}
               variant="outline-info"
               value="show"
             >
-              On
+              <FontAwesomeIcon icon={faStar} key="view-operator" /> Deputy
             </ToggleButton>
           </StyledToggleButtonGroup>
         </ButtonToolbar>
@@ -712,25 +953,37 @@ const PuzzleListView = ({
       : "Filter by title, answer, or tag";
   }, [showSolvers]);
 
-  const matchingSearch = puzzlesMatchingSearchString(allPuzzles);
-  const matchingSearchAndSolved = puzzlesMatchingSolvedFilter(matchingSearch);
-  // Normally, we'll just show matchingSearchAndSolved, but if that produces
-  // no results, and there *is* a solved puzzle that is not being displayed due
-  // to the solved filter, then show that and a note that we're showing solved
-  // puzzles because no unsolved puzzles matched.
-  const solvedOverConstrains =
-    matchingSearch.length > 0 && matchingSearchAndSolved.length === 0;
-  const retainedPuzzles = solvedOverConstrains
-    ? matchingSearch
-    : matchingSearchAndSolved;
+  const onSubmitSearch: NonNullable<FormControlProps["onKeyDown"]> =
+    useCallback(
+      (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === "Enter") {
+          const huntId = retainedPuzzles[0]?.hunt;
+          const puzzleId = retainedPuzzles[0]?._id;
+          if (huntId && puzzleId && retainedPuzzles.length === 1) {
+            return navigate(`/hunts/${huntId}/puzzles/${puzzleId}`);
+          }
+        }
+      },
+      [navigate, retainedPuzzles],
+    );
   const retainedDeletedPuzzles =
     deletedPuzzles && puzzlesMatchingSearchString(deletedPuzzles);
+
+  const listTitle = useTracker(() => {
+    let listTitle = "All puzzles";
+    if (searchString.trim().length > 0) {
+      listTitle = "Search results";
+    } else if (!showSolved) {
+      listTitle = "Unsolved puzzles";
+    }
+    return listTitle;
+  }, [searchString, showSolved]);
 
   return (
     <div>
       <ViewControls $canAdd={canAdd}>
         <FormGroup>
-          <FormLabel>Organize by</FormLabel>
+          <FormLabel>Sort by</FormLabel>
           <ButtonToolbar>
             <StyledToggleButtonGroup
               type="radio"
@@ -744,20 +997,21 @@ const PuzzleListView = ({
                 variant="outline-info"
                 value="group"
               >
-                Group
+                <FontAwesomeIcon icon={faFolderOpen} key="sort-group" /> Group
               </ToggleButton>
               <ToggleButton
                 id={`${idPrefix}-view-unlock-button`}
                 variant="outline-info"
                 value="unlock"
               >
-                Unlock
+                <FontAwesomeIcon icon={faClock} key="sort-when-added" /> When
+                added
               </ToggleButton>
             </StyledToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
         <FormGroup>
-          <FormLabel>Solved puzzles</FormLabel>
+          <FormLabel>Puzzles</FormLabel>
           <ButtonToolbar>
             <StyledToggleButtonGroup
               type="radio"
@@ -771,7 +1025,8 @@ const PuzzleListView = ({
                 variant="outline-info"
                 value="hide"
               >
-                Hidden
+                <FontAwesomeIcon icon={faCircle} key="puzzles-unsolved" />{" "}
+                Unsolved
               </ToggleButton>
               <ToggleButton
                 id={`${idPrefix}-solved-show-button`}
@@ -783,6 +1038,42 @@ const PuzzleListView = ({
             </StyledToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
+        {hunt?.allowUnlockablePuzzles && (
+          <FormGroup>
+            <FormLabel>Locked</FormLabel>
+            <ButtonToolbar>
+              <StyledToggleButtonGroup
+                type="radio"
+                name="show-locked"
+                defaultValue="all"
+                value={lockedDisplayMode}
+                onChange={setShowLockedString}
+              >
+                <ToggleButton
+                  id={`${idPrefix}-locked-hide-button`}
+                  variant="outline-info"
+                  value="unlocked"
+                >
+                  Unlocked
+                </ToggleButton>
+                <ToggleButton
+                  id={`${idPrefix}-locked-only-button`}
+                  variant="outline-info"
+                  value="locked"
+                >
+                  Locked
+                </ToggleButton>
+                <ToggleButton
+                  id={`${idPrefix}-locked-show-button`}
+                  variant="outline-info"
+                  value="all"
+                >
+                  All
+                </ToggleButton>
+              </StyledToggleButtonGroup>
+            </ButtonToolbar>
+          </FormGroup>
+        )}
         <FormGroup>
           <FormLabel>Hunters</FormLabel>
           <ButtonToolbar>
@@ -823,19 +1114,41 @@ const PuzzleListView = ({
               ref={searchBarRef}
               placeholder={filterText}
               value={searchString}
+              onClick={updateCursorPosition}
+              onKeyDown={onSubmitSearch}
+              onFocus={handleSearchFocus}
+              onBlur={handleSearchBlur}
+              onKeyUp={updateCursorPosition}
               onChange={onSearchStringChange}
             />
             <Button variant="secondary" onClick={clearSearch}>
               <FontAwesomeIcon icon={faEraser} />
             </Button>
           </InputGroup>
+          <Overlay
+            target={searchBarRef.current}
+            show={isSearchFocused && retainedPuzzles.length === 1}
+            placement="bottom-start"
+          >
+            {(props) => (
+              <StyledTooltip
+                id={`${idPrefix}-single-match-tooltip`}
+                $cursorOffset={arrowOffsetForTooltip}
+                {...props}
+              >
+                Press <kbd>Enter</kbd> to go to{" "}
+                <strong>{retainedPuzzles[0]?.title}</strong>
+              </StyledTooltip>
+            )}
+          </Overlay>
         </SearchFormGroup>
       </ViewControls>
       {renderList(
         retainedPuzzles,
         retainedDeletedPuzzles,
-        solvedOverConstrains,
+        overConstrained,
         allPuzzles.length,
+        listTitle,
       )}
     </div>
   );
@@ -843,6 +1156,8 @@ const PuzzleListView = ({
 
 const PuzzleListPage = () => {
   const huntId = useParams<"huntId">().huntId!;
+
+  useBreadcrumb({ title: "Puzzles", path: `/hunts/${huntId}/puzzles` });
 
   // Assertion is safe because hunt is already subscribed and checked by HuntApp
   const hunt = useTracker(() => Hunts.findOne(huntId)!, [huntId]);
@@ -855,7 +1170,7 @@ const PuzzleListPage = () => {
 
   const puzzlesLoading = useTypedSubscribe(puzzlesForPuzzleList, {
     huntId,
-    includeDeleted: canUpdate,
+    includeDeleted: isAdmin(Meteor.user()),
   });
 
   useTypedSubscribe(presenceForHunt, { huntId });
@@ -864,6 +1179,7 @@ const PuzzleListPage = () => {
 
   // Don't bother including this in loading - it's ok if they trickle in
   useTypedSubscribe(puzzleActivityForHunt, { huntId });
+  useTypedSubscribe(puzzleFeedbacks, { huntId });
   return loading ? (
     <span>loading...</span>
   ) : (
