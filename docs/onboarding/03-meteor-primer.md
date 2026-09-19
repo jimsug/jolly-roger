@@ -10,7 +10,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 03 — Meteor, from zero
+# 03. Meteor, from zero
 
 This is the document to read if you have never used Meteor. It explains the framework only as
 far as you need it to read this codebase, then explains what Jolly Roger does differently.
@@ -51,10 +51,10 @@ file in the wrong place can ship a secret to the browser. See
 **DDP** (Distributed Data Protocol) is Meteor's wire protocol, a JSON message format over a
 WebSocket. It carries exactly three kinds of traffic:
 
-- **Method calls** — RPC. Client sends a name and arguments; server replies with a result or an
+- **Method calls**: RPC. Client sends a name and arguments; server replies with a result or an
   error.
-- **Subscriptions** — the client says "I want the data from publication `X` with arguments `Y`".
-- **Document deltas** — the server sends `added` / `changed` / `removed` messages for individual
+- **Subscriptions**: the client says "I want the data from publication `X` with arguments `Y`".
+- **Document deltas**: the server sends `added` / `changed` / `removed` messages for individual
   documents, for as long as the subscription lasts.
 
 You can watch all of it. Open your browser devtools, Network tab, filter to WS, and look at the
@@ -103,7 +103,7 @@ sources it touched, and re-renders the component when any of them change.
 > If you close over `huntId` and do not list it, the computation keeps using the old value
 > forever. Biome enforces exhaustive dependencies on `useTracker` specifically
 > (`biome.jsonc`, `useExhaustiveDependencies` with a `useTracker` hook entry), so CI will catch
-> it — but only if you run the linter.
+> it, but only if you run the linter.
 
 > **Foot-gun: everything inside `useTracker` re-runs on every change.**
 > If you `.fetch()` five hundred puzzles and then sort them inside the callback, you re-sort all
@@ -256,7 +256,7 @@ Two useful properties:
 - **It has an autofixer.** `eslint --fix` rewrites `x.findOne(y)` into `(await x.findOneAsync(y))`.
 - **It is disabled for `**/client/**`** (`eslint.config.mts`), because synchronous Minimongo is
   correct there. Note the glob does *not* cover `imports/lib/`, so shared code is held to the
-  server standard — which is right, because shared code may run on the server.
+  server standard, which is right, because shared code may run on the server.
 
 > **Foot-gun: `Meteor.userId()` throws outside a method or publication.**
 > It reads a dynamically-scoped invocation context. In a daemon, an HTTP route handler, or a
@@ -273,7 +273,7 @@ Two useful properties:
 Here is the whole loop in miniature: a component shows the puzzles for a hunt, and a button
 creates one.
 
-**Shared — declare the method's name and type** (`imports/methods/createPuzzle.ts`):
+**Shared: declare the method's name and type** (`imports/methods/createPuzzle.ts`):
 
 ```ts
 export default new TypedMethod<
@@ -282,7 +282,7 @@ export default new TypedMethod<
 >("Puzzles.methods.create");
 ```
 
-**Server — implement it** (`imports/server/methods/createPuzzle.ts`):
+**Server: implement it** (`imports/server/methods/createPuzzle.ts`):
 
 ```ts
 defineMethod(createPuzzle, {
@@ -297,11 +297,11 @@ defineMethod(createPuzzle, {
 });
 ```
 
-**Server — publish the data** (`imports/server/publications/puzzlesForHunt.ts`, simplified):
+**Server: publish the data** (`imports/server/publications/puzzlesForHunt.ts`, simplified):
 a publication that returns a cursor of the hunt's puzzles, after checking the caller is a member
 of that hunt.
 
-**Client — subscribe and render:**
+**Client: subscribe and render**
 
 ```tsx
 const loading = useTypedSubscribe(puzzlesForHunt, { huntId });
@@ -312,7 +312,7 @@ const puzzles = useTracker(
 if (loading()) return <Loading />;
 ```
 
-**Client — write:**
+**Client: write**
 
 ```ts
 await createPuzzle.callPromise({ huntId, title, tags, /* ... */ });

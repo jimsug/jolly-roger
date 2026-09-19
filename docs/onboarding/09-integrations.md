@@ -13,7 +13,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 09 — Integrations and subsystems
+# 09. Integrations and subsystems
 
 Everything here is optional at runtime. An instance with none of it configured still does
 puzzles, tags, chat, guesses and presence. See
@@ -164,11 +164,11 @@ many corporate and mobile networks there is simply no direct path; `$TURN_SERVER
 
 Three architectures for a group call:
 
-- **Mesh** — everyone connects to everyone. Simple, but upload bandwidth grows with participant
+- **Mesh**: everyone connects to everyone. Simple, but upload bandwidth grows with participant
   count. Dies at about five people.
-- **MCU** — the server decodes everything, mixes it into one stream, re-encodes. Cheap for
+- **MCU**: the server decodes everything, mixes it into one stream, re-encodes. Cheap for
   clients, very expensive in CPU for the server.
-- **SFU (Selective Forwarding Unit)** — each client uploads once to the server; the server
+- **SFU (Selective Forwarding Unit)**: each client uploads once to the server; the server
   *forwards* streams without decoding. Cheap for the server, scales well.
 
 Jolly Roger uses **mediasoup**, an SFU. A puzzle chat may have twenty people in it, so mesh is
@@ -210,7 +210,7 @@ every *request* to create one: `Rooms`, `Routers`, `Peers`, `TransportRequests`,
 3. **Free observability.** `/rtcdebug` is essentially "publish all sixteen collections to an
    admin and render them".
 
-**The `createdServer` / `routedServer` convention — read this twice:**
+**The `createdServer` / `routedServer` convention, which you should read twice:**
 
 - **`createdServer`** = the process that wrote this document.
 - **`routedServer`** = the process that must *act on* this document.
@@ -244,7 +244,7 @@ DTLS state and exists purely for this.
 
 Meteor apps can also serve plain HTTP. Jolly Roger mounts an Express 5 application.
 
-- **`/api`** — a small REST API for external integrations and the browser extension, with
+- **`/api`**: a small REST API for external integrations and the browser extension, with
   resources under `imports/server/api/resources/`. Authenticated by **API keys**
   (`imports/lib/models/APIKeys.ts`), which are bearer tokens a user issues for themselves, not
   by the DDP login session. This is a genuinely separate authentication path from everything

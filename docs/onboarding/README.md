@@ -51,7 +51,7 @@ Read in order if you have the time. The numbering is a suggested sequence, not a
 | 11 | [Tooling and tests](11-tooling-and-tests.md) | The six-tool lint stack, the test suite, CI |
 | 12 | [Recipes](12-recipes.md) | Step-by-step: add a field, a method, a publication, a page, a migration |
 | 13 | [Walkthroughs](13-walkthroughs.md) | End-to-end traces of the important flows, with diagrams |
-| — | [Glossary](GLOSSARY.md) | Every term, domain and technical, in one place |
+| - | [Glossary](GLOSSARY.md) | Every term, domain and technical, in one place |
 
 ## Reading paths
 

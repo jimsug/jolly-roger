@@ -9,7 +9,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 12 — Recipes
+# 12. Recipes
 
 Step-by-step procedures for the changes you are most likely to be asked to make. Each one is
 written to be followed literally.

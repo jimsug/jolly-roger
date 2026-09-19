@@ -14,7 +14,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 10 — Operations: startup, deploys, and debugging
+# 10. Operations: startup, deploys, and debugging
 
 ## 1. Startup
 
@@ -58,7 +58,7 @@ installed.
   WebRTC subsystem, and MongoDB-as-message-bus generally.
 - **`Servers`** holds one heartbeat row per process, keyed by an in-memory `serverId`. A row
   that has not been updated for 120 seconds means a dead process, and triggers cleanup of
-  whatever that process owned — because its `onStop` handlers will never run.
+  whatever that process owned, because its `onStop` handlers will never run.
 - **`withLock`** (`imports/server/withLock.ts`, backed by the `Locks` collection) is a
   cooperative distributed mutex, preemptible after 10 seconds. A MongoDB lock is used because
   MongoDB is already the only shared dependency; adding Redis for this alone was not worth it.

@@ -12,7 +12,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 07 — The client
+# 07. The client
 
 A React 18 single-page app. About 90 components, flat, in `imports/client/components/`.
 Routing is react-router v6. Styling is Bootstrap 5 plus styled-components. Data comes from
@@ -69,7 +69,7 @@ Three consequences:
 
 | Path | Component | Guard | Notes |
 | --- | --- | --- | --- |
-| `/` | `RootRedirector` | — | Three-way redirect depending on login and hunt membership |
+| `/` | `RootRedirector` | - | Three-way redirect depending on login and hunt membership |
 | `/hunts` | `HuntListApp` → `HuntListPage` | Auth | |
 | `/hunts/new` | `HuntEditPage` | Auth | Lazy |
 | `/hunts/:huntId` | `HuntApp` | Auth | Gatekeeper: membership, deletion, terms of use |
@@ -91,7 +91,7 @@ Three consequences:
 | `/setup` | `SetupPage` | Auth | Lazy. ~2600 lines of admin configuration |
 | `/rtcdebug` | `RTCDebugPage` | Auth | Lazy. mediasoup internals |
 | `/login`, `/forgot-password`, `/reset-password/:token`, `/enroll/:token`, `/create-first-user` | Account forms | Unauth | Splash chrome |
-| `/join/:invitationCode` | `JoinHunt` | — | Handles both auth states itself |
+| `/join/:invitationCode` | `JoinHunt` | - | Handles both auth states itself |
 
 > **Gap worth knowing: there is no catch-all route.**
 > `Routes.tsx` has no `path: "*"` and there is no 404 component. `useRoutes` returns `null` for
@@ -213,7 +213,7 @@ learn about the UI code.
    controls, dropdowns and the navbar are all react-bootstrap. You will almost never hand-roll
    these.
 2. **Bootstrap utility classes for small spacing tweaks**, via `className="me-2 py-0 d-flex"`.
-3. **styled-components for anything bespoke** — layout, color, hover states, responsive
+3. **styled-components for anything bespoke**: layout, color, hover states, responsive
    behavior. This is the overwhelming majority of the CSS; 63 files import `styled-components`.
 4. **Inline `style={{}}` only for values computed per render**, such as pixel positions from
    `getBoundingClientRect()` or a per-user avatar color.
@@ -268,12 +268,12 @@ time on, and the one you are most likely to be asked to change. Its structure:
 
 - **A resizable split pane** (`SplitPaneMinus`, hand-rolled) dividing the embedded Google
   document from the chat and people rail.
-- **The document pane** — an iframe to the puzzle's Google Sheet, or a placeholder when Google
+- **The document pane**: an iframe to the puzzle's Google Sheet, or a placeholder when Google
   is not configured.
-- **The chat pane** — the message list, the Slate-based composer (`FancyEditor`), and the people
+- **The chat pane**: the message list, the Slate-based composer (`FancyEditor`), and the people
   rail showing who is present and who is in the audio call.
-- **The metadata bar** — title, URL, tags, answers, the guess form, and the notes editor.
-- **The call section** — WebRTC audio, if enabled.
+- **The metadata bar**: title, URL, tags, answers, the guess form, and the notes editor.
+- **The call section**: WebRTC audio, if enabled.
 
 It opens a number of subscriptions: the puzzle itself plus related puzzles, chat messages,
 presence, call state, and document metadata. Several of them are conditional, expressed by

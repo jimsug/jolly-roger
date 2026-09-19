@@ -9,7 +9,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 02 — Getting it running
+# 02. Getting it running
 
 ## 1. Prerequisites
 
@@ -56,7 +56,7 @@ TypeScript definitions for every Atmosphere package.
 > All the `meteor/*` type definitions are *generated* by the `zodern:types` package into
 > `.meteor/local/types/`, which is git-ignored. Until Meteor has built once, every
 > `import { Meteor } from "meteor/meteor"` is an unresolved module. This is also why
-> `package.json`'s lint script is `meteor lint && concurrently npm:lint:*` — the `&&` ordering
+> `package.json`'s lint script is `meteor lint && concurrently npm:lint:*`, and the `&&` ordering
 > is load-bearing, because `tsgo` cannot typecheck before those definitions exist.
 
 ## 3. Bootstrapping an instance
@@ -119,7 +119,7 @@ are stored in the `Settings` collection, not in environment variables or a confi
 | `meteor --port 4000` | Same, different port (there is no `$PORT` in dev) |
 | `meteor npm install` | Install npm dependencies with Meteor's bundled npm |
 | `npm run lint` | The whole lint stack. Run this before pushing. |
-| `npm run lint:types` | Just the typechecker (`tsgo`) — the fastest useful check |
+| `npm run lint:types` | Just the typechecker (`tsgo`), and the fastest useful check |
 | `npm test` | The full test suite, in a real browser via Playwright |
 | `meteor shell` | A Node REPL attached to the running **server** process |
 

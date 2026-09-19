@@ -8,7 +8,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 01 — What Jolly Roger is, and the world it lives in
+# 01. What Jolly Roger is, and the world it lives in
 
 You cannot read this codebase usefully without knowing what a puzzlehunt is. The product's
 central design decisions are responses to specific, non-obvious properties of puzzlehunts, and
@@ -45,8 +45,8 @@ or three levels deep.
 
 There are two ways to make progress:
 
-- **Forward-solving** — solve a feeder normally, then use its answer in the meta.
-- **Backsolving** — go the other way. Work out the meta's mechanism, deduce what a missing feeder
+- **Forward-solving**: solve a feeder normally, then use its answer in the meta.
+- **Backsolving**: go the other way. Work out the meta's mechanism, deduce what a missing feeder
   answer *must* be, and submit it without ever solving that puzzle.
 
 Jolly Roger records which of these happened, per guess, on a −10 to +10 scale
@@ -79,14 +79,14 @@ answers directly.
 
 ### Other words you will meet
 
-- **The grid** — hunters' term for the big table of round × puzzle × answer that a team keeps.
+- **The grid**: hunters' term for the big table of round × puzzle × answer that a team keeps.
   In Jolly Roger the grid is the grouped puzzle list page, plus the tag hover popover that dumps
   tag → (title, answer) rows to the clipboard for pasting into a spreadsheet
   (`imports/client/components/Tag.tsx:283-321`).
-- **Administrivia** — the non-puzzle items a team tracks alongside puzzles: "order food",
+- **Administrivia**: the non-puzzle items a team tracks alongside puzzles: "order food",
   "HQ contact number", "team photo at 3pm". These have a reserved tag and are pinned to the top
   of the list.
-- **Runaround** — the final physical activity that typically ends a hunt.
+- **Runaround**: the final physical activity that typically ends a hunt.
 
 ## 2. What Jolly Roger does
 
@@ -147,11 +147,11 @@ puzzle list page.
 
 Three roles, which map onto the permission checks you will see everywhere:
 
-- **Hunter** — an ordinary team member. Can view puzzles in hunts they are a member of, chat,
+- **Hunter**: an ordinary team member. Can view puzzles in hunts they are a member of, chat,
   submit guesses, edit notes, join calls.
-- **Operator** — a per-hunt role. Can create and edit puzzles, action the guess queue, add users,
+- **Operator**: a per-hunt role. Can create and edit puzzles, action the guess queue, add users,
   post announcements. Checked by `userIsOperatorForHunt` (`imports/lib/permission_stubs.ts`).
-- **Admin** — a global role, scoped with `GLOBAL_SCOPE` rather than to a hunt. Can configure the
+- **Admin**: a global role, scoped with `GLOBAL_SCOPE` rather than to a hunt. Can configure the
   server itself: Google credentials, Discord bot, S3, branding. Admins pass every operator check.
 
 A hunt can also grant roles to everyone by default via `Hunts.defaultRoles`, which is how a team

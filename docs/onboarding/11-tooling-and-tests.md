@@ -13,7 +13,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 11 — Tooling and tests
+# 11. Tooling and tests
 
 Six separate tools check this codebase. That is a lot, and the division of labour is not
 obvious, so this document exists mainly to tell you which one is complaining and why.
@@ -181,7 +181,7 @@ breaks CI, which is the intent.
 
 ### Writing a test
 
-- **Unit test:** add `tests/unit/imports/lib/yourThing.ts`, then register it in `tests/main.ts` —
+- **Unit test:** add `tests/unit/imports/lib/yourThing.ts`, then register it in `tests/main.ts`:
   a plain `import` for shared code, a `require()` inside the `Meteor.isServer` block for
   server-only code.
 - **Acceptance test:** add `tests/acceptance/yourThing.tsx`, register it in `tests/main.ts`,
@@ -231,7 +231,7 @@ updated: 2026-09-19
 git whether any listed file has been changed **since** that commit. If so, the doc is out of
 date and CI fails.
 
-To fix a failure, either update the doc, or — if no change is genuinely needed — bump the
+To fix a failure, either update the doc, or, if no change is genuinely needed, bump the
 `updated:` date, which brings the doc's last commit forward past the file changes.
 
 Two consequences:

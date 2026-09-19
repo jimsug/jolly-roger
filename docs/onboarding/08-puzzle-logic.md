@@ -11,7 +11,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 08 — Puzzle logic
+# 08. Puzzle logic
 
 This is the product. Read [01-domain.md](01-domain.md) first if you do not know what a
 metapuzzle is.
@@ -35,7 +35,7 @@ code reads it.
 | Tag | Meaning | Effect |
 | --- | --- | --- |
 | `administrivia` (exact, **no colon**) | Non-puzzle item: "order food", "HQ phone number" | Forms its own group, pinned to the very top of the list; also boosts an individual puzzle to the top of whatever list it is in. Yellow chip. |
-| `group:<x>` | "These puzzles belong together" — a round, an island, a meta's feeder set | **Any tag with this prefix creates a group in the list.** |
+| `group:<x>` | "These puzzles belong together": a round, an island, a meta's feeder set | **Any tag with this prefix creates a group in the list.** |
 | `meta-for:<x>` | "This puzzle is the metapuzzle for `group:<x>`" | `<x>` must match a `group:` tag's suffix exactly. Sorts to the top of that group. |
 | `is:meta` | "This is a metapuzzle", without saying which group | Sorts above non-metas |
 | `is:metameta` | A meta whose feeders are metas | Sorts above `is:meta` |
@@ -46,8 +46,8 @@ code reads it.
 | `where:campus`, `where:mit` (exact) | On-campus puzzles | For a user whose profile has `isOffsite`, these **sink the puzzle**: a remote solver cannot do an on-campus puzzle |
 | `location:<x>`, `loc:<x>` | Aliases of `where:` **for chip coloring only** | Not understood by sorting or Discord |
 | `is:stuck` / `stuck` | Team is stuck | Shows a 🤷 column; display only |
-| `is:runaround` | The final physical activity | **Convention only** — seeded, nothing parses it |
-| `type:<x>` (`type:crossword`) | Puzzle genre | **Convention only** — seeded, nothing parses it |
+| `is:runaround` | The final physical activity | **Convention only**: seeded, nothing parses it |
+| `type:<x>` (`type:crossword`) | Puzzle genre | **Convention only**: seeded, nothing parses it |
 
 > **Foot-gun: `priority:high` looks like it should affect sorting. It does not.**
 > Only `priority:low` does, and only downward.
@@ -129,7 +129,7 @@ From `puzzleInterestingness`, again lower first:
 | --- | --- |
 | −5 | `administrivia` with no group |
 | −4 | `administrivia` |
-| −3 | Tagged `meta-for:<this group>` — the group's own meta goes on top |
+| −3 | Tagged `meta-for:<this group>`; the group's own meta goes on top |
 | −2 | `is:metameta` |
 | −1 | `is:meta` or any `meta-for:` |
 | 1 (floor) | `priority:low` |
@@ -213,11 +213,11 @@ export const computeSolvedness = (puzzle: PuzzleType): Solvedness => {
 
 The three fields that drive it:
 
-- **`expectedAnswerCount`** — how many answers this puzzle has. `-1` means "unknown", which
+- **`expectedAnswerCount`**: how many answers this puzzle has. `-1` means "unknown", which
   disables the count-based solve check entirely. `0` means the puzzle has no answer at all
   (an administrivia item, or a physical task).
-- **`answers[]`** — the accepted answers so far. Uppercased on write by a zod transform.
-- **`markedComplete`** — an explicit operator override.
+- **`answers[]`**: the accepted answers so far. Uppercased on write by a zod transform.
+- **`markedComplete`**: an explicit operator override.
 
 Multiple answers are first-class: a puzzle with `expectedAnswerCount: 3` and two answers is
 still `unsolved`, and sorts accordingly. That is the feature the README describes as tracking
@@ -286,8 +286,8 @@ both are supported; check the flag before assuming which one you are looking at.
 Two of the guess-related methods check only that the caller is **logged in**, not that they are
 a member of the hunt:
 
-- `createGuess` — `check(this.userId, String)` and nothing else.
-- `addPuzzleAnswer` — likewise.
+- `createGuess`: `check(this.userId, String)` and nothing else.
+- `addPuzzleAnswer`: likewise.
 
 Compare `guessesForGuessQueue`, the *publication*, which does check
 `user.hunts.includes(huntId)`. So a logged-in user of the instance who knows a puzzle ID could

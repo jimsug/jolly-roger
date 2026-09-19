@@ -11,7 +11,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 04 — Codebase map
+# 04. Codebase map
 
 Roughly 63,000 lines of TypeScript across 630 files. This document tells you what lives where,
 what decides that, and where to put new code.
@@ -147,8 +147,8 @@ facade imports every model, and `server/main.ts` imports the facade specifically
 | I want to add | Put it here | Also do this |
 | --- | --- | --- |
 | A React component or page | `imports/client/components/Foo.tsx` | Add a route in `Routes.tsx` if it is a page |
-| A custom React hook | `imports/client/hooks/useFoo.ts(x)` | — |
-| A shared style primitive | `imports/client/components/styling/*.tsx` | — |
+| A custom React hook | `imports/client/hooks/useFoo.ts(x)` | - |
+| A shared style primitive | `imports/client/components/styling/*.tsx` | - |
 | A Bootstrap variable change | `client/stylesheets/_theme.scss` | Only Bootstrap theming lives in SCSS |
 | A collection the client needs | `imports/lib/models/Foo.ts` | Add it to `imports/lib/models/facade.ts`; declare indexes with `Foo.addIndex(...)` |
 | A collection the client must not see | `imports/server/models/Foo.ts` | Make sure something on the server imports it |
@@ -159,14 +159,14 @@ facade imports every model, and `server/main.ts` imports the facade specifically
 | A client-to-server RPC | `imports/methods/fooBar.ts` **and** `imports/server/methods/fooBar.ts` | **Add the import to `methods/index.ts`** |
 | A live data feed | `imports/lib/publications/foosForBar.ts` **and** `imports/server/publications/foosForBar.ts` | **Add the import to `publications/index.ts`** |
 | An always-on data feed | `new DefaultTypedPublication()` | Same registration |
-| A helper used by both sides | `imports/lib/foo.ts` | — |
+| A helper used by both sides | `imports/lib/foo.ts` | - |
 | A helper used only by the server | `imports/server/foo.ts` | Not `imports/server/methods/` unless it *defines a method* |
 | A background loop | `imports/server/daemons/foo.ts` | **Add the import to `daemons/index.ts`** |
 | A reaction to a domain event | A new `Hookset` in `imports/server/hooks/FooHooks.ts` | Register it in `imports/server/GlobalHooks.ts` |
 | An HTTP endpoint | `imports/server/api/resources/foo.ts` (an Express `Router`) | Mount it in `imports/server/api.ts` |
-| A static file at the web root | `public/` | — |
+| A static file at the web root | `public/` | - |
 | A server-only asset | `private/` | Read with `Assets.absoluteFilePath()` |
-| A type declaration for a Meteor package | `types/meteor/<package>.d.ts` | — |
+| A type declaration for a Meteor package | `types/meteor/<package>.d.ts` | - |
 | A unit test | `tests/unit/imports/{lib,server}/foo.ts` | Add to `tests/main.ts`: `import` for lib, `require()` inside `if (Meteor.isServer)` for server |
 | An acceptance test | `tests/acceptance/foo.tsx` | Add the import to `tests/main.ts` |
 | A design doc | `docs/foo.md` with `files:` and `updated:` front matter | `npm run lint:docs` polices it |

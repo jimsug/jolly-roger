@@ -12,7 +12,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 05 — The data layer
+# 05. The data layer
 
 Jolly Roger stores everything in MongoDB, but you will almost never touch
 `Mongo.Collection` directly. There is a wrapper, `Model`, and it does enough that you have to
@@ -203,7 +203,7 @@ primitives. Learn these; using bare `z.string()` will usually be rejected.
 | --- | --- |
 | `nonEmptyString` | A string that must not be empty. The default choice for text. |
 | `allowedEmptyString` | The explicit escape hatch when empty really is valid |
-| `foreignKey` | A 17-character Meteor ID. **A regex, not a constraint** — nothing checks the target exists. |
+| `foreignKey` | A 17-character Meteor ID. **A regex, not a constraint**: nothing checks the target exists. |
 | `answer` | A string, uppercased by a transform on write |
 | `snowflake` | A Discord ID |
 | `stringId` | The default `_id` type |
@@ -320,7 +320,7 @@ erDiagram
 Read `Hunts` as the tenancy root: nearly every query in the application is scoped by hunt, and
 nearly every permission check asks "is this user a member of, or an operator for, this hunt?"
 
-Note that `Guesses.hunt` is **denormalized** — it is derivable from `Guesses.puzzle`, but is
+Note that `Guesses.hunt` is **denormalized**: it is derivable from `Guesses.puzzle`, but is
 stored so the guess queue can be published per hunt without a join.
 
 ## 11. Migrations
@@ -347,7 +347,7 @@ Rules:
   changes nothing there and desynchronizes environments. Add a new one.
 - **Do not write a migration to add an index on a `Model` collection.** Declare it with
   `addIndex` in the model file instead. `imports/server/indexes.ts` reconciles, and *will drop
-  indexes it does not know about* — so an index created by a migration gets removed at the next
+  indexes it does not know about*, so an index created by a migration gets removed at the next
   startup. Indexes on `Meteor.users` are the exception and do need a migration.
 - Migrations run at startup, under a lock so that only one process in the cluster runs them, and
   only on the newest deployed build. See [10-operations.md](10-operations.md).

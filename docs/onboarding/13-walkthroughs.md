@@ -9,7 +9,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 13 — End-to-end walkthroughs
+# 13. End-to-end walkthroughs
 
 Following one operation all the way through the stack is the fastest way to build a mental
 model. Each walkthrough names the boundary crossings explicitly, because in a Meteor app they

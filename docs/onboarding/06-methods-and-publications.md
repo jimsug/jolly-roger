@@ -12,7 +12,7 @@ files:
 updated: 2026-09-19
 ---
 
-# 06 — Methods and publications
+# 06. Methods and publications
 
 Every write in Jolly Roger is a **method**. Every read is a **publication**. Both are wrapped in
 repo-local typed abstractions that you must understand before you can add either.
@@ -26,7 +26,7 @@ A method is split across two files. The split is deliberate: the *name and argum
 reach the browser so it can call the method type-safely; the *body* must not, because it holds
 permission checks and database access.
 
-**Shared declaration** — `imports/methods/createPuzzle.ts`:
+**Shared declaration**: `imports/methods/createPuzzle.ts`:
 
 ```ts
 import TypedMethod from "./TypedMethod";
@@ -37,7 +37,7 @@ export default new TypedMethod<
 >("Puzzles.methods.create");
 ```
 
-**Server implementation** — `imports/server/methods/createPuzzle.ts`:
+**Server implementation**: `imports/server/methods/createPuzzle.ts`:
 
 ```ts
 import { check, Match } from "meteor/check";
@@ -62,7 +62,7 @@ defineMethod(createPuzzle, {
 });
 ```
 
-**Register it** — add `import "./createPuzzle";` to `imports/server/methods/index.ts`, or you
+**Register it**: add `import "./createPuzzle";` to `imports/server/methods/index.ts`, or you
 get `Method 'Puzzles.methods.create' not found` at runtime.
 
 **Call it** from anywhere on the client:
@@ -120,9 +120,9 @@ kicks in.
 
 Two kinds, and the distinction is load-bearing:
 
-- `throw new Meteor.Error(400, "message")` — an **expected** failure. Numeric codes in the 400
+- `throw new Meteor.Error(400, "message")`: an **expected** failure. Numeric codes in the 400
   range are logged at `info` severity and reported to Bugsnag as `info`.
-- `throw new Error("...")` — a **bug**. Logged and reported at `error` severity.
+- `throw new Error("...")`: a **bug**. Logged and reported at `error` severity.
 
 Both `TypedMethod` (client side) and `defineMethod` (server side) inspect the error and pick the
 severity from the numeric code. Using the wrong one either buries a real bug or floods your error
@@ -157,13 +157,13 @@ hunt, and return a boolean. `checkAdmin(user)` is the one that throws rather tha
 
 ## 2. Publications: the same pattern, for reads
 
-**Shared declaration** — `imports/lib/publications/puzzlesForHunt.ts`:
+**Shared declaration**: `imports/lib/publications/puzzlesForHunt.ts`:
 
 ```ts
 export default new TypedPublication<{ huntId: string }>("Puzzles.publications.forHunt");
 ```
 
-**Server implementation** — `imports/server/publications/puzzlesForHunt.ts`:
+**Server implementation**: `imports/server/publications/puzzlesForHunt.ts`:
 
 ```ts
 definePublication(puzzlesForHunt, {
@@ -246,7 +246,7 @@ and only your own rows to everyone else. Field-level control is done with projec
 You can write ordinary publications without these, but you will meet them immediately in the
 interesting ones.
 
-### `publishJoinedQuery` — reactive joins
+### `publishJoinedQuery`: reactive joins
 
 MongoDB has no joins. But the guess queue needs, for each pending guess, the puzzle it is for,
 the hunt it belongs to, and the display name of the submitter. Publishing *all* puzzles, hunts
@@ -271,7 +271,7 @@ only when the last referrer goes), a foreign key *changing* (add the new referen
 retracting the old, or the UI flickers), nested keys, array-valued keys, and ordering all of it
 correctly now that everything is async.
 
-### `PublicationMerger` — several producers, one stream
+### `PublicationMerger`: several producers, one stream
 
 Within one DDP subscription, `added(collection, id, fields)` may be sent only once per document.
 Sending it twice is a protocol error; sending `removed` once retracts the document even if a
@@ -300,8 +300,8 @@ production, configure `$MONGO_OPLOG_URL`.
 
 ### Add a method
 
-1. `imports/methods/myThing.ts` — `export default new TypedMethod<Args, Return>("Things.methods.myThing")`
-2. `imports/server/methods/myThing.ts` — `defineMethod(myThing, { validate, run })`
+1. `imports/methods/myThing.ts`: `export default new TypedMethod<Args, Return>("Things.methods.myThing")`
+2. `imports/server/methods/myThing.ts`: `defineMethod(myThing, { validate, run })`
 3. Add `import "./myThing";` to `imports/server/methods/index.ts`
 4. Call it with `await myThing.callPromise({ ... })`
 
@@ -310,8 +310,8 @@ database; throw `Meteor.Error(4xx)` for expected failures; never rename the wire
 
 ### Add a publication
 
-1. `imports/lib/publications/thingsForFoo.ts` — `export default new TypedPublication<Args>("Things.publications.forFoo")`
-2. `imports/server/publications/thingsForFoo.ts` — `definePublication(thingsForFoo, { validate, run })`
+1. `imports/lib/publications/thingsForFoo.ts`: `export default new TypedPublication<Args>("Things.publications.forFoo")`
+2. `imports/server/publications/thingsForFoo.ts`: `definePublication(thingsForFoo, { validate, run })`
 3. Add `import "./thingsForFoo";` to `imports/server/publications/index.ts`
 4. Subscribe with `useTypedSubscribe(thingsForFoo, args)` and read with `useTracker`
 
