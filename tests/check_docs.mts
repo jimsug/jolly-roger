@@ -141,13 +141,30 @@ const checkDoc = async (doc: string): Promise<DocError | undefined> => {
   return undefined;
 };
 
-const main = async () => {
-  const docsDir = path.join(dirname, "..", "docs");
-  const docs = await fs.readdir(docsDir);
-
-  const results = await Promise.all(
-    docs.map((doc) => checkDoc(path.join(docsDir, doc))),
+// Documentation is allowed to live in subdirectories of docs/ (e.g.
+// docs/onboarding/), so walk the tree rather than reading docs/ flat. Anything
+// that isn't a markdown file is skipped - notably directories, which would
+// otherwise be passed to readFile and blow up with EISDIR.
+const collectDocs = async (dir: string): Promise<string[]> => {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        return collectDocs(entryPath);
+      }
+      return entry.name.endsWith(".md") ? [entryPath] : [];
+    }),
   );
+  return nested.flat();
+};
+
+const main = async () => {
+  const repoRoot = path.join(dirname, "..");
+  const docsDir = path.join(repoRoot, "docs");
+  const docs = await collectDocs(docsDir);
+
+  const results = await Promise.all(docs.map((doc) => checkDoc(doc)));
   const errors = results.filter(
     (result): result is DocError => result !== undefined,
   );
@@ -155,34 +172,31 @@ const main = async () => {
   if (errors.length > 0) {
     process.stderr.write("Documentation errors:\n\n");
     for (const error of errors) {
+      const docPath = path.relative(repoRoot, error.doc);
       switch (error.type) {
         case "out-of-date":
-          process.stderr.write(
-            `  ${path.basename(error.doc)} is out of date\n`,
-          );
+          process.stderr.write(`  ${docPath} is out of date\n`);
           for (const newerFile of error.newerFiles) {
             process.stderr.write(
               `    ${newerFile.file} was updated in ${newerFile.commit}\n`,
             );
           }
           process.stderr.write(
-            `  To fix this, either update ${path.basename(
-              error.doc,
-            )} or, if no changes are needed, change the updated field to today's date.\n`,
+            `  To fix this, either update ${docPath} or, if no changes are needed, change the updated field to today's date.\n`,
           );
           break;
         case "missing-front-matter":
-          process.stderr.write(`  ${error.doc} is missing front matter\n`);
+          process.stderr.write(`  ${docPath} is missing front matter\n`);
           break;
         case "missing-updated-field":
-          process.stderr.write(`  ${error.doc} is missing updated field\n`);
+          process.stderr.write(`  ${docPath} is missing updated field\n`);
           break;
         case "missing-files":
-          process.stderr.write(`  ${error.doc} is missing files field\n`);
+          process.stderr.write(`  ${docPath} is missing files field\n`);
           break;
         case "file-not-found":
           process.stderr.write(
-            `  ${error.doc} references a file that does not exist\n`,
+            `  ${docPath} references a file that does not exist\n`,
           );
           for (const file of error.files) {
             process.stderr.write(`    Missing file: ${file}\n`);

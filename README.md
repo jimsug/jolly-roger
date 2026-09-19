@@ -132,3 +132,10 @@ updates in realtime. It's delightful.
 
 Interested in developing or testing Jolly Roger locally, or
 running your own production instance? See [DEVELOPMENT.md](DEVELOPMENT.md).
+
+## New to the codebase?
+
+[`docs/onboarding/`](docs/onboarding/) is a guided introduction for developers who are new to
+Jolly Roger. It assumes you can program but assumes nothing about Meteor, MongoDB or
+puzzlehunts, and covers the architecture, the data layer, the puzzle logic, the integrations
+and the day-to-day workflow.
