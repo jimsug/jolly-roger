@@ -63,7 +63,10 @@ Three consequences:
 2. The guard wraps only the parent element; nested children inherit it through `<Outlet />`.
 3. **Both lists are exported for the test suite.** `tests/acceptance/smoke.tsx` imports them,
    flattens the nested paths, substitutes fixture values for `:huntId`, `:puzzleId` and friends,
-   and navigates to each one. **Adding a route automatically adds a smoke test.**
+   and navigates to each one. **Adding a route to either list automatically adds a smoke test.**
+   Note the qualifier: `smoke.tsx` enumerates exactly those two exports, so a route added
+   straight to `RouteList` (as `/` and `/join/:invitationCode` are) is never smoke-tested, and
+   a new `:param` needs adding to the substitutions map or its route is skipped.
 
 ### The route table
 
@@ -96,6 +99,14 @@ Three consequences:
 > **Gap worth knowing: there is no catch-all route.**
 > `Routes.tsx` has no `path: "*"` and there is no 404 component. `useRoutes` returns `null` for
 > an unmatched URL, so a mistyped URL renders a completely blank page with no navbar.
+
+> **Unreachable components: `UserPuzzleHistory.tsx` and `ContributionGraph.tsx`.**
+> `UserPuzzleHistory.tsx` has no importer and no route, and it is the only thing that imports
+> `ContributionGraph.tsx`, so neither renders in the running app. Do not be misled by the
+> similarly named `imports/client/UserPuzzleHistory.ts` (a pseudo-collection) or the
+> `UserPuzzleHistoryAggregator` class in `imports/server/publications/puzzleHistorySummaryForUser.ts`,
+> which are live and distinct. The server-side aggregation for this feature exists; the UI that
+> would consume it is not wired up.
 
 ## 3. How components get data
 

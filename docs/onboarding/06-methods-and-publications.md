@@ -121,12 +121,20 @@ kicks in.
 Two kinds, and the distinction is load-bearing:
 
 - `throw new Meteor.Error(400, "message")`: an **expected** failure. Numeric codes in the 400
-  range are logged at `info` severity and reported to Bugsnag as `info`.
-- `throw new Error("...")`: a **bug**. Logged and reported at `error` severity.
+  range are treated as `info`.
+- `throw new Error("...")`: a **bug**. Treated as `error`.
 
-Both `TypedMethod` (client side) and `defineMethod` (server side) inspect the error and pick the
-severity from the numeric code. Using the wrong one either buries a real bug or floods your error
-tracker with routine permission denials.
+Both halves of the stack apply the same 400-to-499 test, but to different things, and it is
+worth being precise:
+
+- `imports/server/methods/defineMethod.ts` sets **Bugsnag's `event.severity`** from it, so this
+  is what decides whether a failure shows up as a real error in your tracker.
+- `imports/methods/TypedMethod.ts` uses it to pick a **winston log level** (`Logger[severity]`)
+  for the client-side "Meteor method call failed" line. Its only Bugsnag interaction is
+  `leaveBreadcrumb`, not a severity.
+
+Using the wrong error type either buries a real bug or floods your error tracker with routine
+permission denials.
 
 ### Permissions
 
@@ -205,6 +213,14 @@ if (loading()) return <Loading />;
   subscription becomes ready with no documents.
 - **Manual `added` / `changed` / `removed` calls** plus `this.ready()`. Used when the data is
   computed rather than queried. You must also register `this.onStop()` cleanup.
+
+> **Do not mistake a universal publication for dead code.**
+> `DefaultTypedPublication` (used by `featureFlagsAll`, among others) passes `null` as the
+> publication name, so `definePublication` ends up calling `Meteor.publish(null, ...)`. Meteor
+> pushes a null-named publication to **every connected client automatically, with no
+> `subscribe` call anywhere**. So when you grep for subscribers to `featureFlagsAll` and find
+> none, that is the design working, not a bug. The source file says as much:
+> *"All feature flags are always available on the client"*.
 
 That third form is worth knowing about because it enables something unusual: **a subscription
 used as a resource with cleanup**. `imports/server/subscribers.ts` publishes *nothing at all*;

@@ -204,9 +204,14 @@ which is what turns tool output into inline annotations on the pull request diff
 `meteor build` on Node 20.19.5, scps the tarball to a VPS, and restarts it. This is a
 single-host deploy, not a rolling one.
 
-> **Inconsistency worth knowing:** `deploy.yml` hardcodes `release=3.3.2` when installing
-> Meteor, while the `Dockerfile` parses the version out of `.meteor/release`. The next Meteor
-> bump will silently skew the two.
+> **Two defects worth knowing about `deploy.yml`:**
+> 1. It hardcodes `release=3.3.2` when installing Meteor, while the `Dockerfile` parses the
+>    version out of `.meteor/release`. The next Meteor bump will silently skew the two.
+> 2. Its `paths-ignore` is `"extensions/**"`, but the directory is `extension/`, singular. The
+>    filter therefore never matches, so extension-only changes still trigger a full deploy.
+>
+> Note also that `deploy.yml` has no `needs:` key, so it does **not** wait for `build.yml`'s
+> lint and test job. A push to `main` deploys whether or not the tests passed.
 
 **`.github/workflows/build-extension.yml`** builds the browser extension, which is a separate
 project.

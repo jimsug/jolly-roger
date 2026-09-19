@@ -1,5 +1,5 @@
 import { check, Match } from "meteor/check";
-import { Meteor } from "meteor/meteor";\
+import { Meteor } from "meteor/meteor";
 import Logger from "../../Logger";
 import Guesses, { GuessStates } from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";

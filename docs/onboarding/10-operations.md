@@ -162,10 +162,14 @@ Both **Sentry** and **Bugsnag** are wired up, on both client and server. Both ar
 first thing in the entry points. Release tagging uses `Meteor.gitCommitHash`, which comes from
 the `METEOR_GIT_COMMIT_HASH` build argument.
 
-Severity is chosen from the error, and this is why the `Meteor.Error(4xx)` convention matters:
-a `Meteor.Error` with a numeric code in the 400 range is reported at `info`, everything else at
-`error`. Throwing a plain `Error` for an expected permission denial floods your error tracker;
-throwing `Meteor.Error(400)` for a genuine bug buries it.
+Severity is chosen from the error, and this is why the `Meteor.Error(4xx)` convention matters.
+`imports/server/methods/defineMethod.ts` sets Bugsnag's `event.severity` to `info` for a
+`Meteor.Error` whose numeric code is in the 400 range, and to `error` otherwise. Throwing a
+plain `Error` for an expected permission denial floods your error tracker; throwing
+`Meteor.Error(400)` for a genuine bug buries it.
+
+(The client-side `TypedMethod` applies the same 400-to-499 test, but to choose a winston log
+level rather than a Bugsnag severity.)
 
 **Monti APM** (`montiapm:agent`) provides Meteor-specific performance monitoring: method and
 publication timings, which is the fastest way to find a slow publication.
