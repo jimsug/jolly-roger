@@ -27,6 +27,9 @@ const ChatNotification = withCommon(
     dingwords: z.optional(z.array(nonEmptyString)),
     // The date this message was sent.  Used for ordering chats in the log.
     timestamp: z.date(),
+    // The whiteboard comment thread the message belongs to (the root
+    // comment's id), including when it is the root.
+    thread: foreignKey.optional(),
   }),
 );
 
@@ -35,6 +38,10 @@ const ChatNotifications = new SoftDeletedModel(
   ChatNotification,
 );
 ChatNotifications.addIndex({ deleted: 1, user: 1 });
+ChatNotifications.addIndex(
+  { thread: 1 },
+  { partialFilterExpression: { thread: { $exists: true } } },
+);
 export type ChatNotificationType = ModelType<typeof ChatNotifications>;
 
 export default ChatNotifications;

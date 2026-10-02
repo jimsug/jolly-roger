@@ -69,6 +69,17 @@ export function contentFromMessage(msg: string): ChatMessageContentType {
   };
 }
 
+// Where a whiteboard comment is pinned. With node, x and y are an offset from
+// the node's top-left corner in board units; without, they're board
+// coordinates.
+const CommentAnchor = z.object({
+  node: foreignKey.optional(),
+  x: z.number(),
+  y: z.number(),
+  resolvedAt: z.date().optional(),
+  resolvedBy: foreignKey.optional(),
+});
+
 const ChatMessage = withCommon(
   z.object({
     hunt: foreignKey,
@@ -84,11 +95,25 @@ const ChatMessage = withCommon(
     parentId: foreignKey.nullable().optional(),
     // Not really a foreign key, since this is always another message when present
     attachments: ChatAttachment.array().optional(),
+    // Set on the message that starts a whiteboard comment thread. Replies are
+    // ordinary chat replies to it.
+    comment: CommentAnchor.optional(),
+    // The id of the comment a reply (at any depth) belongs to. Written only by
+    // the server.
+    thread: foreignKey.optional(),
   }),
 );
 const ChatMessages = new SoftDeletedModel("jr_chatmessages", ChatMessage);
 ChatMessages.addIndex({ deleted: 1, puzzle: 1 });
 ChatMessages.addIndex({ hunt: 1, createdAt: 1 });
+ChatMessages.addIndex(
+  { thread: 1 },
+  { partialFilterExpression: { thread: { $exists: true } } },
+);
+ChatMessages.addIndex(
+  { puzzle: 1, "comment.node": 1 },
+  { partialFilterExpression: { comment: { $exists: true } } },
+);
 export type ChatMessageType = ModelType<typeof ChatMessages>;
 
 export default ChatMessages;

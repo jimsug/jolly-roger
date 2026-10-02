@@ -49,6 +49,7 @@ import pendingAnnouncementsForSelf from "../../lib/publications/pendingAnnouncem
 import pendingGuessesForSelf from "../../lib/publications/pendingGuessesForSelf";
 import puzzleNotificationsForSelf from "../../lib/publications/puzzleNotificationsForSelf";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
+import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import bookmarkPuzzle from "../../methods/bookmarkPuzzle";
 import configureEnsureGoogleScript from "../../methods/configureEnsureGoogleScript";
 import dismissAllDingsForPuzzle from "../../methods/dismissAllDingsForPuzzle";
@@ -488,9 +489,7 @@ const GuessMessage = React.memo(
                 </Button>
                 <Dropdown.Toggle split variant={correctButtonVariant} />
                 <Dropdown.Menu align="end">
-                  <Dropdown.Item
-                    onClick={toggleStateCorrectWithEdit}
-                  >
+                  <Dropdown.Item onClick={toggleStateCorrectWithEdit}>
                     Correct with edit...
                   </Dropdown.Item>
                 </Dropdown.Menu>
@@ -831,6 +830,12 @@ const ChatNotificationMessage = ({
 
   const theme = useTheme();
 
+  // A message on the whiteboard opens the board, at its comment if it's
+  // part of one.
+  const linkTarget = isWhiteboardPuzzle(puzzle)
+    ? `/hunts/${hunt._id}/whiteboard${cn.thread ? `?comment=${cn.thread}` : ""}`
+    : `/hunts/${hunt._id}/puzzles/${puzzle._id}#msg=${messageId}`;
+
   const individualDingwordsMute = useMemo(() => {
     return displayedDingwords.map((word) => (
       <Dropdown.Item
@@ -849,11 +854,7 @@ const ChatNotificationMessage = ({
         <strong className="me-auto">
           {/* {senderDisplayName} */}
           {/* {" on "} */}
-          <Link
-            to={`/hunts/${hunt._id}/puzzles/${puzzle._id}#msg=${messageId}`}
-          >
-            {puzzle.title}
-          </Link>
+          <Link to={linkTarget}>{puzzle.title}</Link>
         </strong>
         <StyledNotificationTimestamp>
           {calendarTimeFormat(cn.createdAt)}

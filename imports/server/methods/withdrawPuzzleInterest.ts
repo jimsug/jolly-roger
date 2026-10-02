@@ -3,6 +3,7 @@ import { Meteor } from "meteor/meteor";
 import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import Puzzles from "../../lib/models/Puzzles";
 import withdrawPuzzleInterest from "../../methods/withdrawPuzzleInterest";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(withdrawPuzzleInterest, {
@@ -15,6 +16,7 @@ defineMethod(withdrawPuzzleInterest, {
 
   async run({ puzzleId }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(puzzleId);
     if (!puzzle) {

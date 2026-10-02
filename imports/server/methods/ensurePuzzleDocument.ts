@@ -5,6 +5,7 @@ import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import ensurePuzzleDocument from "../../methods/ensurePuzzleDocument";
 import { ensureDocument, ensureHuntFolderPermission } from "../gdrive";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(ensurePuzzleDocument, {
@@ -17,6 +18,7 @@ defineMethod(ensurePuzzleDocument, {
 
   async run({ puzzleId }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const user = (await MeteorUsers.findOneAsync(this.userId))!;
     const puzzle = await Puzzles.findOneAsync(puzzleId);

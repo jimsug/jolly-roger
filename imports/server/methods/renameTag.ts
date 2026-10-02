@@ -4,6 +4,7 @@ import Logger from "../../Logger";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
 import renameTag from "../../methods/renameTag";
+import { deferSyncPuzzlesOnBoard } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(renameTag, {
@@ -30,6 +31,12 @@ defineMethod(renameTag, {
       hunt: tag?.hunt,
     });
 
+    // Renaming or merging can change which round a puzzle is in.
+    const affectedPuzzles = await Puzzles.find(
+      { tags: tagId },
+      { projection: { _id: 1 } },
+    ).mapAsync((p) => p._id);
+
     if (alias) {
       Logger.info("Adding alias", {
         tag: existingTag?._id ?? tagId,
@@ -52,5 +59,7 @@ defineMethod(renameTag, {
       Logger.info("Renaming tag", { tag: tagId, name });
       await Tags.updateAsync({ _id: tagId }, { $set: { name } });
     }
+
+    deferSyncPuzzlesOnBoard(tag.hunt, affectedPuzzles);
   },
 });

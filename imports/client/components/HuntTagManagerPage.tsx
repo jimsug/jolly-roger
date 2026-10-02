@@ -445,7 +445,7 @@ const BulkAddRemoveSection = ({
   }, []);
 
   const allPuzzles = useTracker(
-    () => Puzzles.find({ hunt: huntId }).fetch(),
+    () => Puzzles.find({ hunt: huntId, kind: { $ne: "whiteboard" } }).fetch(),
     [huntId],
   );
   const allTags = useTracker(

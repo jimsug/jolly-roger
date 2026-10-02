@@ -40,6 +40,9 @@ const Puzzle = withCommon(
     noteUpdateTs: z.date().optional(),
     locked: z.boolean().optional(),
     lockedSummary: nonEmptyString.optional(),
+    // "whiteboard" marks the hidden puzzle that anchors a hunt whiteboard's
+    // chat and call. Absent means an ordinary puzzle.
+    kind: z.enum(["puzzle", "whiteboard"]).optional(),
   }),
 );
 

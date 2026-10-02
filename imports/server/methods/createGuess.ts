@@ -6,6 +6,7 @@ import Hunts from "../../lib/models/Hunts";
 import Puzzles from "../../lib/models/Puzzles";
 import createGuess from "../../methods/createGuess";
 import sendChatMessageInternal from "../sendChatMessageInternal";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(createGuess, {
@@ -21,6 +22,7 @@ defineMethod(createGuess, {
 
   async run({ puzzleId, guess, direction, confidence }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(puzzleId);
 

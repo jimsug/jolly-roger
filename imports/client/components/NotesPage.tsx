@@ -469,7 +469,7 @@ const NotesPage = () => {
   const allPuzzles = useTracker(
     () =>
       Puzzles.find(
-        { hunt: huntId },
+        { hunt: huntId, kind: { $ne: "whiteboard" } },
         { sort: { noteUpdateTs: 1, updatedTimestamp: 1 } },
       ).fetch(),
     [huntId],

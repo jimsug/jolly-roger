@@ -9,6 +9,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import createPuzzleDocument from "../../methods/createPuzzleDocument";
 import { ensureDocument } from "../gdrive";
 import GoogleClient from "../googleClientRefresher";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(createPuzzleDocument, {
@@ -26,6 +27,7 @@ defineMethod(createPuzzleDocument, {
 
   async run({ huntId, puzzleId, docType }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const hunt = await Hunts.findOneAsync(huntId);
     if (!hunt) {

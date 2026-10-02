@@ -39,6 +39,7 @@ import UsersApp from "./UsersApp";
 const HuntEditPage = React.lazy(() => import("./HuntEditPage"));
 const SetupPage = React.lazy(() => import("./SetupPage"));
 const RTCDebugPage = React.lazy(() => import("./RTCDebugPage"));
+const WhiteboardPage = React.lazy(() => import("./WhiteboardPage"));
 
 /* Authenticated routes - if user not logged in, get redirected to /login */
 export const AuthenticatedRouteList: RouteObject[] = [
@@ -68,6 +69,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
           { path: "more", element: <MoreAppPage /> },
           { path: "tags", element: <HuntTagManagerPage /> },
           { path: "notes", element: <NotesPage /> },
+          { path: "whiteboard", element: <WhiteboardPage /> },
           { path: "purge", element: <HuntPurgePage /> },
           { path: "custom-link", element: <CustomLinkEmbedPage /> },
           { path: "", element: <Navigate to="puzzles" replace /> },

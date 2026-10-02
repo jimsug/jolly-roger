@@ -1,9 +1,13 @@
 import { check, Match } from "meteor/check";
+import { Meteor } from "meteor/meteor";
 import ChatMessages, {
   type ChatAttachmentType,
 } from "../../lib/models/ChatMessages";
-import sendChatMessage from "../../methods/sendChatMessage";
+import sendChatMessage, {
+  type CommentAnchorInput,
+} from "../../methods/sendChatMessage";
 import sendChatMessageInternal from "../sendChatMessageInternal";
+import { assertValidCommentAnchor } from "../whiteboardEdits";
 import defineMethod from "./defineMethod";
 
 const ChatAttachmentPattern = Match.ObjectIncluding({
@@ -20,6 +24,11 @@ defineMethod(sendChatMessage, {
       content: String,
       parentId: Match.Optional(Match.OneOf(String, null)),
       attachments: Match.Optional([ChatAttachmentPattern]),
+      comment: Match.Optional({
+        node: Match.Optional(String),
+        x: Number,
+        y: Number,
+      }),
     });
 
     return arg;
@@ -30,11 +39,13 @@ defineMethod(sendChatMessage, {
     content,
     parentId = null,
     attachments = [],
+    comment,
   }: {
     puzzleId: string;
     content: string;
     parentId?: string | null;
     attachments?: ChatAttachmentType[] | null;
+    comment?: CommentAnchorInput;
   }) {
     check(this.userId, String);
     const contentObj = JSON.parse(content);
@@ -61,10 +72,19 @@ defineMethod(sendChatMessage, {
       ],
     });
 
+    if (comment) {
+      await assertValidCommentAnchor(this.userId, puzzleId, comment);
+      if (parentId) {
+        throw new Meteor.Error(400, "A reply can't start a comment thread");
+      }
+    }
+
     let isPinned = false;
 
+    // Comments skip /pin and /unpin, so their text goes up as written.
     const firstChild = contentObj.children[0];
     if (
+      !comment &&
       "children" in contentObj &&
       contentObj.children.length > 0 &&
       firstChild &&
@@ -97,6 +117,7 @@ defineMethod(sendChatMessage, {
       pinTs: isPinned ? new Date() : null,
       parentId: parentId ?? null,
       attachments,
+      comment,
     });
   },
 });

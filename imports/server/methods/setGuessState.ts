@@ -8,6 +8,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import { userMayUpdateGuessesForHunt } from "../../lib/permission_stubs";
 import setGuessState from "../../methods/setGuessState";
 import transitionGuess from "../transitionGuess";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(setGuessState, {
@@ -33,6 +34,7 @@ defineMethod(setGuessState, {
     if (!puzzle) {
       throw new Meteor.Error(404, "Puzzle is deleted");
     }
+    await assertNotWhiteboardPuzzle(puzzle._id);
 
     if (
       !userMayUpdateGuessesForHunt(

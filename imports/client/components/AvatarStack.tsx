@@ -25,11 +25,16 @@ const AvatarItem = styled.div<{
   $overlap: number;
   $size: number;
   $isPassive?: boolean;
+  $plain?: boolean;
 }>`
   margin-right: -${({ $overlap }) => $overlap}px;
   border: 2px solid
-    ${({ theme, $isPassive }) =>
-      $isPassive ? theme.colors.warning : theme.colors.success};
+    ${({ theme, $isPassive, $plain }) =>
+      $plain
+        ? theme.colors.background
+        : $isPassive
+          ? theme.colors.warning
+          : theme.colors.success};
   border-radius: 50%;
   transition: all 0.2s ease-in-out;
   position: relative;
@@ -74,7 +79,18 @@ const AvatarStack: FC<{
   inline?: boolean;
   className?: string;
   tooltip?: React.ReactElement;
-}> = ({ users, size = 24, max = 3, inline = true, className, tooltip }) => {
+  // Drop the presence colours from the borders, for stacks that aren't about
+  // who's here right now.
+  plain?: boolean;
+}> = ({
+  users,
+  size = 24,
+  max = 3,
+  inline = true,
+  className,
+  tooltip,
+  plain = false,
+}) => {
   const id = useId();
   const visibleUsers = users.slice(0, max);
   const remaining = users.length - max;
@@ -99,6 +115,7 @@ const AvatarStack: FC<{
             }
             $size={size}
             $isPassive={user.isPassive}
+            $plain={plain}
           >
             <Avatar
               size={size}

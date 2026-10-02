@@ -32,7 +32,7 @@ files:
   - imports/server/models/DriveActivityLatests.ts
   - imports/server/setup.ts
   - private/google-script/main.js
-updated: 2026-01-30
+updated: 2026-10-03
 ---
 
 # Google Drive Integration
@@ -117,6 +117,9 @@ they call on loading a puzzle page. In order to prevent thundering herds of
 creation attempts, when creating a new puzzle, the document is created *before*
 saving the puzzle to MongoDB, so that once clients discover the new puzzle, the
 document should already be present.
+
+The hidden puzzle behind a hunt's whiteboard (`kind: "whiteboard"`) never gets a
+document: it's created without one, and `ensurePuzzleDocument` refuses it.
 
 Both folders and documents are renamed when the hunt or puzzle (respectively) is
 renamed.

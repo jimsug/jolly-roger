@@ -8,6 +8,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import undestroyPuzzle from "../../methods/undestroyPuzzle";
 import { makeReadWrite } from "../gdrive";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(undestroyPuzzle, {
@@ -20,6 +21,7 @@ defineMethod(undestroyPuzzle, {
 
   async run({ puzzleId }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneDeletedAsync(puzzleId);
     if (!puzzle) {

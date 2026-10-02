@@ -22,6 +22,11 @@ defineMethod(removeChatMessage, {
     if (this.userId !== message?.sender) {
       throw new Meteor.Error(403, "Not allowed");
     }
+    // Removing a comment's first message would strand its replies; the board
+    // deletes the whole thread instead.
+    if (message.comment) {
+      throw new Meteor.Error(400, "Delete a whiteboard comment from the board");
+    }
 
     await ChatMessages.removeAsync(message);
   },

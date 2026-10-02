@@ -14,6 +14,7 @@ import GlobalHooks from "./GlobalHooks";
 import { deleteUnusedDocument, ensureDocument } from "./gdrive";
 import getOrCreateTagByName from "./getOrCreateTagByName";
 import GoogleClient from "./googleClientRefresher";
+import { syncPuzzleOnBoard } from "./whiteboard";
 
 async function checkForDuplicatePuzzle(huntId: string, url: string) {
   const existingPuzzleWithUrl = await Puzzles.findOneAsync({
@@ -159,6 +160,10 @@ export default async function addPuzzle({
   Meteor.defer(() => {
     if (!fullPuzzle.locked) {
       void GlobalHooks.runPuzzleCreatedHooks(fullPuzzle._id);
+    } else {
+      // Locked puzzles skip the created hooks until they're unlocked, but they
+      // still belong on the whiteboard.
+      void syncPuzzleOnBoard(fullPuzzle._id);
     }
   });
 

@@ -10,7 +10,14 @@ chai.use(chaiAsPromised);
 import "./unit/imports/lib/calendarTimeFormat";
 import "./unit/imports/lib/puzzle-sort-and-group";
 import "./unit/imports/lib/relativeTimeFormat";
+import "./unit/imports/lib/safeHref";
 import "./unit/imports/lib/ValidateShape";
+import "./unit/imports/lib/whiteboard-arrange";
+import "./unit/imports/lib/whiteboard-comments";
+import "./unit/imports/lib/whiteboard-connectors";
+import "./unit/imports/lib/whiteboard-contributors";
+import "./unit/imports/lib/whiteboard-ink";
+import "./unit/imports/lib/whiteboard-layout";
 
 if (Meteor.isServer) {
   // Disable rate limiting
@@ -26,9 +33,11 @@ if (Meteor.isServer) {
   require("./unit/imports/server/Model");
   require("./unit/imports/server/publishJoinedQuery");
   require("./unit/imports/server/validateSchema");
+  require("./unit/imports/server/whiteboard");
 }
 
 import "./acceptance/authentication";
 import "./acceptance/chatHooks";
 import "./acceptance/profiles";
 import "./acceptance/smoke";
+import "./acceptance/whiteboard";

@@ -7,6 +7,7 @@ import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import unlockPuzzle from "../../methods/unlockPuzzle";
 import GlobalHooks from "../GlobalHooks";
 import sendChatMessageInternal from "../sendChatMessageInternal";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(unlockPuzzle, {
@@ -20,6 +21,7 @@ defineMethod(unlockPuzzle, {
 
   async run({ puzzleId, url }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(puzzleId);
     if (!puzzle) {

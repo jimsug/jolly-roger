@@ -12,6 +12,7 @@ import GlobalHooks from "../GlobalHooks";
 import { ensureDocument, renameDocument } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import getTeamName from "../getTeamName";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(updatePuzzle, {
@@ -46,6 +47,7 @@ defineMethod(updatePuzzle, {
     markedComplete,
   }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const oldPuzzle = await Puzzles.findOneAllowingDeletedAsync(puzzleId);
     if (!oldPuzzle) {

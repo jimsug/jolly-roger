@@ -8,6 +8,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import addPuzzleAnswer from "../../methods/addPuzzleAnswer";
 import GlobalHooks from "../GlobalHooks";
 import sendChatMessageInternal from "../sendChatMessageInternal";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(addPuzzleAnswer, {
@@ -21,6 +22,7 @@ defineMethod(addPuzzleAnswer, {
 
   async run({ puzzleId, answer }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(puzzleId);
 

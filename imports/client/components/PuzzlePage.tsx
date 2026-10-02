@@ -6,6 +6,7 @@ import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons/faAngleDoub
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faArrowDown } from "@fortawesome/free-solid-svg-icons/faArrowDown";
 import { faChevronLeft } from "@fortawesome/free-solid-svg-icons/faChevronLeft";
+import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
 import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
@@ -14,6 +15,7 @@ import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
 import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
+import { faLocationCrosshairs } from "@fortawesome/free-solid-svg-icons/faLocationCrosshairs";
 import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
 import { faPaperPlane } from "@fortawesome/free-solid-svg-icons/faPaperPlane";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
@@ -27,6 +29,7 @@ import type { Theme as EmojiTheme } from "emoji-picker-react";
 import type { ComponentPropsWithRef, FC } from "react";
 import React, {
   useCallback,
+  useContext,
   useEffect,
   useId,
   useImperativeHandle,
@@ -38,6 +41,7 @@ import React, {
 import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
+import ButtonGroup from "react-bootstrap/ButtonGroup";
 import Col from "react-bootstrap/Col";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
@@ -57,7 +61,7 @@ import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import Tooltip from "react-bootstrap/Tooltip";
 import { createPortal } from "react-dom";
-import { Link, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
 import type { Descendant } from "slate";
 import styled, { css, keyframes, useTheme } from "styled-components";
 import {
@@ -65,6 +69,7 @@ import {
   shortCalendarTimeFormat,
 } from "../../lib/calendarTimeFormat";
 import { messageDingsUser } from "../../lib/dingwordLogic";
+import isReaction from "../../lib/isReaction";
 import { indexedById, sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import type { ChatMessageType } from "../../lib/models/ChatMessages";
@@ -94,6 +99,7 @@ import puzzleFeedbacks from "../../lib/publications/puzzleFeedbacks";
 import puzzleForPuzzlePage from "../../lib/publications/puzzleForPuzzlePage";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import { computeSolvedness } from "../../lib/solvedness";
+import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import addPuzzleAnswer from "../../methods/addPuzzleAnswer";
 import addPuzzleTag from "../../methods/addPuzzleTag";
 import createChatImageUpload from "../../methods/createChatImageUpload";
@@ -106,6 +112,12 @@ import sendChatMessage from "../../methods/sendChatMessage";
 import setChatMessagePin from "../../methods/setChatMessagePin";
 import undestroyPuzzle from "../../methods/undestroyPuzzle";
 import updatePuzzle from "../../methods/updatePuzzle";
+import {
+  cleanEditorMessage,
+  emptyEditorContent,
+  hasLoadingImage as hasLoadingImageInContent,
+  hasSendableContent,
+} from "../chatEditorContent";
 import EnabledChatImage from "../EnabledChatImage";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import {
@@ -126,7 +138,7 @@ import ChatMessage from "./ChatMessage";
 import ChatPeople from "./ChatPeople";
 import CopyToClipboardButton from "./CopyToClipboardButton";
 import DocumentDisplay, { DocumentMessage } from "./DocumentDisplay";
-import type { FancyEditorHandle, MessageElement } from "./FancyEditor";
+import type { FancyEditorHandle } from "./FancyEditor";
 import FancyEditor from "./FancyEditor";
 import GuessState from "./GuessState";
 import InsertImage from "./InsertImage";
@@ -145,6 +157,9 @@ import { MonospaceFontFamily } from "./styling/constants";
 import FixedLayout from "./styling/FixedLayout";
 import { mediaBreakpointDown } from "./styling/responsive";
 import TagList from "./TagList";
+import type { BoardFocus } from "./whiteboard/BoardFocusContext";
+import BoardFocusContext from "./whiteboard/BoardFocusContext";
+import describeCommentTarget from "./whiteboard/commentTarget";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -161,6 +176,8 @@ const FilteredChatFields = [
   "parentId",
   "attachments",
   "hunt",
+  "comment",
+  "thread",
 ] as const;
 type FilteredChatMessageType = Pick<
   ChatMessageType,
@@ -465,6 +482,20 @@ const ReplyingToCancel = styled(FontAwesomeIcon)`
   margin-left: auto;
 `;
 
+const CommentNote = styled.div`
+  font-size: 12px;
+  color: ${({ theme }) => theme.colors.textSecondary};
+`;
+
+const CommentNoteLink = styled.button`
+  padding: 0;
+  border: 0;
+  background: none;
+  color: ${({ theme }) => theme.colors.linkColor ?? "#0d6efd"};
+  text-decoration: underline;
+  cursor: pointer;
+`;
+
 const ChatMessageTimestamp = styled.span`
   float: right;
   font-style: italic;
@@ -626,29 +657,6 @@ const ReactionContainer = styled.div`
   z-index: 100;
 `;
 
-const isReaction = (
-  message: ChatMessageType | FilteredChatMessageType,
-): boolean => {
-  try {
-    const parsedContent = message.content;
-    const firstChild = parsedContent?.children?.[0];
-    if (
-      parsedContent?.children &&
-      parsedContent.children.length === 1 &&
-      firstChild &&
-      nodeIsText(firstChild) &&
-      firstChild.text &&
-      firstChild.text.length > 0 &&
-      /^\p{Extended_Pictographic}/u.test(firstChild.text)
-    ) {
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
-};
-
 const AddReactionButton = styled(FontAwesomeIcon)`
   cursor: pointer;
   color: #666;
@@ -722,6 +730,19 @@ const ChatHistoryMessage = React.memo(
     imageOnLoad: () => void;
   }) => {
     const ts = shortCalendarTimeFormat(message.timestamp);
+
+    // On the whiteboard, comments and their replies can be found on the board.
+    const boardFocus = useContext(BoardFocusContext);
+    const commentThread = message.comment ? message._id : message.thread;
+    const commentNode = message.comment?.node;
+    const isComment = !!message.comment;
+    const commentTarget = useTracker(
+      () =>
+        boardFocus && isComment
+          ? describeCommentTarget(commentNode)
+          : undefined,
+      [boardFocus, isComment, commentNode],
+    );
 
     const senderDisplayName =
       message.sender !== undefined
@@ -999,6 +1020,14 @@ const ChatHistoryMessage = React.memo(
             >
               <AddReactionButton icon={faFaceSmile} />
             </PillSection>
+            {boardFocus && commentThread && (
+              <PillSection
+                title="Show on board"
+                onClick={() => boardFocus.focusComment(commentThread)}
+              >
+                <ReplyButton icon={faLocationCrosshairs} />
+              </PillSection>
+            )}
             <PillSection
               title={"Reply"}
               onClick={() => setReplyingTo(message._id)}
@@ -1043,6 +1072,19 @@ const ChatHistoryMessage = React.memo(
           roles={roles}
           imageOnLoad={imageOnLoad}
         />
+        {boardFocus && message.comment && (
+          <CommentNote>
+            <FontAwesomeIcon icon={faComment} /> Comment on {commentTarget}
+            {message.comment.resolvedAt ? " (resolved)" : ""}
+            {" · "}
+            <CommentNoteLink
+              type="button"
+              onClick={() => boardFocus.focusComment(message._id)}
+            >
+              Show on board
+            </CommentNoteLink>
+          </CommentNote>
+        )}
         <ReactionContainer>
           {Array.from(reactionCounts.entries()).map(([emoji, count]) => {
             const userHasReacted = userReactions.some((reaction) => {
@@ -1311,7 +1353,9 @@ const ChatHistory = React.forwardRef(
             // * this message was sent by the same person as the previous message
             // * this message was sent within 60 seconds (60000 milliseconds) of the previous message
             // * the message is not pinned
-            if (isReaction(msg)) {
+            // A whiteboard comment that happens to start with an emoji is
+            // still a comment, not a reaction.
+            if (!msg.comment && isReaction(msg)) {
               return null;
             }
             const lastMessage = index > 0 ? messages[index - 1] : undefined;
@@ -1534,17 +1578,6 @@ const StyledFancyEditor = styled(FancyEditor)`
   resize: none;
 `;
 
-const initialValue: Descendant[] = [
-  {
-    type: "message",
-    children: [
-      {
-        text: "",
-      },
-    ],
-  },
-];
-
 const ChatInput = React.memo(
   React.forwardRef<
     FancyEditorHandle,
@@ -1608,7 +1641,7 @@ const ChatInput = React.memo(
         e.preventDefault();
       }, []);
 
-      const [content, setContent] = useState<Descendant[]>(initialValue);
+      const [content, setContent] = useState<Descendant[]>(emptyEditorContent);
       const fancyEditorRef = useRef<FancyEditorHandle | null>(null);
       const onContentChange = useCallback(
         (newContent: Descendant[]) => {
@@ -1617,83 +1650,26 @@ const ChatInput = React.memo(
         },
         [onHeightChangeCb],
       );
-      const hasNonTrivialContent = useMemo(() => {
-        return (
-          content.length > 0 &&
-          (content[0]! as MessageElement).children.some((child) => {
-            return (
-              nodeIsImage(child) ||
-              nodeIsMention(child) ||
-              nodeIsRoleMention(child) ||
-              (nodeIsText(child) && child.text.trim().length > 0)
-            );
-          })
-        );
-      }, [content]);
+      const hasNonTrivialContent = useMemo(
+        () => hasSendableContent(content),
+        [content],
+      );
 
-      const hasLoadingImage = useMemo(() => {
-        return (
-          content.length > 0 &&
-          (content[0]! as MessageElement).children.some((child) => {
-            return nodeIsImage(child) && child.status === "loading";
-          })
-        );
-      }, [content]);
+      const hasLoadingImage = useMemo(
+        () => hasLoadingImageInContent(content),
+        [content],
+      );
 
       const sendContentMessage = useCallback(() => {
         if (hasNonTrivialContent && !hasLoadingImage) {
           // Prepare to send message to server.
 
-          // Take only the first Descendant; we normalize the input to a single
-          // block with type "message".
-          const message = content[0]! as MessageElement;
-          // Strip out children from mention elements.  We only need the type and
-          // userId for display purposes.
-          const { type, children } = message;
-          const cleanedMessage = {
-            type,
-            children: children
-              .filter((child) => {
-                if (nodeIsMention(child) || nodeIsRoleMention(child)) {
-                  return true;
-                }
-                if (nodeIsImage(child) && child.status !== "success") {
-                  return false;
-                }
-                if (nodeIsText(child) && child.text === "") {
-                  return false;
-                }
-                return true;
-              })
-              .map((child) => {
-                if (nodeIsMention(child)) {
-                  return {
-                    type: child.type,
-                    userId: child.userId,
-                  };
-                } else if (nodeIsRoleMention(child)) {
-                  return {
-                    type: child.type,
-                    roleId: child.roleId,
-                  };
-                } else if (nodeIsImage(child)) {
-                  return {
-                    type: child.type,
-                    url: child.url,
-                  };
-                } else {
-                  return child;
-                }
-              }),
-          };
-
-          // Send chat message.
           sendChatMessage.call({
             puzzleId,
-            content: JSON.stringify(cleanedMessage),
+            content: JSON.stringify(cleanEditorMessage(content)),
             parentId: replyingTo,
           });
-          setContent(initialValue);
+          setContent(emptyEditorContent);
           fancyEditorRef.current?.clearInput();
           if (onMessageSent) {
             onMessageSent();
@@ -3632,7 +3608,42 @@ const PuzzleDeletedModal = ({
   return createPortal(modal, document.body);
 };
 
-const PuzzlePage = React.memo(() => {
+interface PuzzlePageProps {
+  // Used by the whiteboard, which reuses this page's chat and call around its
+  // own canvas.
+  puzzleIdOverride?: string;
+  content?: React.ReactNode;
+  // Changing this to a new value brings the content back into view on narrow
+  // screens (e.g. a link to a whiteboard comment).
+  showContentFor?: string;
+}
+
+const NarrowPaneToggle = styled.div`
+  display: flex;
+  justify-content: center;
+  padding: 4px;
+`;
+
+const NarrowPanes = styled.div`
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+`;
+
+// Chat stays mounted (and laid out, which its scrolling relies on) while
+// hidden, so a call keeps playing and an unsent message survives switching
+// panes.
+const NarrowPane = styled.div<{ $hidden?: boolean }>`
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  visibility: ${({ $hidden }) => ($hidden ? "hidden" : "visible")};
+  z-index: ${({ $hidden }) => ($hidden ? -1 : "auto")};
+`;
+
+const PuzzlePage = React.memo((props: PuzzlePageProps) => {
+  const { puzzleIdOverride, content, showContentFor } = props;
   const puzzlePageDivRef = useRef<HTMLDivElement | null>(null);
   const chatSectionRef = useRef<ChatSectionHandle | null>(null);
   const [persistentWidth, setPersistentWidth] = usePersistedSidebarWidth();
@@ -3648,6 +3659,22 @@ const PuzzlePage = React.memo(() => {
     useState<boolean>(false);
   const [isDesktop, setIsDesktop] = useState<boolean>(
     window.innerWidth >= MinimumDesktopWidth,
+  );
+  const [narrowPane, setNarrowPane] = useState<"content" | "chat">("content");
+  useEffect(() => {
+    if (showContentFor) setNarrowPane("content");
+  }, [showContentFor]);
+  const outerBoardFocus = useContext(BoardFocusContext);
+  // Showing a comment from chat on a narrow screen switches to the board.
+  const boardFocus = useMemo<BoardFocus | undefined>(
+    () =>
+      outerBoardFocus && {
+        focusComment: (threadId) => {
+          setNarrowPane("content");
+          return outerBoardFocus.focusComment(threadId);
+        },
+      },
+    [outerBoardFocus],
   );
 
   const [replyingTo, setMsgReplyingTo] = useState<string | null>(null);
@@ -3669,7 +3696,8 @@ const PuzzlePage = React.memo(() => {
   const prevIsChatMinimized = useRef(isChatMinimized);
 
   const huntId = useParams<"huntId">().huntId!;
-  const puzzleId = useParams<"puzzleId">().puzzleId!;
+  const routePuzzleId = useParams<"puzzleId">().puzzleId;
+  const puzzleId = puzzleIdOverride ?? routePuzzleId!;
 
   const [isVisible, setIsVisible] = useState(document.visibilityState);
 
@@ -3848,7 +3876,9 @@ const PuzzlePage = React.memo(() => {
   const puzzlesSubscribe = useTypedSubscribe(puzzlesForHunt, { huntId });
   const puzzlesLoading = puzzlesSubscribe();
   const puzzles = useTracker(() => {
-    return puzzlesLoading ? [] : Puzzles.find({ hunt: huntId }).fetch();
+    return puzzlesLoading
+      ? []
+      : Puzzles.find({ hunt: huntId, kind: { $ne: "whiteboard" } }).fetch();
   }, [puzzlesLoading, huntId]);
 
   // Sort by created at so that the "first" document always has consistent meaning
@@ -3900,9 +3930,12 @@ const PuzzlePage = React.memo(() => {
     ? `${activePuzzle.title}${activePuzzle.deleted ? " (deleted)" : ""}`
     : "(no such puzzle)";
   const title = puzzleDataLoading ? "loading..." : puzzleTitle;
+  const isWhiteboard = isWhiteboardPuzzle(activePuzzle);
   useBreadcrumb({
     title,
-    path: `/hunts/${huntId}/puzzles/${puzzleId}`,
+    path: isWhiteboard
+      ? `/hunts/${huntId}/whiteboard`
+      : `/hunts/${huntId}/puzzles/${puzzleId}`,
   });
 
   const documentTitle = `${title} :: Jolly Roger`;
@@ -4080,7 +4113,11 @@ const PuzzlePage = React.memo(() => {
   }, [isChatMinimized]);
 
   useEffect(() => {
-    if (activePuzzle && !activePuzzle.deleted) {
+    if (
+      activePuzzle &&
+      !activePuzzle.deleted &&
+      !isWhiteboardPuzzle(activePuzzle)
+    ) {
       ensurePuzzleDocument.call({ puzzleId: activePuzzle._id });
     }
   }, [activePuzzle]);
@@ -4101,7 +4138,10 @@ const PuzzlePage = React.memo(() => {
       </FixedLayout>
     );
   }
-  const metadata = (
+  if (isWhiteboard && !content) {
+    return <Navigate to={`/hunts/${huntId}/whiteboard`} replace />;
+  }
+  const metadata = content ? null : (
     <PuzzlePageMetadata
       isMinimized={isMetadataMinimized}
       puzzle={activePuzzle}
@@ -4118,29 +4158,31 @@ const PuzzlePage = React.memo(() => {
   const effectiveSidebarWidth = isChatMinimized ? 1 : sidebarWidth;
 
   const chat = (
-    <ChatSectionMemo
-      ref={chatSectionRef}
-      chatDataLoading={chatDataLoading}
-      disabled={activePuzzle.deleted ?? true}
-      displayNames={displayNames}
-      puzzles={puzzles}
-      chatMessages={chatMessages}
-      huntId={huntId}
-      puzzleId={puzzleId}
-      callState={callState}
-      callDispatch={dispatch}
-      selfUser={selfUser!}
-      pulsingMessageId={pulsingMessageId}
-      setPulsingMessageId={setPulsingMessageId}
-      replyingTo={replyingTo}
-      setReplyingTo={setReplyingTo}
-      sidebarWidth={effectiveSidebarWidth}
-      showHighlights={showHighlights}
-      handleOpen={handleOpen}
-      handleClose={handleClose}
-      handleHighlightMessageClick={handleHighlightMessageClick}
-      roles={roles}
-    />
+    <BoardFocusContext.Provider value={boardFocus}>
+      <ChatSectionMemo
+        ref={chatSectionRef}
+        chatDataLoading={chatDataLoading}
+        disabled={activePuzzle.deleted ?? true}
+        displayNames={displayNames}
+        puzzles={puzzles}
+        chatMessages={chatMessages}
+        huntId={huntId}
+        puzzleId={puzzleId}
+        callState={callState}
+        callDispatch={dispatch}
+        selfUser={selfUser!}
+        pulsingMessageId={pulsingMessageId}
+        setPulsingMessageId={setPulsingMessageId}
+        replyingTo={replyingTo}
+        setReplyingTo={setReplyingTo}
+        sidebarWidth={effectiveSidebarWidth}
+        showHighlights={showHighlights}
+        handleOpen={handleOpen}
+        handleClose={handleClose}
+        handleHighlightMessageClick={handleHighlightMessageClick}
+        roles={roles}
+      />
+    </BoardFocusContext.Provider>
   );
   const deletedModal = activePuzzle.deleted && (
     <PuzzleDeletedModal
@@ -4189,20 +4231,21 @@ const PuzzlePage = React.memo(() => {
     );
   }
 
-  const showMetadataButton = isMetadataMinimized ? (
-    <OverlayTrigger
-      placement="bottom-end"
-      overlay={<Tooltip>Show puzzle information</Tooltip>}
-    >
-      <PuzzleMetadataFloatingButton
-        variant="secondary"
-        size="sm"
-        onClick={toggleMetadata}
+  const showMetadataButton =
+    isMetadataMinimized && !content ? (
+      <OverlayTrigger
+        placement="bottom-end"
+        overlay={<Tooltip>Show puzzle information</Tooltip>}
       >
-        <FontAwesomeIcon icon={faAngleDoubleDown} />
-      </PuzzleMetadataFloatingButton>
-    </OverlayTrigger>
-  ) : null;
+        <PuzzleMetadataFloatingButton
+          variant="secondary"
+          size="sm"
+          onClick={toggleMetadata}
+        >
+          <FontAwesomeIcon icon={faAngleDoubleDown} />
+        </PuzzleMetadataFloatingButton>
+      </OverlayTrigger>
+    ) : null;
 
   const visibleTickers = tickerQueue.slice(0, 3);
   const overflowCount = Math.max(0, tickerQueue.length - 3);
@@ -4278,11 +4321,13 @@ const PuzzlePage = React.memo(() => {
               {metadata}
               {showMetadataButton}
               <PuzzleDocumentDiv>
-                <PuzzlePageMultiplayerDocument
-                  document={doc}
-                  showDocument={true}
-                  selfUser={selfUser!}
-                />
+                {content ?? (
+                  <PuzzlePageMultiplayerDocument
+                    document={doc}
+                    showDocument={true}
+                    selfUser={selfUser!}
+                  />
+                )}
               </PuzzleDocumentDiv>
               {debugPane}
             </PuzzleContent>
@@ -4293,6 +4338,39 @@ const PuzzlePage = React.memo(() => {
   }
 
   // Non-desktop (narrow layout)
+  if (content) {
+    return (
+      <>
+        {deletedModal}
+        <FixedLayout $narrow ref={puzzlePageDivRef}>
+          <NarrowPaneToggle>
+            <ButtonGroup size="sm">
+              <Button
+                variant={
+                  narrowPane === "content" ? "secondary" : "outline-secondary"
+                }
+                onClick={() => setNarrowPane("content")}
+              >
+                Board
+              </Button>
+              <Button
+                variant={
+                  narrowPane === "chat" ? "secondary" : "outline-secondary"
+                }
+                onClick={() => setNarrowPane("chat")}
+              >
+                Chat
+              </Button>
+            </ButtonGroup>
+          </NarrowPaneToggle>
+          <NarrowPanes>
+            {narrowPane === "content" && <NarrowPane>{content}</NarrowPane>}
+            <NarrowPane $hidden={narrowPane !== "chat"}>{chat}</NarrowPane>
+          </NarrowPanes>
+        </FixedLayout>
+      </>
+    );
+  }
   return (
     <>
       {deletedModal}

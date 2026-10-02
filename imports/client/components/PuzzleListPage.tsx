@@ -221,7 +221,7 @@ const PuzzleListView = ({
 }) => {
   const hunt = Hunts.findOne(huntId);
   const allPuzzles = useTracker(
-    () => Puzzles.find({ hunt: huntId }).fetch(),
+    () => Puzzles.find({ hunt: huntId, kind: { $ne: "whiteboard" } }).fetch(),
     [huntId],
   );
   const allTags = useTracker(
@@ -239,7 +239,10 @@ const PuzzleListView = ({
     () =>
       !isAdmin || loading
         ? undefined
-        : Puzzles.findDeleted({ hunt: huntId }).fetch(),
+        : Puzzles.findDeleted({
+            hunt: huntId,
+            kind: { $ne: "whiteboard" },
+          }).fetch(),
     [huntId, loading],
   );
 

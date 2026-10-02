@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import { faBullhorn } from "@fortawesome/free-solid-svg-icons/faBullhorn";
+import { faChalkboard } from "@fortawesome/free-solid-svg-icons/faChalkboard";
 import { faDisplay } from "@fortawesome/free-solid-svg-icons/faDisplay";
 import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
 import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalLinkAlt";
@@ -12,8 +13,12 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Nav from "react-bootstrap/Nav";
 import { NavLink, useParams } from "react-router-dom";
 import styled, { css } from "styled-components";
+import Flags from "../../Flags";
 import Hunts from "../../lib/models/Hunts";
+import Whiteboards from "../../lib/models/Whiteboards";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
+import whiteboardForHunt from "../../lib/publications/whiteboardForHunt";
+import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import type { Theme } from "../theme";
 import { mediaBreakpointDown } from "./styling/responsive";
 
@@ -146,6 +151,15 @@ const HuntNav = () => {
       canUpdate: userMayWritePuzzlesForHunt(Meteor.user(), hunt),
     };
   }, [hunt]);
+  useTypedSubscribe(whiteboardForHunt, { huntId });
+  // Members see the link once a board exists; operators also see it before
+  // then, so they can create one.
+  const showWhiteboard = useTracker(
+    () =>
+      !Flags.active("disable.whiteboard") &&
+      (canUpdate || !!Whiteboards.findOne({ hunt: huntId })),
+    [canUpdate, huntId],
+  );
   if (huntId && hunt) {
     const huntUrl = hunt.archivedHuntUrl ?? hunt.homepageUrl;
     const huntLink = huntUrl && (
@@ -195,6 +209,16 @@ const HuntNav = () => {
           <MenuIcon icon={faUsers} />
           <StyledPuzzleListLinkLabel>Hunters</StyledPuzzleListLinkLabel>
         </StyledPuzzleListLinkAnchor>
+
+        {showWhiteboard && (
+          <StyledPuzzleListLinkAnchor
+            to={`/hunts/${huntId}/whiteboard`}
+            title="Whiteboard"
+          >
+            <MenuIcon icon={faChalkboard} />
+            <StyledPuzzleListLinkLabel>Whiteboard</StyledPuzzleListLinkLabel>
+          </StyledPuzzleListLinkAnchor>
+        )}
 
         {/* Show firehose and tag manager links only to operators */}
         {canUpdate && (

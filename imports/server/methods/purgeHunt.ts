@@ -14,6 +14,10 @@ import PendingAnnouncements from "../../lib/models/PendingAnnouncements";
 import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
+import WhiteboardEdges from "../../lib/models/WhiteboardEdges";
+import WhiteboardNodes from "../../lib/models/WhiteboardNodes";
+import WhiteboardPresence from "../../lib/models/WhiteboardPresence";
+import Whiteboards from "../../lib/models/Whiteboards";
 import { checkAdmin } from "../../lib/permission_stubs";
 import purgeHunt from "../../methods/purgeHunt";
 import Subscribers from "../models/Subscribers";
@@ -46,5 +50,9 @@ defineMethod(purgeHunt, {
     await PuzzleNotifications.removeAsync({ hunt });
     await Subscribers.removeAsync({ hunt });
     await Tags.removeAsync({ hunt });
+    await WhiteboardEdges.removeAsync({ hunt });
+    await WhiteboardNodes.removeAsync({ hunt });
+    await WhiteboardPresence.removeAsync({ hunt });
+    await Whiteboards.removeAsync({ hunt });
   },
 });

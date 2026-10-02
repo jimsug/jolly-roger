@@ -388,7 +388,10 @@ const GuessQueuePage = () => {
         { hunt: huntId },
         { sort: { createdAt: -1 } },
       ).fetch(),
-      rawPuzzles: Puzzles.find({ hunt: huntId }).fetch(),
+      rawPuzzles: Puzzles.find({
+        hunt: huntId,
+        kind: { $ne: "whiteboard" },
+      }).fetch(),
       rawDisplayNames: indexedDisplayNames(),
       canEdit: userMayUpdateGuessesForHunt(
         Meteor.user(),

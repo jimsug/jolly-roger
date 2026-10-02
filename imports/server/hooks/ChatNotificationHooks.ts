@@ -3,6 +3,7 @@ import {
   normalizedForDingwordSearch,
   normalizedMessageDingsUserByDingword,
 } from "../../lib/dingwordLogic";
+import isReaction from "../../lib/isReaction";
 import ChatMessages from "../../lib/models/ChatMessages";
 import ChatNotifications from "../../lib/models/ChatNotifications";
 import MeteorUsers from "../../lib/models/MeteorUsers";
@@ -81,6 +82,28 @@ const ChatNotificationHooks: Hookset = {
       }),
     );
 
+    // A reply in a whiteboard comment thread goes to whoever left the comment
+    // and everyone who has replied so far.
+    if (chatMessage.thread && !isReaction(chatMessage)) {
+      const root = await ChatMessages.findOneAsync(chatMessage.thread);
+      const earlierReplies = await ChatMessages.find({
+        thread: chatMessage.thread,
+        _id: { $ne: chatMessage._id },
+        timestamp: { $lte: chatMessage.timestamp },
+      }).fetchAsync();
+      const participants = new Set<string>();
+      [root, ...earlierReplies.filter((m) => !isReaction(m))].forEach((m) => {
+        if (m?.sender && m.sender !== sender) participants.add(m.sender);
+      });
+      if (participants.size > 0) {
+        const stillInHunt = await MeteorUsers.find(
+          { _id: { $in: [...participants] }, hunts: chatMessage.hunt },
+          { projection: { _id: 1 } },
+        ).mapAsync((u) => u._id);
+        stillInHunt.forEach((userId) => addUserToNotify(userId));
+      }
+    }
+
     // Respect feature flag.
     if (!(await Flags.activeAsync("disable.dingwords"))) {
       const normalizedText = normalizedForDingwordSearch(chatMessage);
@@ -131,6 +154,9 @@ const ChatNotificationHooks: Hookset = {
           message: chatMessage._id,
           // Store the matches so the UI knows which word to offer to ignore
           dingwords: words.length > 0 ? words : undefined,
+          thread:
+            chatMessage.thread ??
+            (chatMessage.comment ? chatMessage._id : undefined),
         }),
       );
     });

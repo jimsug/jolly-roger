@@ -7,6 +7,7 @@ import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import markComplete from "../../methods/markComplete";
 import GlobalHooks from "../GlobalHooks";
 import sendChatMessageInternal from "../sendChatMessageInternal";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(markComplete, {
@@ -20,6 +21,7 @@ defineMethod(markComplete, {
 
   async run({ puzzleId, markedComplete }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const oldPuzzle = await Puzzles.findOneAllowingDeletedAsync(puzzleId);
     if (!oldPuzzle) {

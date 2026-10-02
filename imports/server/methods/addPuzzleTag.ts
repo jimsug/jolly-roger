@@ -5,6 +5,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import addPuzzleTag from "../../methods/addPuzzleTag";
 import GlobalHooks from "../GlobalHooks";
 import getOrCreateTagByName from "../getOrCreateTagByName";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(addPuzzleTag, {
@@ -19,6 +20,7 @@ defineMethod(addPuzzleTag, {
 
   async run({ puzzleId, tagName }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     // Look up which hunt the specified puzzle is from.
     const puzzle = await Puzzles.findOneAsync(

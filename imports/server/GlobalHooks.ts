@@ -7,6 +7,7 @@ import HooksRegistry from "./hooks/HooksRegistry";
 import PuzzleHooks from "./hooks/PuzzleHooks";
 import TagCleanupHooks from "./hooks/TagCleanupHooks";
 import TagDingwordHooks from "./hooks/TagHooks";
+import WhiteboardHooks from "./hooks/WhiteboardHooks";
 
 // Instantiate the application-global hookset list.
 const GlobalHooks = new HooksRegistry();
@@ -19,5 +20,6 @@ GlobalHooks.addHookSet(TagCleanupHooks);
 GlobalHooks.addHookSet(ChatHooks);
 GlobalHooks.addHookSet(BookmarkNotificationHooks);
 GlobalHooks.addHookSet(TagDingwordHooks);
+GlobalHooks.addHookSet(WhiteboardHooks);
 
 export default GlobalHooks;

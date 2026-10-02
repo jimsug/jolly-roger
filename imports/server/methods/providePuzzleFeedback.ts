@@ -3,6 +3,7 @@ import { Meteor } from "meteor/meteor";
 import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import Puzzles from "../../lib/models/Puzzles";
 import providePuzzleFeedback from "../../methods/providePuzzleFeedback";
+import { assertNotWhiteboardPuzzle } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(providePuzzleFeedback, {
@@ -17,6 +18,7 @@ defineMethod(providePuzzleFeedback, {
 
   async run({ puzzleId, score, comment }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(puzzleId);
     if (!puzzle) {
