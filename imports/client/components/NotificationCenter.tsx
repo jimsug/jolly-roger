@@ -10,7 +10,6 @@ import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
 import Alert from "react-bootstrap/Alert";
-import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
 import Dropdown from "react-bootstrap/Dropdown";
@@ -78,7 +77,7 @@ import indexedDisplayNames from "../indexedDisplayNames";
 import AnnouncementToast from "./AnnouncementToast";
 import ChatMessage from "./ChatMessage";
 import CopyToClipboardButton from "./CopyToClipboardButton";
-import { formatConfidence, formatGuessDirection } from "./guessDetails";
+import { GuessConfidenceBadge, GuessDirectionBadge } from "./guessDetails";
 import Markdown from "./Markdown";
 import PuzzleAnswer from "./PuzzleAnswer";
 import { MinimumDesktopWidth } from "./PuzzlePage";
@@ -182,76 +181,16 @@ const ToastSettings = ({
 };
 
 // A guess's direction and confidence sliders summarised as a word each.
-const GuessDetailBadges = ({ guess }: { guess: GuessType }) => {
-  const { t } = useTranslation();
-
-  const direction = guess.direction ?? 0;
-  let directionLabel: string;
-  let directionVariant: string;
-  if (direction > 5) {
-    directionLabel = t(
-      "notification.guessMessage.direction.forward",
-      "Forward",
-    );
-    directionVariant = "primary";
-  } else if (direction > 0) {
-    directionLabel = t(
-      "notification.guessMessage.direction.mostlyForward",
-      "Forward*",
-    );
-    directionVariant = "primary";
-  } else if (direction < -5) {
-    directionLabel = t("notification.guessMessage.direction.back", "Back");
-    directionVariant = "danger";
-  } else if (direction < 0) {
-    directionLabel = t(
-      "notification.guessMessage.direction.mostlyBack",
-      "Back*",
-    );
-    directionVariant = "danger";
-  } else {
-    directionLabel = t("notification.guessMessage.direction.mixed", "Mixed");
-    directionVariant = "secondary";
-  }
-
-  const confidence = guess.confidence ?? 50;
-  let confidenceLabel: string;
-  let confidenceVariant: string;
-  if (confidence > 50) {
-    confidenceLabel = t("notification.guessMessage.confidence.high", "High");
-    confidenceVariant = "success";
-  } else if (confidence < 50) {
-    confidenceLabel = t("notification.guessMessage.confidence.low", "Low");
-    confidenceVariant = "danger";
-  } else {
-    confidenceLabel = t(
-      "notification.guessMessage.confidence.medium",
-      "Medium",
-    );
-    confidenceVariant = "warning";
-  }
-
-  return (
-    <>
-      <StyledNotificationActionItem className="align-items-center">
-        <Badge
-          bg={directionVariant}
-          title={`${t("puzzle.answerOrGuess.direction", "Solve direction")}: ${formatGuessDirection(guess.direction)}`}
-        >
-          {directionLabel}
-        </Badge>
-      </StyledNotificationActionItem>
-      <StyledNotificationActionItem className="align-items-center">
-        <Badge
-          bg={confidenceVariant}
-          title={`${t("puzzle.answerOrGuess.confidence", "Confidence")}: ${formatConfidence(guess.confidence)}`}
-        >
-          {confidenceLabel}
-        </Badge>
-      </StyledNotificationActionItem>
-    </>
-  );
-};
+const GuessDetailBadges = ({ guess }: { guess: GuessType }) => (
+  <>
+    <StyledNotificationActionItem className="align-items-center">
+      <GuessDirectionBadge value={guess.direction} />
+    </StyledNotificationActionItem>
+    <StyledNotificationActionItem className="align-items-center">
+      <GuessConfidenceBadge value={guess.confidence} />
+    </StyledNotificationActionItem>
+  </>
+);
 
 // Whether a corrected answer changes more than the spacing of the guess.
 const changesMoreThanSpacing = (correction: string, original: string) =>

@@ -583,7 +583,7 @@ const PuzzleModalForm = ({
             : t("puzzle.edit.addPuzzle", "Add puzzle")
         }
         onSubmit={onFormSubmit}
-        submitDisabled={disableForm}
+        submitting={disableForm}
       >
         <FormGroup
           as={Row}

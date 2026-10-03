@@ -5,9 +5,6 @@ import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg
 import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons/faAngleDoubleDown";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faArrowDown } from "@fortawesome/free-solid-svg-icons/faArrowDown";
-import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
-import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
-import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faChevronLeft } from "@fortawesome/free-solid-svg-icons/faChevronLeft";
 import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
@@ -58,6 +55,8 @@ import Popover from "react-bootstrap/Popover";
 import Row from "react-bootstrap/Row";
 import Tab from "react-bootstrap/Tab";
 import Tabs from "react-bootstrap/Tabs";
+import ToggleButton from "react-bootstrap/ToggleButton";
+import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import Tooltip from "react-bootstrap/Tooltip";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -93,6 +92,7 @@ import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import nodeIsText from "../../lib/nodeIsText";
 import {
   listAllRolesForHunt,
+  userMayUpdateGuessesForHunt,
   userMayWritePuzzlesForHunt,
 } from "../../lib/permission_stubs";
 import chatMessagesForPuzzle from "../../lib/publications/chatMessagesForPuzzle";
@@ -113,9 +113,12 @@ import undestroyPuzzle from "../../methods/undestroyPuzzle";
 import updatePuzzle from "../../methods/updatePuzzle";
 import EnabledChatImage from "../EnabledChatImage";
 import { useBreadcrumb } from "../hooks/breadcrumb";
-import { usePersistedSidebarWidth } from "../hooks/persisted-state";
+import {
+  useOperatorActionsHiddenForHunt,
+  usePersistedSidebarWidth,
+} from "../hooks/persisted-state";
 import useBlockUpdate from "../hooks/useBlockUpdate";
-import type { Action, CallState } from "../hooks/useCallState";
+import type { Action, CallState, JoinCallOptions } from "../hooks/useCallState";
 import useCallState from "../hooks/useCallState";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import useDocumentVisible from "../hooks/useDocumentVisible";
@@ -131,12 +134,7 @@ import DocumentDisplay, { DocumentMessage } from "./DocumentDisplay";
 import type { FancyEditorHandle, MessageElement } from "./FancyEditor";
 import FancyEditor from "./FancyEditor";
 import GuessState from "./GuessState";
-import {
-  formatConfidence,
-  formatGuessDirection,
-  GuessConfidence,
-  GuessDirection,
-} from "./guessDetails";
+import { GuessConfidenceBadge, GuessDirectionBadge } from "./guessDetails";
 import InsertImage from "./InsertImage";
 import Markdown from "./Markdown";
 import MinimizedChatInfo from "./MinimizedChatInfo";
@@ -1868,7 +1866,7 @@ const ChatSection = React.memo(
     huntId: string;
     callState: CallState;
     callDispatch: React.Dispatch<Action>;
-    joinCall: () => void;
+    joinCall: (options?: JoinCallOptions) => void;
     selfUser: Meteor.User;
     ref: React.Ref<ChatSectionHandle>;
   }) => {
@@ -2443,11 +2441,6 @@ const PuzzlePageMetadata = ({
   );
 };
 
-const ValidatedSliderContainer = styled.div`
-  display: flex;
-  align-items: center;
-`;
-
 const GuessTable = styled.div`
   display: grid;
   grid-template-columns:
@@ -2493,24 +2486,6 @@ const GuessRow = styled.div<{ $state: GuessType["state"] }>`
     background-color: ${({ $state, theme }) =>
       theme.colors.guess[$state].hoverBackground};
   }
-`;
-
-const GuessSliderContainer = styled.div`
-  display: flex;
-  align-items: center;
-  flex-grow: 1;
-`;
-const GuessSliderLeftLabel = styled.div`
-  width: 1.5em;
-  text-align: right;
-`;
-const GuessSliderRightLabel = styled.div`
-  width: 2.5em;
-  text-align: left;
-`;
-const GuessSlider = styled.input`
-  width: 1px;
-  flex-grow: 1;
 `;
 
 const GuessCell = styled.div`
@@ -2808,6 +2783,10 @@ type PuzzleGuessModalHandle = {
   show: () => void;
 };
 
+// New guesses start out as a confident forward solve, the common case
+const DEFAULT_GUESS_DIRECTION = 10;
+const DEFAULT_GUESS_CONFIDENCE = 100;
+
 const PuzzleGuessModal = ({
   puzzle,
   guesses,
@@ -2820,10 +2799,10 @@ const PuzzleGuessModal = ({
   ref: React.Ref<PuzzleGuessModalHandle>;
 }) => {
   const [guessInput, setGuessInput] = useState("");
-  const [directionInput, setDirectionInput] = useState(0);
-  const [haveSetDirection, setHaveSetDirection] = useState(false);
-  const [confidenceInput, setConfidenceInput] = useState(50);
-  const [haveSetConfidence, setHaveSetConfidence] = useState(false);
+  const [directionInput, setDirectionInput] = useState(DEFAULT_GUESS_DIRECTION);
+  const [confidenceInput, setConfidenceInput] = useState(
+    DEFAULT_GUESS_CONFIDENCE,
+  );
   const [confirmingSubmit, setConfirmingSubmit] = useState(false);
   const [confirmationMessage, setConfirmationMessage] = useState("");
   const [submitState, setSubmitState] = useState(PuzzleGuessSubmitState.IDLE);
@@ -2846,109 +2825,93 @@ const PuzzleGuessModal = ({
       setConfirmingSubmit(false);
     }, []);
 
-  const onDirectionInputChange: NonNullable<FormControlProps["onChange"]> =
-    useCallback((event) => {
-      setHaveSetDirection(true);
-      setDirectionInput(parseInt(event.currentTarget.value, 10));
-    }, []);
+  const onDirectionInputChange = useCallback((value: number) => {
+    setDirectionInput(value);
+  }, []);
 
-  const onConfidenceInputChange: NonNullable<FormControlProps["onChange"]> =
-    useCallback((event) => {
-      setHaveSetConfidence(true);
-      setConfidenceInput(parseInt(event.currentTarget.value, 10));
-    }, []);
+  const onConfidenceInputChange = useCallback((value: number) => {
+    setConfidenceInput(value);
+  }, []);
 
   const solvedness = useMemo(() => {
     return computeSolvedness(puzzle);
   }, [puzzle]);
 
-  const onSubmitGuess = useCallback(() => {
-    const strippedGuess = guessInput.replaceAll(/\s/g, "");
-    const repeatGuess = guesses.find((g) => {
-      return g.guess.replaceAll(/\s/g, "") === strippedGuess;
-    });
-    if ((repeatGuess || solvedness !== "unsolved") && !confirmingSubmit) {
-      const repeatGuessStr = repeatGuess
-        ? t(
-            "puzzle.answerOrGuess.repeatAnswer",
-            "This answer has already been submitted. ",
-          )
-        : "";
-      const solvednessStr = {
-        solved: t(
-          "puzzle.answerOrGuess.alreadySolved",
-          "This puzzle has already been solved. ",
-        ),
-        noAnswers: t(
-          "puzzle.answerOrGuess.expectNoAnswer",
-          "This puzzle does not expect any answers to be submitted. ",
-        ),
-        unsolved: "",
-      }[solvedness];
-      const msg = `${solvednessStr} ${repeatGuessStr} ${t("puzzle.answerOrGuess.areYouSure", "Are you sure you want to submit this guess?")}`;
-      setConfirmationMessage(msg);
-      setConfirmingSubmit(true);
-    } else if (!haveSetDirection || !haveSetConfidence) {
-      setSubmitError(
-        t(
-          "puzzle.answerOrGuess.needDirectionAndConfidence",
-          "Please set a direction and confidence for your guess.",
-        ),
-      );
-      setSubmitState(PuzzleGuessSubmitState.FAILED);
-    } else {
-      createGuess.call(
-        {
-          puzzleId: puzzle._id,
-          guess: guessInput,
-          direction: directionInput,
-          confidence: confidenceInput,
-        },
-        (error) => {
-          if (error) {
-            setSubmitError(error.message);
-            setSubmitState(PuzzleGuessSubmitState.FAILED);
-          } else {
-            // Clear the input box.  Don't dismiss the dialog.
-            setGuessInput("");
-            setHaveSetConfidence(false);
-            setConfidenceInput(50);
-            setHaveSetDirection(false);
-            setDirectionInput(0);
-            setSubmitError("");
-            setSubmitState(PuzzleGuessSubmitState.IDLE);
-          }
-          setConfirmingSubmit(false);
-        },
-      );
-    }
-  }, [
-    guesses,
-    puzzle._id,
-    solvedness,
-    guessInput,
-    directionInput,
-    confidenceInput,
-    confirmingSubmit,
-    haveSetDirection,
-    haveSetConfidence,
-    t,
-  ]);
+  // Operators mark guesses from the notification toasts, which stay hidden
+  // while the operator interface is off
+  const hunt = useTracker(() => Hunts.findOne(puzzle.hunt), [puzzle.hunt]);
+  const canUpdateGuesses = useTracker(
+    () => userMayUpdateGuessesForHunt(Meteor.user(), hunt),
+    [hunt],
+  );
+  const [operatorActionsHidden] = useOperatorActionsHiddenForHunt(puzzle.hunt);
+
+  const onSubmitGuess = useCallback(
+    (hideModal: () => void) => {
+      const strippedGuess = guessInput.replaceAll(/\s/g, "");
+      const repeatGuess = guesses.find((g) => {
+        return g.guess.replaceAll(/\s/g, "") === strippedGuess;
+      });
+      if ((repeatGuess || solvedness !== "unsolved") && !confirmingSubmit) {
+        const repeatGuessStr = repeatGuess
+          ? t(
+              "puzzle.answerOrGuess.repeatAnswer",
+              "This answer has already been submitted. ",
+            )
+          : "";
+        const solvednessStr = {
+          solved: t(
+            "puzzle.answerOrGuess.alreadySolved",
+            "This puzzle has already been solved. ",
+          ),
+          noAnswers: t(
+            "puzzle.answerOrGuess.expectNoAnswer",
+            "This puzzle does not expect any answers to be submitted. ",
+          ),
+          unsolved: "",
+        }[solvedness];
+        const msg = `${solvednessStr} ${repeatGuessStr} ${t("puzzle.answerOrGuess.areYouSure", "Are you sure you want to submit this guess?")}`;
+        setConfirmationMessage(msg);
+        setConfirmingSubmit(true);
+      } else {
+        createGuess.call(
+          {
+            puzzleId: puzzle._id,
+            guess: guessInput,
+            direction: directionInput,
+            confidence: confidenceInput,
+          },
+          (error) => {
+            if (error) {
+              setSubmitError(error.message);
+              setSubmitState(PuzzleGuessSubmitState.FAILED);
+            } else {
+              // Reset for the next guess and dismiss the dialog
+              setGuessInput("");
+              setDirectionInput(DEFAULT_GUESS_DIRECTION);
+              setConfidenceInput(DEFAULT_GUESS_CONFIDENCE);
+              setSubmitError("");
+              setSubmitState(PuzzleGuessSubmitState.IDLE);
+              hideModal();
+            }
+            setConfirmingSubmit(false);
+          },
+        );
+      }
+    },
+    [
+      guesses,
+      puzzle._id,
+      solvedness,
+      guessInput,
+      directionInput,
+      confidenceInput,
+      confirmingSubmit,
+      t,
+    ],
+  );
 
   const idPrefix = useId();
-
-  const directionTooltip = (
-    <Tooltip id={`${idPrefix}-direction-tooltip`}>
-      <strong>{t("puzzle.answerOrGuess.direction", "Solve direction")}:</strong>{" "}
-      {formatGuessDirection(directionInput)}
-    </Tooltip>
-  );
-  const confidenceTooltip = (
-    <Tooltip id={`${idPrefix}-confidence-tooltip`}>
-      <strong>{t("puzzle.answerOrGuess.confidence", "Confidence")}:</strong>{" "}
-      {formatConfidence(confidenceInput)}
-    </Tooltip>
-  );
 
   const clearError = useCallback(() => {
     setSubmitState(PuzzleGuessSubmitState.IDLE);
@@ -3007,99 +2970,116 @@ const PuzzleGuessModal = ({
         </Col>
       </FormGroup>
 
-      <FormGroup
-        as={Row}
-        className="mb-3"
-        controlId={`${idPrefix}-guess-direction`}
-      >
+      <FormGroup as={Row} className="mb-3">
         <FormLabel column xs={3}>
           {t("puzzle.answerOrGuess.direction", "Solve direction")}:
         </FormLabel>
         <Col xs={9}>
-          <ValidatedSliderContainer>
-            <OverlayTrigger placement="top" overlay={directionTooltip}>
-              <GuessSliderContainer>
-                <GuessSliderLeftLabel>
-                  <FontAwesomeIcon icon={faArrowLeft} />
-                </GuessSliderLeftLabel>
-                <GuessSlider
-                  id={`${idPrefix}-guess-direction`}
-                  type="range"
-                  min="-10"
-                  max="10"
-                  list={`${idPrefix}-guess-direction-list`}
-                  onChange={onDirectionInputChange}
-                  value={directionInput}
-                  disabled={puzzle.deleted}
-                />
-                <datalist id={`${idPrefix}-guess-direction-list`}>
-                  <option value="-10">-10</option>
-                  <option value="0">0</option>
-                  <option value="10">10</option>
-                </datalist>
-                <GuessSliderRightLabel>
-                  <FontAwesomeIcon icon={faArrowRight} />
-                </GuessSliderRightLabel>
-              </GuessSliderContainer>
-            </OverlayTrigger>
-            <FontAwesomeIcon
-              icon={faCheck}
-              color={haveSetDirection ? "green" : "transparent"}
-            />
-          </ValidatedSliderContainer>
+          <ToggleButtonGroup
+            type="radio"
+            name={`${idPrefix}-guess-direction`}
+            value={directionInput}
+            onChange={onDirectionInputChange}
+          >
+            <ToggleButton
+              id={`${idPrefix}-guess-direction-back`}
+              variant="outline-secondary"
+              value={-10}
+              disabled={puzzle.deleted}
+            >
+              {t("puzzle.answerOrGuess.directionOption.backsolve", "Backsolve")}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-guess-direction-mostly-back`}
+              variant="outline-secondary"
+              value={-5}
+              disabled={puzzle.deleted}
+            >
+              {t(
+                "puzzle.answerOrGuess.directionOption.mostlyBack",
+                "Mostly back",
+              )}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-guess-direction-mixed`}
+              variant="outline-secondary"
+              value={0}
+              disabled={puzzle.deleted}
+            >
+              {t("puzzle.answerOrGuess.directionOption.mixed", "Mixed")}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-guess-direction-mostly-forward`}
+              variant="outline-secondary"
+              value={5}
+              disabled={puzzle.deleted}
+            >
+              {t(
+                "puzzle.answerOrGuess.directionOption.mostlyForward",
+                "Mostly forward",
+              )}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-guess-direction-forward`}
+              variant="outline-primary"
+              value={10}
+              disabled={puzzle.deleted}
+            >
+              {t(
+                "puzzle.answerOrGuess.directionOption.forwardsolve",
+                "Forwardsolve",
+              )}
+            </ToggleButton>
+          </ToggleButtonGroup>
           <FormText>
             {t(
-              "puzzle.answerOrGuess.directionHelp",
-              `Pick a number between -10 (backsolved without opening the puzzle)
-              to 10 (forward-solved without seeing the round) to indicate if you
-              forward- or back-solved.`,
+              "puzzle.answerOrGuess.directionOptionsHelp",
+              "Select the direction of your solve.",
             )}
           </FormText>
         </Col>
       </FormGroup>
 
-      <FormGroup
-        as={Row}
-        className="mb-3"
-        controlId={`${idPrefix}-guess-confidence`}
-      >
+      <FormGroup as={Row} className="mb-3">
         <FormLabel column xs={3}>
           {t("puzzle.answerOrGuess.confidence", "Confidence")}
         </FormLabel>
         <Col xs={9}>
-          <ValidatedSliderContainer>
-            <OverlayTrigger placement="top" overlay={confidenceTooltip}>
-              <GuessSliderContainer>
-                <GuessSliderLeftLabel>0%</GuessSliderLeftLabel>
-                <GuessSlider
-                  id={`${idPrefix}-guess-confidence`}
-                  type="range"
-                  min="0"
-                  max="100"
-                  list={`${idPrefix}-guess-confidence-list`}
-                  onChange={onConfidenceInputChange}
-                  value={confidenceInput}
-                  disabled={puzzle.deleted}
-                />
-                <datalist id={`${idPrefix}-guess-confidence-list`}>
-                  <option value="0">0%</option>
-                  <option value="25">25%</option>
-                  <option value="50">50%</option>
-                  <option value="75">75%</option>
-                  <option value="100">100%</option>
-                </datalist>
-                <GuessSliderRightLabel>100%</GuessSliderRightLabel>
-              </GuessSliderContainer>
-            </OverlayTrigger>
-            <FontAwesomeIcon
-              icon={faCheck}
-              color={haveSetConfidence ? "green" : "transparent"}
-            />
-          </ValidatedSliderContainer>
+          <ToggleButtonGroup
+            type="radio"
+            name={`${idPrefix}-guess-confidence`}
+            value={confidenceInput}
+            onChange={onConfidenceInputChange}
+          >
+            <ToggleButton
+              id={`${idPrefix}-guess-confidence-low`}
+              variant="outline-danger"
+              value={0}
+              disabled={puzzle.deleted}
+            >
+              {t("puzzle.answerOrGuess.confidenceLevel.low", "Low")}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-guess-confidence-medium`}
+              variant="outline-warning"
+              value={50}
+              disabled={puzzle.deleted}
+            >
+              {t("puzzle.answerOrGuess.confidenceLevel.medium", "Medium")}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-guess-confidence-high`}
+              variant="outline-success"
+              value={100}
+              disabled={puzzle.deleted}
+            >
+              {t("puzzle.answerOrGuess.confidenceLevel.high", "High")}
+            </ToggleButton>
+          </ToggleButtonGroup>
           <FormText>
             {t(
-              "puzzle.answerOrGuess.confidenceHelp",
-              "Pick a number between 0 and 100 for the probability that you think this answer is right.",
+              "puzzle.answerOrGuess.confidenceOptionsHelp",
+              "Tell us how confident you are about your guess.",
             )}
           </FormText>
         </Col>
@@ -3110,15 +3090,15 @@ const PuzzleGuessModal = ({
           {t("puzzle.answerOrGuess.noGuesses", "No previous submissions.")}{" "}
         </div>
       ) : (
-        [
-          <div key="label">
+        <>
+          <div>
             {t(
               "puzzle.answerOrGuess.previousSubmissions",
               "Previous submissions",
             )}
             :
-          </div>,
-          <GuessTable key="table">
+          </div>
+          <GuessTable>
             {sortedBy(guesses, (g) => g.createdAt)
               .toReversed()
               .map((guess) => {
@@ -3148,16 +3128,10 @@ const PuzzleGuessModal = ({
                       </Breakable>
                     </GuessSubmitterCell>
                     <GuessDirectionCell>
-                      <GuessDirection
-                        id={`${idPrefix}-${guess._id}-direction`}
-                        value={guess.direction}
-                      />
+                      <GuessDirectionBadge value={guess.direction} />
                     </GuessDirectionCell>
                     <GuessConfidenceCell>
-                      <GuessConfidence
-                        id={`${idPrefix}-${guess._id}-confidence`}
-                        value={guess.confidence}
-                      />
+                      <GuessConfidenceBadge value={guess.confidence} />
                     </GuessConfidenceCell>
                     <GuessTableSmallRow>
                       {guess.additionalNotes && (
@@ -3170,8 +3144,25 @@ const PuzzleGuessModal = ({
                   </GuessRow>
                 );
               })}
-          </GuessTable>,
-        ]
+          </GuessTable>
+          {canUpdateGuesses && (
+            <Alert variant="info" className="mt-3">
+              {t(
+                "puzzle.answerOrGuess.operatorHint.useAlerts",
+                "To mark answers correct or incorrect, use the popup alerts.",
+              )}{" "}
+              {operatorActionsHidden
+                ? t(
+                    "puzzle.answerOrGuess.operatorHint.turnOnOperatorInterface",
+                    "To see them, turn the Operator Interface on from the puzzle list page.",
+                  )
+                : t(
+                    "puzzle.answerOrGuess.operatorHint.reload",
+                    "If you've dismissed them, reload the page.",
+                  )}
+            </Alert>
+          )}
+        </>
       )}
       {confirmingSubmit ? (
         <Alert variant="warning">{confirmationMessage}</Alert>

@@ -1,3 +1,5 @@
+import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type React from "react";
 import {
   useCallback,
@@ -22,6 +24,7 @@ const StyledModalTitle = styled(Modal.Title)`
 export type ModalFormHandle = {
   show: () => void;
   hide: () => void;
+  submit: () => void;
 };
 
 const ModalForm = (props: {
@@ -29,6 +32,8 @@ const ModalForm = (props: {
   size?: ModalProps["size"];
   submitLabel?: string;
   submitStyle?: string;
+  // The submit is in flight: shows a spinner and disables the buttons
+  submitting?: boolean;
   submitDisabled?: boolean;
   closeDisabled?: boolean;
   onSubmit: (callback: () => void) => void;
@@ -46,11 +51,6 @@ const ModalForm = (props: {
     setIsShown(false);
   }, []);
 
-  useImperativeHandle(props.ref, () => ({
-    show,
-    hide,
-  }));
-
   useEffect(() => {
     dontTryToHide.current = false;
     return () => {
@@ -60,8 +60,8 @@ const ModalForm = (props: {
 
   const { onSubmit } = props;
   const submit = useCallback(
-    (e: React.SubmitEvent<HTMLFormElement>) => {
-      e.preventDefault();
+    (e?: React.SubmitEvent<HTMLFormElement>) => {
+      e?.preventDefault();
       onSubmit(() => {
         // For delete forms, it's possible that the component gets
         // deleted and unmounted before the callback gets called.
@@ -73,10 +73,19 @@ const ModalForm = (props: {
     [onSubmit, hide],
   );
 
+  useImperativeHandle(props.ref, () => ({
+    show,
+    hide,
+    submit,
+  }));
+
   const { t } = useTranslation();
 
   const submitLabel = props.submitLabel ?? t("common.save", "Save");
   const submitStyle = props.submitStyle ?? "primary";
+  const submitting = props.submitting ?? false;
+  const submitDisabled = submitting || (props.submitDisabled ?? false);
+  const closeDisabled = props.closeDisabled ?? submitDisabled;
 
   const modal = (
     <Modal show={isShown} onHide={hide} size={props.size}>
@@ -86,18 +95,11 @@ const ModalForm = (props: {
         </Modal.Header>
         <Modal.Body>{props.children}</Modal.Body>
         <Modal.Footer>
-          <Button
-            variant="light"
-            onClick={hide}
-            disabled={props.closeDisabled ?? props.submitDisabled}
-          >
+          {submitting && <FontAwesomeIcon icon={faPuzzlePiece} spin />}
+          <Button variant="light" onClick={hide} disabled={closeDisabled}>
             {t("common.close", "Close")}
           </Button>
-          <Button
-            variant={submitStyle}
-            type="submit"
-            disabled={props.submitDisabled}
-          >
+          <Button variant={submitStyle} type="submit" disabled={submitDisabled}>
             {submitLabel}
           </Button>
         </Modal.Footer>

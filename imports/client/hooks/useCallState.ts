@@ -103,14 +103,21 @@ export type CallState = (
   // after a server disconnection (rather than a user hang-up) since the state
   // there shouldn't be considered to have changed.
   allowInitialPeerStateNotification: boolean;
+  // Whether the user asked to join muted. The server's initial peer state
+  // must not undo that; cleared once the user changes their own mute.
+  initialMuted: boolean;
   remoteMutedBy: string | undefined;
   error: Error | undefined;
+};
+
+export type JoinCallOptions = {
+  muted?: boolean;
 };
 
 export type Action =
   | { type: "request-capture" }
   | { type: "capture-error"; error: Error }
-  | { type: "join-call"; audioState: AudioState }
+  | { type: "join-call"; audioState: AudioState; initialMute?: boolean }
   | { type: "set-device"; device: types.Device | undefined }
   | {
       type: "set-transport";
@@ -125,6 +132,9 @@ export type Action =
   | { type: "set-router"; router: RouterType | undefined }
   | { type: "leave-call" }
   | { type: "toggle-mute" }
+  // Idempotent form of toggle-mute for push-to-talk, whose keydown and keyup
+  // dispatch independently and may land after the call has ended
+  | { type: "set-muted"; muted: boolean }
   | { type: "toggle-deafen" }
   | { type: "dismiss-peer-state-notification" }
   | { type: "set-remote-muted"; remoteMutedBy: string }
@@ -155,6 +165,7 @@ const INITIAL_STATE: CallState = {
   otherPeers: [] as PeerType[],
   peerStreams: new Map<string, MediaStream>(),
   allowInitialPeerStateNotification: false,
+  initialMuted: false,
   remoteMutedBy: undefined,
   error: undefined,
 };
@@ -170,18 +181,21 @@ function reducer(state: CallState, action: Action): CallState {
         callState: CallJoinState.STREAM_ERROR,
         error: action.error,
       };
-    case "join-call":
+    case "join-call": {
+      const initialMute = action.initialMute ?? false;
       return {
         ...state,
         callState: CallJoinState.IN_CALL,
         audioState: action.audioState,
         audioControls: {
-          muted: false,
+          muted: initialMute,
           deafened: false,
         },
         allowInitialPeerStateNotification: true,
+        initialMuted: initialMute,
         error: undefined,
       };
+    }
     case "set-device":
       return {
         ...state,
@@ -224,6 +238,27 @@ function reducer(state: CallState, action: Action): CallState {
           deafened: false,
         },
         allowInitialPeerStateNotification: false,
+        initialMuted: false,
+        remoteMutedBy: undefined,
+      };
+    }
+    case "set-muted": {
+      if (
+        state.callState !== CallJoinState.IN_CALL ||
+        state.audioControls.muted === action.muted
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        audioControls: {
+          muted: action.muted,
+          // Unmuting undeafens, as toggle-mute does; muting leaves a deafen
+          // in place so undeafening later doesn't open the mic
+          deafened: action.muted ? state.audioControls.deafened : false,
+        },
+        allowInitialPeerStateNotification: false,
+        initialMuted: false,
         remoteMutedBy: undefined,
       };
     }
@@ -281,8 +316,9 @@ function reducer(state: CallState, action: Action): CallState {
 
         switch (action.selfPeer.initialPeerState) {
           case "active":
+            // Unless we asked to start out muted
             audioControls = {
-              muted: false,
+              muted: state.initialMuted,
               deafened: false,
             };
             break;
@@ -521,7 +557,7 @@ const useCallState = ({
 }): {
   state: CallState;
   dispatch: React.Dispatch<Action>;
-  joinCall: () => void;
+  joinCall: (options?: JoinCallOptions) => void;
 } => {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
 
@@ -1239,9 +1275,10 @@ const useCallState = ({
     };
   }, [cleanupConsumer]);
 
-  const joinCall = useCallback(() => {
+  const joinCall = useCallback((options?: JoinCallOptions) => {
+    const muted = options?.muted ?? false;
     void (async () => {
-      trace("useCallState joinCall");
+      trace("useCallState joinCall", { muted });
       if (navigator.mediaDevices) {
         dispatch({ type: "request-capture" });
         const preferredAudioDeviceId =
@@ -1255,6 +1292,15 @@ const useCallState = ({
           return;
         }
 
+        // Joining muted: silence the capture before anything can consume
+        // it. Once a producer exists, the pause effect keeps the tracks in
+        // step with the mute state.
+        if (muted) {
+          mediaSource.getAudioTracks().forEach((track) => {
+            track.enabled = false;
+          });
+        }
+
         const AudioContext =
           window.AudioContext ||
           (window as { webkitAudioContext?: AudioContext }).webkitAudioContext;
@@ -1266,6 +1312,7 @@ const useCallState = ({
             mediaSource,
             audioContext,
           },
+          initialMute: muted,
         });
       } else {
         const msg =
@@ -1281,5 +1328,8 @@ const useCallState = ({
     joinCall,
   };
 };
+
+// Exposed for the reducer's unit tests
+export { INITIAL_STATE, reducer };
 
 export default useCallState;

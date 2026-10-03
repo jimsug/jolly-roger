@@ -7,6 +7,7 @@ import "./unit/imports/lib/calendarTimeFormat";
 import "./unit/imports/lib/chatMessagePlainText";
 import "./unit/imports/lib/defaultHuntTags";
 import "./unit/imports/lib/dingwordLogic";
+import "./unit/imports/lib/guessQueueFilter";
 import "./unit/imports/lib/guessTitleFromUrl";
 import "./unit/imports/lib/isReaction";
 import "./unit/imports/lib/permission_stubs";
@@ -20,6 +21,8 @@ import "./unit/imports/lib/tagNames";
 import "./unit/imports/lib/userStatusesToLastSeen";
 import "./unit/imports/lib/ValidateShape";
 
+import "./unit/imports/client/callStateReducer";
+import "./unit/imports/client/guessDetails";
 import "./unit/imports/client/puzzleTitles";
 
 import "./acceptance/authentication";

@@ -14,7 +14,7 @@ import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import Flags from "../../Flags";
 import Peers from "../../lib/models/mediasoup/Peers";
-import type { Action, CallState } from "../hooks/useCallState";
+import type { Action, CallState, JoinCallOptions } from "../hooks/useCallState";
 import { CallJoinState } from "../hooks/useCallState";
 import { Subscribers } from "../subscribers";
 
@@ -82,7 +82,7 @@ const MinimizedChatInfo = ({
   puzzleId: string;
   callState: CallState;
   callDispatch: React.Dispatch<Action>;
-  joinCall: () => void;
+  joinCall: (options?: JoinCallOptions) => void;
   onRestore: () => void;
   // Messages that arrived while the chat was minimised
   missedMessages?: number;
@@ -122,6 +122,11 @@ const MinimizedChatInfo = ({
   const onLeaveCall = React.useCallback(() => {
     callDispatch({ type: "leave-call" });
   }, [callDispatch]);
+
+  // Not passed to onClick directly: joinCall takes options, not a click event
+  const onJoinCall = React.useCallback(() => {
+    joinCall();
+  }, [joinCall]);
 
   const { muted } = callState.audioControls;
 
@@ -189,7 +194,7 @@ const MinimizedChatInfo = ({
       >
         <SquareIconButton
           variant="primary"
-          onClick={joinCall}
+          onClick={onJoinCall}
           title={
             callers > 0
               ? t("audio.joinCall", "Join audio call")

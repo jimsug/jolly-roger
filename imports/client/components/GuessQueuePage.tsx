@@ -3,20 +3,27 @@ import { useTracker } from "meteor/react-meteor-data";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
-import { faSkullCrossbones } from "@fortawesome/free-solid-svg-icons/faSkullCrossbones";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import React, { useCallback, useId, useRef } from "react";
+import React, { useCallback, useId, useMemo, useRef, useState } from "react";
 import Button from "react-bootstrap/Button";
+import ButtonToolbar from "react-bootstrap/ButtonToolbar";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
+import FormLabel from "react-bootstrap/FormLabel";
 import InputGroup from "react-bootstrap/InputGroup";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
+import ToggleButton from "react-bootstrap/ToggleButton";
+import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import Tooltip from "react-bootstrap/Tooltip";
 import { useTranslation } from "react-i18next";
 import { Link, useParams, useSearchParams } from "react-router";
 import styled, { css } from "styled-components";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
+import type { GuessQueueFilterableState } from "../../lib/guessQueueFilter";
+import guessShownInQueue, {
+  GUESS_QUEUE_FILTERABLE_STATES,
+} from "../../lib/guessQueueFilter";
 import { indexedById } from "../../lib/listUtils";
 import type { GuessType } from "../../lib/models/Guesses";
 import Guesses from "../../lib/models/Guesses";
@@ -37,8 +44,8 @@ import CopyToClipboardButton from "./CopyToClipboardButton";
 import GuessState from "./GuessState";
 import {
   formatGuessDirection,
-  GuessConfidence,
-  GuessDirection,
+  GuessConfidenceBadge,
+  GuessDirectionBadge,
 } from "./guessDetails";
 import Markdown from "./Markdown";
 import PuzzleAnswer from "./PuzzleAnswer";
@@ -47,6 +54,12 @@ import type { Breakpoint } from "./styling/responsive";
 import { mediaBreakpointDown } from "./styling/responsive";
 
 const compactViewBreakpoint: Breakpoint = "md";
+
+const StyledToggleButtonGroup = styled(ToggleButtonGroup)`
+  @media (width < 360px) {
+    width: 100%;
+  }
+`;
 
 const StyledTable = styled.div<{ $hasGuessQueue: boolean }>`
   display: grid;
@@ -106,30 +119,6 @@ const StyledCell = styled.div`
   overflow: hidden;
   padding: 4px;
   background-color: inherit;
-`;
-
-const StyledGuessDirection = styled(GuessDirection)`
-  padding: 4px;
-  background-color: inherit;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      padding: 0;
-      max-width: 200px;
-    `,
-  )}
-`;
-
-const StyledGuessConfidence = styled(GuessConfidence)`
-  padding: 4px;
-  background-color: inherit;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      padding: 0;
-      max-width: 200px;
-    `,
-  )}
 `;
 
 const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
@@ -205,29 +194,6 @@ const StyledGuessDetails = styled.div`
   )}
 `;
 
-const StyledGuessDetailWithLabel = styled(StyledCell)`
-  display: contents;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      display: flex;
-      flex-direction: column;
-      align-items: stretch;
-      flex-grow: 1;
-    `,
-  )}
-`;
-
-const StyledGuessDetailLabel = styled.span`
-  display: none;
-  ${mediaBreakpointDown(
-    compactViewBreakpoint,
-    css`
-      display: inline;
-    `,
-  )}
-`;
-
 const StyledAdditionalNotes = styled(StyledCell)`
   grid-column: 1 / -1;
   overflow: hidden;
@@ -261,12 +227,17 @@ const GuessBlock = React.memo(
 
     const puzzleTooltip = (
       <Tooltip id={`${idPrefix}-puzzle-tooltip`}>
-        {t("guessQueue.openPuzzleTooltip", "Open puzzle")}
+        {t("guessQueue.openPuzzleTooltip", "Open original puzzle")}
       </Tooltip>
     );
     const discussionTooltip = (
       <Tooltip id={`${idPrefix}-discussion-tooltip`}>
         {t("guessQueue.openDiscussionTooltip", "Open Jolly Roger discussion")}
+      </Tooltip>
+    );
+    const requeueTooltip = (
+      <Tooltip id={`${idPrefix}-requeue-tooltip`}>
+        {t("guessQueue.returnToQueueTooltip", "Return this guess to the queue")}
       </Tooltip>
     );
     return (
@@ -285,17 +256,16 @@ const GuessBlock = React.memo(
               href={guessURL(hunt, puzzle)}
               target="_blank"
               rel="noopener noreferrer"
-              aria-labelledby={`guess-${guess._id}-puzzle-tooltip`}
+              aria-labelledby={`${idPrefix}-puzzle-tooltip`}
             >
               <FontAwesomeIcon icon={faPuzzlePiece} />
             </a>
           </OverlayTrigger>{" "}
           <OverlayTrigger placement="top" overlay={discussionTooltip}>
             <Link to={`/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`}>
-              <FontAwesomeIcon icon={faSkullCrossbones} />
+              <Breakable>{puzzle.title}</Breakable>
             </Link>
-          </OverlayTrigger>{" "}
-          <Breakable>{puzzle.title}</Breakable>
+          </OverlayTrigger>
         </StyledPuzzleCell>
         <StyledGuessCell>
           <StyledCopyToClipboardButton
@@ -309,20 +279,14 @@ const GuessBlock = React.memo(
         </StyledGuessCell>
         {hunt.hasGuessQueue && (
           <StyledGuessDetails>
-            <StyledGuessDetailWithLabel>
-              <StyledGuessDetailLabel>Solve direction</StyledGuessDetailLabel>
-              <StyledGuessDirection
-                id={`${idPrefix}-direction`}
-                value={guess.direction}
-              />
-            </StyledGuessDetailWithLabel>
-            <StyledGuessDetailWithLabel>
-              <StyledGuessDetailLabel>Confidence</StyledGuessDetailLabel>
-              <StyledGuessConfidence
-                id={`${idPrefix}-confidence`}
-                value={guess.confidence}
-              />
-            </StyledGuessDetailWithLabel>
+            <StyledCell>
+              <GuessDirectionBadge value={guess.direction} />
+            </StyledCell>
+            <StyledCell>
+              {/* A legacy guess with no confidence recorded reads as low
+                  here (the guess history and toast read it as medium) */}
+              <GuessConfidenceBadge value={guess.confidence ?? 0} />
+            </StyledCell>
           </StyledGuessDetails>
         )}
         <StyledCell>
@@ -331,13 +295,15 @@ const GuessBlock = React.memo(
         {hunt.hasGuessQueue && (
           <StyledCell>
             {canEdit && guess.state !== "pending" && (
-              <Button
-                variant="outline-secondary"
-                size="sm"
-                onClick={markPending}
-              >
-                {t("guessQueue.returnToQueue", "Return to queue")}
-              </Button>
+              <OverlayTrigger placement="top" overlay={requeueTooltip}>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  onClick={markPending}
+                >
+                  {t("guessQueue.returnToQueue", "Re-queue")}
+                </Button>
+              </OverlayTrigger>
             )}
           </StyledCell>
         )}
@@ -353,48 +319,45 @@ const GuessQueuePage = () => {
   const huntId = useParams<"huntId">().huntId!;
   const [searchParams, setSearchParams] = useSearchParams();
   const searchString = searchParams.get("q") ?? "";
+  // Which non-pending states to list; pending guesses are always shown
+  const [shownStates, setShownStates] = useState<GuessQueueFilterableState[]>([
+    ...GUESS_QUEUE_FILTERABLE_STATES,
+  ]);
 
   const guessesLoading = useTypedSubscribe(guessesForGuessQueue, { huntId });
   const loading = guessesLoading();
 
-  const hunt = useTracker(() => Hunts.findOne({ _id: huntId }), [huntId]);
-
   const { t } = useTranslation();
 
-  const pageTitle = useTracker(() => {
-    if (loading || !hunt) {
+  const data = useTracker(() => {
+    if (loading) {
+      return undefined;
+    }
+    const hunt = Hunts.findOne({ _id: huntId });
+    return {
+      hunt,
+      guesses: Guesses.find(
+        { hunt: huntId },
+        { sort: { createdAt: -1 } },
+      ).fetch(),
+      puzzles: indexedById(Puzzles.find({ hunt: huntId }).fetch()),
+      displayNames: indexedDisplayNames(),
+      canEdit: userMayUpdateGuessesForHunt(Meteor.user(), hunt),
+    };
+  }, [huntId, loading]);
+  const hunt = data?.hunt;
+
+  const pageTitle = useMemo(() => {
+    if (!hunt) {
       return `${t("common.loading", "loading")}...`;
     } else if (hunt.hasGuessQueue) {
       return t("guessQueue.title.guess", "Guess queue");
     } else {
       return t("guessQueue.title.answer", "Answer log");
     }
-  }, [hunt, loading, t]);
+  }, [hunt, t]);
 
   useBreadcrumb({ title: pageTitle, path: `/hunts/${huntId}/guesses` });
-
-  const guesses = useTracker(
-    () =>
-      loading
-        ? []
-        : Guesses.find({ hunt: huntId }, { sort: { createdAt: -1 } }).fetch(),
-    [huntId, loading],
-  );
-  const puzzles = useTracker(
-    () =>
-      loading
-        ? new Map<string, PuzzleType>()
-        : indexedById(Puzzles.find({ hunt: huntId }).fetch()),
-    [huntId, loading],
-  );
-  const displayNames = useTracker(
-    () => (loading ? new Map<string, string>() : indexedDisplayNames()),
-    [loading],
-  );
-  const canEdit = useTracker(
-    () => userMayUpdateGuessesForHunt(Meteor.user(), hunt),
-    [hunt],
-  );
 
   const searchBarRef = useRef<HTMLInputElement>(null);
   useFocusRefOnFindHotkey(searchBarRef);
@@ -424,36 +387,26 @@ const GuessQueuePage = () => {
     setSearchString("");
   }, [setSearchString]);
 
-  const filteredGuesses = useCallback(
-    (allGuesses: GuessType[], puzzleMap: Map<string, PuzzleType>) => {
-      const searchKeys = searchString.split(" ");
-      const guessesForKnownPuzzles = allGuesses.filter((guess) =>
-        puzzleMap.has(guess.puzzle),
-      );
-      let interestingGuesses;
-
-      if (searchKeys.length === 1 && searchKeys[0] === "") {
-        interestingGuesses = guessesForKnownPuzzles;
-      } else {
-        const searchKeysWithEmptyKeysRemoved = searchKeys.filter((key) => {
-          return key.length > 0;
-        });
-        const isInteresting = compileGuessMatcher(
-          puzzles,
-          displayNames,
-          searchKeysWithEmptyKeysRemoved,
-        );
-        interestingGuesses = guessesForKnownPuzzles.filter(isInteresting);
-      }
-
-      return interestingGuesses;
-    },
-    [searchString, puzzles, displayNames],
-  );
+  const filteredGuesses = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+    const searchKeys = searchString.split(" ").filter((key) => key.length > 0);
+    const matchesSearch =
+      searchKeys.length > 0
+        ? compileGuessMatcher(data.puzzles, data.displayNames, searchKeys)
+        : () => true;
+    return data.guesses.filter(
+      (guess) =>
+        data.puzzles.has(guess.puzzle) &&
+        guessShownInQueue(guess, shownStates) &&
+        matchesSearch(guess),
+    );
+  }, [data, searchString, shownStates]);
 
   const idPrefix = useId();
 
-  if (loading || !hunt) {
+  if (!data || !hunt) {
     return <div>{t("common.loading", "loading")}...</div>;
   }
 
@@ -491,6 +444,47 @@ const GuessQueuePage = () => {
           </Button>
         </InputGroup>
       </FormGroup>
+      <FormGroup className="mb-3">
+        <FormLabel>
+          {t("guessQueue.stateFilter.label", "Guesses to show")}
+        </FormLabel>
+        <ButtonToolbar>
+          <StyledToggleButtonGroup
+            type="checkbox"
+            value={shownStates}
+            onChange={setShownStates}
+          >
+            <ToggleButton
+              id={`${idPrefix}-state-filter-correct`}
+              variant="outline-success"
+              value="correct"
+            >
+              {t("guessQueue.stateFilter.correct", "Correct")}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-state-filter-intermediate`}
+              variant="outline-warning"
+              value="intermediate"
+            >
+              {t("guessQueue.stateFilter.intermediate", "Intermediate")}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-state-filter-incorrect`}
+              variant="outline-danger"
+              value="incorrect"
+            >
+              {t("guessQueue.stateFilter.incorrect", "Incorrect")}
+            </ToggleButton>
+            <ToggleButton
+              id={`${idPrefix}-state-filter-rejected`}
+              variant="outline-secondary"
+              value="rejected"
+            >
+              {t("guessQueue.stateFilter.rejected", "Rejected")}
+            </ToggleButton>
+          </StyledToggleButtonGroup>
+        </ButtonToolbar>
+      </FormGroup>
       <StyledTable $hasGuessQueue={hunt.hasGuessQueue}>
         <StyledHeaderRow>
           <StyledHeader>
@@ -524,15 +518,17 @@ const GuessQueuePage = () => {
           </StyledHeader>
           {hunt.hasGuessQueue && <StyledHeader>&nbsp;</StyledHeader>}
         </StyledHeaderRow>
-        {filteredGuesses(guesses, puzzles).map((guess) => {
+        {filteredGuesses.map((guess) => {
           return (
             <GuessBlock
               key={guess._id}
               hunt={hunt}
               guess={guess}
-              createdByDisplayName={displayNames.get(guess.createdBy) ?? "???"}
-              puzzle={puzzles.get(guess.puzzle)!}
-              canEdit={canEdit}
+              createdByDisplayName={
+                data.displayNames.get(guess.createdBy) ?? "???"
+              }
+              puzzle={data.puzzles.get(guess.puzzle)!}
+              canEdit={data.canEdit}
             />
           );
         })}

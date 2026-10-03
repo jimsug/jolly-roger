@@ -59,22 +59,21 @@ function compileGuessMatcher(
   // Given a list a search keys, compileGuessMatcher returns a function that,
   // given a guess, returns true if all search keys match that guess in
   // some way, and false if any of the search keys cannot be found in
-  // either the guess or the puzzle title.
+  // the guess, the puzzle title or the submitter's name.
   const lowerSearchKeys = searchKeys.map((key) => key.toLowerCase());
   return (guess) => {
-    const puzzle = puzzles.get(guess.puzzle)!;
+    const title = puzzles.get(guess.puzzle)?.title.toLowerCase() ?? "";
     const guessText = guess.guess.toLowerCase();
     const submitterDisplayName = (
       displayNames.get(guess.createdBy) ?? ""
     ).toLowerCase();
 
-    const titleWords = puzzle.title.toLowerCase().split(" ");
-    // For each search key, if nothing from the text or the title match,
-    // reject this guess.
+    // Every key must appear somewhere; the title matches on any substring,
+    // so "ross" finds "Crossword".
     return lowerSearchKeys.every((key) => {
       return (
         guessText.includes(key) ||
-        titleWords.some((word) => word.startsWith(key)) ||
+        title.includes(key) ||
         submitterDisplayName.includes(key)
       );
     });

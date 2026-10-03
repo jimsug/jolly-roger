@@ -116,7 +116,7 @@ const PuzzleUnlockModal = ({
       size="lg"
       submitLabel={t("puzzle.unlock.submit", "Unlock puzzle")}
       submitStyle="danger"
-      submitDisabled={submitting}
+      submitting={submitting}
       onSubmit={onSubmit}
     >
       <FormGroup className="mb-4" controlId={`${idPrefix}-url`}>

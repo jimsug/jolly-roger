@@ -542,7 +542,12 @@ const Callers = ({
 
   const { t } = useTranslation();
 
-  const peerBoxes = otherPeers.map((peer) => {
+  // Unmuted callers first; each group keeps its subscription order
+  const sortedPeers = otherPeers.toSorted(
+    (a, b) => Number(a.muted) - Number(b.muted),
+  );
+
+  const peerBoxes = sortedPeers.map((peer) => {
     const stream = peerStreams.get(peer._id);
     return (
       <PeerBox
@@ -695,7 +700,11 @@ const CallSection = ({
       {joiningCallAlert}
       <Overlay
         target={muteRef.current}
-        show={callState.allowInitialPeerStateNotification && muted}
+        show={
+          callState.allowInitialPeerStateNotification &&
+          muted &&
+          !callState.initialMuted
+        }
         placement="bottom"
       >
         <Tooltip id={`${idPrefix}-muted-on-join-notification`}>
