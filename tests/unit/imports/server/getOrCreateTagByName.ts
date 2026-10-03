@@ -1,15 +1,13 @@
-import { DDP } from "meteor/ddp";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import Tags from "../../../../imports/lib/models/Tags";
 import { MAX_TAG_NAME_LENGTH } from "../../../../imports/lib/tagNames";
 import getOrCreateTagByName from "../../../../imports/server/getOrCreateTagByName";
+import asUser from "../../../lib/asUser";
 import resetDatabase from "../../../lib/resetDatabase";
 
 // Tags record who created them, which needs a method context.
 const userId = Random.id();
-const asUser = <T>(fn: () => Promise<T>) =>
-  DDP._CurrentMethodInvocation.withValue({ userId }, fn);
 
 describe("getOrCreateTagByName", function () {
   this.timeout(30000);
@@ -21,7 +19,7 @@ describe("getOrCreateTagByName", function () {
   });
 
   it("creates a tag with a normalised name", async function () {
-    const tagId = await asUser(() =>
+    const tagId = await asUser(userId, () =>
       getOrCreateTagByName(huntId, "  needs:  love "),
     );
     const tag = await Tags.findOneAsync(tagId);
@@ -31,19 +29,21 @@ describe("getOrCreateTagByName", function () {
 
   it("rejects blank names", async function () {
     await assert.isRejected(
-      asUser(() => getOrCreateTagByName(huntId, "   ")),
+      asUser(userId, () => getOrCreateTagByName(huntId, "   ")),
       /must not be empty/,
     );
   });
 
   it("returns the existing tag regardless of case and spacing", async function () {
-    const tagId = await asUser(() => getOrCreateTagByName(huntId, "Cryptic"));
+    const tagId = await asUser(userId, () =>
+      getOrCreateTagByName(huntId, "Cryptic"),
+    );
     assert.equal(
-      await asUser(() => getOrCreateTagByName(huntId, "cryptic")),
+      await asUser(userId, () => getOrCreateTagByName(huntId, "cryptic")),
       tagId,
     );
     assert.equal(
-      await asUser(() => getOrCreateTagByName(huntId, " CRYPTIC  ")),
+      await asUser(userId, () => getOrCreateTagByName(huntId, " CRYPTIC  ")),
       tagId,
     );
     assert.equal(
@@ -53,53 +53,61 @@ describe("getOrCreateTagByName", function () {
   });
 
   it("prefers an exact match when tags differ only by case", async function () {
-    const lower = await asUser(() => getOrCreateTagByName(huntId, "logic"));
-    const upperId = await asUser(() =>
+    const lower = await asUser(userId, () =>
+      getOrCreateTagByName(huntId, "logic"),
+    );
+    const upperId = await asUser(userId, () =>
       Tags.insertAsync({ hunt: huntId, name: "Logic" }),
     );
     assert.equal(
-      await asUser(() => getOrCreateTagByName(huntId, "Logic")),
+      await asUser(userId, () => getOrCreateTagByName(huntId, "Logic")),
       upperId,
     );
     assert.equal(
-      await asUser(() => getOrCreateTagByName(huntId, "logic")),
+      await asUser(userId, () => getOrCreateTagByName(huntId, "logic")),
       lower,
     );
   });
 
   it("resolves aliases", async function () {
-    const tagId = await asUser(() =>
+    const tagId = await asUser(userId, () =>
       getOrCreateTagByName(huntId, "group:round 1"),
     );
     await Tags.updateAsync(tagId, { $set: { aliases: ["group:r1"] } });
     assert.equal(
-      await asUser(() => getOrCreateTagByName(huntId, "Group:R1")),
+      await asUser(userId, () => getOrCreateTagByName(huntId, "Group:R1")),
       tagId,
     );
   });
 
   it("treats regex metacharacters in names literally", async function () {
-    const plainId = await asUser(() =>
+    const plainId = await asUser(userId, () =>
       getOrCreateTagByName(huntId, "needs:extraction"),
     );
-    const questionId = await asUser(() =>
+    const questionId = await asUser(userId, () =>
       getOrCreateTagByName(huntId, "needs:extraction?"),
     );
     assert.notEqual(questionId, plainId);
     assert.equal(
-      await asUser(() => getOrCreateTagByName(huntId, "needs:extraction?")),
+      await asUser(userId, () =>
+        getOrCreateTagByName(huntId, "needs:extraction?"),
+      ),
       questionId,
     );
-    const dottedId = await asUser(() => getOrCreateTagByName(huntId, "a.b"));
+    const dottedId = await asUser(userId, () =>
+      getOrCreateTagByName(huntId, "a.b"),
+    );
     assert.notEqual(
-      await asUser(() => getOrCreateTagByName(huntId, "axb")),
+      await asUser(userId, () => getOrCreateTagByName(huntId, "axb")),
       dottedId,
     );
   });
 
   it("is scoped to the hunt", async function () {
-    const tagId = await asUser(() => getOrCreateTagByName(huntId, "shared"));
-    const otherHuntTagId = await asUser(() =>
+    const tagId = await asUser(userId, () =>
+      getOrCreateTagByName(huntId, "shared"),
+    );
+    const otherHuntTagId = await asUser(userId, () =>
       getOrCreateTagByName(Random.id(), "shared"),
     );
     assert.notEqual(otherHuntTagId, tagId);
@@ -108,7 +116,7 @@ describe("getOrCreateTagByName", function () {
   it("caps the length of new names but still resolves long existing ones", async function () {
     const longName = `where:${"x".repeat(MAX_TAG_NAME_LENGTH)}`;
     await assert.isRejected(
-      asUser(() => getOrCreateTagByName(huntId, longName)),
+      asUser(userId, () => getOrCreateTagByName(huntId, longName)),
       /at most/,
     );
     assert.isUndefined(
@@ -116,21 +124,23 @@ describe("getOrCreateTagByName", function () {
     );
 
     // A tag written before the cap existed is still found by name
-    const legacyId = await asUser(() =>
+    const legacyId = await asUser(userId, () =>
       Tags.insertAsync({ hunt: huntId, name: longName }),
     );
     assert.equal(
-      await asUser(() => getOrCreateTagByName(huntId, longName)),
+      await asUser(userId, () => getOrCreateTagByName(huntId, longName)),
       legacyId,
     );
     assert.equal(
-      await asUser(() => getOrCreateTagByName(huntId, longName.toUpperCase())),
+      await asUser(userId, () =>
+        getOrCreateTagByName(huntId, longName.toUpperCase()),
+      ),
       legacyId,
     );
   });
 
   it("creates the meta-for twin of a group tag", async function () {
-    await asUser(() => getOrCreateTagByName(huntId, "group:Events"));
+    await asUser(userId, () => getOrCreateTagByName(huntId, "group:Events"));
     const twin = await Tags.findOneAsync({
       hunt: huntId,
       name: "meta-for:Events",

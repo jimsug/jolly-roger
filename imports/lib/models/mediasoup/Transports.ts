@@ -20,8 +20,7 @@ const Transport = withCommon(
     dtlsParameters: nonEmptyString, // JSON-encoded
     turnConfig: z
       .object({
-        // A list when $TURN_SERVER names several servers
-        urls: z.union([nonEmptyString, z.array(nonEmptyString)]),
+        urls: nonEmptyString, // JSON-encoded list
         username: nonEmptyString,
         credential: nonEmptyString,
       })

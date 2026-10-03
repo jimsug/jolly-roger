@@ -82,10 +82,10 @@ const ChatMessage = withCommon(
     // The date this message was sent.  Used for ordering chats in the log.
     timestamp: z.date(),
     // When set, the message is pinned to the top of the puzzle's chat.
-    pinTs: z.date().nullable().optional(),
+    pinTs: z.date().optional(),
     // The message this one replies to (or, for a reaction, the message it
     // reacts to). Always another message on the same puzzle.
-    parentId: foreignKey.nullable().optional(),
+    parentId: foreignKey.optional(),
     // Set on the message that starts a whiteboard comment thread. Replies are
     // ordinary chat replies to it.
     comment: CommentAnchor.optional(),
@@ -98,7 +98,9 @@ const ChatMessages = new SoftDeletedModel("jr_chatmessages", ChatMessage);
 ChatMessages.addIndex({ deleted: 1, puzzle: 1 });
 ChatMessages.addIndex({ hunt: 1, createdAt: 1 });
 // The puzzle history publications read everything a user sent or was
-// mentioned in across their hunts
+// mentioned in across their hunts. A per-user scan gets its own index only
+// where writes come at human pace, as chat's do: call and document activity
+// ride their hunt indexes, and Guesses is small enough not to need one.
 ChatMessages.addIndex({ hunt: 1, sender: 1 });
 ChatMessages.addIndex({ hunt: 1, "content.children.userId": 1 });
 ChatMessages.addIndex(

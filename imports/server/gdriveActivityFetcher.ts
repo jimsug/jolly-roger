@@ -10,7 +10,7 @@ import DocumentActivities from "../lib/models/DocumentActivities";
 import Documents from "../lib/models/Documents";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import Settings from "../lib/models/Settings";
-import { PASSIVE_VIEWER_WINDOW_MS } from "../lib/puzzleSolvers";
+import { PASSIVE_VIEWER_WINDOW_MS } from "../lib/presenceStatus";
 import roundedTime from "../lib/roundedTime";
 import GoogleClient from "./googleClientRefresher";
 import ignoringDuplicateKeyErrors from "./ignoringDuplicateKeyErrors";

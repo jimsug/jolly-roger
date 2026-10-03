@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { assert } from "chai";
-import { generateTurnConfig } from "../../../../imports/server/mediasoup";
+import generateTurnConfig from "../../../../imports/server/generateTurnConfig";
 
 describe("generateTurnConfig", function () {
   it("is unset without a server or any credentials", function () {
@@ -23,7 +23,7 @@ describe("generateTurnConfig", function () {
       TURN_SECRET: "sekrit",
     });
     assert.isDefined(config);
-    assert.equal(config.urls, "turn:turn.example.com:443");
+    assert.equal(config.urls, '["turn:turn.example.com:443"]');
 
     const [validUntil, nonce] = config.username.split(":");
     const threeDays = 3 * 24 * 60 * 60;
@@ -45,7 +45,7 @@ describe("generateTurnConfig", function () {
       TURN_CREDENTIAL: "password",
     };
     assert.deepEqual(generateTurnConfig(env), {
-      urls: "turn:turn.example.com:443",
+      urls: '["turn:turn.example.com:443"]',
       username: "user",
       credential: "password",
     });
@@ -59,25 +59,30 @@ describe("generateTurnConfig", function () {
   it("splits a comma-separated server list", function () {
     const servers =
       "turn:turn.example.com:80, turn:turn.example.com:443?transport=tcp,";
+    const urls = (env: NodeJS.ProcessEnv) => {
+      const config = generateTurnConfig(env);
+      assert.isDefined(config);
+      return JSON.parse(config.urls);
+    };
     assert.deepEqual(
-      generateTurnConfig({
+      urls({
         TURN_SERVER: servers,
         TURN_USERNAME: "user",
         TURN_CREDENTIAL: "password",
-      })?.urls,
+      }),
       ["turn:turn.example.com:80", "turn:turn.example.com:443?transport=tcp"],
     );
+    assert.deepEqual(urls({ TURN_SERVER: servers, TURN_SECRET: "sekrit" }), [
+      "turn:turn.example.com:80",
+      "turn:turn.example.com:443?transport=tcp",
+    ]);
+    // A single server is a list of one
     assert.deepEqual(
-      generateTurnConfig({ TURN_SERVER: servers, TURN_SECRET: "sekrit" })?.urls,
-      ["turn:turn.example.com:80", "turn:turn.example.com:443?transport=tcp"],
-    );
-    // A single server stays a plain string
-    assert.equal(
-      generateTurnConfig({
+      urls({
         TURN_SERVER: " turn:turn.example.com:443 ,",
         TURN_SECRET: "sekrit",
-      })?.urls,
-      "turn:turn.example.com:443",
+      }),
+      ["turn:turn.example.com:443"],
     );
   });
 });

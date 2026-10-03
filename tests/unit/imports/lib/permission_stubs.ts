@@ -1,24 +1,39 @@
 import { assert } from "chai";
 import { GLOBAL_SCOPE } from "../../../../imports/lib/isAdmin";
+import type { HuntType } from "../../../../imports/lib/models/Hunts";
 import {
+  huntGrantsRoleByDefault,
+  huntsUserIsOperatorFor,
   listAllRolesForHunt,
+  listAssignedRolesForHunt,
+  userHasAssignedRoleForHunt,
+  userHasEffectiveRoleForHunt,
   userIsOperatorForHunt,
   userMayAddUsersToHunt,
-  userMayBulkAddToHunt,
   userMayMakeOperatorForHunt,
   userMayUpdateGuessesForHunt,
   userMayUpdateHuntInvitationCode,
   userMayWritePuzzlesForHunt,
 } from "../../../../imports/lib/permission_stubs";
 
+type TestHunt = Pick<HuntType, "_id" | "openSignups" | "defaultRoles">;
+
 describe("permission_stubs", function () {
-  const plainHunt = { _id: "hunt1", openSignups: false, defaultRoles: [] };
-  const operatorByDefaultHunt = {
+  const plainHunt: TestHunt = {
+    _id: "hunt1",
+    openSignups: false,
+    defaultRoles: [],
+  };
+  const operatorByDefaultHunt: TestHunt = {
     _id: "hunt2",
     openSignups: false,
     defaultRoles: ["operator"],
   };
-  const openHunt = { _id: "hunt3", openSignups: true, defaultRoles: [] };
+  const openHunt: TestHunt = {
+    _id: "hunt3",
+    openSignups: true,
+    defaultRoles: [],
+  };
 
   const admin = { roles: { [GLOBAL_SCOPE]: ["admin"] }, hunts: [] };
   const explicitOperator = {
@@ -57,10 +72,25 @@ describe("permission_stubs", function () {
       assert.deepEqual(listAllRolesForHunt(member, plainHunt), []);
     });
 
-    it("ignores default roles when the caller only has a hunt id", function () {
-      assert.isFalse(
-        userIsOperatorForHunt(member, { _id: operatorByDefaultHunt._id }),
+    it("leaves default roles out where only assigned roles count", function () {
+      assert.isTrue(
+        userHasEffectiveRoleForHunt(member, operatorByDefaultHunt, "operator"),
       );
+      assert.isFalse(
+        userHasAssignedRoleForHunt(member, operatorByDefaultHunt, "operator"),
+      );
+      assert.deepEqual(
+        listAssignedRolesForHunt(member, operatorByDefaultHunt),
+        [],
+      );
+      assert.isFalse(
+        huntsUserIsOperatorFor(member).has(operatorByDefaultHunt._id),
+      );
+    });
+
+    it("knows which roles a hunt grants by default", function () {
+      assert.isTrue(huntGrantsRoleByDefault(operatorByDefaultHunt, "operator"));
+      assert.isFalse(huntGrantsRoleByDefault(plainHunt, "operator"));
     });
 
     it("still honours explicit roles", function () {
@@ -105,6 +135,11 @@ describe("permission_stubs", function () {
     it("does not allow non-members", function () {
       assert.isFalse(userMayAddUsersToHunt(nonMember, plainHunt));
     });
+
+    it("handles missing users and hunts", function () {
+      assert.isFalse(userMayAddUsersToHunt(undefined, plainHunt));
+      assert.isFalse(userMayAddUsersToHunt(admin, null));
+    });
   });
 
   describe("invitation links", function () {
@@ -117,17 +152,6 @@ describe("permission_stubs", function () {
         userMayUpdateHuntInvitationCode(member, operatorByDefaultHunt),
       );
       assert.isFalse(userMayUpdateHuntInvitationCode(undefined, plainHunt));
-    });
-  });
-
-  describe("bulk invites", function () {
-    it("follows the single-invite policy", function () {
-      assert.isTrue(userMayBulkAddToHunt(admin, plainHunt));
-      assert.isTrue(userMayBulkAddToHunt(nonMember, openHunt));
-      assert.isFalse(userMayBulkAddToHunt(member, plainHunt));
-      assert.isFalse(userMayBulkAddToHunt(explicitOperator, plainHunt));
-      assert.isFalse(userMayBulkAddToHunt(member, operatorByDefaultHunt));
-      assert.isFalse(userMayBulkAddToHunt(undefined, plainHunt));
     });
   });
 

@@ -14,13 +14,11 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router";
 import styled from "styled-components";
 import Hunts from "../../lib/models/Hunts";
-import MeteorUsers from "../../lib/models/MeteorUsers";
 import { userMayAddUsersToHunt } from "../../lib/permission_stubs";
-import invitedUsers from "../../lib/publications/invitedUsers";
 import addHuntUser from "../../methods/addHuntUser";
 import bulkAddHuntUsers from "../../methods/bulkAddHuntUsers";
 import { useBreadcrumb } from "../hooks/breadcrumb";
-import useTypedSubscribe from "../hooks/useTypedSubscribe";
+import usePendingInvitees from "../hooks/usePendingInvitees";
 import InvitedUserList from "./InvitedUserList";
 
 const BulkError = styled.p`
@@ -101,26 +99,28 @@ const UserInvitePage = () => {
 
   const idPrefix = useId();
 
-  // Only admins receive this publication; everyone else just sees no list.
-  const invitedLoading = useTypedSubscribe(invitedUsers);
-  const invitedReady = !invitedLoading();
-  const invitees = useTracker(() => {
-    return invitedReady
-      ? MeteorUsers.find(
-          { "services.password.enroll": { $exists: true }, hunts: huntId },
-          { sort: { "services.password.enroll.when": 1 } },
-        ).fetch()
-      : [];
-  }, [huntId, invitedReady]);
+  // Only admins see pending invitations; everyone else just sees no list.
+  const {
+    canView: canSeeInvitees,
+    loading: inviteesLoading,
+    invitees,
+  } = usePendingInvitees({ huntId });
 
   const pendingInvitations = useMemo(() => {
-    return invitees.length > 0 ? (
+    if (!canSeeInvitees || inviteesLoading) {
+      return undefined;
+    }
+    return (
       <div>
         <h2>{t("invite.pendingInvitations", "Pending invitations")}</h2>
-        <InvitedUserList users={invitees} />
+        {invitees.length > 0 ? (
+          <InvitedUserList users={invitees} />
+        ) : (
+          <p>{t("invite.noPendingInvitations", "No pending invitations.")}</p>
+        )}
       </div>
-    ) : undefined;
-  }, [invitees, t]);
+    );
+  }, [canSeeInvitees, inviteesLoading, invitees, t]);
 
   const bulkInvite = useMemo(() => {
     return canInvite ? (

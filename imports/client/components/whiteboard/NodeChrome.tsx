@@ -32,7 +32,7 @@ const NodeChrome = ({
 }) => {
   const { readOnly, updateNodes, persistResize } = useWhiteboard();
   const onColor = useCallback(
-    (colour: WhiteboardColor) => updateNodes([{ _id: id, colour }]),
+    (color: WhiteboardColor) => updateNodes([{ _id: id, color }]),
     [id, updateNodes],
   );
   const onResizeEnd = useCallback(() => persistResize(id), [id, persistResize]);

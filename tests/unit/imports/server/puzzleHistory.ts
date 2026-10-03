@@ -1,18 +1,16 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
 import { assert } from "chai";
-import { GLOBAL_SCOPE } from "../../../../imports/lib/isAdmin";
 import ChatMessages from "../../../../imports/lib/models/ChatMessages";
 import Guesses from "../../../../imports/lib/models/Guesses";
-import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
 import Tags from "../../../../imports/lib/models/Tags";
-import { addUserToRole } from "../../../../imports/lib/permission_stubs";
 import {
   ACTIVITY_HISTORY_SUMMARIES,
   PUZZLE_HISTORY_SUMMARIES,
 } from "../../../../imports/lib/puzzleHistory";
+import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 import StubSubscription, {
   publishHandler,
@@ -29,15 +27,11 @@ describe("puzzle history publications", function () {
 
   let selfId: string;
   let otherId: string;
-  let adminId: string;
   let huntId: string;
   let otherHuntId: string;
   let puzzleId: string;
   let otherHuntPuzzleId: string;
   let tagId: string;
-
-  const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-    DDP._CurrentMethodInvocation.withValue({ userId }, fn);
 
   let subs: StubSubscription[] = [];
   this.afterEach(function () {
@@ -60,35 +54,14 @@ describe("puzzle history publications", function () {
       email: "other@example.com",
       password: "password",
     });
-    adminId = await Accounts.createUserAsync({
-      email: "admin@example.com",
-      password: "password",
-    });
-    await addUserToRole(adminId, GLOBAL_SCOPE, "admin");
 
-    const newHunt = (name: string) =>
-      asUser(selfId, () =>
-        Hunts.insertAsync({
-          name,
-          mailingLists: [],
-          openSignups: false,
-          hasGuessQueue: true,
-          defaultRoles: [],
-          allowUnlockablePuzzles: false,
-          isArchived: false,
-          customLinkEmbed: false,
-        }),
-      );
-    huntId = await newHunt("History hunt");
-    otherHuntId = await newHunt("Hunt I left");
+    huntId = await createTestHunt(selfId, { name: "History hunt" });
+    otherHuntId = await createTestHunt(selfId, { name: "Hunt I left" });
     await MeteorUsers.updateAsync(selfId, {
       $set: { displayName: "Self", hunts: [huntId] },
     });
     await MeteorUsers.updateAsync(otherId, {
       $set: { displayName: "Other", hunts: [huntId] },
-    });
-    await MeteorUsers.updateAsync(adminId, {
-      $set: { displayName: "Admin", hunts: [] },
     });
 
     await asUser(selfId, async () => {
@@ -141,7 +114,7 @@ describe("puzzle history publications", function () {
   describe("puzzleHistorySummaryForUser", function () {
     it("summarises the user's own puzzles in the hunts they belong to", async function () {
       const sub = stub(selfId);
-      await publishHandler(SUMMARY).call(sub, { userId: selfId });
+      await publishHandler(SUMMARY).call(sub);
       const summaries = sub.published(PUZZLE_HISTORY_SUMMARIES);
       assert.sameMembers(
         [...summaries.keys()],
@@ -154,7 +127,6 @@ describe("puzzle history publications", function () {
       assert.equal(summary.chatCounter, 2);
       assert.equal(summary.guessCounter, 1);
       assert.equal(summary.correctGuessCounter, 1);
-      assert.equal(summary.interactionCount, 3);
       assert.equal(summary.solvedness, "solved");
       assert.deepEqual(summary.answers, ["RECALL"]);
       assert.deepEqual(summary.tags, ["group:history"]);
@@ -187,69 +159,44 @@ describe("puzzle history publications", function () {
       });
     });
 
-    it("is only available to the user and to admins", async function () {
+    it("publishes only the subscriber's own history", async function () {
       const other = stub(otherId);
-      assert.deepEqual(
-        await publishHandler(SUMMARY).call(other, { userId: selfId }),
-        [],
+      await publishHandler(SUMMARY).call(other);
+      const summaries = other.published(PUZZLE_HISTORY_SUMMARIES);
+      assert.sameMembers([...summaries.keys()], [puzzleId]);
+      assert.equal(
+        summaries.get(puzzleId)?.chatCounter,
+        1,
+        "Only the message they sent",
       );
-      assert.isFalse(other.data.has(PUZZLE_HISTORY_SUMMARIES));
+      assert.equal(summaries.get(puzzleId)?.guessCounter, 0);
 
       const anonymous = stub(null);
-      assert.deepEqual(
-        await publishHandler(SUMMARY).call(anonymous, { userId: selfId }),
-        [],
-      );
-
-      const admin = stub(adminId);
-      await publishHandler(SUMMARY).call(admin, { userId: selfId });
-      assert.sameMembers(
-        [...admin.published(PUZZLE_HISTORY_SUMMARIES).keys()],
-        [puzzleId],
-      );
+      assert.deepEqual(await publishHandler(SUMMARY).call(anonymous), []);
+      assert.isFalse(anonymous.data.has(PUZZLE_HISTORY_SUMMARIES));
     });
   });
 
   describe("puzzleHistoryForUser", function () {
+    // How many documents each cursor finds: the puzzle, the hunt's tags, and
+    // the user's calls, chat messages (sent or mentioning them) and sheet edits
+    const countsFor = async (userId: string, puzzle: string) => {
+      const cursors: { countAsync(): Promise<number> }[] = await publishHandler(
+        DETAIL,
+      ).call(stub(userId), { puzzleId: puzzle });
+      return Promise.all(cursors.map((cursor) => cursor.countAsync()));
+    };
+
     it("publishes the user's activity on one puzzle", async function () {
-      const cursors = await publishHandler(DETAIL).call(stub(selfId), {
-        userId: selfId,
-        puzzleId,
-      });
-      const docs = await Promise.all(
-        cursors.map((cursor: { fetchAsync(): Promise<unknown[]> }) =>
-          cursor.fetchAsync(),
-        ),
-      );
-      // puzzle, tags, bookmarks, calls, chat, document activity, guesses
-      assert.lengthOf(docs, 7);
-      assert.lengthOf(docs[0], 1);
-      assert.lengthOf(docs[1], 1);
-      assert.lengthOf(docs[4], 2, "Messages sent by or mentioning the user");
-      assert.lengthOf(docs[6], 1);
+      assert.deepEqual(await countsFor(selfId, puzzleId), [1, 1, 0, 2, 0]);
     });
 
-    it("stays within the user's hunts and the user's own history", async function () {
+    it("stays within the user's hunts and the user's own activity", async function () {
+      assert.deepEqual(await countsFor(selfId, otherHuntPuzzleId), []);
       assert.deepEqual(
-        await publishHandler(DETAIL).call(stub(selfId), {
-          userId: selfId,
-          puzzleId: otherHuntPuzzleId,
-        }),
-        [],
-      );
-      assert.deepEqual(
-        await publishHandler(DETAIL).call(stub(otherId), {
-          userId: selfId,
-          puzzleId,
-        }),
-        [],
-      );
-      assert.lengthOf(
-        await publishHandler(DETAIL).call(stub(adminId), {
-          userId: selfId,
-          puzzleId,
-        }),
-        7,
+        await countsFor(otherId, puzzleId),
+        [1, 1, 0, 1, 0],
+        "Only the message they sent",
       );
     });
   });
@@ -257,34 +204,41 @@ describe("puzzle history publications", function () {
   describe("activitySummaryForUser", function () {
     it("buckets the user's activity by day and hour", async function () {
       const sub = stub(selfId);
-      await publishHandler(ACTIVITY).call(sub, { userId: selfId });
+      await publishHandler(ACTIVITY).call(sub);
       assert.sameDeepMembers(
         [...sub.published(ACTIVITY_HISTORY_SUMMARIES).values()],
         [
           {
-            _id: `${huntId}-1-10-Chat`,
+            _id: `${huntId}-1-10-chat`,
             huntId,
             dayOfWeek: 1,
             hour: 10,
-            type: "Chat",
+            type: "chat",
             count: 1,
           },
         ],
         "The hunt the user left is excluded, and mentions aren't the user's activity",
       );
 
-      const filtered = stub(selfId);
-      await publishHandler(ACTIVITY).call(filtered, {
-        userId: selfId,
-        huntIds: [otherHuntId],
-      });
-      assert.isFalse(filtered.data.has(ACTIVITY_HISTORY_SUMMARIES));
-
       const other = stub(otherId);
-      assert.deepEqual(
-        await publishHandler(ACTIVITY).call(other, { userId: selfId }),
-        [],
+      await publishHandler(ACTIVITY).call(other);
+      assert.sameDeepMembers(
+        [...other.published(ACTIVITY_HISTORY_SUMMARIES).values()],
+        [
+          {
+            _id: `${huntId}-1-11-chat`,
+            huntId,
+            dayOfWeek: 1,
+            hour: 11,
+            type: "chat",
+            count: 1,
+          },
+        ],
+        "Each user gets only their own activity",
       );
+
+      const anonymous = stub(null);
+      assert.deepEqual(await publishHandler(ACTIVITY).call(anonymous), []);
     });
 
     it("publishes each bucket once however many documents it holds", async function () {
@@ -312,10 +266,10 @@ describe("puzzle history publications", function () {
           calls.changed += 1;
           changed(collection, id, fields);
         };
-        await publishHandler(ACTIVITY).call(sub, { userId: selfId });
+        await publishHandler(ACTIVITY).call(sub);
         const bucket = sub
           .published(ACTIVITY_HISTORY_SUMMARIES)
-          .get(`${huntId}-1-10-Chat`);
+          .get(`${huntId}-1-10-chat`);
         assert.equal(bucket?.count, 2);
         assert.deepEqual(
           calls,
@@ -329,7 +283,7 @@ describe("puzzle history publications", function () {
         });
         await waitForAssertion(() => {
           assert.equal(
-            sub.published(ACTIVITY_HISTORY_SUMMARIES).get(`${huntId}-1-10-Chat`)
+            sub.published(ACTIVITY_HISTORY_SUMMARIES).get(`${huntId}-1-10-chat`)
               ?.count,
             3,
           );

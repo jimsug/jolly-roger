@@ -1,14 +1,15 @@
 import { useTracker } from "meteor/react-meteor-data";
 import { ViewportPortal } from "@xyflow/react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import styled, { useTheme } from "styled-components";
 import MeteorUsers from "../../../lib/models/MeteorUsers";
 import { inkPath } from "../../../lib/whiteboard/ink";
+import useDocumentVisible from "../../hooks/useDocumentVisible";
+import { useWhiteboardZoom } from "../../hooks/useWhiteboardDetail";
 import WhiteboardPresence from "../../WhiteboardPresence";
 import { userColors } from "../Avatar";
-import { STROKE_COLORS } from "./colors";
-import { useZoom } from "./useDetail";
+import colors from "./colors";
 
 const IDLE_AFTER = 10_000;
 
@@ -45,6 +46,12 @@ const StrokeSvg = styled.svg`
   opacity: 0.6;
 `;
 
+// Where a tab's pointer was, and when it got there.
+interface PointerSeen {
+  key: string;
+  at: number;
+}
+
 // Other people's pointers and their half-drawn ink. Everything is placed in
 // flow coordinates, so it lines up whatever each person's zoom or screen size.
 // Pointers move constantly, so only this layer follows them.
@@ -60,47 +67,51 @@ const CursorLayer = ({
       liveEnabled ? WhiteboardPresence.find({ board: boardId }).fetch() : [],
     [boardId, liveEnabled],
   );
-  const zoom = useZoom();
+  const zoom = useWhiteboardZoom();
   const theme = useTheme();
   const { t } = useTranslation();
+  const visible = useDocumentVisible();
   const [now, setNow] = useState(Date.now());
-  const lastMoved = useRef(new Map<string, { key: string; at: number }>());
-
-  const movedAt = useMemo(() => {
-    const result = new Map<string, number>();
-    presence.forEach((doc) => {
-      const key = JSON.stringify(doc.cursor);
-      const seen = lastMoved.current.get(doc._id);
-      if (!seen || seen.key !== key) {
-        lastMoved.current.set(doc._id, { key, at: Date.now() });
-      }
-      result.set(doc._id, lastMoved.current.get(doc._id)!.at);
+  // When each tab's pointer last moved, so idle ones can fade out. Tabs that
+  // have gone are forgotten.
+  const [lastMoved, setLastMoved] = useState(
+    () => new Map<string, PointerSeen>(),
+  );
+  useEffect(() => {
+    setLastMoved((previous) => {
+      const next = new Map<string, PointerSeen>();
+      presence.forEach((doc) => {
+        const key = JSON.stringify(doc.cursor);
+        const seen = previous.get(doc._id);
+        next.set(doc._id, seen?.key === key ? seen : { key, at: Date.now() });
+      });
+      return next;
     });
-    // Forget tabs that have gone.
-    lastMoved.current.forEach((_seen, id) => {
-      if (!result.has(id)) lastMoved.current.delete(id);
-    });
-    return result;
   }, [presence]);
 
-  // Ticks while anyone's pointer is on the board, so idle ones fade out.
+  // Ticks while anyone's pointer is on the board and this tab can be seen, so
+  // idle ones fade out.
   const anyCursors = presence.some((doc) => doc.cursor);
   useEffect(() => {
-    if (!anyCursors) return undefined;
+    if (!anyCursors || !visible) return undefined;
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
-  }, [anyCursors]);
+  }, [anyCursors, visible]);
 
+  // Names only change as people come and go, not as their pointers move.
+  const userIds = [...new Set(presence.map((doc) => doc.user))]
+    .toSorted()
+    .join(",");
   const names = useTracker(
     () =>
       new Map(
-        presence.map((doc) => [
-          doc.user,
-          MeteorUsers.findOne(doc.user)?.displayName ??
+        (userIds ? userIds.split(",") : []).map((user) => [
+          user,
+          MeteorUsers.findOne(user)?.displayName ??
             t("whiteboard.cursor.someone", "Someone"),
         ]),
       ),
-    [presence, t],
+    [userIds, t],
   );
 
   return (
@@ -111,12 +122,12 @@ const CursorLayer = ({
           <StrokeSvg key={`${doc._id}-stroke`}>
             <path
               d={inkPath(doc.stroke.points, doc.stroke.strokeWidth, false)}
-              fill={STROKE_COLORS[doc.stroke.colour] ?? theme.colors.text}
+              fill={colors.stroke[doc.stroke.color] ?? theme.colors.text}
             />
           </StrokeSvg>
         ) : null;
         if (!doc.cursor) return stroke;
-        const idle = now - (movedAt.get(doc._id) ?? now) > IDLE_AFTER;
+        const idle = now - (lastMoved.get(doc._id)?.at ?? now) > IDLE_AFTER;
         return (
           <React.Fragment key={doc._id}>
             {stroke}
@@ -130,7 +141,7 @@ const CursorLayer = ({
                 <path
                   d="M1 1 L1 17 L5.5 13 L9 21 L12 19.5 L8.5 12 L15 12 Z"
                   fill={background}
-                  stroke="#fff"
+                  stroke={theme.colors.whiteboardCursorOutline}
                   strokeWidth="1.5"
                   strokeLinejoin="round"
                 />

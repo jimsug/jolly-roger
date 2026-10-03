@@ -1,12 +1,12 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
 import { Random } from "meteor/random";
 import { assert } from "chai";
-import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Peers from "../../../../imports/lib/models/mediasoup/Peers";
 import Subscribers from "../../../../imports/server/models/Subscribers";
 import serverId from "../../../../imports/server/serverId";
+import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 import StubSubscription, {
   publishHandler,
@@ -22,9 +22,6 @@ describe("subscriber presence", function () {
   let outsiderId: string;
   const puzzleId = Random.id();
   const topic = `puzzle:${puzzleId}`;
-
-  const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-    DDP._CurrentMethodInvocation.withValue({ userId }, fn);
 
   const addSubscriber = (user: string, visible: boolean | string) =>
     Subscribers.insertAsync({
@@ -45,18 +42,7 @@ describe("subscriber presence", function () {
       email: "outsider@example.com",
       password: "password",
     });
-    huntId = await asUser(memberId, () =>
-      Hunts.insertAsync({
-        name: "Presence hunt",
-        mailingLists: [],
-        openSignups: false,
-        hasGuessQueue: true,
-        defaultRoles: [],
-        allowUnlockablePuzzles: false,
-        isArchived: false,
-        customLinkEmbed: false,
-      }),
-    );
+    huntId = await createTestHunt(memberId, { name: "Presence hunt" });
     await MeteorUsers.updateAsync(memberId, {
       $set: { displayName: "Member", hunts: [huntId] },
     });
@@ -158,15 +144,16 @@ describe("subscriber presence", function () {
       );
     });
 
-    it("rejects non-members and anonymous subscribers", async function () {
-      await assert.isRejected(
-        publishHandler("subscribers.fetchAll").call(stub(outsiderId), huntId),
-        /Not a member/,
-      );
-      await assert.isRejected(
-        publishHandler("subscribers.fetchAll").call(stub(null), huntId),
-        /Not logged in/,
-      );
+    it("publishes nothing to non-members or anonymous subscribers", async function () {
+      await addSubscriber(memberId, true);
+      for (const userId of [outsiderId, null]) {
+        const sub = stub(userId);
+        assert.deepEqual(
+          await publishHandler("subscribers.fetchAll").call(sub, huntId),
+          [],
+        );
+        assert.equal(sub.published("subscribers").size, 0);
+      }
     });
   });
 

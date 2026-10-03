@@ -74,11 +74,14 @@ losing relevant discussion from last year to a paid service's retention limits.
 
 Chat supports rich text editing, including bulleted lists, \_italics\_,
 \*bold\*, \`monospace\`, \`\`\`code blocks\`\`\`, and @-mentions with formatting
-previews. You can also upload images directly into chat.
+previews. You can also upload images directly into chat, link another puzzle by
+typing `!` and part of its title, reply to a message, react to it with an emoji,
+and pin it so it stays in view at the top of the chat.
 
 We work hard to make sure that puzzle chat is visible whenever it is active, so
 remote hunters desperately trying to get your attention are hard to ignore.
-While it is possible to temporarily hide it, it always pops out on new messages.
+While it is possible to temporarily hide it, new messages still roll past as
+toasts and are counted on the restore button.
 
 <details>
 <summary>See the chat</summary>
@@ -131,6 +134,14 @@ search handles nested groups sensibly. And since early evaluations of a hunt's
 structure often don't hold up as you get deeper into it, we also include
 powerful tag management tools for re-grouping and re-organizing puzzles later
 on.
+
+Renaming a tag can keep the old name as an alias, so adding a tag by either
+name finds the same tag, and renaming a tag to another tag's name merges the
+two. `where:` tags record a puzzle's location. `group:`, `meta-for:` and
+`where:` tags show an icon in place of their prefix (the puzzle list has a
+legend), and each row of the puzzle list has a column for priority and stuck
+markers and one for a meta or metameta badge. Server admins can set the tags new
+hunts start with.
 
 We've found this approach able to be capable of modeling every hunt
 structure we've thrown at it.
@@ -213,8 +224,11 @@ answer, or tag.
 #### Notifications
 
 Set dingwords — keywords that trigger a notification when mentioned in any chat
-message across the hunt. Bookmark puzzles to receive notifications when their
-state changes (e.g. when an answer is found).
+message across the hunt, or when someone adds a matching tag to a puzzle.
+Dingwords match whole words or phrases (or the start of a word, if you choose
+that in your profile), and a dingword notification can mute that dingword, or
+all of them, for that puzzle. Bookmark puzzles to receive notifications when
+their state changes (e.g. when an answer is found).
 
 <details>
 <summary>See a dingword notification</summary>

@@ -1,4 +1,3 @@
-import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
 import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg-icons/faLightbulb";
@@ -33,14 +32,14 @@ import styled, { css, useTheme } from "styled-components";
 import { indexedById } from "../../lib/listUtils";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
-import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
-import type { PuzzleSolvers } from "../../lib/puzzleSolvers";
+import type { PuzzleViewers } from "../../lib/puzzleViewers";
 import type { Solvedness } from "../../lib/solvedness";
 import { computeSolvedness } from "../../lib/solvedness";
 import updatePuzzle from "../../methods/updatePuzzle";
 import { useOperatorActionsHiddenForHunt } from "../hooks/persisted-state";
+import usePuzzleInterest from "../hooks/usePuzzleInterest";
 import type { AvatarStackUser } from "./AvatarStack";
 import AvatarStack from "./AvatarStack";
 import BookmarkButton from "./BookmarkButton";
@@ -50,7 +49,6 @@ import PuzzleDeleteModal from "./PuzzleDeleteModal";
 import PuzzleInterestPopover from "./PuzzleInterestPopover";
 import type { PuzzleModalFormSubmitPayload } from "./PuzzleModalForm";
 import PuzzleModalForm from "./PuzzleModalForm";
-import type { PuzzleUnlockModalHandle } from "./PuzzleUnlockModal";
 import PuzzleUnlockModal from "./PuzzleUnlockModal";
 import { mediaBreakpointDown } from "./styling/responsive";
 import TagList from "./TagList";
@@ -62,15 +60,15 @@ const PuzzleDiv = styled.div<{
   background-color: ${({ $solvedness, theme }) => {
     return theme.colors.solvedness[$solvedness];
   }};
-  ${({ $locked }) =>
+  ${({ $locked, theme }) =>
     $locked &&
     css`
       background-image: repeating-linear-gradient(
         -45deg,
         transparent,
         transparent 8px,
-        rgb(128 128 128 / 10%) 8px,
-        rgb(128 128 128 / 10%) 16px
+        ${theme.colors.lockedPuzzleStripe} 8px,
+        ${theme.colors.lockedPuzzleStripe} 16px
       );
     `}
   display: flex;
@@ -216,6 +214,10 @@ const PuzzleStatusColumn = styled(PuzzleColumn)`
   )}
 `;
 
+const PriorityHighIcon = styled(FontAwesomeIcon)`
+  color: ${({ theme }) => theme.colors.priorityHighIcon};
+`;
+
 // Meta/metameta status, shown as a badge instead of tag chips.
 const PuzzleMetaColumn = styled(PuzzleColumn)`
   flex: 1.5;
@@ -235,7 +237,7 @@ const MetaBadge = styled(Badge)`
 `;
 
 // Who is on the call and who is looking at the puzzle
-const SolversColumn = styled(PuzzleColumn)`
+const ViewersColumn = styled(PuzzleColumn)`
   flex: 3;
   cursor: default;
   ${mediaBreakpointDown(
@@ -246,7 +248,7 @@ const SolversColumn = styled(PuzzleColumn)`
   )}
 `;
 
-const SolverRow = styled.div`
+const ViewerRow = styled.div`
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -254,7 +256,7 @@ const SolverRow = styled.div`
   line-height: normal;
 `;
 
-const SolverTooltipLine = styled.div<{ $passive?: boolean }>`
+const ViewerTooltipLine = styled.div<{ $passive?: boolean }>`
   text-align: left;
   ${({ $passive }) =>
     $passive &&
@@ -264,10 +266,10 @@ const SolverTooltipLine = styled.div<{ $passive?: boolean }>`
     `}
 `;
 
-const NO_SOLVER_USERS: {
-  callers: AvatarStackUser[];
-  viewers: AvatarStackUser[];
-} = { callers: [], viewers: [] };
+const NO_VIEWER_USERS: {
+  callerUsers: AvatarStackUser[];
+  viewerUsers: AvatarStackUser[];
+} = { callerUsers: [], viewerUsers: [] };
 
 const NOTE_PREVIEW_LENGTH = 250;
 const truncateNote = (text: string) =>
@@ -283,8 +285,8 @@ const Puzzle = React.memo(
     canUpdate,
     suppressTags,
     segmentAnswers,
-    showSolvers = false,
-    solvers,
+    showViewers = false,
+    viewers,
   }: {
     puzzle: PuzzleType;
     bookmarked: boolean;
@@ -294,8 +296,8 @@ const Puzzle = React.memo(
     suppressTags?: string[];
     segmentAnswers?: boolean;
     // Whether to show who is on the puzzle, and who that is
-    showSolvers?: boolean;
-    solvers?: PuzzleSolvers;
+    showViewers?: boolean;
+    viewers?: PuzzleViewers;
   }) => {
     const [operatorActionsHidden] = useOperatorActionsHiddenForHunt(
       puzzle.hunt,
@@ -320,41 +322,18 @@ const Puzzle = React.memo(
       [puzzle.hunt],
     );
     const renderAsLocked = (puzzle.locked ?? false) && allowUnlockablePuzzles;
-    const feedbacks = useTracker(
-      () =>
-        renderAsLocked
-          ? PuzzleFeedbacks.find({ puzzle: puzzle._id }).fetch()
-          : [],
-      [puzzle._id, renderAsLocked],
-    );
-    const myFeedback = useTracker(
-      () =>
-        renderAsLocked
-          ? PuzzleFeedbacks.findOne({
-              puzzle: puzzle._id,
-              createdBy: Meteor.userId()!,
-            })
-          : undefined,
-      [puzzle._id, renderAsLocked],
-    );
-    const interestScore = feedbacks.reduce((acc, f) => acc + f.score, 0);
-    const [showInterestPopover, setShowInterestPopover] = useState(false);
-    const interestButtonRef = useRef<HTMLButtonElement>(null);
-    const toggleInterestPopover = useCallback(() => {
-      setShowInterestPopover((shown) => !shown);
-    }, []);
-    const hideInterestPopover = useCallback(() => {
-      setShowInterestPopover(false);
-    }, []);
-    const [renderUnlockModal, setRenderUnlockModal] = useState(false);
-    const unlockModalRef = useRef<PuzzleUnlockModalHandle>(null);
-    const onShowUnlockModal = useCallback(() => {
-      if (renderUnlockModal && unlockModalRef.current) {
-        unlockModalRef.current.show();
-      } else {
-        setRenderUnlockModal(true);
-      }
-    }, [renderUnlockModal]);
+    const {
+      interests,
+      myInterest,
+      interestScore,
+      showInterestPopover,
+      interestButtonRef,
+      toggleInterestPopover,
+      hideInterestPopover,
+      renderUnlockModal,
+      unlockModalRef,
+      showUnlockModal,
+    } = usePuzzleInterest(puzzle._id, renderAsLocked);
 
     const onEdit = useCallback(
       (
@@ -429,7 +408,7 @@ const Puzzle = React.memo(
       if (note.flavor) {
         lines.push(
           <div key="flavor">
-            <strong>{t("notes.fields.flavorShort", "Flavor")}:</strong>{" "}
+            <strong>{t("puzzle.notePreview.flavor", "Flavor")}:</strong>{" "}
             <em>{truncateNote(note.flavor)}</em>
           </div>,
         );
@@ -437,7 +416,7 @@ const Puzzle = React.memo(
       if (note.summary) {
         lines.push(
           <div key="summary">
-            <strong>{t("notes.columns.summary", "Summary")}:</strong>{" "}
+            <strong>{t("puzzle.notePreview.summary", "Summary")}:</strong>{" "}
             {truncateNote(note.summary)}
           </div>,
         );
@@ -445,7 +424,7 @@ const Puzzle = React.memo(
       if (note.theories) {
         lines.push(
           <div key="theories">
-            <strong>{t("notes.columns.theories", "Theories")}:</strong>{" "}
+            <strong>{t("puzzle.notePreview.theories", "Theories")}:</strong>{" "}
             <em>{truncateNote(note.theories)}</em>
           </div>,
         );
@@ -508,9 +487,9 @@ const Puzzle = React.memo(
     const tooltipId = useId();
 
     // Display names and avatars come from the list page's subscriptions
-    const { callers, viewers } = useTracker(() => {
-      if (!showSolvers || !solvers) {
-        return NO_SOLVER_USERS;
+    const { callerUsers, viewerUsers } = useTracker(() => {
+      if (!showViewers || !viewers) {
+        return NO_VIEWER_USERS;
       }
       const toUsers = (ids: string[], isPassive: boolean): AvatarStackUser[] =>
         ids.flatMap((id) => {
@@ -527,33 +506,33 @@ const Puzzle = React.memo(
             : [];
         });
       return {
-        callers: toUsers(solvers.rtcViewers, false),
-        viewers: [
-          ...toUsers(solvers.activeViewers, false),
-          ...toUsers(solvers.passiveViewers, true),
+        callerUsers: toUsers(viewers.rtcViewers, false),
+        viewerUsers: [
+          ...toUsers(viewers.activeViewers, false),
+          ...toUsers(viewers.passiveViewers, true),
         ],
       };
-    }, [showSolvers, solvers]);
-    const activeViewers = viewers.filter((u) => !u.isPassive);
-    const passiveViewers = viewers.filter((u) => u.isPassive);
-    const solversTooltip = (
-      <Tooltip id={`${tooltipId}-solvers`}>
-        {callers.length > 0 && (
-          <SolverTooltipLine>
+    }, [showViewers, viewers]);
+    const activeViewers = viewerUsers.filter((u) => !u.isPassive);
+    const passiveViewers = viewerUsers.filter((u) => u.isPassive);
+    const viewersTooltip = (
+      <Tooltip id={`${tooltipId}-viewers`}>
+        {callerUsers.length > 0 && (
+          <ViewerTooltipLine>
             <FontAwesomeIcon icon={faPhone} />{" "}
-            {callers.map((u) => u.displayName).join(", ")}
-          </SolverTooltipLine>
+            {callerUsers.map((u) => u.displayName).join(", ")}
+          </ViewerTooltipLine>
         )}
         {activeViewers.length > 0 && (
-          <SolverTooltipLine>
+          <ViewerTooltipLine>
             <FontAwesomeIcon icon={faEye} />{" "}
             {activeViewers.map((u) => u.displayName).join(", ")}
-          </SolverTooltipLine>
+          </ViewerTooltipLine>
         )}
         {passiveViewers.length > 0 && (
-          <SolverTooltipLine $passive>
+          <ViewerTooltipLine $passive>
             {passiveViewers.map((u) => u.displayName).join(", ")}
-          </SolverTooltipLine>
+          </ViewerTooltipLine>
         )}
       </Tooltip>
     );
@@ -561,7 +540,7 @@ const Puzzle = React.memo(
     let statusIcon;
     let statusText;
     if (isHighPriority) {
-      statusIcon = <FontAwesomeIcon icon={faAngleDoubleUp} color="red" />;
+      statusIcon = <PriorityHighIcon icon={faAngleDoubleUp} />;
       statusText = t("puzzleList.highPriority", "High priority");
     } else if (isLowPriority) {
       statusIcon = <FontAwesomeIcon icon={faAngleDown} />;
@@ -603,16 +582,16 @@ const Puzzle = React.memo(
               <>
                 <InterestButton
                   ref={interestButtonRef}
-                  variant={myFeedback ? "info" : theme.basicMode}
+                  variant={myInterest ? "info" : theme.basicMode}
                   onClick={toggleInterestPopover}
                   title={
-                    myFeedback
+                    myInterest
                       ? `${t("puzzle.interest.update", "Update interest")}...`
                       : `${t("puzzle.interest.register", "I'm interested")}...`
                   }
                 >
                   <FontAwesomeIcon
-                    icon={myFeedback ? faLightbulbSolid : faLightbulbRegular}
+                    icon={myInterest ? faLightbulbSolid : faLightbulbRegular}
                   />
                   {interestScore > 0 && (
                     <Badge bg="light" text="dark">
@@ -623,7 +602,7 @@ const Puzzle = React.memo(
                 {showEdit && (
                   <StyledButton
                     variant="danger"
-                    onClick={onShowUnlockModal}
+                    onClick={showUnlockModal}
                     title={`${t("puzzle.unlock.title", "Unlock puzzle")}...`}
                   >
                     <FontAwesomeIcon icon={faUnlock} />
@@ -644,7 +623,7 @@ const Puzzle = React.memo(
             <PuzzleInterestPopover
               puzzleId={puzzle._id}
               lockedSummary={puzzle.lockedSummary}
-              myFeedback={myFeedback}
+              myInterest={myInterest}
               target={interestButtonRef.current}
               show={showInterestPopover}
               placement="right"
@@ -655,7 +634,7 @@ const Puzzle = React.memo(
             <PuzzleUnlockModal
               ref={unlockModalRef}
               puzzle={puzzle}
-              feedbacks={feedbacks}
+              interests={interests}
               showOnMount
             />
           )}
@@ -713,28 +692,34 @@ const Puzzle = React.memo(
           </LockedSummaryColumn>
         ) : (
           <>
-            {showSolvers && (
-              <SolversColumn>
+            {showViewers && (
+              <ViewersColumn>
                 {solvedness === "unsolved" &&
-                  (callers.length > 0 || viewers.length > 0) && (
-                    <OverlayTrigger placement="left" overlay={solversTooltip}>
+                  (callerUsers.length > 0 || viewerUsers.length > 0) && (
+                    <OverlayTrigger placement="left" overlay={viewersTooltip}>
                       <div>
-                        {callers.length > 0 && (
-                          <SolverRow>
+                        {callerUsers.length > 0 && (
+                          <ViewerRow>
                             <FontAwesomeIcon icon={faPhone} />
-                            <AvatarStack users={callers} withTooltip={false} />
-                          </SolverRow>
+                            <AvatarStack
+                              users={callerUsers}
+                              withTooltip={false}
+                            />
+                          </ViewerRow>
                         )}
-                        {viewers.length > 0 && (
-                          <SolverRow>
+                        {viewerUsers.length > 0 && (
+                          <ViewerRow>
                             <FontAwesomeIcon icon={faEye} />
-                            <AvatarStack users={viewers} withTooltip={false} />
-                          </SolverRow>
+                            <AvatarStack
+                              users={viewerUsers}
+                              withTooltip={false}
+                            />
+                          </ViewerRow>
                         )}
                       </div>
                     </OverlayTrigger>
                   )}
-              </SolversColumn>
+              </ViewersColumn>
             )}
             <PuzzleActivityColumn>
               {solvedness === "unsolved" && (

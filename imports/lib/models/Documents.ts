@@ -4,24 +4,22 @@ import type { ModelType } from "../typedModel/Model";
 import SoftDeletedModel from "../typedModel/SoftDeletedModel";
 import withCommon from "../typedModel/withCommon";
 
+export const GoogleDocumentProvider = z.object({
+  provider: z.literal("google"),
+  value: z.object({
+    type: z.enum(["spreadsheet", "document"]),
+    id: nonEmptyString,
+    folder: nonEmptyString.optional(),
+  }),
+});
+
 const DocumentSchema = withCommon(
   z
     .object({
       hunt: foreignKey,
       puzzle: foreignKey,
     })
-    .and(
-      z.discriminatedUnion("provider", [
-        z.object({
-          provider: z.literal("google"),
-          value: z.object({
-            type: z.enum(["spreadsheet", "document"]),
-            id: nonEmptyString,
-            folder: nonEmptyString.optional(),
-          }),
-        }),
-      ]),
-    ),
+    .and(z.discriminatedUnion("provider", [GoogleDocumentProvider])),
 );
 
 const Documents = new SoftDeletedModel("jr_documents", DocumentSchema);

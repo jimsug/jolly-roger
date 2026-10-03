@@ -31,8 +31,9 @@ const Guess = withCommon(
     // Whether this was forward solved (10), backwards solved (-10), or somewhere
     // in between (only optional in that older hunts won't have it)
     direction: z.int32().min(-10).max(10).optional(),
-    // Submitted-evaluated probability that the answer is right (also only
-    // optional on older hunts)
+    // How sure the submitter is that the answer is right, 0 to 100. The guess
+    // modal records Low, Medium and High as 0, 50 and 100 (also only optional
+    // on older hunts).
     confidence: z.int32().min(0).max(100).optional(),
     state: GuessStates,
     // Additional notes can be used by the operator either for sharing (e.g.)

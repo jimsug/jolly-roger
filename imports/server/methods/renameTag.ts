@@ -18,13 +18,13 @@ defineMethod(renameTag, {
     check(arg, {
       tagId: String,
       name: String,
-      alias: Boolean,
+      keepOldNameAsAlias: Boolean,
     });
 
     return arg;
   },
 
-  async run({ tagId, name, alias }) {
+  async run({ tagId, name, keepOldNameAsAlias }) {
     check(this.userId, String);
 
     const tag = await Tags.findOneAsync(tagId);
@@ -71,12 +71,12 @@ defineMethod(renameTag, {
       // Another tag already answers to the new name: fold this one into it.
       Logger.info("Merging tag", { tag: tagId, into: target._id, name });
       await Puzzles.updateAsync(
-        { tags: tagId },
+        { hunt: tag.hunt, tags: tagId },
         { $addToSet: { tags: target._id } },
         { multi: true },
       );
       await Puzzles.updateAsync(
-        { tags: tagId },
+        { hunt: tag.hunt, tags: tagId },
         { $pull: { tags: tagId } },
         { multi: true },
       );
@@ -86,7 +86,7 @@ defineMethod(renameTag, {
       const targetMatcher = tagNameMatcher(target.name);
       const aliases = [
         ...(tag.aliases ?? []),
-        ...(alias ? [tag.name] : []),
+        ...(keepOldNameAsAlias ? [tag.name] : []),
       ].filter((a) => !targetMatcher.test(a));
       if (aliases.length > 0) {
         await Tags.updateAsync(target._id, {
@@ -94,7 +94,7 @@ defineMethod(renameTag, {
         });
       }
 
-      await Tags.removeAsync(tagId);
+      await Tags.destroyAsync(tagId);
       deferSyncPuzzlesOnBoard(tag.hunt, affectedPuzzles);
       return;
     }
@@ -103,7 +103,7 @@ defineMethod(renameTag, {
     // The new name can't also be one of the tag's own aliases, and a rename
     // that only changes case doesn't need the old spelling kept.
     const aliases = (tag.aliases ?? []).filter((a) => !matcher.test(a));
-    if (alias && !matcher.test(tag.name)) {
+    if (keepOldNameAsAlias && !matcher.test(tag.name)) {
       aliases.push(tag.name);
     }
     await Tags.updateAsync(tagId, { $set: { name: newName, aliases } });

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import styled, { css } from "styled-components";
-import { MarkdownText } from "../ChatMarkdown";
+import ChatMarkdown from "../ChatMarkdown";
 
 const editorStyles = css`
   width: 100%;
@@ -62,6 +62,10 @@ const stopLinkClicks = (e: React.MouseEvent) => {
   }
 };
 
+const selectAll = (
+  e: React.FocusEvent<HTMLTextAreaElement | HTMLInputElement>,
+) => e.target.select();
+
 // Never rendered as HTML. With markdown set, chat's markdown subset is shown
 // (raw HTML stays literal and unsafe links become plain text), but editing is
 // still on the raw text. Double-click to edit; blur or Enter (single line)
@@ -94,13 +98,22 @@ const EditableText = ({
   const [pending, setPending] = useState<string | undefined>(undefined);
   const cancelled = useRef(false);
 
+  const begin = useCallback(() => {
+    if (readOnly) return;
+    cancelled.current = false;
+    setDraft(pending ?? value ?? "");
+    setEditing(true);
+  }, [readOnly, pending, value]);
+
+  // An edit the canvas asks for (a note just placed, or one someone pressed
+  // Enter on) starts in an effect: telling the canvas it has started updates
+  // the canvas, which can't happen while this renders.
   useEffect(() => {
     if (startEditing && !readOnly) {
-      setDraft(value ?? "");
-      setEditing(true);
+      begin();
       onStartedEditing?.();
     }
-  }, [startEditing, readOnly, value, onStartedEditing]);
+  }, [startEditing, readOnly, begin, onStartedEditing]);
 
   useEffect(() => {
     if (pending === undefined) return undefined;
@@ -111,13 +124,6 @@ const EditableText = ({
     const timeout = setTimeout(() => setPending(undefined), 5000);
     return () => clearTimeout(timeout);
   }, [value, pending]);
-
-  const begin = useCallback(() => {
-    if (readOnly) return;
-    cancelled.current = false;
-    setDraft(pending ?? value ?? "");
-    setEditing(true);
-  }, [readOnly, pending, value]);
 
   const commit = useCallback(() => {
     setEditing(false);
@@ -142,19 +148,22 @@ const EditableText = ({
     [multiline],
   );
 
+  const onChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) =>
+      setDraft(e.target.value),
+    [],
+  );
+
   if (editing) {
     const props = {
       className: "nodrag nowheel",
       autoFocus: true,
       value: draft,
       maxLength,
-      onChange: (
-        e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>,
-      ) => setDraft(e.target.value),
+      onChange,
       onBlur: commit,
       onKeyDown,
-      onFocus: (e: React.FocusEvent<HTMLTextAreaElement | HTMLInputElement>) =>
-        e.target.select(),
+      onFocus: selectAll,
     };
     return multiline ? <TextArea {...props} /> : <Input {...props} />;
   }
@@ -166,7 +175,7 @@ const EditableText = ({
   } else if (markdown) {
     body = (
       <MarkdownBody onClick={stopLinkClicks} onDoubleClick={stopLinkClicks}>
-        <MarkdownText text={shown} safeLinks linkClassName="nodrag nopan" />
+        <ChatMarkdown text={shown} safeLinks linkClassName="nodrag nopan" />
       </MarkdownBody>
     );
   } else {

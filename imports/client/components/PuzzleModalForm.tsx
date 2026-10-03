@@ -58,21 +58,22 @@ enum PuzzleModalFormSubmitState {
   FAILED = "failed",
 }
 
-export type PuzzleModalFormHandle = {
-  reset: () => void;
-  show: () => void;
-  // Pre-fills the form, e.g. with a group's tags when adding a puzzle to it,
-  // or with the page the bookmarklet was clicked on.
-  populateForm: (data: {
-    title?: string;
-    url?: string;
-    tagIds?: string[];
-  }) => void;
+// Fields to fill in as the form opens, e.g. a group's tags when adding a
+// puzzle to it, or the page the bookmarklet was clicked on
+export type PuzzleModalFormPrefill = {
+  title?: string;
+  url?: string;
+  tagIds?: string[];
 };
 
-// "Functional" tags carry a prefix (group:, meta-for:, priority:, where:...)
-// and drive how the puzzle list is organised; everything else describes the
-// puzzle's content. The form takes them in separate inputs.
+export type PuzzleModalFormHandle = {
+  reset: () => void;
+  show: (prefill?: PuzzleModalFormPrefill) => void;
+};
+
+// "Functional" tags are any with a prefix (group:, meta-for:, priority:,
+// where:, or anything else before a colon); the rest describe the puzzle's
+// content. The form takes them in separate inputs.
 const isFunctionalTag = (name: string) => name.includes(":");
 
 const sortTagNames = (names: Iterable<string>) =>
@@ -149,11 +150,21 @@ const PuzzleModalForm = ({
   ] = useState(false);
   const [lockedDirty, setLockedDirty] = useState(false);
   const [lockedSummaryDirty, setLockedSummaryDirty] = useState(false);
-  // The title last filled in from the URL, so a later URL can replace it but
-  // a title someone typed is left alone.
-  const [guessedTitle, setGuessedTitle] = useState<string | undefined>(
-    undefined,
+  // The title last guessed from the URL, so a later URL can replace it but a
+  // title someone typed is left alone.
+  const lastGuessedTitle = useRef(
+    puzzle?.url === undefined ? undefined : guessTitleFromUrl(puzzle.url),
   );
+  // Whether the tags came from a prefill, which belongs to whatever opened
+  // the form with it: the next show() without tags clears them.
+  const tagsPrefilled = useRef(false);
+  // show() reads the tag names through a ref so that it stays the same
+  // function, as otherwise showOnMount would reopen the form whenever the
+  // hunt's tags change.
+  const tagNamesForIdsRef = useRef(tagNamesForIds);
+  useEffect(() => {
+    tagNamesForIdsRef.current = tagNamesForIds;
+  }, [tagNamesForIds]);
 
   // show() can be asked for before ModalForm has mounted (the tag selector
   // below is lazy-loaded), e.g. by the bookmarklet on page load, so it is
@@ -175,28 +186,6 @@ const PuzzleModalForm = ({
     },
     [],
   );
-
-  const onUrlChange: NonNullable<FormControlProps["onChange"]> = useCallback(
-    (event) => {
-      setUrl(event.currentTarget.value);
-      setUrlDirty(true);
-    },
-    [],
-  );
-
-  // Fills in a title from the URL while the title is blank or still the one
-  // guessed from the previous URL.
-  useEffect(() => {
-    const guessed = guessTitleFromUrl(url);
-    if (guessed === undefined) {
-      return;
-    }
-    if (title === "" || title === guessedTitle) {
-      setTitle(guessed);
-      setTitleDirty(true);
-    }
-    setGuessedTitle(guessed);
-  }, [url, title, guessedTitle]);
 
   const onDocTypeChange = useCallback((newValue: string) => {
     setDocType(newValue as GdriveMimeTypesType);
@@ -341,7 +330,33 @@ const PuzzleModalForm = ({
     ],
   );
 
-  const show = useCallback(() => {
+  const show = useCallback((prefill?: PuzzleModalFormPrefill) => {
+    if (prefill?.title !== undefined) {
+      setTitle(prefill.title);
+      setTitleDirty(true);
+    }
+    if (prefill?.url !== undefined) {
+      setUrl(prefill.url);
+      setUrlDirty(true);
+      const guessed = guessTitleFromUrl(prefill.url);
+      if (guessed !== undefined) {
+        if (!prefill.title) {
+          setTitle(guessed);
+          setTitleDirty(true);
+        }
+        lastGuessedTitle.current = guessed;
+      }
+    }
+    if (prefill?.tagIds !== undefined) {
+      setTags(tagNamesForIdsRef.current([...new Set(prefill.tagIds)]));
+      setTagsDirty(true);
+      tagsPrefilled.current = true;
+    } else if (tagsPrefilled.current) {
+      setTags([]);
+      setTagsDirty(true);
+      tagsPrefilled.current = false;
+    }
+
     if (formRef.current) {
       formRef.current.show();
     } else {
@@ -357,7 +372,8 @@ const PuzzleModalForm = ({
     setDocType("spreadsheet");
     setLocked(false);
     setLockedSummary("");
-    setGuessedTitle(undefined);
+    lastGuessedTitle.current = undefined;
+    tagsPrefilled.current = false;
   }, []);
 
   const currentTitle = useMemo(() => {
@@ -367,6 +383,26 @@ const PuzzleModalForm = ({
       return title;
     }
   }, [titleDirty, puzzle, title]);
+
+  // Fills in a title from the URL while the title is blank or still the one
+  // guessed from the previous URL.
+  const onUrlChange: NonNullable<FormControlProps["onChange"]> = useCallback(
+    (event) => {
+      const newUrl = event.currentTarget.value;
+      setUrl(newUrl);
+      setUrlDirty(true);
+      const guessed = guessTitleFromUrl(newUrl);
+      if (guessed === undefined) {
+        return;
+      }
+      if (currentTitle === "" || currentTitle === lastGuessedTitle.current) {
+        setTitle(guessed);
+        setTitleDirty(true);
+      }
+      lastGuessedTitle.current = guessed;
+    },
+    [currentTitle],
+  );
 
   const currentUrl = useMemo(() => {
     if (!urlDirty && puzzle) {
@@ -439,32 +475,6 @@ const PuzzleModalForm = ({
     [onTagHalfChange, currentFunctionalTags],
   );
 
-  const populateForm = useCallback(
-    ({
-      title: newTitle,
-      url: newUrl,
-      tagIds,
-    }: {
-      title?: string;
-      url?: string;
-      tagIds?: string[];
-    }) => {
-      if (newTitle !== undefined) {
-        setTitle(newTitle);
-        setTitleDirty(true);
-      }
-      if (newUrl !== undefined) {
-        setUrl(newUrl);
-        setUrlDirty(true);
-      }
-      if (tagIds !== undefined) {
-        setTags(tagNamesForIds([...new Set(tagIds)]));
-        setTagsDirty(true);
-      }
-    },
-    [tagNamesForIds],
-  );
-
   const currentExpectedAnswerCount = useMemo(() => {
     if (!expectedAnswerCountDirty && puzzle) {
       return puzzle.expectedAnswerCount;
@@ -488,7 +498,6 @@ const PuzzleModalForm = ({
   useImperativeHandle(ref, () => ({
     show,
     reset,
-    populateForm,
   }));
 
   useEffect(() => {
@@ -635,7 +644,7 @@ const PuzzleModalForm = ({
           </FormLabel>
           <Col xs={9}>
             <Creatable
-              id={`${idPrefix}-new-puzzle-functional-tags`}
+              inputId={`${idPrefix}-new-puzzle-functional-tags`}
               theme={theme.reactSelectTheme}
               options={functionalSelectOptions}
               isMulti
@@ -650,7 +659,7 @@ const PuzzleModalForm = ({
               <Trans
                 i18nKey="puzzle.edit.functionalTagsHelp"
                 t={t}
-                defaults="Tags with a prefix, like <code>group:</code>, <code>meta-for:</code>, <code>priority:</code>, or <code>where:</code> (e.g. <code>priority:high</code>; <code>where:Sydney</code>)"
+                defaults="Tags with a prefix, like <code>group:</code>, <code>meta-for:</code>, <code>priority:</code>, or <code>where:</code> (e.g. <code>priority:high</code>; <code>group:events</code>)"
                 components={{ code: <code /> }}
               />
             </FormText>
@@ -667,7 +676,7 @@ const PuzzleModalForm = ({
           </FormLabel>
           <Col xs={9}>
             <Creatable
-              id={`${idPrefix}-new-puzzle-content-tags`}
+              inputId={`${idPrefix}-new-puzzle-content-tags`}
               theme={theme.reactSelectTheme}
               options={contentSelectOptions}
               isMulti

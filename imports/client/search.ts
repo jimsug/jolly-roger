@@ -1,6 +1,7 @@
 import type { GuessType } from "../lib/models/Guesses";
 import type { PuzzleType } from "../lib/models/Puzzles";
 import type { TagType } from "../lib/models/Tags";
+import { computeSolvedness } from "../lib/solvedness";
 
 // Given a set of tags and a set of search keys, produces a function that will
 // evaluate whether a puzzle should be included for the given search filter.
@@ -51,6 +52,34 @@ function compilePuzzleMatcher(
   };
 }
 
+// The puzzles matching every space-separated key in searchString (all of
+// them when there are no keys), as compilePuzzleMatcher matches them.
+function puzzlesMatchingSearchString(
+  puzzles: PuzzleType[],
+  allTags: TagType[],
+  searchString: string,
+  extraTerms?: (p: PuzzleType) => string[],
+): PuzzleType[] {
+  const searchKeys = searchString.split(" ").filter((key) => key.length > 0);
+  if (searchKeys.length === 0) {
+    // No search query, so no need to do fancy search computation
+    return puzzles;
+  }
+  return puzzles.filter(compilePuzzleMatcher(allTags, searchKeys, extraTerms));
+}
+
+// Drops solved puzzles unless they're to be shown. Items with no expected
+// answer always stay, since they're generally pinned administrivia.
+function puzzlesMatchingSolvedFilter(
+  puzzles: PuzzleType[],
+  showSolved: boolean,
+): PuzzleType[] {
+  if (showSolved) {
+    return puzzles;
+  }
+  return puzzles.filter((puzzle) => computeSolvedness(puzzle) !== "solved");
+}
+
 function compileGuessMatcher(
   puzzles: Map<string, PuzzleType>,
   displayNames: Map<string, string>,
@@ -80,4 +109,9 @@ function compileGuessMatcher(
   };
 }
 
-export { compileGuessMatcher, compilePuzzleMatcher };
+export {
+  compileGuessMatcher,
+  compilePuzzleMatcher,
+  puzzlesMatchingSearchString,
+  puzzlesMatchingSolvedFilter,
+};

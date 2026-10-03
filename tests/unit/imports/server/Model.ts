@@ -269,17 +269,22 @@ describe("Model", function () {
   describe("indexes", function () {
     const schema = z.object({
       updatedAt: updatedTimestamp,
-      ephemeral: z.boolean().optional(),
     });
     let model: Model<typeof schema>;
     this.beforeAll(async function () {
       model = await createTestModel(schema);
     });
 
-    // Create the index the way imports/server/indexes.ts does, then read it
-    // back the way the reconciler does: the two must agree, or the index
-    // would be dropped and recreated on every boot.
-    const roundTrips = async (spec: (typeof model.indexes)[number]) => {
+    it("carries a TTL through to the index the reconciler creates", async function () {
+      model.addIndex({ updatedAt: 1 }, { expireAfterSeconds: 60 });
+      const [spec] = model.indexes;
+      assert.isDefined(spec);
+      assert.equal(spec.name, "updatedAt_1");
+      assert.deepEqual(spec.options, [["expireAfterSeconds", 60]]);
+
+      // Create it the way imports/server/indexes.ts does, then read it back
+      // the way the reconciler does: the two must agree, or the index would
+      // be dropped and recreated on every boot.
       const collection = model.collection.rawCollection();
       await collection.createIndexes([
         {
@@ -300,31 +305,6 @@ describe("Model", function () {
         ]),
         spec.stringified,
       );
-    };
-
-    it("carries a TTL through to the index the reconciler creates", async function () {
-      model.addIndex({ updatedAt: 1 }, { expireAfterSeconds: 60 });
-      const spec = model.indexes.at(-1)!;
-      assert.equal(spec.name, "updatedAt_1");
-      assert.deepEqual(spec.options, [["expireAfterSeconds", 60]]);
-      await roundTrips(spec);
-    });
-
-    it("carries a partial TTL through as well", async function () {
-      await model.collection.rawCollection().dropIndex("updatedAt_1");
-      model.addIndex(
-        { updatedAt: 1 },
-        {
-          expireAfterSeconds: 30,
-          partialFilterExpression: { ephemeral: true },
-        },
-      );
-      const spec = model.indexes.at(-1)!;
-      assert.deepEqual(spec.options, [
-        ["expireAfterSeconds", 30],
-        ["partialFilterExpression", { ephemeral: true }],
-      ]);
-      await roundTrips(spec);
     });
   });
 

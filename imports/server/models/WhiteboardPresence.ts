@@ -36,7 +36,7 @@ const WhiteboardPresenceSchema = z.object({
     .optional(),
   stroke: z
     .object({
-      colour: z.enum(WhiteboardColors),
+      color: z.enum(WhiteboardColors),
       strokeWidth: z.enum(WhiteboardStrokeWidths),
       points: WhiteboardInkPoint.array(),
     })

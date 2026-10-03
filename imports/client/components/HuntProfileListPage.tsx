@@ -15,10 +15,11 @@ import {
   userMayUseDiscordBotAPIs,
 } from "../../lib/permission_stubs";
 import invitationCodesForHunt from "../../lib/publications/invitationCodesForHunt";
-import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
-import statusesForHuntUsers from "../../lib/publications/statusesForHuntUsers";
+import puzzlesForHuntProfileList from "../../lib/publications/puzzlesForHuntProfileList";
+import userStatusesForHunt from "../../lib/publications/userStatusesForHunt";
 import sortUsersByDisplayName from "../../lib/sortUsersByDisplayName";
-import userStatusesToLastSeen from "../../lib/userStatusesToLastSeen";
+import summarizeUserStatuses from "../../lib/summarizeUserStatuses";
+import useDocumentVisible from "../hooks/useDocumentVisible";
 import useNow from "../hooks/useNow";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import ProfileList from "./ProfileList";
@@ -31,9 +32,11 @@ const HuntProfileListPage = () => {
   const invitationCodesLoading = useTypedSubscribe(invitationCodesForHunt, {
     huntId,
   });
-  const statusesLoading = useTypedSubscribe(statusesForHuntUsers, { huntId });
-  // Puzzle titles for the "last active on" buttons
-  const puzzlesLoading = useTypedSubscribe(puzzlesForHunt, { huntId });
+  const statusesLoading = useTypedSubscribe(userStatusesForHunt, { huntId });
+  // Puzzle titles for the "last active on" links
+  const puzzlesLoading = useTypedSubscribe(puzzlesForHuntProfileList, {
+    huntId,
+  });
   const loading =
     profilesLoading() ||
     userRolesLoading() ||
@@ -45,7 +48,7 @@ const HuntProfileListPage = () => {
     () =>
       loading
         ? {}
-        : userStatusesToLastSeen(UserStatuses.find({ hunt: huntId }).fetch()),
+        : summarizeUserStatuses(UserStatuses.find({ hunt: huntId }).fetch()),
     [huntId, loading],
   );
   const puzzleTitles = useTracker(() => {
@@ -67,8 +70,9 @@ const HuntProfileListPage = () => {
     [huntId],
   );
   // One clock for every badge, so the list re-renders once a minute rather
-  // than one badge at a time
-  const now = useNow(60 * 1000);
+  // than one badge at a time. It stops while the tab is hidden.
+  const visible = useDocumentVisible();
+  const now = useNow(visible ? 60 * 1000 : null);
   const presence = useMemo(
     () => ({ userStatuses, puzzleTitles, whiteboardPuzzle, now }),
     [userStatuses, puzzleTitles, whiteboardPuzzle, now],

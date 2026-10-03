@@ -67,6 +67,6 @@ defineMethod(addPuzzleTag, {
       },
     );
 
-    await GlobalHooks.runTagAddedHooks(puzzleId, tagId, this.userId);
+    await GlobalHooks.runPuzzleTagAddedHooks(puzzleId, tagId, this.userId);
   },
 });

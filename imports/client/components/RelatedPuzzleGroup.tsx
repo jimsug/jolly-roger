@@ -3,14 +3,14 @@ import { faCaretRight } from "@fortawesome/free-solid-svg-icons/faCaretRight";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type React from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import type { TagType } from "../../lib/models/Tags";
 import type { PuzzleGroup } from "../../lib/puzzle-sort-and-group";
-import type { PuzzleSolvers } from "../../lib/puzzleSolvers";
+import type { PuzzleViewers } from "../../lib/puzzleViewers";
 import { computeSolvedness } from "../../lib/solvedness";
 import { useHuntPuzzleListCollapseGroup } from "../hooks/persisted-state";
 import RelatedPuzzleList from "./RelatedPuzzleList";
@@ -75,8 +75,8 @@ const RelatedPuzzleGroup = ({
   suppressedTagIds,
   trackPersistentExpand,
   addPuzzleCallback,
-  showSolvers,
-  solvers,
+  showViewers,
+  viewers,
 }: {
   huntId: string;
   group: PuzzleGroup;
@@ -91,8 +91,8 @@ const RelatedPuzzleGroup = ({
   // If present, the group header offers to add a puzzle pre-tagged with the
   // group's tags (and those of any enclosing groups).
   addPuzzleCallback?: (tagIds: string[]) => void;
-  showSolvers?: boolean;
-  solvers?: Record<string, PuzzleSolvers>;
+  showViewers?: boolean;
+  viewers?: Record<string, PuzzleViewers>;
 }) => {
   const [persistentCollapsed, setPersistentCollapsed] =
     useHuntPuzzleListCollapseGroup(
@@ -120,21 +120,26 @@ const RelatedPuzzleGroup = ({
 
   const { puzzles: relatedPuzzles, sharedTag } = group;
 
-  const allSuppressedTagIds = [...suppressedTagIds];
-  if (sharedTag) {
-    allSuppressedTagIds.push(sharedTag._id);
-  }
-
-  const onAddPuzzle = (event: React.MouseEvent<HTMLButtonElement>) => {
-    // Don't also toggle the group.
-    event.stopPropagation();
-    addPuzzleCallback?.([...new Set(allSuppressedTagIds)]);
-  };
-
-  const { t } = useTranslation();
-
   const puzzlePlural = relatedPuzzles.length === 1 ? "puzzle" : "puzzles";
   const countString = `(${relatedPuzzles.length} other ${puzzlePlural})`;
+  const allSuppressedTagIds = useMemo(() => {
+    const tagIds = [...suppressedTagIds];
+    if (sharedTag) {
+      tagIds.push(sharedTag._id);
+    }
+    return tagIds;
+  }, [suppressedTagIds, sharedTag]);
+
+  const onAddPuzzle = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      // Don't also toggle the group.
+      event.stopPropagation();
+      addPuzzleCallback?.([...new Set(allSuppressedTagIds)]);
+    },
+    [addPuzzleCallback, allSuppressedTagIds],
+  );
+
+  const { t } = useTranslation();
 
   // Puzzles that can't be solved (administrivia) don't count either way.
   const unsolvedCount = relatedPuzzles.filter(
@@ -174,7 +179,7 @@ const RelatedPuzzleGroup = ({
                 onClick={onAddPuzzle}
               >
                 <FontAwesomeIcon icon={faPlus} />{" "}
-                {t("puzzleList.addPuzzleHere", "add puzzle here")}
+                {t("puzzleList.addPuzzleHere", "Add puzzle here")}
               </AddPuzzleButton>
             )}
           </>
@@ -192,8 +197,8 @@ const RelatedPuzzleGroup = ({
             canUpdate={canUpdate}
             sharedTag={sharedTag}
             suppressedTagIds={allSuppressedTagIds}
-            showSolvers={showSolvers}
-            solvers={solvers}
+            showViewers={showViewers}
+            viewers={viewers}
           />
           {group.subgroups.map((subgroup) => {
             const subgroupSuppressedTagIds = [...allSuppressedTagIds];
@@ -213,8 +218,8 @@ const RelatedPuzzleGroup = ({
                 suppressedTagIds={subgroupSuppressedTagIds}
                 trackPersistentExpand={trackPersistentExpand}
                 addPuzzleCallback={addPuzzleCallback}
-                showSolvers={showSolvers}
-                solvers={solvers}
+                showViewers={showViewers}
+                viewers={viewers}
               />
             );
           })}

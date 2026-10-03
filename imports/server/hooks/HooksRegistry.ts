@@ -118,18 +118,18 @@ class HooksRegistry {
     }
   }
 
-  async runTagAddedHooks(
+  async runPuzzleTagAddedHooks(
     puzzleId: string,
     tagId: string,
     addingUserId: string,
   ) {
     for (const hook of this.registeredHooks) {
-      if (hook.onAddPuzzleTag) {
+      if (hook.onPuzzleTagAdded) {
         try {
-          await hook.onAddPuzzleTag(puzzleId, tagId, addingUserId);
+          await hook.onPuzzleTagAdded(puzzleId, tagId, addingUserId);
         } catch (error) {
           Logger.error("Error while running hook", {
-            hook: "onAddPuzzleTag",
+            hook: "onPuzzleTagAdded",
             hookSet: hook.name,
             error,
           });

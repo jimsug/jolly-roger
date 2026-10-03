@@ -24,7 +24,6 @@ const StyledModalTitle = styled(Modal.Title)`
 export type ModalFormHandle = {
   show: () => void;
   hide: () => void;
-  submit: () => void;
 };
 
 const ModalForm = (props: {
@@ -51,6 +50,11 @@ const ModalForm = (props: {
     setIsShown(false);
   }, []);
 
+  useImperativeHandle(props.ref, () => ({
+    show,
+    hide,
+  }));
+
   useEffect(() => {
     dontTryToHide.current = false;
     return () => {
@@ -60,8 +64,8 @@ const ModalForm = (props: {
 
   const { onSubmit } = props;
   const submit = useCallback(
-    (e?: React.SubmitEvent<HTMLFormElement>) => {
-      e?.preventDefault();
+    (e: React.SubmitEvent<HTMLFormElement>) => {
+      e.preventDefault();
       onSubmit(() => {
         // For delete forms, it's possible that the component gets
         // deleted and unmounted before the callback gets called.
@@ -72,12 +76,6 @@ const ModalForm = (props: {
     },
     [onSubmit, hide],
   );
-
-  useImperativeHandle(props.ref, () => ({
-    show,
-    hide,
-    submit,
-  }));
 
   const { t } = useTranslation();
 

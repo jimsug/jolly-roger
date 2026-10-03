@@ -6,7 +6,7 @@ import type {
   WhiteboardColor,
   WhiteboardStrokeWidth,
 } from "../../lib/models/WhiteboardNodes";
-import type { LineStyle } from "../components/whiteboard/LineStyleControls";
+import type { LineStyle } from "../../lib/whiteboard/lineStyle";
 
 export type AppThemeState = "dark" | "light" | "auto";
 export const useAppThemeState = () => {
@@ -15,7 +15,7 @@ export const useAppThemeState = () => {
 
 // The dragged width of the puzzle page's chat pane, shared across puzzles
 export const usePersistedSidebarWidth = (defaultWidth: number) => {
-  return useLocalStorage<number>("persistentSidebarWidth", defaultWidth);
+  return useLocalStorage("persistentSidebarWidth", defaultWidth);
 };
 
 export type NotesPageViewMode = "list" | "table" | "fullwidth";
@@ -61,17 +61,17 @@ export const useOperatorActionsHiddenForHunt = (huntId: string) => {
 
 export type LockedDisplayMode = "all" | "unlocked" | "locked";
 
-// Whether the puzzle list shows who is on each puzzle
-export type ShowSolversMode = "hide" | "viewers";
-
 export type PuzzleListState = {
   displayMode: "group" | "unlock";
   showSolved: boolean;
   // Only consulted in hunts that allow locked puzzles. State saved before
   // this field existed lacks it, so readers treat undefined as "all".
   lockedDisplayMode?: LockedDisplayMode;
-  // Saved state may lack this or hold a retired value, so readers treat
-  // anything but "hide" as "viewers".
+  // Whether the list shows who is on each puzzle. State saved before this
+  // field existed lacks it and may have showSolvers instead.
+  showViewers?: boolean;
+  // Superseded by showViewers. Anything but "hide" (including a retired
+  // value) means shown.
   showSolvers?: string;
   collapseGroups: Record<string /* tag ID */, boolean>;
 };
@@ -81,13 +81,13 @@ const defaultPuzzleListState = () => {
     displayMode: "group",
     showSolved: true,
     lockedDisplayMode: "all",
-    showSolvers: "viewers",
+    showViewers: true,
     collapseGroups: {},
   } as PuzzleListState;
 };
 
-const showSolversMode = (value: string | undefined): ShowSolversMode =>
-  value === "hide" ? "hide" : "viewers";
+const viewersShown = (state: PuzzleListState) =>
+  state.showViewers ?? state.showSolvers !== "hide";
 export const useHuntPuzzleListState = (huntId: string) => {
   const [puzzleListView, setPuzzleListView] = useLocalStorage<
     Record<string /* huntId */, PuzzleListState>
@@ -181,19 +181,19 @@ export const useHuntPuzzleListLockedDisplayMode = (huntId: string) => {
   ] as const;
 };
 
-export const useHuntPuzzleListShowSolvers = (huntId: string) => {
+export const useHuntPuzzleListShowViewers = (huntId: string) => {
   const [huntPuzzleListView, setHuntPuzzleListView] =
     useHuntPuzzleListState(huntId);
   return [
-    showSolversMode(huntPuzzleListView.showSolvers),
+    viewersShown(huntPuzzleListView),
     useCallback(
-      (update: SetStateAction<ShowSolversMode>) => {
+      (update: SetStateAction<boolean>) => {
         setHuntPuzzleListView((prevView) => {
           const newView = {
             ...prevView,
-            showSolvers:
+            showViewers:
               typeof update === "function"
-                ? update(showSolversMode(prevView.showSolvers))
+                ? update(viewersShown(prevView))
                 : update,
           };
           return newView;

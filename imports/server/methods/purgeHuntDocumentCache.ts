@@ -1,14 +1,16 @@
 import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import Logger from "../../Logger";
+import purgeHuntDocumentCache from "../../lib/jobs/purgeHuntDocumentCache";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import { checkAdmin } from "../../lib/permission_stubs";
-import purgeHuntDocumentCache from "../../methods/purgeHuntDocumentCache";
-import { isGoogleAvailable, purgeDocumentCache } from "../documentCache";
+import purgeHuntDocumentCacheMethod from "../../methods/purgeHuntDocumentCache";
+import { checkClientOk } from "../gdrive";
+import enqueueJob from "../jobs/framework/enqueueJob";
 import defineMethod from "./defineMethod";
 
-defineMethod(purgeHuntDocumentCache, {
+defineMethod(purgeHuntDocumentCacheMethod, {
   validate(arg) {
     check(arg, { huntId: String });
     return arg;
@@ -25,13 +27,9 @@ defineMethod(purgeHuntDocumentCache, {
 
     // Without Drive the files couldn't be deleted, and dropping the rows
     // alone would just lose track of them.
-    if (!(await isGoogleAvailable())) {
-      throw new Meteor.Error(500, "Google integration is disabled");
-    }
+    await checkClientOk();
 
-    this.unblock();
-
-    Logger.info("Purging document cache", { huntId, user: this.userId });
-    await purgeDocumentCache(huntId);
+    Logger.info("Queueing document cache purge", { huntId, user: this.userId });
+    await enqueueJob(purgeHuntDocumentCache, { huntId });
   },
 });

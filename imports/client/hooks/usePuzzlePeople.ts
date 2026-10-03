@@ -1,6 +1,6 @@
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import Peers from "../../lib/models/mediasoup/Peers";
-import type { PuzzlePeople } from "../components/whiteboard/WhiteboardContext";
+import type { PuzzlePeople } from "../../lib/whiteboard/puzzlePeople";
 import { Subscribers } from "../subscribers";
 import useSubscribeAvatars from "./useSubscribeAvatars";
 import useSubscribeDisplayNames from "./useSubscribeDisplayNames";

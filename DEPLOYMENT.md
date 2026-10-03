@@ -89,6 +89,13 @@ of environment variables.
 Also see the other environment variables defined by [Meteor
 core](https://docs.meteor.com/environment-variables) and other packages.
 
+## Health check
+
+`GET /api/health` answers without an API key, for uptime monitors and load
+balancers: 200 with `{"status": "success"}` while the server's MongoDB answers
+a ping, and 500 otherwise. It doesn't exercise DDP, so a server can pass it and
+still fail to serve clients.
+
 ## Setting up a fresh server
 
 For initial setup steps (admin account creation, server options, integrations,

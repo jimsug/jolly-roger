@@ -14,7 +14,7 @@ import type {
 import Hunts from "../../../lib/models/Hunts";
 import MeteorUsers from "../../../lib/models/MeteorUsers";
 import {
-  listAllRolesForHunt,
+  listAssignedRolesForHunt,
   userMayWritePuzzlesForHunt,
 } from "../../../lib/permission_stubs";
 import type { CommentThread } from "../../../lib/whiteboard/comments";
@@ -119,7 +119,10 @@ const CommentPanel = ({
     const user = Meteor.user();
     const hunt = Hunts.findOne(huntId);
     return {
-      roles: listAllRolesForHunt(user, { _id: huntId }),
+      // Assigned roles only, on purpose: an @operator mention only notifies
+      // assigned operators (queryOperatorsForHunt), so the hunt's default roles
+      // don't highlight it either
+      roles: listAssignedRolesForHunt(user, { _id: huntId }),
       isOperator: userMayWritePuzzlesForHunt(user, hunt),
     };
   }, [huntId]);
@@ -200,10 +203,14 @@ const CommentPanel = ({
   const title = draft
     ? t("whiteboard.comments.newOn", "New comment on {{target}}", {
         target: targetLabel,
+        // React escapes the text and title, so i18next's escaping would only
+        // show entities. Goes once both i18n inits stop escaping.
         interpolation: { escapeValue: false },
       })
     : t("whiteboard.comments.on", "Comment on {{target}}", {
         target: targetLabel,
+        // React escapes the text and title, so i18next's escaping would only
+        // show entities. Goes once both i18n inits stop escaping.
         interpolation: { escapeValue: false },
       });
 
@@ -242,7 +249,12 @@ const CommentPanel = ({
             ? t(
                 "whiteboard.comments.resolvedBy",
                 "Resolved by {{name}}. Replying reopens it.",
-                { name: resolvedBy, interpolation: { escapeValue: false } },
+                {
+                  name: resolvedBy,
+                  // React escapes text, so i18next's escaping would only show
+                  // entities. Goes once both i18n inits stop escaping.
+                  interpolation: { escapeValue: false },
+                },
               )
             : t(
                 "whiteboard.comments.resolved",
@@ -266,7 +278,7 @@ const CommentPanel = ({
               <EntryBody>
                 <Meta>
                   {(m.sender && displayNames.get(m.sender)) ??
-                    t("whiteboard.cursor.someone", "Someone")}{" "}
+                    t("whiteboard.comments.unknownAuthor", "Someone")}{" "}
                   · <RelativeTime date={m.timestamp} minimumUnit="minute" />
                 </Meta>
                 <ChatMessage

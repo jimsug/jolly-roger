@@ -5,6 +5,7 @@ import {
   arrangeUnits,
   companionsOf,
   distributeItems,
+  sortParentsFirst,
   withoutParentLoops,
 } from "../../../../imports/lib/whiteboard/arrange";
 
@@ -327,5 +328,61 @@ describe("whiteboard withoutParentLoops", function () {
   it("lifts a node that's its own parent", function () {
     const result = withoutParentLoops([{ id: "f", parentId: "f" }]);
     assert.isUndefined(result[0]!.parentId);
+  });
+});
+
+describe("whiteboard sortParentsFirst", function () {
+  const ids = (nodes: { id: string }[]) => nodes.map((n) => n.id);
+
+  it("handles an empty board", function () {
+    assert.deepEqual(sortParentsFirst([]), []);
+  });
+
+  it("keeps the order of nodes that are already parents first", function () {
+    const nodes = [
+      { id: "b" },
+      { id: "f" },
+      { id: "a", parentId: "f" },
+      { id: "g", parentId: "f" },
+      { id: "card", parentId: "g" },
+    ];
+    assert.deepEqual(ids(sortParentsFirst(nodes)), ids(nodes));
+  });
+
+  it("moves each frame ahead of what's inside it, however deep", function () {
+    assert.deepEqual(
+      ids(
+        sortParentsFirst([
+          { id: "card", parentId: "g" },
+          { id: "g", parentId: "f" },
+          { id: "sticky", parentId: "f" },
+          { id: "f" },
+          { id: "loose" },
+        ]),
+      ),
+      ["f", "loose", "g", "sticky", "card"],
+    );
+  });
+
+  it("counts a parent that isn't among the nodes as the top level", function () {
+    assert.deepEqual(
+      ids(
+        sortParentsFirst([
+          { id: "card", parentId: "f" },
+          { id: "orphan", parentId: "gone" },
+          { id: "f" },
+        ]),
+      ),
+      ["orphan", "f", "card"],
+    );
+  });
+
+  it("doesn't hang on frames whose parents loop", function () {
+    const sorted = sortParentsFirst([
+      { id: "f", parentId: "g" },
+      { id: "g", parentId: "f" },
+      { id: "top" },
+    ]);
+    assert.deepEqual(ids(sorted), ["top", "f", "g"]);
   });
 });

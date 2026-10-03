@@ -1,0 +1,17 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  "entry": ["src/{options,popup}.tsx", "webpack/webpack.{dev,prod}.mjs"],
+  // knip's webpack plugin would load the configs, and loading
+  // webpack.common.mjs empties dist/
+  "webpack": false,
+  // The linters come from the root package, whose configs they run with
+  "ignoreBinaries": ["biome", "eslint", "knip", "oxlint"],
+  "ignoreDependencies": [
+    // Loaders webpack.common.mjs names, which only knip's webpack plugin finds
+    "css-loader",
+    "style-loader",
+    "ts-loader",
+    // Needed by styled-components' .d.ts files (dropped from its production deps in 6.4.0)
+    "@types/stylis"
+  ]
+}

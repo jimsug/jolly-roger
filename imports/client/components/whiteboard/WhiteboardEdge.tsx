@@ -1,4 +1,4 @@
-import type { Edge, EdgeProps } from "@xyflow/react";
+import type { EdgeProps } from "@xyflow/react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -11,20 +11,15 @@ import {
 import React, { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import styled, { useTheme } from "styled-components";
-import type { WhiteboardEdgeType } from "../../../lib/models/WhiteboardEdges";
 import { MAX_LABEL_LENGTH } from "../../../lib/whiteboard/limits";
-import { STROKE_COLORS } from "./colors";
+import useHoverIntent from "../../hooks/useHoverIntent";
+import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
+import type { WhiteboardFlowEdge } from "../../hooks/useWhiteboardSync";
+import colors from "./colors";
 import EditableText from "./EditableText";
-import floatingEdgeParams from "./floatingEdge";
+import floatingEdgeParams from "./floatingEdgeParams";
 import NodeContributors from "./NodeContributors";
-import useDetail from "./useDetail";
-import useHoverIntent from "./useHoverIntent";
 import { useWhiteboard } from "./WhiteboardContext";
-
-export type WhiteboardFlowEdge = Edge<
-  { doc: WhiteboardEdgeType },
-  "whiteboard"
->;
 
 const LabelBox = styled.div`
   position: absolute;
@@ -43,8 +38,6 @@ const Attribution = styled.div`
   pointer-events: all;
 `;
 
-// A handle at each end of a selected line: drag it to move that end, or to
-// attach it to (or detach it from) something.
 const Grip = styled.div`
   position: absolute;
   width: 12px;
@@ -55,6 +48,41 @@ const Grip = styled.div`
   background: ${({ theme }) => theme.colors.background};
   border: 2px solid ${({ theme }) => theme.colors.primary};
 `;
+
+// A handle at one end of a selected line: drag it to move that end, or to
+// attach it to (or detach it from) something.
+const EdgeGrip = ({
+  edgeId,
+  end,
+  x,
+  y,
+  scale,
+}: {
+  edgeId: string;
+  end: "source" | "target";
+  x: number;
+  y: number;
+  scale: number;
+}) => {
+  const { beginEndpointDrag } = useWhiteboard();
+  const onPointerDown = useCallback(
+    (event: React.PointerEvent) => {
+      event.stopPropagation();
+      event.preventDefault();
+      beginEndpointDrag(edgeId, end, event);
+    },
+    [beginEndpointDrag, edgeId, end],
+  );
+  return (
+    <Grip
+      className="nodrag nopan"
+      style={{
+        transform: `translate(-50%, -50%) translate(${x}px, ${y}px) scale(${scale})`,
+      }}
+      onPointerDown={onPointerDown}
+    />
+  );
+};
 
 const WhiteboardEdge = ({
   id,
@@ -67,8 +95,8 @@ const WhiteboardEdge = ({
 }: EdgeProps<WhiteboardFlowEdge>) => {
   const theme = useTheme();
   const { t } = useTranslation();
-  const detail = useDetail();
-  const { readOnly, updateEdge, beginEndpointDrag } = useWhiteboard();
+  const detail = useWhiteboardDetail();
+  const { readOnly, updateEdge } = useWhiteboard();
   const hover = useHoverIntent();
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
@@ -97,7 +125,7 @@ const WhiteboardEdge = ({
 
   let stroke = auto
     ? theme.colors.textSecondary
-    : ((doc?.colour && STROKE_COLORS[doc.colour]) ?? theme.colors.text);
+    : ((doc?.color && colors.stroke[doc.color]) ?? theme.colors.text);
   if (selected) stroke = theme.colors.primary;
 
   // Feeder arrows follow their tags and are drawn thin and quiet; only
@@ -105,20 +133,6 @@ const WhiteboardEdge = ({
   const showLabel =
     !auto && detail !== "far" && (!!label || (!!selected && !readOnly));
   const showAttribution = !auto && (hover.hovered || !!selected);
-
-  const grip = (end: "source" | "target", x: number, y: number) => (
-    <Grip
-      className="nodrag nopan"
-      style={{
-        transform: `translate(-50%, -50%) translate(${x}px, ${y}px) scale(${gripScale})`,
-      }}
-      onPointerDown={(event) => {
-        event.stopPropagation();
-        event.preventDefault();
-        beginEndpointDrag(id, end, event);
-      }}
-    />
-  );
 
   return (
     <>
@@ -168,8 +182,24 @@ const WhiteboardEdge = ({
               <NodeContributors contributors={doc?.contributors} />
             </Attribution>
           )}
-          {showGrips && grip("source", params.sourceX, params.sourceY)}
-          {showGrips && grip("target", params.targetX, params.targetY)}
+          {showGrips && (
+            <EdgeGrip
+              edgeId={id}
+              end="source"
+              x={params.sourceX}
+              y={params.sourceY}
+              scale={gripScale}
+            />
+          )}
+          {showGrips && (
+            <EdgeGrip
+              edgeId={id}
+              end="target"
+              x={params.targetX}
+              y={params.targetY}
+              scale={gripScale}
+            />
+          )}
         </EdgeLabelRenderer>
       )}
     </>

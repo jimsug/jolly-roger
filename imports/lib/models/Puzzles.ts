@@ -10,7 +10,7 @@ const tagList = foreignKey.array().default([]).meta({ uniqueItems: true });
 // Notes about a puzzle, written from outside Jolly Roger (a script on the
 // puzzle's sheet posts them to /api/updatePuzzleNote) and shown on the Notes
 // page.
-export const PuzzleNoteContent = z.object({
+const PuzzleNoteContent = z.object({
   flavor: nonEmptyString.optional(),
   flavorMeanings: nonEmptyString.array().array().optional(),
   summary: nonEmptyString.optional(),

@@ -32,7 +32,6 @@ export interface Puzzle {
 /** A puzzle found by GET /api/hunts/:huntId/puzzles?url=... */
 export interface ExistingPuzzle {
   _id: string;
-  title: string;
   /** The puzzle's page in Jolly Roger. */
   jollyRogerUrl: string;
 }
@@ -105,31 +104,31 @@ export class JollyRogerClient {
     return result.existing as Record<string, string>;
   }
 
-  private callApi = (endpoint: string, requestBody?: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const url = new URL(endpoint, this.instance);
-      const xhr = new XMLHttpRequest();
-      xhr.open(requestBody ? "POST" : "GET", url);
-      xhr.setRequestHeader("Authorization", `Bearer ${this.apiKey}`);
-      if (requestBody) {
-        xhr.setRequestHeader("Content-Type", "application/json");
-      }
-      xhr.onload = function () {
-        if (xhr.status === 200) {
-          resolve(JSON.parse(xhr.response));
-        } else {
-          reject(
-            new HttpError(
-              `HTTP error ${xhr.status} calling ${url}`,
-              xhr.status,
-            ),
-          );
-        }
-      };
-      xhr.onerror = function () {
-        reject(new HttpError(`HTTP error calling ${url}`));
-      };
-      xhr.send(requestBody ? JSON.stringify(requestBody) : null);
-    });
+  private callApi = async (
+    endpoint: string,
+    requestBody?: unknown,
+  ): Promise<any> => {
+    const url = new URL(endpoint, this.instance);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: requestBody ? "POST" : "GET",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          ...(requestBody ? { "Content-Type": "application/json" } : {}),
+        },
+        body: requestBody ? JSON.stringify(requestBody) : null,
+      });
+    } catch {
+      // fetch rejects only when no response came back, so there's no status
+      throw new HttpError(`HTTP error calling ${url}`);
+    }
+    if (response.status !== 200) {
+      throw new HttpError(
+        `HTTP error ${response.status} calling ${url}`,
+        response.status,
+      );
+    }
+    return response.json();
   };
 }

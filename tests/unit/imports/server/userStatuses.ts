@@ -1,21 +1,20 @@
-import { setTimeout } from "node:timers/promises";
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import { ACTIVITY_GRANULARITY } from "../../../../imports/lib/config/activityTracking";
+import CallActivities from "../../../../imports/lib/models/CallActivities";
 import ChatMessages from "../../../../imports/lib/models/ChatMessages";
-import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
-import Puzzles from "../../../../imports/lib/models/Puzzles";
+import type { PresenceStatus } from "../../../../imports/lib/models/UserStatuses";
 import UserStatuses, {
   USER_STATUS_RETENTION_MS,
 } from "../../../../imports/lib/models/UserStatuses";
-import setUserStatus from "../../../../imports/methods/setUserStatus";
+import userStatusForHuntApp from "../../../../imports/lib/publications/userStatusForHuntApp";
 import UserStatusHooks from "../../../../imports/server/hooks/UserStatusHooks";
-import CallActivities from "../../../../imports/server/models/CallActivities";
 import recordCallPresence from "../../../../imports/server/recordCallPresence";
 import serverId from "../../../../imports/server/serverId";
+import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 import StubSubscription, {
   publishHandler,
@@ -31,11 +30,6 @@ describe("user statuses", function () {
   let outsiderId: string;
   // A puzzle id that nothing checks against the puzzles collection
   const puzzleId = Random.id();
-  // A puzzle that exists in the hunt, for the method's puzzle check
-  let realPuzzleId: string;
-
-  const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-    DDP._CurrentMethodInvocation.withValue({ userId }, fn);
 
   this.beforeAll(async function () {
     await resetDatabase("user statuses");
@@ -51,21 +45,8 @@ describe("user statuses", function () {
       email: "outsider@example.com",
       password: "password",
     });
-    const newHunt = (name: string) =>
-      asUser(memberId, () =>
-        Hunts.insertAsync({
-          name,
-          mailingLists: [],
-          openSignups: false,
-          hasGuessQueue: true,
-          defaultRoles: [],
-          allowUnlockablePuzzles: false,
-          isArchived: false,
-          customLinkEmbed: false,
-        }),
-      );
-    huntId = await newHunt("Presence hunt");
-    otherHuntId = await newHunt("Other hunt");
+    huntId = await createTestHunt(memberId, { name: "Presence hunt" });
+    otherHuntId = await createTestHunt(memberId, { name: "Other hunt" });
     for (const userId of [memberId, otherMemberId]) {
       await MeteorUsers.updateAsync(userId, {
         $set: { displayName: userId, hunts: [huntId] },
@@ -74,15 +55,6 @@ describe("user statuses", function () {
     await MeteorUsers.updateAsync(outsiderId, {
       $set: { displayName: "Outsider", hunts: [otherHuntId] },
     });
-    realPuzzleId = await asUser(memberId, () =>
-      Puzzles.insertAsync({
-        hunt: huntId,
-        title: "Present",
-        tags: [],
-        answers: [],
-        expectedAnswerCount: 1,
-      }),
-    );
   });
 
   this.beforeEach(async function () {
@@ -90,216 +62,77 @@ describe("user statuses", function () {
     await CallActivities.removeAsync({});
   });
 
-  describe("setUserStatus", function () {
-    it("records the caller's own presence in the hunt", async function () {
-      await asUser(memberId, () =>
-        setUserStatus.callPromise({
-          hunt: huntId,
-          type: "status",
-          status: "online",
-        }),
-      );
-      const rows = await UserStatuses.find({}).fetchAsync();
-      assert.lengthOf(rows, 1);
-      const row = rows[0]!;
-      assert.equal(row.user, memberId);
-      assert.equal(row.hunt, huntId);
-      assert.equal(row.type, "status");
-      assert.equal(row.status, "online");
-      assert.equal(row.server, serverId);
-
-      // A later call updates the same row rather than adding one
-      await asUser(memberId, () =>
-        setUserStatus.callPromise({
-          hunt: huntId,
-          type: "status",
-          status: "away",
-        }),
-      );
-      const updated = await UserStatuses.find({}).fetchAsync();
-      assert.lengthOf(updated, 1);
-      assert.equal(updated[0]!._id, row._id);
-      assert.equal(updated[0]!.status, "away");
-    });
-
-    it("rejects callers who aren't logged in", async function () {
-      await assert.isRejected(
-        setUserStatus.callPromise({
-          hunt: huntId,
-          type: "status",
-          status: "online",
-        }),
-      );
-      assert.equal(await UserStatuses.find({}).countAsync(), 0);
-    });
-
-    it("rejects callers who aren't members of the hunt", async function () {
-      await assert.isRejected(
-        asUser(outsiderId, () =>
-          setUserStatus.callPromise({
-            hunt: huntId,
-            type: "status",
-            status: "online",
-          }),
-        ),
-        /Not a member/,
-      );
-      assert.equal(await UserStatuses.find({}).countAsync(), 0);
-    });
-
-    it("rejects statuses and types it doesn't know", async function () {
-      await assert.isRejected(
-        asUser(memberId, () =>
-          setUserStatus.callPromise({
-            hunt: huntId,
-            type: "status",
-            status: "sleeping" as any,
-          }),
-        ),
-      );
-      await assert.isRejected(
-        asUser(memberId, () =>
-          setUserStatus.callPromise({
-            hunt: huntId,
-            type: "mood" as any,
-            status: "online",
-          }),
-        ),
-      );
-      // Known values, but not for that type
-      await assert.isRejected(
-        asUser(memberId, () =>
-          setUserStatus.callPromise({
-            hunt: huntId,
-            type: "status",
-            status: "chat",
-          }),
-        ),
-        /not a status/,
-      );
-      await assert.isRejected(
-        asUser(memberId, () =>
-          setUserStatus.callPromise({
-            hunt: huntId,
-            type: "puzzleStatus",
-            status: "chat",
-          }),
-        ),
-        /needs a puzzle/,
-      );
-      assert.equal(await UserStatuses.find({}).countAsync(), 0);
-    });
-
-    it("only records puzzle statuses for puzzles in the hunt", async function () {
-      await assert.isRejected(
-        asUser(memberId, () =>
-          setUserStatus.callPromise({
-            hunt: huntId,
-            type: "puzzleStatus",
-            status: "chat",
-            puzzle: Random.id(),
-          }),
-        ),
-        /No such puzzle/,
-      );
-      assert.equal(await UserStatuses.find({}).countAsync(), 0);
-
-      await asUser(memberId, () =>
-        setUserStatus.callPromise({
-          hunt: huntId,
-          type: "puzzleStatus",
-          status: "chat",
-          puzzle: realPuzzleId,
-        }),
-      );
-      const row = await UserStatuses.findOneAsync({ user: memberId });
-      assert.equal(row?.type, "puzzleStatus");
-      assert.equal(row?.puzzle, realPuzzleId);
-    });
-
-    it("can't touch another user's row", async function () {
-      await asUser(otherMemberId, () =>
-        setUserStatus.callPromise({
-          hunt: huntId,
-          type: "status",
-          status: "online",
-        }),
-      );
-      await asUser(memberId, () =>
-        setUserStatus.callPromise({
-          hunt: huntId,
-          type: "status",
-          status: "away",
-        }),
-      );
-      const theirs = await UserStatuses.find({
-        user: otherMemberId,
-      }).fetchAsync();
-      assert.lengthOf(theirs, 1);
-      assert.equal(theirs[0]!.status, "online");
-      const mine = await UserStatuses.find({ user: memberId }).fetchAsync();
-      assert.lengthOf(mine, 1);
-      assert.equal(mine[0]!.status, "away");
-    });
-  });
-
-  describe("userStatus.inc", function () {
-    const handler = () => publishHandler("userStatus.inc");
+  describe("userStatusForHuntApp", function () {
+    const handler = () => publishHandler(userStatusForHuntApp.name);
 
     it("tracks a connection's presence and marks it offline when it stops", async function () {
       const sub = new StubSubscription(memberId);
-      await handler().call(sub, huntId, "online");
+      assert.deepEqual(
+        await handler().call(sub, { hunt: huntId, status: "online" }),
+        [],
+      );
       const row = await UserStatuses.findOneAsync({ user: memberId });
       assert.isDefined(row);
       assert.equal(row.status, "online");
       assert.equal(row.connection, sub.connection.id);
       assert.equal(row.server, serverId);
 
-      sub.stop();
-      await assertEventually(async () => {
-        const stopped = await UserStatuses.findOneAsync(row._id);
-        assert.equal(stopped?.status, "offline");
-      });
+      await sub.stopAsync();
+      assert.equal(
+        (await UserStatuses.findOneAsync(row._id))?.status,
+        "offline",
+      );
     });
 
     it("lets a re-subscription from the same connection take over the row", async function () {
       const first = new StubSubscription(memberId);
-      await handler().call(first, huntId, "online");
+      await handler().call(first, { hunt: huntId, status: "online" });
       // Same connection, new subscription (the tab was hidden)
-      const second = new StubSubscription(memberId);
-      Object.assign(second, { connection: first.connection });
-      await handler().call(second, huntId, "away");
+      const second = new StubSubscription(memberId, first.connection);
+      await handler().call(second, { hunt: huntId, status: "away" });
       assert.equal(await UserStatuses.find({ user: memberId }).countAsync(), 1);
 
       // The old subscription stops after the new one started, as Meteor
       // delivers them; the row stays with the new subscription
-      first.stop();
-      await setTimeout(50);
+      await first.stopAsync();
       assert.equal(
         (await UserStatuses.findOneAsync({ user: memberId }))?.status,
         "away",
       );
 
-      second.stop();
-      await assertEventually(async () => {
-        assert.equal(
-          (await UserStatuses.findOneAsync({ user: memberId }))?.status,
-          "offline",
-        );
-      });
+      await second.stopAsync();
+      assert.equal(
+        (await UserStatuses.findOneAsync({ user: memberId }))?.status,
+        "offline",
+      );
     });
 
-    it("rejects non-members", async function () {
-      const sub = new StubSubscription(outsiderId);
+    it("records nothing for non-members or anonymous subscribers", async function () {
+      for (const userId of [outsiderId, null]) {
+        const sub = new StubSubscription(userId);
+        assert.deepEqual(
+          await handler().call(sub, { hunt: huntId, status: "online" }),
+          [],
+        );
+        await sub.stopAsync();
+      }
+      assert.equal(await UserStatuses.find({}).countAsync(), 0);
+    });
+
+    it("rejects statuses it doesn't know", async function () {
+      const args: { hunt: string; status: PresenceStatus } = {
+        hunt: huntId,
+        // @ts-expect-error -- invalid on purpose
+        status: "sleeping",
+      };
       await assert.isRejected(
-        handler().call(sub, huntId, "online"),
-        /Not a member/,
+        handler().call(new StubSubscription(memberId), args),
       );
       assert.equal(await UserStatuses.find({}).countAsync(), 0);
     });
   });
 
-  describe("statusesForHuntUsers", function () {
+  describe("userStatusesForHunt", function () {
     const handler = () => publishHandler("UserStatuses.publications.forHunt");
 
     it("publishes the hunt's recent rows to members only", async function () {
@@ -412,13 +245,17 @@ describe("user statuses", function () {
 
       // The sweep records the same bucket again (from this or another
       // server): the activity row already exists, so the presence row is
-      // left alone
-      await setTimeout(20);
+      // left alone while it's fresh. Backdating it a little shows whether it
+      // was rewritten.
+      const fresh = new Date(Date.now() - ACTIVITY_GRANULARITY / 2);
+      await UserStatuses.collection
+        .rawCollection()
+        .updateOne({ _id: first._id }, { $set: { updatedAt: fresh } });
       await recordCallPresence(presence);
       assert.equal(await CallActivities.find({}).countAsync(), 1);
       assert.deepEqual(
         (await UserStatuses.findOneAsync({ user: memberId }))?.updatedAt,
-        first.updatedAt,
+        fresh,
       );
 
       // ...unless it has gone a bucket stale, as it does when the speaking
@@ -438,16 +275,3 @@ describe("user statuses", function () {
     });
   });
 });
-
-async function assertEventually(assertion: () => Promise<void>) {
-  const deadline = Date.now() + 1500;
-  while (Date.now() < deadline) {
-    try {
-      await assertion();
-      return;
-    } catch {
-      await setTimeout(20);
-    }
-  }
-  await assertion();
-}

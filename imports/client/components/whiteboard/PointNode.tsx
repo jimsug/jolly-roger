@@ -3,7 +3,7 @@ import { Handle, Position } from "@xyflow/react";
 import React from "react";
 import styled from "styled-components";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
-import { useZoom } from "./useDetail";
+import { useWhiteboardZoom } from "../../hooks/useWhiteboardDetail";
 
 type PointNodeType = Node<{ doc: WhiteboardNodeType }, "point">;
 
@@ -47,7 +47,7 @@ const hiddenHandle = {
 
 // The free end of a line: invisible until hovered or selected.
 const PointNode = ({ selected }: NodeProps<PointNodeType>) => {
-  const size = GRAB_SIZE / useZoom();
+  const size = GRAB_SIZE / useWhiteboardZoom();
   return (
     <Dot>
       <GrabArea $selected={selected} style={{ width: size, height: size }} />

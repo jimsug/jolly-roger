@@ -40,6 +40,8 @@ if (Meteor.isClient) {
   const HUNTER_PASSWORD = "password";
   const OUTSIDER_EMAIL = "outsider@example.com";
   const OUTSIDER_PASSWORD = "password";
+  const OTHER_HUNTER_EMAIL = "other-hunter@example.com";
+  const OTHER_HUNTER_PASSWORD = "password";
 
   const login = (email: string, password: string) =>
     promisify(Meteor.loginWithPassword)(email, password);
@@ -55,7 +57,7 @@ if (Meteor.isClient) {
     await login(USER_EMAIL, USER_PASSWORD);
     const huntId = await createHunt.callPromise({
       ...huntFields,
-      initialTags: "",
+      initialTags: [],
     });
     await addHuntUser.callPromise({ huntId, email: USER_EMAIL });
     const puzzleIds = [];
@@ -88,7 +90,7 @@ if (Meteor.isClient) {
         await renameTag.callPromise({
           tagId: tag._id,
           name: "  needs:extraction ",
-          alias: true,
+          keepOldNameAsAlias: true,
         });
         const renamed = await Tags.findOneAsync(tag._id);
         assert.equal(renamed?.name, "needs:extraction");
@@ -130,7 +132,7 @@ if (Meteor.isClient) {
         await renameTag.callPromise({
           tagId: source._id,
           name: "Needs:Extraction",
-          alias: true,
+          keepOldNameAsAlias: true,
         });
 
         assert.isUndefined(
@@ -170,11 +172,19 @@ if (Meteor.isClient) {
         assert.isDefined(tag);
 
         await assert.isRejected(
-          renameTag.callPromise({ tagId: "nope", name: "x", alias: false }),
+          renameTag.callPromise({
+            tagId: "nope",
+            name: "x",
+            keepOldNameAsAlias: false,
+          }),
           /No tag known/,
         );
         await assert.isRejected(
-          renameTag.callPromise({ tagId: tag._id, name: "  ", alias: false }),
+          renameTag.callPromise({
+            tagId: tag._id,
+            name: "  ",
+            keepOldNameAsAlias: false,
+          }),
           /must not be empty/,
         );
         assert.equal((await Tags.findOneAsync(tag._id))?.name, "cryptic");
@@ -210,7 +220,7 @@ if (Meteor.isClient) {
         await renameTag.callPromise({
           tagId: tag._id,
           name: "logic",
-          alias: false,
+          keepOldNameAsAlias: false,
         });
         const memberSub = await typedSubscribe.async(puzzlesForPuzzleList, {
           huntId,
@@ -220,7 +230,7 @@ if (Meteor.isClient) {
           renameTag.callPromise({
             tagId: tag._id,
             name: "x".repeat(MAX_TAG_NAME_LENGTH + 1),
-            alias: false,
+            keepOldNameAsAlias: false,
           }),
           /at most/,
         );
@@ -233,7 +243,7 @@ if (Meteor.isClient) {
           renameTag.callPromise({
             tagId: tag._id,
             name: "cryptic",
-            alias: false,
+            keepOldNameAsAlias: false,
           }),
           /not a member/,
         );
@@ -376,6 +386,90 @@ if (Meteor.isClient) {
         });
         assert.equal(await PuzzleNotifications.find(tagDings).countAsync(), 0);
         sub.stop();
+      });
+
+      it("keeps each member's dings to themselves", async function () {
+        const { huntId, puzzleIds } = await setUpHunt("tags dings per user", [
+          [],
+        ]);
+        const hunterId = await createUser.callPromise({
+          email: HUNTER_EMAIL,
+          password: HUNTER_PASSWORD,
+          displayName: "Hunter",
+        });
+        await addHuntUser.callPromise({ huntId, email: HUNTER_EMAIL });
+        const otherHunterId = await createUser.callPromise({
+          email: OTHER_HUNTER_EMAIL,
+          password: OTHER_HUNTER_PASSWORD,
+          displayName: "Other hunter",
+        });
+        await addHuntUser.callPromise({ huntId, email: OTHER_HUNTER_EMAIL });
+
+        await promisify(Meteor.logout)();
+        await login(HUNTER_EMAIL, HUNTER_PASSWORD);
+        await updateProfile.callPromise({
+          displayName: "Hunter",
+          dingwords: ["events"],
+        });
+        await promisify(Meteor.logout)();
+        await login(OTHER_HUNTER_EMAIL, OTHER_HUNTER_PASSWORD);
+        await updateProfile.callPromise({
+          displayName: "Other hunter",
+          dingwords: ["logic"],
+        });
+
+        await promisify(Meteor.logout)();
+        await login(USER_EMAIL, USER_PASSWORD);
+        await addPuzzleTag.callPromise({
+          puzzleId: puzzleIds[0]!,
+          tagName: "group:events",
+        });
+        await addPuzzleTag.callPromise({
+          puzzleId: puzzleIds[0]!,
+          tagName: "group:logic",
+        });
+
+        const tagDings = { ephemeral: { $ne: true } };
+        await promisify(Meteor.logout)();
+        await login(HUNTER_EMAIL, HUNTER_PASSWORD);
+        const hunterSub = await typedSubscribe.async(
+          puzzleNotificationsForSelf,
+        );
+        const hunterDings =
+          await PuzzleNotifications.find(tagDings).fetchAsync();
+        assert.deepEqual(
+          hunterDings.map((ding) => ding.user),
+          [hunterId],
+          "The subscription only carries the hunter's own ding",
+        );
+        const hunterDingId = hunterDings[0]!._id;
+        hunterSub.stop();
+
+        await promisify(Meteor.logout)();
+        await login(OTHER_HUNTER_EMAIL, OTHER_HUNTER_PASSWORD);
+        const otherSub = await typedSubscribe.async(puzzleNotificationsForSelf);
+        assert.deepEqual(
+          (await PuzzleNotifications.find(tagDings).fetchAsync()).map(
+            (ding) => ding.user,
+          ),
+          [otherHunterId],
+          "The subscription only carries the other hunter's own ding",
+        );
+        await dismissPuzzleNotification.callPromise({
+          puzzleNotificationId: hunterDingId,
+        });
+        otherSub.stop();
+
+        await promisify(Meteor.logout)();
+        await login(HUNTER_EMAIL, HUNTER_PASSWORD);
+        const hunterAgainSub = await typedSubscribe.async(
+          puzzleNotificationsForSelf,
+        );
+        assert.isDefined(
+          await PuzzleNotifications.findOneAsync(hunterDingId),
+          "Only its owner can dismiss a ding",
+        );
+        hunterAgainSub.stop();
       });
     });
   });

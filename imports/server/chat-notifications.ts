@@ -29,6 +29,10 @@ Meteor.publish("chatNotifications", async function () {
           join: { model: Puzzles },
         },
         {
+          field: "mentionedPuzzles",
+          join: { model: Puzzles },
+        },
+        {
           field: "sender",
           join: {
             model: MeteorUsers,

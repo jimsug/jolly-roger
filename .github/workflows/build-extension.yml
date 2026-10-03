@@ -4,8 +4,15 @@ on:
   push:
     paths:
       - "extension/**"
+      - ".github/workflows/build-extension.yml"
+      # The extension's lint runs with the root's configs
+      - ".oxlintrc.json"
+      - "biome.jsonc"
+      - "eslint.config.mts"
+    # Browsers only take dotted integers as an extension's version, which the
+    # build takes from the tag
     tags:
-      - "v*.*.*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
     branches:
       - main
   workflow_dispatch:
@@ -27,22 +34,27 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
-          cache-dependency-path: "extension/package-lock.json"
+          cache-dependency-path: |
+            package-lock.json
+            extension/package-lock.json
+
+      # The extension's lint runs the root's linters with the root's configs
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
 
       - name: Install dependencies
         working-directory: ./extension
-        run: npm install
+        run: npm ci
+
+      - name: Lint extension
+        working-directory: ./extension
+        run: npm run lint
 
       - name: Build extension
         working-directory: ./extension
         run: npm run build
-
-      - name: List files in extension/dist after build
-        if: always()
-        working-directory: ./extension
-        run: ls -R dist/
 
       - name: Generate Firefox Update Manifest
         if: startsWith(github.ref, 'refs/tags/')
@@ -65,7 +77,8 @@ jobs:
           }
           EOL
 
-      - name: Package Firefox extension
+      - name: Sign Firefox extension
+        if: startsWith(github.ref, 'refs/tags/')
         uses: wdzeng/firefox-addon@v1
         with:
           addon-guid: "{2bf7bc48-4f7d-4c16-9a88-58bb9f1c6ff5}"
@@ -84,17 +97,10 @@ jobs:
           updateXmlPath: 'extension/dist/update_manifest.xml'
           updateXmlCodebaseUrl: 'https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/jolly-roger-chrome.crx'
 
-      - name: List files in extension/dist before release
-        if: always()
-        working-directory: ./extension
-        run: ls -R dist/
-
       - name: Create Release and Upload Artifacts
         uses: ncipollo/release-action@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          # Note: The artifact paths must exist. If .crx packaging is skipped,
-          # that part of the artifact list will gracefully fail to upload.
           artifacts: |
             extension/dist/chrome/jolly-roger-chrome.zip
             extension/dist/jolly-roger-chrome.crx

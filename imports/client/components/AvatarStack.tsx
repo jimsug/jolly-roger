@@ -34,8 +34,8 @@ const AvatarItem = styled.div<{
       $plain
         ? theme.colors.background
         : $isPassive
-          ? theme.colors.warning
-          : theme.colors.success};
+          ? theme.colors.presence.idle
+          : theme.colors.presence.online};
   border-radius: 50%;
   transition: all 0.2s ease-in-out;
   position: relative;
@@ -80,14 +80,12 @@ const AvatarStack = ({
   users,
   size = 24,
   max = 3,
-  className,
   withTooltip = true,
   plain = false,
 }: {
   users: AvatarStackUser[];
   size?: number;
   max?: number;
-  className?: string;
   withTooltip?: boolean;
   plain?: boolean;
 }) => {
@@ -103,7 +101,7 @@ const AvatarStack = ({
   const overlap = size / 3;
 
   const stack = (
-    <StackContainer className={className}>
+    <StackContainer>
       {visibleUsers.map((user, i) => (
         <AvatarItem
           key={user._id}

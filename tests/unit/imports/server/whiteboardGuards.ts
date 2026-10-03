@@ -1,5 +1,4 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { assert } from "chai";
@@ -56,9 +55,9 @@ import demoteOperator from "../../../../imports/methods/demoteOperator";
 import destroyAPIKey from "../../../../imports/methods/destroyAPIKey";
 import destroyHunt from "../../../../imports/methods/destroyHunt";
 import destroyPuzzle from "../../../../imports/methods/destroyPuzzle";
-import dismissAllDingsForPuzzle from "../../../../imports/methods/dismissAllDingsForPuzzle";
 import dismissBookmarkNotification from "../../../../imports/methods/dismissBookmarkNotification";
 import dismissChatNotification from "../../../../imports/methods/dismissChatNotification";
+import dismissChatNotificationsForPuzzle from "../../../../imports/methods/dismissChatNotificationsForPuzzle";
 import dismissPendingAnnouncement from "../../../../imports/methods/dismissPendingAnnouncement";
 import dismissPuzzleNotification from "../../../../imports/methods/dismissPuzzleNotification";
 import ensurePuzzleDocument from "../../../../imports/methods/ensurePuzzleDocument";
@@ -77,12 +76,12 @@ import mediasoupSetPeerState from "../../../../imports/methods/mediasoupSetPeerS
 import mediasoupSetProducerPaused from "../../../../imports/methods/mediasoupSetProducerPaused";
 import postAnnouncement from "../../../../imports/methods/postAnnouncement";
 import promoteOperator from "../../../../imports/methods/promoteOperator";
-import providePuzzleFeedback from "../../../../imports/methods/providePuzzleFeedback";
 import provisionFirstUser from "../../../../imports/methods/provisionFirstUser";
 import provisionScreenshotData from "../../../../imports/methods/provisionScreenshotData";
 import purgeHunt from "../../../../imports/methods/purgeHunt";
 import purgeHuntDocumentCache from "../../../../imports/methods/purgeHuntDocumentCache";
-import removeChatMessage from "../../../../imports/methods/removeChatMessage";
+import registerPuzzleInterest from "../../../../imports/methods/registerPuzzleInterest";
+import removeChatReaction from "../../../../imports/methods/removeChatReaction";
 import removePuzzleAnswer from "../../../../imports/methods/removePuzzleAnswer";
 import removePuzzleTag from "../../../../imports/methods/removePuzzleTag";
 import removeUserAccountEmail from "../../../../imports/methods/removeUserAccountEmail";
@@ -92,7 +91,6 @@ import sendUserVerificationEmail from "../../../../imports/methods/sendUserVerif
 import setChatMessagePin from "../../../../imports/methods/setChatMessagePin";
 import setFeatureFlag from "../../../../imports/methods/setFeatureFlag";
 import setGuessState from "../../../../imports/methods/setGuessState";
-import setUserStatus from "../../../../imports/methods/setUserStatus";
 import setWhiteboardCommentResolved from "../../../../imports/methods/setWhiteboardCommentResolved";
 import setWhiteboardLive from "../../../../imports/methods/setWhiteboardLive";
 import suppressDingwordsForPuzzle from "../../../../imports/methods/suppressDingwordsForPuzzle";
@@ -112,6 +110,7 @@ import userLoginOptions from "../../../../imports/methods/userLoginOptions";
 import withdrawPuzzleInterest from "../../../../imports/methods/withdrawPuzzleInterest";
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
 import { ensureWhiteboard } from "../../../../imports/server/whiteboard";
+import asUser from "../../../lib/asUser";
 import resetDatabase from "../../../lib/resetDatabase";
 import StubSubscription, {
   publishHandler,
@@ -165,9 +164,9 @@ const METHODS = {
   destroyAPIKey,
   destroyHunt,
   destroyPuzzle,
-  dismissAllDingsForPuzzle,
   dismissBookmarkNotification,
   dismissChatNotification,
+  dismissChatNotificationsForPuzzle,
   dismissPendingAnnouncement,
   dismissPuzzleNotification,
   ensurePuzzleDocument,
@@ -186,12 +185,12 @@ const METHODS = {
   mediasoupSetProducerPaused,
   postAnnouncement,
   promoteOperator,
-  providePuzzleFeedback,
   provisionFirstUser,
   provisionScreenshotData,
   purgeHunt,
   purgeHuntDocumentCache,
-  removeChatMessage,
+  registerPuzzleInterest,
+  removeChatReaction,
   removePuzzleAnswer,
   removePuzzleTag,
   removeUserAccountEmail,
@@ -201,7 +200,6 @@ const METHODS = {
   setChatMessagePin,
   setFeatureFlag,
   setGuessState,
-  setUserStatus,
   setWhiteboardCommentResolved,
   setWhiteboardLive,
   suppressDingwordsForPuzzle,
@@ -237,9 +235,9 @@ type BackingIds = { puzzle: string; guess: string };
 
 // Every method that takes a puzzle either refuses the whiteboard's hidden
 // puzzle (given arguments that get it as far as that check) or is allowed on
-// it on purpose: the board has its own chat, pins, reactions, bookmark,
-// presence and dingword mutes, and comments are chat messages. The type
-// checker insists each such method is listed here.
+// it on purpose: the board has its own chat, pins, reactions, bookmark and
+// dingword mutes, and comments are chat messages. The type checker insists
+// each such method is listed here.
 const PUZZLE_METHODS: Record<
   PuzzleMethod,
   ((ids: BackingIds) => Record<string, unknown>) | "allowed"
@@ -259,10 +257,10 @@ const PUZZLE_METHODS: Record<
     puzzleId: puzzle,
     copySheetsToReplacement: false,
   }),
-  dismissAllDingsForPuzzle: "allowed",
+  dismissChatNotificationsForPuzzle: "allowed",
   ensurePuzzleDocument: ({ puzzle }) => ({ puzzleId: puzzle }),
-  providePuzzleFeedback: ({ puzzle }) => ({ puzzleId: puzzle, score: 1 }),
-  removeChatMessage: "allowed",
+  registerPuzzleInterest: ({ puzzle }) => ({ puzzleId: puzzle, score: 1 }),
+  removeChatReaction: "allowed",
   removePuzzleAnswer: ({ puzzle }) => ({
     puzzleId: puzzle,
     guessId: Random.id(),
@@ -271,7 +269,6 @@ const PUZZLE_METHODS: Record<
   sendChatMessage: "allowed",
   setChatMessagePin: "allowed",
   setGuessState: ({ guess }) => ({ guessId: guess, state: "correct" }),
-  setUserStatus: "allowed",
   setWhiteboardCommentResolved: "allowed",
   suppressDingwordsForPuzzle: "allowed",
   undestroyPuzzle: ({ puzzle }) => ({ puzzleId: puzzle }),
@@ -284,9 +281,6 @@ const PUZZLE_METHODS: Record<
   }),
   withdrawPuzzleInterest: ({ puzzle }) => ({ puzzleId: puzzle }),
 };
-
-const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-  DDP._CurrentMethodInvocation.withValue({ userId }, fn);
 
 describe("whiteboard guards", function () {
   this.timeout(30000);
@@ -324,9 +318,20 @@ describe("whiteboard guards", function () {
     });
   });
 
+  // What a refusal must leave as it was, checked in each test so it doesn't
+  // matter which of them run or in what order
+  const assertBoardUntouched = async () => {
+    const backing = (await Puzzles.findOneAllowingDeletedAsync(backingId))!;
+    assert.isFalse(backing.deleted);
+    assert.deepEqual(backing.tags, []);
+    assert.deepEqual(backing.answers, []);
+    assert.equal(backing.title, "Whiteboard");
+    assert.equal(await Documents.find({ puzzle: backingId }).countAsync(), 0);
+  };
+
   Object.entries(PUZZLE_METHODS).forEach(([name, args]) => {
     if (args === "allowed") return;
-    it(`${name} refuses the whiteboard`, async function () {
+    it(`${name} refuses the whiteboard and leaves it untouched`, async function () {
       const method: TypedMethod<any, any> = METHODS[name as PuzzleMethod];
       await assert.isRejected(
         asUser(operator, () =>
@@ -337,6 +342,7 @@ describe("whiteboard guards", function () {
         ),
         /isn't a puzzle/,
       );
+      await assertBoardUntouched();
     });
   });
 
@@ -353,15 +359,6 @@ describe("whiteboard guards", function () {
       Object.values(METHODS).map((method) => method.name),
       "Add new methods to METHODS (and to PUZZLE_METHODS if they take a puzzle)",
     );
-  });
-
-  it("left the whiteboard untouched", async function () {
-    const backing = (await Puzzles.findOneAllowingDeletedAsync(backingId))!;
-    assert.isFalse(backing.deleted);
-    assert.deepEqual(backing.tags, []);
-    assert.deepEqual(backing.answers, []);
-    assert.equal(backing.title, "Whiteboard");
-    assert.equal(await Documents.find({ puzzle: backingId }).countAsync(), 0);
   });
 
   it("won't replace a puzzle with the whiteboard", async function () {
@@ -407,7 +404,6 @@ describe("whiteboard guards", function () {
     try {
       await publishHandler("PuzzleHistorySummary.publications.forUser").call(
         sub,
-        { userId: member },
       );
       const summaries = sub.published(PUZZLE_HISTORY_SUMMARIES);
       assert.isTrue(summaries.get(backingId)?.whiteboard);

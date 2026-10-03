@@ -19,8 +19,6 @@ const profileFields: Record<ProfileFields, 1> = {
   discordAccount: 1,
   phoneNumber: 1,
   dingwords: 1,
-  dingwordsOpenMatch: 1,
-  isOffsite: 1,
 };
 
 // This overrides the default set of fields that are published to the
@@ -31,6 +29,11 @@ Accounts.setDefaultPublishFields({
   roles: 1,
   hunts: 1,
   huntTermsAcceptedAt: 1,
+  // Settings only the user's own client reads (dingword matching and mutes,
+  // hunting offsite), kept out of the profile fields every hunt-mate receives
+  dingwordsOpenMatch: 1,
+  isOffsite: 1,
+  suppressedDingwords: 1,
   ...profileFields,
 });
 

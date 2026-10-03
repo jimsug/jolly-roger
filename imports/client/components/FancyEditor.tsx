@@ -41,6 +41,7 @@ import {
 import styled, { css } from "styled-components";
 import { formatDiscordName } from "../../lib/discord";
 import { indexedById, sortedBy } from "../../lib/listUtils";
+import matchPuzzles from "../../lib/matchPuzzles";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { Solvedness } from "../../lib/solvedness";
 import { computeSolvedness } from "../../lib/solvedness";
@@ -172,14 +173,14 @@ export const PuzzleSpan = styled.span<{
   display: inline-block;
   overflow-wrap: break-word;
   border-radius: 4px;
-  color: ${({ theme }) => theme.colors.mentionSpanText};
+  color: ${({ theme }) => theme.colors.puzzleSpanText};
   background-color: ${({ $solvedness, theme }) =>
     theme.colors.solvedness[$solvedness]};
   font-size: 0.8rem;
 `;
 
 const SelectedPuzzleSpan = styled(PuzzleSpan)`
-  box-shadow: 0 0 0 2px ${({ theme }) => theme.colors.selectedMentionSpanShadow};
+  box-shadow: 0 0 0 2px ${({ theme }) => theme.colors.selectedPuzzleSpanShadow};
 `;
 
 export const ImageSpan = styled.span<{
@@ -588,25 +589,6 @@ function matchMentions(
   }));
 
   return [...userMentions, ...roleMentions];
-}
-
-// Hunts have hundreds of puzzles, so the list is kept short: a title that
-// starts with the search comes before one that merely contains it.
-const MAX_PUZZLE_MATCHES = 10;
-
-function matchPuzzles(
-  puzzles: PuzzleType[],
-  searchString: string,
-): MentionMatch[] {
-  if (!searchString) return [];
-
-  const needle = searchString.toLowerCase();
-  const matches = puzzles.filter((p) => p.title.toLowerCase().includes(needle));
-  return sortedBy(matches, (p) =>
-    p.title.toLowerCase().startsWith(needle) ? 0 : 1,
-  )
-    .slice(0, MAX_PUZZLE_MATCHES)
-    .map((puzzle) => ({ type: "puzzle" as const, puzzle }));
 }
 
 const StyledMessage = styled.p`
@@ -1036,7 +1018,10 @@ const FancyEditor = ({
   const matchingMentions: MentionMatch[] = useMemo(
     () =>
       completionType === "puzzle"
-        ? matchPuzzles(puzzles, completionSearchString)
+        ? matchPuzzles(puzzles, completionSearchString).map((puzzle) => ({
+            type: "puzzle" as const,
+            puzzle,
+          }))
         : matchMentions(users, completionSearchString),
     [completionType, users, puzzles, completionSearchString],
   );

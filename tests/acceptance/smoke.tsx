@@ -39,7 +39,7 @@ if (Meteor.isClient) {
     require("../../imports/client/components/Routes").default;
   const {
     AuthenticatedRouteList,
-    NoAuthenticationRouteList,
+    PublicRouteList,
     UnauthenticatedRouteList,
   }: typeof import("../../imports/client/components/Routes") = require("../../imports/client/components/Routes");
 
@@ -205,9 +205,7 @@ if (Meteor.isClient) {
           await promisify(Meteor.logout)();
         });
 
-        enumeratePaths(NoAuthenticationRouteList).forEach(
-          rendersWithoutRedirect,
-        );
+        enumeratePaths(PublicRouteList).forEach(rendersWithoutRedirect);
       });
 
       describe("when logged in", function () {
@@ -215,9 +213,7 @@ if (Meteor.isClient) {
           await promisify(Meteor.loginWithPassword)(USER_EMAIL, USER_PASSWORD);
         });
 
-        enumeratePaths(NoAuthenticationRouteList).forEach(
-          rendersWithoutRedirect,
-        );
+        enumeratePaths(PublicRouteList).forEach(rendersWithoutRedirect);
       });
     });
   });

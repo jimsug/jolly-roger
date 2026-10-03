@@ -1,39 +1,30 @@
 import { check } from "meteor/check";
-import Bookmarks from "../../lib/models/Bookmarks";
+import CallActivities from "../../lib/models/CallActivities";
 import ChatMessages from "../../lib/models/ChatMessages";
 import DocumentActivities from "../../lib/models/DocumentActivities";
-import Guesses from "../../lib/models/Guesses";
+import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
 import puzzleHistoryForUser from "../../lib/publications/puzzleHistoryForUser";
-import CallActivities from "../models/CallActivities";
-import huntsForPuzzleHistory from "../puzzleHistoryHunts";
 import definePublication from "./definePublication";
 
 // Everything a user did on one puzzle, for the expanded row on the puzzle
 // history page.
 definePublication(puzzleHistoryForUser, {
   validate(arg) {
-    check(arg, {
-      userId: String,
-      puzzleId: String,
-    });
+    check(arg, { puzzleId: String });
     return arg;
   },
 
-  async run({ userId, puzzleId }) {
+  async run({ puzzleId }) {
     if (!this.userId) {
       return [];
     }
 
-    const hunts = await huntsForPuzzleHistory(this.userId, userId);
-    if (!hunts) {
-      return [];
-    }
-
+    const user = await MeteorUsers.findOneAsync(this.userId);
     const puzzle = await Puzzles.findOneAsync({
       _id: puzzleId,
-      hunt: { $in: hunts },
+      hunt: { $in: user?.hunts ?? [] },
     });
     if (!puzzle) {
       return [];
@@ -42,23 +33,22 @@ definePublication(puzzleHistoryForUser, {
 
     return [
       Puzzles.find({ _id: puzzleId }),
-      Tags.find({ _id: { $in: puzzle.tags } }),
-      Bookmarks.find({ user: userId, hunt, puzzle: puzzleId }),
-      CallActivities.find({ user: userId, hunt, call: puzzleId }),
+      // The whole hunt's tags, so the row keeps up with tags added later
+      Tags.find({ hunt }),
+      CallActivities.find({ user: this.userId, hunt, call: puzzleId }),
       ChatMessages.find({
         hunt,
         puzzle: puzzleId,
         $or: [
-          { sender: userId },
+          { sender: this.userId },
           {
             "content.children": {
-              $elemMatch: { type: "mention", userId },
+              $elemMatch: { type: "mention", userId: this.userId },
             },
           },
         ],
       }),
-      DocumentActivities.find({ user: userId, hunt, puzzle: puzzleId }),
-      Guesses.find({ createdBy: userId, hunt, puzzle: puzzleId }),
+      DocumentActivities.find({ user: this.userId, hunt, puzzle: puzzleId }),
     ];
   },
 });

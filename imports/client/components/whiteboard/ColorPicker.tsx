@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import type { WhiteboardColor } from "../../../lib/models/WhiteboardNodes";
@@ -25,6 +25,33 @@ const Swatch = styled.button<{ $color: string | undefined; $active: boolean }>`
   outline: 1px solid rgb(0 0 0 / 15%);
 `;
 
+const ColorSwatch = ({
+  color,
+  name,
+  fill,
+  active,
+  onChange,
+}: {
+  color: WhiteboardColor;
+  name: string;
+  fill: string | undefined;
+  active: boolean;
+  onChange: (color: WhiteboardColor) => void;
+}) => {
+  const onClick = useCallback(() => onChange(color), [onChange, color]);
+  return (
+    <Swatch
+      type="button"
+      title={name}
+      aria-label={name}
+      aria-pressed={active}
+      $color={fill}
+      $active={active}
+      onClick={onClick}
+    />
+  );
+};
+
 const ColorPicker = ({
   value,
   palette,
@@ -39,27 +66,26 @@ const ColorPicker = ({
 }) => {
   const { t } = useTranslation();
   const names: Record<WhiteboardColor, string> = {
-    yellow: t("whiteboard.color.yellow", "yellow"),
-    orange: t("whiteboard.color.orange", "orange"),
-    red: t("whiteboard.color.red", "red"),
-    pink: t("whiteboard.color.pink", "pink"),
-    purple: t("whiteboard.color.purple", "purple"),
-    blue: t("whiteboard.color.blue", "blue"),
-    green: t("whiteboard.color.green", "green"),
-    grey: t("whiteboard.color.grey", "grey"),
-    black: t("whiteboard.color.black", "black"),
+    yellow: t("whiteboard.color.yellow", "Yellow"),
+    orange: t("whiteboard.color.orange", "Orange"),
+    red: t("whiteboard.color.red", "Red"),
+    pink: t("whiteboard.color.pink", "Pink"),
+    purple: t("whiteboard.color.purple", "Purple"),
+    blue: t("whiteboard.color.blue", "Blue"),
+    green: t("whiteboard.color.green", "Green"),
+    gray: t("whiteboard.color.gray", "Grey"),
+    black: t("whiteboard.color.black", "Black"),
   };
   return (
     <Swatches className="nodrag">
       {WhiteboardColors.map((color) => (
-        <Swatch
+        <ColorSwatch
           key={color}
-          type="button"
-          title={names[color]}
-          aria-label={names[color]}
-          $color={palette[color] ?? fallback}
-          $active={color === value}
-          onClick={() => onChange(color)}
+          color={color}
+          name={names[color]}
+          fill={palette[color] ?? fallback}
+          active={color === value}
+          onChange={onChange}
         />
       ))}
     </Swatches>

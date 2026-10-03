@@ -3,9 +3,9 @@ import React, { useMemo } from "react";
 import styled, { useTheme } from "styled-components";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
 import { inkPath } from "../../../lib/whiteboard/ink";
-import { STROKE_COLORS } from "./colors";
+import useHoverIntent from "../../hooks/useHoverIntent";
+import colors from "./colors";
 import NodeContributors from "./NodeContributors";
-import useHoverIntent from "./useHoverIntent";
 
 type InkNodeType = Node<{ doc: WhiteboardNodeType; erasing?: boolean }, "ink">;
 
@@ -41,7 +41,7 @@ const InkNode = ({ data, selected, width, height }: NodeProps<InkNodeType>) => {
     () => inkPath(doc.points ?? [], doc.strokeWidth ?? "medium", true),
     [doc.points, doc.strokeWidth],
   );
-  const color = (doc.colour && STROKE_COLORS[doc.colour]) ?? theme.colors.text;
+  const color = (doc.color && colors.stroke[doc.color]) ?? theme.colors.text;
 
   return (
     <>

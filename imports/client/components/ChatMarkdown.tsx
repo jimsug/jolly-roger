@@ -151,7 +151,7 @@ const MarkdownToken = ({
 
 // With safeLinks, a link whose href isn't http(s), mailto or a same-site path
 // is shown as its text with no link at all.
-export const MarkdownText = ({
+const ChatMarkdown = ({
   text,
   safeLinks = false,
   linkClassName,
@@ -170,3 +170,5 @@ export const MarkdownText = ({
     </>
   );
 };
+
+export default ChatMarkdown;

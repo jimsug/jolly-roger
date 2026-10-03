@@ -39,6 +39,7 @@ import Tags from "../../lib/models/Tags";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
 import type { Solvedness } from "../../lib/solvedness";
 import { computeSolvedness } from "../../lib/solvedness";
+import { normalizeTagName, tagNameMatcher } from "../../lib/tagNames";
 import addPuzzleTag from "../../methods/addPuzzleTag";
 import removePuzzleTag from "../../methods/removePuzzleTag";
 import renameTag from "../../methods/renameTag";
@@ -92,7 +93,7 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
 
   const [selectedTagId, setSelectedTagId] = useState("");
   const [newTagName, setNewTagName] = useState("");
-  const [alias, setAlias] = useState(false);
+  const [keepOldNameAsAlias, setKeepOldNameAsAlias] = useState(false);
 
   const allTags = useTracker(
     () => Tags.find({ hunt: huntId }).fetch(),
@@ -121,6 +122,22 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
       : undefined;
   }, [tagToRename]);
 
+  // The tag a rename would merge into, found the way the server finds it:
+  // another tag whose name or alias matches the new name
+  const mergeTarget = useMemo(() => {
+    const name = normalizeTagName(newTagName);
+    if (!tagToRename || !name) {
+      return undefined;
+    }
+    const matcher = tagNameMatcher(name);
+    return allTags.find(
+      (tag) =>
+        tag._id !== tagToRename._id &&
+        (matcher.test(tag.name) ||
+          (tag.aliases ?? []).some((alias) => matcher.test(alias))),
+    );
+  }, [allTags, tagToRename, newTagName]);
+
   const dismissAlert = useCallback(() => {
     setSubmitState(SubmitState.IDLE);
   }, []);
@@ -142,9 +159,9 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
     [],
   );
 
-  const onAliasChanged = useCallback(
+  const onKeepOldNameAsAliasChanged = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      setAlias(e.currentTarget.checked);
+      setKeepOldNameAsAlias(e.currentTarget.checked);
     },
     [],
   );
@@ -154,7 +171,7 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
       e.preventDefault();
       setSubmitState(SubmitState.SUBMITTING);
       renameTag.call(
-        { tagId: selectedTagId, name: newTagName, alias },
+        { tagId: selectedTagId, name: newTagName, keepOldNameAsAlias },
         (error?: Error) => {
           if (error) {
             setSubmitState(SubmitState.FAILED);
@@ -165,12 +182,12 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
             // The renamed tag may no longer exist (merged away), so start over.
             setSelectedTagId("");
             setNewTagName("");
-            setAlias(false);
+            setKeepOldNameAsAlias(false);
           }
         },
       );
     },
-    [selectedTagId, newTagName, alias],
+    [selectedTagId, newTagName, keepOldNameAsAlias],
   );
 
   const isNameDirtied = tagToRename?.name.trim() !== newTagName.trim();
@@ -181,6 +198,28 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
   const theme = useTheme();
 
   const { t } = useTranslation();
+
+  const submitLabel = mergeTarget
+    ? t("tags.renameTagSection.mergeButton", "Merge into {{tag}}", {
+        tag: mergeTarget.name,
+        // Text node, so escaping only shows entities; goes once i18n stops escaping
+        interpolation: { escapeValue: false },
+      })
+    : t("tags.renameTagSection.renameButton", "Rename");
+  const mergeWarningId = `${idPrefix}-rename-merge-warning`;
+  const mergeWarning =
+    tagToRename && mergeTarget
+      ? t(
+          "tags.renameTagSection.mergeWarning",
+          "Merging removes “{{tag}}” and tags its puzzles “{{target}}” instead. This can't be undone.",
+          {
+            tag: tagToRename.name,
+            target: mergeTarget.name,
+            // Text node, so escaping only shows entities; goes once i18n stops escaping
+            interpolation: { escapeValue: false },
+          },
+        )
+      : undefined;
 
   return (
     <section>
@@ -230,12 +269,22 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
           </Col>
           <Col xs={2}>
             <FormGroup className="mb-3">
-              <Button variant="primary" type="submit" disabled={disableRename}>
-                {t("tags.renameTagSection.renameButton", "Rename")}
+              <Button
+                variant="primary"
+                type="submit"
+                disabled={disableRename}
+                aria-describedby={mergeWarning ? mergeWarningId : undefined}
+              >
+                {submitLabel}
               </Button>
             </FormGroup>
           </Col>
         </Row>
+        {mergeWarning && (
+          <FormText as="p" id={mergeWarningId}>
+            {mergeWarning}
+          </FormText>
+        )}
         <FormGroup className="mb-3" controlId={`${idPrefix}-rename-alias`}>
           <FormCheck
             type="checkbox"
@@ -243,8 +292,8 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
               "tags.renameTagSection.aliasLabel",
               "Keep the old name as an alias of the new one",
             )}
-            checked={alias}
-            onChange={onAliasChanged}
+            checked={keepOldNameAsAlias}
+            onChange={onKeepOldNameAsAliasChanged}
           />
           <FormText>
             {t(

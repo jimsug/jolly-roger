@@ -1,5 +1,5 @@
 import TypedPublication from "./TypedPublication";
 
-export default new TypedPublication<{ userId: string; puzzleId: string }>(
+export default new TypedPublication<{ puzzleId: string }>(
   "Puzzles.publications.historyForUser",
 );

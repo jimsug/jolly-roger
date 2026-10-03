@@ -162,6 +162,10 @@ const HuntNav = () => {
       (canUpdate || !!Whiteboards.findOne({ hunt: huntId })),
     [canUpdate, huntId],
   );
+  const notesDisabled = useTracker(
+    () => Flags.active("disable.puzzle_notes"),
+    [],
+  );
 
   if (huntId && hunt) {
     // Once a hunt is archived its site often moves, so prefer the archive URL
@@ -171,7 +175,11 @@ const HuntNav = () => {
         to={huntUrl}
         target="_blank"
         rel="noopener noreferrer"
-        title={t("navigation.huntLinkTitle", "Open the hunt homepage")}
+        title={
+          hunt.archivedHuntUrl
+            ? t("navigation.huntArchiveLinkTitle", "Open the hunt archive")
+            : t("navigation.huntLinkTitle", "Open the hunt homepage")
+        }
       >
         <MenuIcon icon={faMap} />
         <StyledPuzzleListLinkLabel>
@@ -245,7 +253,7 @@ const HuntNav = () => {
 
         {/* Notes and the tag manager are operator tools. The guess queue and
             firehose are linked from the More page instead of the bar. */}
-        {canUpdate && (
+        {canUpdate && !notesDisabled && (
           <StyledPuzzleListLinkAnchor
             to={`/hunts/${huntId}/notes`}
             title={t("notes.navTitle", "Notes")}

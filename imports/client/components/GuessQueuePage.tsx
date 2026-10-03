@@ -14,16 +14,15 @@ import FormLabel from "react-bootstrap/FormLabel";
 import InputGroup from "react-bootstrap/InputGroup";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import ToggleButton from "react-bootstrap/ToggleButton";
-import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import Tooltip from "react-bootstrap/Tooltip";
 import { useTranslation } from "react-i18next";
 import { Link, useParams, useSearchParams } from "react-router";
 import styled, { css } from "styled-components";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
-import type { GuessQueueFilterableState } from "../../lib/guessQueueFilter";
+import type { GuessQueueFilterableState } from "../../lib/guessShownInQueue";
 import guessShownInQueue, {
   GUESS_QUEUE_FILTERABLE_STATES,
-} from "../../lib/guessQueueFilter";
+} from "../../lib/guessShownInQueue";
 import { indexedById } from "../../lib/listUtils";
 import type { GuessType } from "../../lib/models/Guesses";
 import Guesses from "../../lib/models/Guesses";
@@ -50,16 +49,39 @@ import {
 import Markdown from "./Markdown";
 import PuzzleAnswer from "./PuzzleAnswer";
 import Breakable from "./styling/Breakable";
+import ResponsiveToggleButtonGroup from "./styling/ResponsiveToggleButtonGroup";
 import type { Breakpoint } from "./styling/responsive";
 import { mediaBreakpointDown } from "./styling/responsive";
 
 const compactViewBreakpoint: Breakpoint = "md";
 
-const StyledToggleButtonGroup = styled(ToggleButtonGroup)`
-  @media (width < 360px) {
-    width: 100%;
-  }
-`;
+// How the state filter shows each state. The buttons follow
+// GUESS_QUEUE_FILTERABLE_STATES' order.
+const STATE_FILTER_BUTTONS: Record<
+  GuessQueueFilterableState,
+  { variant: string; key: string; label: string }
+> = {
+  correct: {
+    variant: "outline-success",
+    key: "guessQueue.stateFilter.correct",
+    label: "Correct",
+  },
+  intermediate: {
+    variant: "outline-warning",
+    key: "guessQueue.stateFilter.intermediate",
+    label: "Intermediate",
+  },
+  incorrect: {
+    variant: "outline-danger",
+    key: "guessQueue.stateFilter.incorrect",
+    label: "Incorrect",
+  },
+  rejected: {
+    variant: "outline-secondary",
+    key: "guessQueue.stateFilter.rejected",
+    label: "Rejected",
+  },
+};
 
 const StyledTable = styled.div<{ $hasGuessQueue: boolean }>`
   display: grid;
@@ -327,37 +349,43 @@ const GuessQueuePage = () => {
   const guessesLoading = useTypedSubscribe(guessesForGuessQueue, { huntId });
   const loading = guessesLoading();
 
+  const hunt = useTracker(() => Hunts.findOne({ _id: huntId }), [huntId]);
+
   const { t } = useTranslation();
 
-  const data = useTracker(() => {
-    if (loading) {
-      return undefined;
-    }
-    const hunt = Hunts.findOne({ _id: huntId });
-    return {
-      hunt,
-      guesses: Guesses.find(
-        { hunt: huntId },
-        { sort: { createdAt: -1 } },
-      ).fetch(),
-      puzzles: indexedById(Puzzles.find({ hunt: huntId }).fetch()),
-      displayNames: indexedDisplayNames(),
-      canEdit: userMayUpdateGuessesForHunt(Meteor.user(), hunt),
-    };
-  }, [huntId, loading]);
-  const hunt = data?.hunt;
-
-  const pageTitle = useMemo(() => {
-    if (!hunt) {
-      return `${t("common.loading", "loading")}...`;
-    } else if (hunt.hasGuessQueue) {
-      return t("guessQueue.title.guess", "Guess queue");
-    } else {
-      return t("guessQueue.title.answer", "Answer log");
-    }
-  }, [hunt, t]);
+  let pageTitle;
+  if (loading || !hunt) {
+    pageTitle = `${t("common.loading", "loading")}...`;
+  } else if (hunt.hasGuessQueue) {
+    pageTitle = t("guessQueue.title.guess", "Guess queue");
+  } else {
+    pageTitle = t("guessQueue.title.answer", "Answer log");
+  }
 
   useBreadcrumb({ title: pageTitle, path: `/hunts/${huntId}/guesses` });
+
+  const guesses = useTracker(
+    () =>
+      loading
+        ? []
+        : Guesses.find({ hunt: huntId }, { sort: { createdAt: -1 } }).fetch(),
+    [huntId, loading],
+  );
+  const puzzles = useTracker(
+    () =>
+      loading
+        ? new Map<string, PuzzleType>()
+        : indexedById(Puzzles.find({ hunt: huntId }).fetch()),
+    [huntId, loading],
+  );
+  const displayNames = useTracker(
+    () => (loading ? new Map<string, string>() : indexedDisplayNames()),
+    [loading],
+  );
+  const canEdit = useTracker(
+    () => userMayUpdateGuessesForHunt(Meteor.user(), hunt),
+    [hunt],
+  );
 
   const searchBarRef = useRef<HTMLInputElement>(null);
   useFocusRefOnFindHotkey(searchBarRef);
@@ -388,33 +416,30 @@ const GuessQueuePage = () => {
   }, [setSearchString]);
 
   const filteredGuesses = useMemo(() => {
-    if (!data) {
-      return [];
-    }
     const searchKeys = searchString.split(" ").filter((key) => key.length > 0);
     const matchesSearch =
       searchKeys.length > 0
-        ? compileGuessMatcher(data.puzzles, data.displayNames, searchKeys)
+        ? compileGuessMatcher(puzzles, displayNames, searchKeys)
         : () => true;
-    return data.guesses.filter(
+    return guesses.filter(
       (guess) =>
-        data.puzzles.has(guess.puzzle) &&
+        puzzles.has(guess.puzzle) &&
         guessShownInQueue(guess, shownStates) &&
         matchesSearch(guess),
     );
-  }, [data, searchString, shownStates]);
+  }, [guesses, puzzles, displayNames, searchString, shownStates]);
 
   const idPrefix = useId();
 
-  if (!data || !hunt) {
+  if (loading || !hunt) {
     return <div>{t("common.loading", "loading")}...</div>;
   }
 
   const directionTooltip = (
     <Tooltip id={`${idPrefix}-direction-tooltip`}>
       Direction this puzzle was solved, ranging from completely backsolved (
-      {formatGuessDirection(-10)}) to completely forward solved (
-      {formatGuessDirection(10)})
+      {formatGuessDirection(-10, t)}) to completely forward solved (
+      {formatGuessDirection(10, t)})
     </Tooltip>
   );
   const confidenceTooltip = (
@@ -445,44 +470,30 @@ const GuessQueuePage = () => {
         </InputGroup>
       </FormGroup>
       <FormGroup className="mb-3">
-        <FormLabel>
+        <FormLabel id={`${idPrefix}-state-filter-label`}>
           {t("guessQueue.stateFilter.label", "Guesses to show")}
         </FormLabel>
         <ButtonToolbar>
-          <StyledToggleButtonGroup
+          <ResponsiveToggleButtonGroup
             type="checkbox"
             value={shownStates}
             onChange={setShownStates}
+            aria-labelledby={`${idPrefix}-state-filter-label`}
           >
-            <ToggleButton
-              id={`${idPrefix}-state-filter-correct`}
-              variant="outline-success"
-              value="correct"
-            >
-              {t("guessQueue.stateFilter.correct", "Correct")}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-state-filter-intermediate`}
-              variant="outline-warning"
-              value="intermediate"
-            >
-              {t("guessQueue.stateFilter.intermediate", "Intermediate")}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-state-filter-incorrect`}
-              variant="outline-danger"
-              value="incorrect"
-            >
-              {t("guessQueue.stateFilter.incorrect", "Incorrect")}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-state-filter-rejected`}
-              variant="outline-secondary"
-              value="rejected"
-            >
-              {t("guessQueue.stateFilter.rejected", "Rejected")}
-            </ToggleButton>
-          </StyledToggleButtonGroup>
+            {GUESS_QUEUE_FILTERABLE_STATES.map((state) => {
+              const { variant, key, label } = STATE_FILTER_BUTTONS[state];
+              return (
+                <ToggleButton
+                  key={state}
+                  id={`${idPrefix}-state-filter-${state}`}
+                  variant={variant}
+                  value={state}
+                >
+                  {t(key, label)}
+                </ToggleButton>
+              );
+            })}
+          </ResponsiveToggleButtonGroup>
         </ButtonToolbar>
       </FormGroup>
       <StyledTable $hasGuessQueue={hunt.hasGuessQueue}>
@@ -524,11 +535,9 @@ const GuessQueuePage = () => {
               key={guess._id}
               hunt={hunt}
               guess={guess}
-              createdByDisplayName={
-                data.displayNames.get(guess.createdBy) ?? "???"
-              }
-              puzzle={data.puzzles.get(guess.puzzle)!}
-              canEdit={data.canEdit}
+              createdByDisplayName={displayNames.get(guess.createdBy) ?? "???"}
+              puzzle={puzzles.get(guess.puzzle)!}
+              canEdit={canEdit}
             />
           );
         })}

@@ -11,6 +11,15 @@ export type WhiteboardPathStyle = (typeof WhiteboardPathStyles)[number];
 export const WhiteboardArrowHeads = ["none", "end", "both"] as const;
 export type WhiteboardArrowHead = (typeof WhiteboardArrowHeads)[number];
 
+// A line's look: what the line tool draws with and restyling changes.
+export const LINE_STYLE_FIELDS = [
+  "pathStyle",
+  "arrowHead",
+  "color",
+  "dashed",
+] as const;
+export type LineStyleField = (typeof LINE_STYLE_FIELDS)[number];
+
 const WhiteboardEdge = withCommon(
   z.object({
     hunt: foreignKey,
@@ -23,7 +32,7 @@ const WhiteboardEdge = withCommon(
     // Drawing style. Unset means a curved line with an arrow at the target end.
     pathStyle: z.enum(WhiteboardPathStyles).optional(),
     arrowHead: z.enum(WhiteboardArrowHeads).optional(),
-    colour: z.enum(WhiteboardColors).optional(),
+    color: z.enum(WhiteboardColors).optional(),
     dashed: z.boolean().optional(),
     // Who drew and restyled a hand-drawn line, oldest first. Server-written.
     contributors: WhiteboardContributor.array().default([]),

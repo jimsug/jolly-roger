@@ -1,19 +1,18 @@
-import { check, Match } from "meteor/check";
 import type { Meteor } from "meteor/meteor";
+import CallActivities from "../../lib/models/CallActivities";
 import ChatMessages from "../../lib/models/ChatMessages";
 import DocumentActivities from "../../lib/models/DocumentActivities";
+import MeteorUsers from "../../lib/models/MeteorUsers";
 import activitySummaryForUser from "../../lib/publications/activitySummaryForUser";
 import {
   ACTIVITY_HISTORY_SUMMARIES,
   type ActivityHistorySummary,
-  type ActivityHistoryType,
+  type GraphedActivityKind,
 } from "../../lib/puzzleHistory";
-import CallActivities from "../models/CallActivities";
-import huntsForPuzzleHistory from "../puzzleHistoryHunts";
 import definePublication from "./definePublication";
 
 type ActivityCursor = {
-  type: ActivityHistoryType;
+  type: GraphedActivityKind;
   observe: (callbacks: {
     added: (id: string, fields: { hunt?: string; ts?: Date }) => void;
     changed: (id: string, fields: { hunt?: string; ts?: Date }) => void;
@@ -24,7 +23,7 @@ type ActivityCursor = {
 function bucketFor(
   hunt: string,
   ts: Date,
-  type: ActivityHistoryType,
+  type: GraphedActivityKind,
 ): ActivityHistorySummary {
   const dayOfWeek = ts.getUTCDay();
   const hour = ts.getUTCHours();
@@ -42,35 +41,13 @@ function bucketFor(
 // week and hour, for the contribution graph. Call rows count whether or not
 // the user was speaking: being on the call is the activity.
 definePublication(activitySummaryForUser, {
-  validate(arg) {
-    check(arg, {
-      userId: String,
-      huntIds: Match.Optional([String]),
-      excludeCallActivity: Match.Optional(Boolean),
-      excludeChatMessages: Match.Optional(Boolean),
-      excludeDocumentActivity: Match.Optional(Boolean),
-    });
-    return arg;
-  },
-
-  async run({
-    userId,
-    huntIds,
-    excludeCallActivity = false,
-    excludeChatMessages = false,
-    excludeDocumentActivity = false,
-  }) {
-    if (!this.userId) {
+  async run() {
+    const { userId } = this;
+    if (!userId) {
       return [];
     }
 
-    const userHunts = await huntsForPuzzleHistory(this.userId, userId);
-    if (!userHunts) {
-      return [];
-    }
-    const hunts = huntIds
-      ? userHunts.filter((hunt) => huntIds.includes(hunt))
-      : userHunts;
+    const hunts = (await MeteorUsers.findOneAsync(userId))?.hunts ?? [];
     if (hunts.length === 0) {
       return [];
     }
@@ -126,24 +103,21 @@ definePublication(activitySummaryForUser, {
       }
     };
 
-    const cursors: ActivityCursor[] = [];
-    if (!excludeCallActivity) {
-      cursors.push({
-        type: "Call",
+    const cursors: ActivityCursor[] = [
+      {
+        type: "call",
         observe: (callbacks) =>
           CallActivities.find(
             { user: userId, hunt: huntFilter },
-            { fields: { hunt: 1, ts: 1 } },
+            { projection: { hunt: 1, ts: 1 } },
           ).observeChangesAsync(callbacks),
-      });
-    }
-    if (!excludeChatMessages) {
-      cursors.push({
-        type: "Chat",
+      },
+      {
+        type: "chat",
         observe: (callbacks) =>
           ChatMessages.find(
             { sender: userId, hunt: huntFilter },
-            { fields: { hunt: 1, timestamp: 1 } },
+            { projection: { hunt: 1, timestamp: 1 } },
           ).observeChangesAsync({
             added: (id, fields) =>
               callbacks.added(id, { hunt: fields.hunt, ts: fields.timestamp }),
@@ -154,18 +128,16 @@ definePublication(activitySummaryForUser, {
               }),
             removed: callbacks.removed,
           }),
-      });
-    }
-    if (!excludeDocumentActivity) {
-      cursors.push({
-        type: "Document",
+      },
+      {
+        type: "document",
         observe: (callbacks) =>
           DocumentActivities.find(
             { user: userId, hunt: huntFilter },
-            { fields: { hunt: 1, ts: 1 } },
+            { projection: { hunt: 1, ts: 1 } },
           ).observeChangesAsync(callbacks),
-      });
-    }
+      },
+    ];
 
     const handles = await Promise.all(
       cursors.map(({ type, observe }) => {

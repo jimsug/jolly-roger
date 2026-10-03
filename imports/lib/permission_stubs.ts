@@ -1,17 +1,12 @@
 import { Meteor } from "meteor/meteor";
 import type z from "zod";
 import isAdmin, { GLOBAL_SCOPE } from "./isAdmin";
-import type { HuntType } from "./models/Hunts";
+import type { HuntDefaultRole, HuntType } from "./models/Hunts";
 import MeteorUsers from "./models/MeteorUsers";
 import type { User } from "./models/User";
 import type { Selector } from "./typedModel/Model";
 
-// A hunt may grant roles to every member by default (Hunts.defaultRoles).
-// Callers that only have a hunt id can still pass `{ _id }`; default roles
-// are only honoured when the caller supplies them.
-type HuntWithDefaultRoles = Pick<HuntType, "_id"> & {
-  defaultRoles?: readonly string[];
-};
+type HuntWithDefaultRoles = Pick<HuntType, "_id" | "defaultRoles">;
 
 type UserWithRoles = Pick<Meteor.User, "roles" | "hunts">;
 
@@ -27,14 +22,67 @@ function defaultRolesForHunt(
   return hunt.defaultRoles ?? [];
 }
 
+// Whether the hunt grants this role to every member (Hunts.defaultRoles)
+export function huntGrantsRoleByDefault(
+  hunt: Pick<HuntType, "defaultRoles">,
+  role: HuntDefaultRole,
+): boolean {
+  return hunt.defaultRoles.includes(role);
+}
+
+// A role written to the user's account for this hunt. The hunt's default
+// roles don't count.
+export function userHasAssignedRoleForHunt(
+  user: Pick<Meteor.User, "roles"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> | null | undefined,
+  role: string,
+): boolean {
+  if (!user || !hunt) {
+    return false;
+  }
+
+  return user.roles?.[hunt._id]?.includes(role) ?? false;
+}
+
+// A role the user holds in this hunt, whether assigned to them or granted to
+// every member by the hunt's default roles.
+export function userHasEffectiveRoleForHunt(
+  user: UserWithRoles | null | undefined,
+  hunt: Pick<HuntType, "_id" | "defaultRoles"> | null | undefined,
+  role: string,
+): boolean {
+  if (!user || !hunt) {
+    return false;
+  }
+
+  return (
+    userHasAssignedRoleForHunt(user, hunt, role) ||
+    defaultRolesForHunt(user, hunt).includes(role)
+  );
+}
+
 function isOperatorForHunt(
   user: UserWithRoles,
-  hunt: HuntWithDefaultRoles,
+  hunt: Pick<HuntType, "_id" | "defaultRoles">,
 ): boolean {
-  if (user.roles?.[hunt._id]?.includes("operator")) {
-    return true;
+  return userHasEffectiveRoleForHunt(user, hunt, "operator");
+}
+
+// Global roles plus the roles assigned to the user for this hunt, without the
+// hunt's default roles.
+export function listAssignedRolesForHunt(
+  user: Pick<Meteor.User, "roles"> | null | undefined,
+  hunt: Pick<HuntType, "_id"> | null | undefined,
+): string[] {
+  if (!user || !hunt) {
+    return [];
   }
-  return defaultRolesForHunt(user, hunt).includes("operator");
+
+  const roles = new Set([
+    ...(user.roles?.[GLOBAL_SCOPE] ?? []),
+    ...(user.roles?.[hunt._id] ?? []),
+  ]);
+  return [...roles];
 }
 
 export function listAllRolesForHunt(
@@ -46,8 +94,7 @@ export function listAllRolesForHunt(
   }
 
   const roles = new Set([
-    ...(user.roles?.[GLOBAL_SCOPE] ?? []),
-    ...(user.roles?.[hunt._id] ?? []),
+    ...listAssignedRolesForHunt(user, hunt),
     ...defaultRolesForHunt(user, hunt),
   ]);
   return [...roles];
@@ -55,7 +102,7 @@ export function listAllRolesForHunt(
 
 export function userIsOperatorForHunt(
   user: UserWithRoles | null | undefined,
-  hunt: HuntWithDefaultRoles | null | undefined,
+  hunt: Pick<HuntType, "_id" | "defaultRoles"> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -64,6 +111,9 @@ export function userIsOperatorForHunt(
   return isOperatorForHunt(user, hunt);
 }
 
+// Assigned operator roles only, on purpose: the pending-guess feed follows
+// this, and a hunt that makes every member an operator by default shouldn't
+// send every member every guess.
 export function huntsUserIsOperatorFor(
   user: Pick<Meteor.User, "roles"> | null | undefined,
 ): Set<string> {
@@ -82,6 +132,9 @@ export function huntsUserIsOperatorFor(
     }, new Set<string>());
 }
 
+// Matches assigned operators only, on purpose: @operator mentions fall back to
+// everyone this finds, and a hunt that makes every member an operator by
+// default shouldn't ping every member.
 export function queryOperatorsForHunt(
   hunt: Pick<HuntType, "_id">,
 ): Selector<z.output<typeof User>> {
@@ -135,7 +188,7 @@ export function userMayUpdateHuntInvitationCode(
 // Admins and operators may add announcements to a hunt.
 export function userMayAddAnnouncementToHunt(
   user: UserWithRoles | null | undefined,
-  hunt: HuntWithDefaultRoles | null | undefined,
+  hunt: Pick<HuntType, "_id" | "defaultRoles"> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -152,9 +205,9 @@ export function userMayAddAnnouncementToHunt(
   return false;
 }
 
-// Only admins and explicitly assigned operators may grant or revoke operator
-// roles. Default roles don't count here: they would let any member of such a
-// hunt write a persistent role that outlives the hunt's configuration.
+// Only admins and assigned operators may grant or revoke operator roles.
+// Default roles don't count here, on purpose: they would let any member of
+// such a hunt write a persistent role that outlives the hunt's configuration.
 export function userMayMakeOperatorForHunt(
   user: UserWithRoles | null | undefined,
   hunt: Pick<HuntType, "_id"> | null | undefined,
@@ -167,12 +220,12 @@ export function userMayMakeOperatorForHunt(
     return true;
   }
 
-  return user.roles?.[hunt._id]?.includes("operator") ?? false;
+  return userHasAssignedRoleForHunt(user, hunt, "operator");
 }
 
 export function userMaySeeUserInfoForHunt(
   user: UserWithRoles | null | undefined,
-  hunt: HuntWithDefaultRoles | null | undefined,
+  hunt: Pick<HuntType, "_id" | "defaultRoles"> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -187,14 +240,6 @@ export function userMaySeeUserInfoForHunt(
   }
 
   return false;
-}
-
-// Bulk invites follow the same policy as single invites.
-export function userMayBulkAddToHunt(
-  user: Pick<Meteor.User, "roles" | "hunts"> | null | undefined,
-  hunt: Pick<HuntType, "_id" | "openSignups"> | null | undefined,
-): boolean {
-  return userMayAddUsersToHunt(user, hunt);
 }
 
 export function userMayUseDiscordBotAPIs(
@@ -259,6 +304,12 @@ export function userMayConfigureTeamName(
   return isAdmin(user);
 }
 
+export function userMayConfigureDefaultHuntTags(
+  user: Pick<Meteor.User, "roles"> | null | undefined,
+): boolean {
+  return isAdmin(user);
+}
+
 export function userMayConfigureAssets(
   user: Pick<Meteor.User, "roles"> | null | undefined,
 ): boolean {
@@ -267,7 +318,7 @@ export function userMayConfigureAssets(
 
 export function userMayUpdateGuessesForHunt(
   user: UserWithRoles | null | undefined,
-  hunt: HuntWithDefaultRoles | null | undefined,
+  hunt: Pick<HuntType, "_id" | "defaultRoles"> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;
@@ -283,7 +334,7 @@ export function userMayUpdateGuessesForHunt(
 
 export function userMayWritePuzzlesForHunt(
   user: UserWithRoles | null | undefined,
-  hunt: HuntWithDefaultRoles | null | undefined,
+  hunt: Pick<HuntType, "_id" | "defaultRoles"> | null | undefined,
 ): boolean {
   if (!user || !hunt) {
     return false;

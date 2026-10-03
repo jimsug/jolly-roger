@@ -3,11 +3,6 @@ import { createContext, useContext } from "react";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../../../methods/upsertWhiteboardNodes";
 
-export interface PuzzlePeople {
-  callers: string[];
-  viewers: { user: string; passive: boolean }[];
-}
-
 // What the board's nodes and lines need from the canvas.
 export interface WhiteboardActions {
   readOnly: boolean;
@@ -22,13 +17,13 @@ export interface WhiteboardActions {
     end: "source" | "target",
     event: React.PointerEvent,
   ) => void;
-  // A node created by this client that should open for editing when it
-  // appears.
+  // A node that should open for editing as soon as it's showing: one this
+  // client has just placed, or a note someone pressed Enter on.
   editOnAppear: string | undefined;
   clearEditOnAppear: () => void;
 }
 
-export const WhiteboardContext = createContext<WhiteboardActions | undefined>(
+const WhiteboardContext = createContext<WhiteboardActions | undefined>(
   undefined,
 );
 
@@ -40,6 +35,4 @@ export function useWhiteboard(): WhiteboardActions {
   return value;
 }
 
-export const PeopleContext = createContext<Map<string, PuzzlePeople>>(
-  new Map(),
-);
+export default WhiteboardContext;

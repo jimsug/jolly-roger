@@ -23,7 +23,7 @@ export const WhiteboardColors = [
   "purple",
   "blue",
   "green",
-  "grey",
+  "gray",
   "black",
 ] as const;
 export type WhiteboardColor = (typeof WhiteboardColors)[number];
@@ -73,7 +73,7 @@ const WhiteboardNode = withCommon(
 
     // type: "sticky" | "text"
     text: nonEmptyString.optional(),
-    colour: z.enum(WhiteboardColors).optional(),
+    color: z.enum(WhiteboardColors).optional(),
 
     // type: "ink". Points are [x, y, pressure], relative to position. A long
     // stroke is split into several nodes that share a stroke id.

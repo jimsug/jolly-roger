@@ -1,16 +1,15 @@
-import { useTracker } from "meteor/react-meteor-data";
 import React, { useId, useMemo } from "react";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Tooltip from "react-bootstrap/Tooltip";
 import { useTranslation } from "react-i18next";
 import styled from "styled-components";
-import MeteorUsers from "../../../lib/models/MeteorUsers";
 import type { WhiteboardContributorType } from "../../../lib/models/WhiteboardNodes";
 import relativeTimeFormat from "../../../lib/relativeTimeFormat";
 import contributorsByRecency from "../../../lib/whiteboard/contributors";
+import useAvatarUsers from "../../hooks/useAvatarUsers";
+import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import Avatar from "../Avatar";
 import AvatarStack from "../AvatarStack";
-import useDetail from "./useDetail";
 
 const ContributorList = styled.ul`
   list-style: none;
@@ -35,26 +34,6 @@ const StackWrapper = styled.div`
   cursor: default;
 `;
 
-// Who each user is, for an AvatarStack. Anyone passive is drawn faded.
-export const useAvatarUsers = (ids: string[], passive?: Set<string>) => {
-  const { t } = useTranslation();
-  return useTracker(
-    () =>
-      ids.map((id) => {
-        const user = MeteorUsers.findOne(id);
-        return {
-          _id: id,
-          displayName:
-            user?.displayName ??
-            t("whiteboard.contributors.unknown", "Unknown"),
-          discordAccount: user?.discordAccount,
-          isPassive: passive?.has(id),
-        };
-      }),
-    [ids, passive, t],
-  );
-};
-
 // On-board size of the avatars at each detail level. Drawn larger when zoomed
 // out so they stay a readable size on screen; hidden when zoomed right out.
 const SIZES = { full: 18, mid: 36, far: 0 };
@@ -68,7 +47,7 @@ const NodeContributors = ({
 }) => {
   const id = useId();
   const { t } = useTranslation();
-  const size = SIZES[useDetail()];
+  const size = SIZES[useWhiteboardDetail()];
   const ordered = useMemo(
     () => contributorsByRecency(contributors),
     [contributors],
@@ -83,7 +62,9 @@ const NodeContributors = ({
     <Tooltip id={id}>
       <ContributorList>
         {ordered.map((entry, i) => {
-          const user = users[i]!;
+          // useAvatarUsers gives one user per id, in order.
+          const user = users[i];
+          if (!user) return null;
           const when = relativeTimeFormat(entry.at, t);
           return (
             <ContributorRow key={entry.user}>

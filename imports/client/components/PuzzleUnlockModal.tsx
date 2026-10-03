@@ -16,7 +16,7 @@ import FormLabel from "react-bootstrap/FormLabel";
 import FormText from "react-bootstrap/FormText";
 import Table from "react-bootstrap/Table";
 import { useTranslation } from "react-i18next";
-import type { PuzzleFeedbackType } from "../../lib/models/PuzzleFeedbacks";
+import type { PuzzleInterestType } from "../../lib/models/PuzzleInterests";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import unlockPuzzle from "../../methods/unlockPuzzle";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
@@ -32,12 +32,12 @@ export type PuzzleUnlockModalHandle = {
 // the same time, with the interested members listed to help decide.
 const PuzzleUnlockModal = ({
   puzzle,
-  feedbacks,
+  interests,
   showOnMount,
   ref,
 }: {
   puzzle: PuzzleType;
-  feedbacks: PuzzleFeedbackType[];
+  interests: PuzzleInterestType[];
   showOnMount?: boolean;
   ref: React.Ref<PuzzleUnlockModalHandle>;
 }) => {
@@ -48,7 +48,9 @@ const PuzzleUnlockModal = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
-  // Reopening starts from the puzzle's current URL again
+  // Reopening starts from the puzzle's current URL again. show() reads it
+  // through a ref so that it stays the same function: otherwise showOnMount
+  // would reopen the modal whenever the URL changes.
   const puzzleUrl = useRef(puzzle.url);
   useEffect(() => {
     puzzleUrl.current = puzzle.url;
@@ -109,8 +111,8 @@ const PuzzleUnlockModal = ({
       ref={formRef}
       title={t("puzzle.unlock.modalTitle", "Unlock puzzle: {{title}}", {
         title: puzzle.title,
-        // Rendered as a text node, so i18next's HTML escaping would only
-        // turn an apostrophe in the title into an entity
+        // The title lands in a text node, so escaping would only show
+        // entities; this goes once both i18n inits switch escapeValue off
         interpolation: { escapeValue: false },
       })}
       size="lg"
@@ -152,16 +154,16 @@ const PuzzleUnlockModal = ({
           </tr>
         </thead>
         <tbody>
-          {feedbacks.map((feedback) => (
-            <tr key={feedback._id}>
+          {interests.map((interest) => (
+            <tr key={interest._id}>
               <td>
-                {displayNames.get(feedback.createdBy) ??
+                {displayNames.get(interest.createdBy) ??
                   t("puzzle.unlock.unknownMember", "Unknown member")}
               </td>
-              <td>{feedback.comment}</td>
+              <td>{interest.comment}</td>
             </tr>
           ))}
-          {feedbacks.length === 0 && (
+          {interests.length === 0 && (
             <tr>
               <td colSpan={2} className="text-center text-muted">
                 {t("puzzle.unlock.noInterest", "No interest expressed yet")}

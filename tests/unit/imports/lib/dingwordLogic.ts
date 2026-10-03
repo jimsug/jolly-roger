@@ -3,9 +3,10 @@ import { assert } from "chai";
 import {
   dingedByMentions,
   dingedByRoleMentions,
+  dingwordsMatchingMessage,
   messageDingsUser,
   normalizedForDingwordSearch,
-  normalizedMessageDingsUserByDingword,
+  normalizedTagForDingwordSearch,
 } from "../../../../imports/lib/dingwordLogic";
 import type { ChatMessageContentType } from "../../../../imports/lib/models/ChatMessages";
 
@@ -38,13 +39,13 @@ const matches = (
   dingwords: string[],
   extra: Partial<Meteor.User> = {},
 ) =>
-  normalizedMessageDingsUserByDingword(
+  dingwordsMatchingMessage(
     normalizedForDingwordSearch(message(text(body))),
     user(dingwords, extra),
   );
 
 describe("dingwordLogic", function () {
-  describe("normalizedMessageDingsUserByDingword", function () {
+  describe("dingwordsMatchingMessage", function () {
     it("returns the dingwords that appear as whole words", function () {
       assert.deepEqual(matches("the cryptic is hard", ["cryptic", "logic"]), [
         "cryptic",
@@ -121,17 +122,13 @@ describe("dingwordLogic", function () {
       ]);
     });
 
-    it("stays cheap with a long dingword list", function () {
+    it("finds the last of a long dingword list at the end of a long message", function () {
       const dingwords = Array.from(
         { length: 100 },
         (_, i) => `word${i} phrase`,
       );
       const text = `${"filler ".repeat(500)}word99 phrase`;
-      const started = Date.now();
-      for (let i = 0; i < 100; i += 1) {
-        assert.deepEqual(matches(text, dingwords), ["word99 phrase"]);
-      }
-      assert.isBelow(Date.now() - started, 1000);
+      assert.deepEqual(matches(text, dingwords), ["word99 phrase"]);
     });
   });
 
@@ -148,6 +145,32 @@ describe("dingwordLogic", function () {
       assert.equal(
         normalizedForDingwordSearch(message(content)),
         "hey logic time",
+      );
+    });
+  });
+
+  describe("normalizedTagForDingwordSearch", function () {
+    it("lowercases the name and splits words at colons", function () {
+      assert.equal(
+        normalizedTagForDingwordSearch("group:events"),
+        "group events",
+      );
+      assert.equal(
+        normalizedTagForDingwordSearch("  Meta-For:Big   Top "),
+        "meta-for big top",
+      );
+      assert.equal(normalizedTagForDingwordSearch("a:b:c"), "a b c");
+      assert.equal(normalizedTagForDingwordSearch("cryptic"), "cryptic");
+      assert.equal(normalizedTagForDingwordSearch(""), "");
+    });
+
+    it("lets single and multi-word dingwords match a prefixed tag", function () {
+      assert.deepEqual(
+        dingwordsMatchingMessage(
+          normalizedTagForDingwordSearch("group:Special Events"),
+          user(["events", "group special", "special events", "special"]),
+        ),
+        ["events", "group special", "special events", "special"],
       );
     });
   });

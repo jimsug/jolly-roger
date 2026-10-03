@@ -25,7 +25,7 @@ async function defaultTagNames(): Promise<string[]> {
 
 defineMethod(createHunt, {
   validate(arg) {
-    check(arg, { ...HuntPattern, initialTags: Match.Optional(String) });
+    check(arg, { ...HuntPattern, initialTags: Match.Optional([String]) });
     return arg;
   },
 
@@ -38,10 +38,7 @@ defineMethod(createHunt, {
     const huntId = await Hunts.insertAsync(hunt);
     await addUserToRole(this.userId, huntId, "operator");
 
-    const tags =
-      initialTags === undefined
-        ? await defaultTagNames()
-        : parseInitialTags(initialTags);
+    const tags = initialTags ?? (await defaultTagNames());
     for (const tag of tags) {
       await getOrCreateTagByName(huntId, tag);
     }
@@ -57,8 +54,8 @@ defineMethod(createHunt, {
         ).map((u) => u._id);
         await addUsersToDiscordRole(userIds, huntId);
         await ensureHuntFolder({ _id: huntId, name: hunt.name });
-        // Have placeholder documents ready before the first puzzle, rather
-        // than waiting for the periodic pass to notice the new hunt.
+        // The sweep skips hunts without puzzles, so fill a new hunt's cache
+        // here, ready for its first puzzle.
         await replenishDocumentCache(huntId);
       } catch (error) {
         Logger.warn("Unable to finish setting up hunt", { huntId, error });

@@ -1,10 +1,9 @@
-import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { useTracker } from "meteor/react-meteor-data";
 import React, { useCallback, useRef, useState } from "react";
 import Button from "react-bootstrap/Button";
 import { useTranslation } from "react-i18next";
 import type { Descendant } from "slate";
 import styled from "styled-components";
-import MeteorUsers from "../../../lib/models/MeteorUsers";
 import Puzzles from "../../../lib/models/Puzzles";
 import {
   cleanEditorMessage,
@@ -12,6 +11,7 @@ import {
   hasLoadingImage,
   hasSendableContent,
 } from "../../chatEditorContent";
+import useMentionableUsers from "../../hooks/useMentionableUsers";
 import type { FancyEditorHandle } from "../FancyEditor";
 import FancyEditor from "../FancyEditor";
 
@@ -50,17 +50,7 @@ const CommentComposer = ({
   onSend: (content: string) => void;
 }) => {
   const { t } = useTranslation();
-  const profilesLoading = useSubscribe("huntProfiles", huntId)();
-  const users = useTracker(
-    () =>
-      profilesLoading
-        ? []
-        : MeteorUsers.find({
-            hunts: huntId,
-            displayName: { $ne: undefined },
-          }).fetch(),
-    [huntId, profilesLoading],
-  );
+  const users = useMentionableUsers(huntId);
   const puzzles = useTracker(
     () => Puzzles.find({ hunt: huntId, kind: { $ne: "whiteboard" } }).fetch(),
     [huntId],

@@ -1,14 +1,14 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import type { ChatMessageContentType } from "../../../../imports/lib/models/ChatMessages";
 import ChatMessages from "../../../../imports/lib/models/ChatMessages";
-import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import setChatMessagePin from "../../../../imports/methods/setChatMessagePin";
+import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 
 const text = (body: string): ChatMessageContentType => ({
@@ -26,9 +26,6 @@ describe("pinned chat messages", function () {
   let puzzleId: string;
   let otherPuzzleId: string;
 
-  const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-    DDP._CurrentMethodInvocation.withValue({ userId }, fn);
-
   const send = (
     userId: string,
     content: ChatMessageContentType,
@@ -44,7 +41,7 @@ describe("pinned chat messages", function () {
   const messagesOn = (puzzle: string) =>
     ChatMessages.find({ puzzle }, { sort: { timestamp: 1 } }).fetchAsync();
   const pinnedOn = (puzzle: string) =>
-    ChatMessages.find({ puzzle, pinTs: { $ne: null } }).fetchAsync();
+    ChatMessages.find({ puzzle, pinTs: { $exists: true } }).fetchAsync();
 
   this.beforeAll(async function () {
     await resetDatabase("pinned chat messages");
@@ -60,18 +57,7 @@ describe("pinned chat messages", function () {
       email: "outsider@example.com",
       password: "password",
     });
-    huntId = await asUser(memberId, () =>
-      Hunts.insertAsync({
-        name: "Pin hunt",
-        mailingLists: [],
-        openSignups: false,
-        hasGuessQueue: true,
-        defaultRoles: [],
-        allowUnlockablePuzzles: false,
-        isArchived: false,
-        customLinkEmbed: false,
-      }),
-    );
+    huntId = await createTestHunt(memberId, { name: "Pin hunt" });
     for (const userId of [memberId, otherMemberId]) {
       await MeteorUsers.updateAsync(userId, {
         $set: { displayName: userId, hunts: [huntId] },

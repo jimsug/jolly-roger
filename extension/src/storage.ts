@@ -1,4 +1,4 @@
-export interface OptionsData {
+interface OptionsData {
   jollyRogerInstance: string;
   apiKey: string;
 }

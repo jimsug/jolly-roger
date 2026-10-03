@@ -8,7 +8,7 @@ import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useId, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
@@ -28,6 +28,7 @@ import styled, { css, useTheme } from "styled-components";
 import { useMediaQuery } from "usehooks-ts";
 import Flags from "../../Flags";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
+import correctedAnswer from "../../lib/correctedAnswer";
 import { SUPPRESS_ALL_DINGWORDS } from "../../lib/dingwordLogic";
 import isAdmin from "../../lib/isAdmin";
 import { indexedById } from "../../lib/listUtils";
@@ -46,22 +47,20 @@ import type { PuzzleNotificationType } from "../../lib/models/PuzzleNotification
 import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
-import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import {
   huntsUserIsOperatorFor,
-  listAllRolesForHunt,
+  listAssignedRolesForHunt,
 } from "../../lib/permission_stubs";
 import bookmarkNotificationsForSelf from "../../lib/publications/bookmarkNotificationsForSelf";
 import pendingAnnouncementsForSelf from "../../lib/publications/pendingAnnouncementsForSelf";
 import pendingGuessesForSelf from "../../lib/publications/pendingGuessesForSelf";
 import puzzleNotificationsForSelf from "../../lib/publications/puzzleNotificationsForSelf";
-import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import bookmarkPuzzle from "../../methods/bookmarkPuzzle";
 import configureEnsureGoogleScript from "../../methods/configureEnsureGoogleScript";
-import dismissAllDingsForPuzzle from "../../methods/dismissAllDingsForPuzzle";
 import dismissBookmarkNotification from "../../methods/dismissBookmarkNotification";
 import dismissChatNotification from "../../methods/dismissChatNotification";
+import dismissChatNotificationsForPuzzle from "../../methods/dismissChatNotificationsForPuzzle";
 import dismissPendingAnnouncement from "../../methods/dismissPendingAnnouncement";
 import dismissPuzzleNotification from "../../methods/dismissPuzzleNotification";
 import setGuessState from "../../methods/setGuessState";
@@ -181,7 +180,21 @@ const ToastSettings = ({
   );
 };
 
-// A guess's direction and confidence sliders summarised as a word each.
+// A line of help under a settings item, wrapped to the width of the menu.
+const SettingsItemHelp = styled.small`
+  display: block;
+  white-space: normal;
+`;
+
+// Why an action started from a toast failed, shown in that toast.
+const ToastActionError = ({ error }: { error: string | undefined }) =>
+  error ? (
+    <Alert variant="danger" transition={false}>
+      {error}
+    </Alert>
+  ) : null;
+
+// A guess's direction and confidence as a badge each.
 const GuessDetailBadges = ({ guess }: { guess: GuessType }) => (
   <>
     <StyledNotificationActionItem className="align-items-center">
@@ -192,11 +205,6 @@ const GuessDetailBadges = ({ guess }: { guess: GuessType }) => (
     </StyledNotificationActionItem>
   </>
 );
-
-// Whether a corrected answer changes more than the spacing of the guess.
-const changesMoreThanSpacing = (correction: string, original: string) =>
-  correction.replaceAll(/\s/g, "").toUpperCase() !==
-  original.replaceAll(/\s/g, "").toUpperCase();
 
 const GuessMessage = React.memo(
   ({
@@ -216,14 +224,18 @@ const GuessMessage = React.memo(
       useCallback((e) => {
         setAdditionalNotes(e.target.value);
       }, []);
-    const [correctedAnswer, setCorrectedAnswer] = useState("");
-    const onCorrectedAnswerChange: React.ChangeEventHandler<HTMLTextAreaElement> =
+    const [editedAnswer, setEditedAnswer] = useState("");
+    const onEditedAnswerChange: React.ChangeEventHandler<HTMLTextAreaElement> =
       useCallback((e) => {
-        setCorrectedAnswer(e.target.value);
+        setEditedAnswer(e.target.value);
       }, []);
     // A correction that changes more than the spacing of the guess has to be
     // submitted twice; this is the one waiting on its second submit.
     const [confirmPendingFor, setConfirmPendingFor] = useState<string>();
+    // A correct-with-edit submission in flight, and the error the last one
+    // failed with
+    const [correctionPending, setCorrectionPending] = useState(false);
+    const [correctionError, setCorrectionError] = useState<string>();
 
     const markCorrect = useCallback(() => {
       if (nextState === "correct") {
@@ -238,6 +250,25 @@ const GuessMessage = React.memo(
     const markIncorrect = useCallback(() => {
       setGuessState.call({ guessId: guess._id, state: "incorrect" });
     }, [guess._id]);
+
+    const markCorrectWithEdit = useCallback(
+      (correctAnswer?: string) => {
+        setCorrectionPending(true);
+        setCorrectionError(undefined);
+        setGuessState.call(
+          {
+            guessId: guess._id,
+            state: "correct",
+            ...(correctAnswer === undefined ? {} : { correctAnswer }),
+          },
+          (error) => {
+            setCorrectionPending(false);
+            setCorrectionError(error?.message);
+          },
+        );
+      },
+      [guess._id],
+    );
 
     const toggleStateCorrectWithEdit = useCallback(() => {
       setConfirmPendingFor(undefined);
@@ -260,23 +291,20 @@ const GuessMessage = React.memo(
       if (!nextState) return;
 
       if (nextState === "correct") {
-        const correction = correctedAnswer.trim();
-        if (correction === "" || correction.toUpperCase() === guess.guess) {
-          setGuessState.call({ guessId: guess._id, state: "correct" });
+        if (correctionPending) return;
+        const correction = correctedAnswer(editedAnswer, guess.guess);
+        if (!correction) {
+          markCorrectWithEdit();
           return;
         }
         if (
-          changesMoreThanSpacing(correction, guess.guess) &&
-          confirmPendingFor !== correction
+          correction.changesMoreThanSpacing &&
+          confirmPendingFor !== correction.answer
         ) {
-          setConfirmPendingFor(correction);
+          setConfirmPendingFor(correction.answer);
           return;
         }
-        setGuessState.call({
-          guessId: guess._id,
-          state: "correct",
-          correctAnswer: correction,
-        });
+        markCorrectWithEdit(correction.answer);
         return;
       }
 
@@ -290,8 +318,10 @@ const GuessMessage = React.memo(
       guess.guess,
       nextState,
       additionalNotes,
-      correctedAnswer,
+      editedAnswer,
       confirmPendingFor,
+      correctionPending,
+      markCorrectWithEdit,
     ]);
     const onStageTwoKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> =
       useCallback(
@@ -324,7 +354,7 @@ const GuessMessage = React.memo(
     const [, setOperatorActionsHidden] = useOperatorActionsHiddenForHunt(
       guess.hunt,
     );
-    const hideGuessNotifications = useCallback(() => {
+    const switchToSolverView = useCallback(() => {
       setOperatorActionsHidden(true);
     }, [setOperatorActionsHidden]);
 
@@ -377,7 +407,7 @@ const GuessMessage = React.memo(
             <StyledNotificationRow>
               {t(
                 "notification.guessMessage.correctWithEditInstruction",
-                "Enter the corrected answer to this puzzle as provided by game control (or just submit to mark it correct).",
+                "Enter the corrected answer to this puzzle as provided by HQ (or just submit to mark it correct).",
               )}
             </StyledNotificationRow>
             {confirmPendingFor !== undefined && (
@@ -420,8 +450,8 @@ const GuessMessage = React.memo(
                     className="form-control"
                     autoFocus
                     disabled={disableForms}
-                    value={correctedAnswer}
-                    onChange={onCorrectedAnswerChange}
+                    value={editedAnswer}
+                    onChange={onEditedAnswerChange}
                     onKeyDown={onStageTwoKeyDown}
                   />
                 </StyledNotificationRow>
@@ -432,13 +462,14 @@ const GuessMessage = React.memo(
                 <Button
                   variant="outline-secondary"
                   size="sm"
-                  disabled={disableForms}
+                  disabled={disableForms || correctionPending}
                   onClick={submitStageTwo}
                 >
                   {t("notification.guessMessage.save", "Save (or press Enter)")}
                 </Button>
               </StyledNotificationActionItem>
             </StyledNotificationActionBar>
+            <ToastActionError error={correctionError} />
           </Form>
         );
         break;
@@ -519,11 +550,17 @@ const GuessMessage = React.memo(
             />
           )}
           <ToastSettings id={`${idPrefix}-settings`}>
-            <DropdownItem onClick={hideGuessNotifications}>
+            <DropdownItem onClick={switchToSolverView}>
               {t(
-                "notification.guessMessage.disableForHunt",
-                "Disable guess notifications for this hunt",
+                "notification.guessMessage.switchToSolver",
+                "Switch to Solver view for this hunt",
               )}
+              <SettingsItemHelp className="text-muted">
+                {t(
+                  "notification.guessMessage.switchToSolverHelp",
+                  "Hides guess alerts and edit controls. To bring them back, choose Deputy on the puzzle list or “Switch to Deputy” in the profile menu.",
+                )}
+              </SettingsItemHelp>
             </DropdownItem>
           </ToastSettings>
         </Toast.Header>
@@ -768,9 +805,31 @@ const ProfileMissingMessage = ({ onDismiss }: { onDismiss: () => void }) => {
 // How many matched dingwords the chat toast offers to mute individually.
 const MAX_MUTE_ITEMS = 3;
 
-const HuntPuzzlesSubscription = ({ huntId }: { huntId: string }) => {
-  useTypedSubscribe(puzzlesForHunt, { huntId });
-  return null;
+const MuteDingwordItem = ({
+  word,
+  disabled,
+  onMute,
+}: {
+  word: string;
+  disabled: boolean;
+  onMute: (word: string) => void;
+}) => {
+  const { t } = useTranslation();
+  const mute = useCallback(() => onMute(word), [onMute, word]);
+
+  return (
+    <DropdownItem disabled={disabled} onClick={mute}>
+      {t(
+        "notification.chat.muteWordForPuzzle",
+        "Mute “{{word}}” for this puzzle",
+        {
+          word,
+          // Plain text in the menu, so escaping only shows entities; drop once both i18n inits stop escaping
+          interpolation: { escapeValue: false },
+        },
+      )}
+    </DropdownItem>
+  );
 };
 
 const ChatNotificationMessage = ({
@@ -817,26 +876,49 @@ const ChatNotificationMessage = ({
     return newest?.createdAt ?? cn.createdAt;
   }, [cn.hunt, cn.puzzle, cn.createdAt]);
 
+  // A dismiss or mute in flight, and the error the last one failed with
+  const [actionPending, setActionPending] = useState(false);
+  const [actionError, setActionError] = useState<string>();
+  const startAction = useCallback(() => {
+    setActionPending(true);
+    setActionError(undefined);
+  }, []);
+  const finishAction = useCallback((error?: Meteor.Error) => {
+    setActionPending(false);
+    setActionError(error?.message);
+  }, []);
+
   const dismissAllForPuzzle = useCallback(() => {
-    dismissAllDingsForPuzzle.call({
-      hunt: cn.hunt,
-      puzzle: cn.puzzle,
-      dismissUntil: newestSeen(),
-    });
-  }, [cn.hunt, cn.puzzle, newestSeen]);
+    startAction();
+    dismissChatNotificationsForPuzzle.call(
+      {
+        hunt: cn.hunt,
+        puzzle: cn.puzzle,
+        dismissUntil: newestSeen(),
+      },
+      finishAction,
+    );
+  }, [cn.hunt, cn.puzzle, newestSeen, startAction, finishAction]);
 
   const muteForPuzzle = useCallback(
     (dingword?: string) => {
-      suppressDingwordsForPuzzle.call({
-        hunt: cn.hunt,
-        puzzle: cn.puzzle,
-        // A present-but-undefined key fails the server's check()
-        ...(dingword === undefined ? {} : { dingword }),
-        dismissUntil: newestSeen(),
-      });
+      startAction();
+      suppressDingwordsForPuzzle.call(
+        {
+          hunt: cn.hunt,
+          puzzle: cn.puzzle,
+          // A present-but-undefined key fails the server's check()
+          ...(dingword === undefined ? {} : { dingword }),
+          dismissUntil: newestSeen(),
+        },
+        finishAction,
+      );
     },
-    [cn.hunt, cn.puzzle, newestSeen],
+    [cn.hunt, cn.puzzle, newestSeen, startAction, finishAction],
   );
+  const muteAllForPuzzle = useCallback(() => {
+    muteForPuzzle();
+  }, [muteForPuzzle]);
 
   // A message on the whiteboard opens the board, at its comment if it's
   // part of one.
@@ -862,7 +944,7 @@ const ChatNotificationMessage = ({
           {calendarTimeFormat(cn.createdAt, t, i18n.language)}
         </StyledNotificationTimestamp>
         <ToastSettings id={`chat-settings-${id}`}>
-          <DropdownItem onClick={dismissAllForPuzzle}>
+          <DropdownItem disabled={actionPending} onClick={dismissAllForPuzzle}>
             {t(
               "notification.chat.dismissAllForPuzzle",
               "Dismiss all for this puzzle",
@@ -874,7 +956,7 @@ const ChatNotificationMessage = ({
           {!allMuted && (
             <>
               <Dropdown.Divider />
-              <DropdownItem onClick={() => muteForPuzzle()}>
+              <DropdownItem disabled={actionPending} onClick={muteAllForPuzzle}>
                 <Trans
                   i18nKey="notification.chat.muteAllForPuzzle"
                   t={t}
@@ -883,19 +965,19 @@ const ChatNotificationMessage = ({
                 />
               </DropdownItem>
               {muteableWords.map((word) => (
-                <DropdownItem key={word} onClick={() => muteForPuzzle(word)}>
-                  {t(
-                    "notification.chat.muteWordForPuzzle",
-                    "Mute “{{word}}” for this puzzle",
-                    { word, interpolation: { escapeValue: false } },
-                  )}
-                </DropdownItem>
+                <MuteDingwordItem
+                  key={word}
+                  word={word}
+                  disabled={actionPending}
+                  onMute={muteForPuzzle}
+                />
               ))}
             </>
           )}
         </ToastSettings>
       </Toast.Header>
       <CappedToastBody>
+        <ToastActionError error={actionError} />
         <div>
           <ChatMessage
             message={cn.content}
@@ -925,10 +1007,14 @@ const BookmarkNotificationMessage = ({
   );
 
   const puzzleId = puzzle._id;
+  const [unbookmarkError, setUnbookmarkError] = useState<string>();
   const unbookmark = useCallback(() => {
+    setUnbookmarkError(undefined);
     bookmarkPuzzle.call({ puzzleId, bookmark: false }, (error) => {
-      // The toast is about a bookmark that no longer exists
-      if (!error) {
+      if (error) {
+        setUnbookmarkError(error.message);
+      } else {
+        // The toast is about a bookmark that no longer exists
         dismiss();
       }
     });
@@ -971,6 +1057,7 @@ const BookmarkNotificationMessage = ({
         </ToastSettings>
       </Toast.Header>
       <CappedToastBody>
+        <ToastActionError error={unbookmarkError} />
         <div>
           <Trans
             i18nKey="notification.bookmark.message"
@@ -992,13 +1079,6 @@ const BookmarkNotificationMessage = ({
 
 // How long an ephemeral puzzle notification stays up before dismissing itself.
 const EPHEMERAL_LINGER_PERIOD = 5000;
-
-// Keep the body legible on the Bootstrap background variants, which are
-// light in both themes.
-const StyledPuzzleNotificationBody = styled(Toast.Body)`
-  ${cappedToastBody}
-  color: black;
-`;
 
 const PuzzleNotificationMessage = ({
   pn,
@@ -1023,7 +1103,7 @@ const PuzzleNotificationMessage = ({
   return (
     <Toast
       onClose={dismiss}
-      bg={pn.background}
+      className={`text-bg-${pn.background}`}
       delay={EPHEMERAL_LINGER_PERIOD}
       autohide={ephemeral}
     >
@@ -1050,7 +1130,7 @@ const PuzzleNotificationMessage = ({
           />
         )}
       </Toast.Header>
-      <StyledPuzzleNotificationBody>{pn.content}</StyledPuzzleNotificationBody>
+      <CappedToastBody>{pn.content}</CappedToastBody>
     </Toast>
   );
 };
@@ -1363,23 +1443,17 @@ const NotificationCenter = () => {
         : PuzzleNotifications.find({}, { sort: { createdAt: 1 } }).fetch(),
     [loading, disableDingwords],
   );
-  // A ding that mentions a puzzle needs that hunt's puzzles to render it; the
-  // notification publication only carries the puzzle the ding is about.
-  const huntsWithPuzzleMentions = useMemo(
-    () => [
-      ...new Set(
-        chatNotifications
-          .filter((cn) => cn.content.children.some(nodeIsPuzzle))
-          .map((cn) => cn.hunt),
-      ),
-    ],
-    [chatNotifications],
-  );
+  // Assigned roles only, on purpose: an @operator mention only notifies
+  // assigned operators (queryOperatorsForHunt), so the hunt's default roles
+  // don't highlight it either
   const rolesForChat = useTracker(() => {
     const hunts = new Set(chatNotifications.map((cn) => cn.hunt));
     const roles = new Map(
       [...hunts].map((huntId) => {
-        return [huntId, listAllRolesForHunt(Meteor.user(), { _id: huntId })];
+        return [
+          huntId,
+          listAssignedRolesForHunt(Meteor.user(), { _id: huntId }),
+        ];
       }),
     );
     return roles;
@@ -1558,15 +1632,14 @@ const NotificationCenter = () => {
   return (
     <>
       {cookieCheckFrames}
-      {huntsWithPuzzleMentions.map((huntId) => (
-        <HuntPuzzlesSubscription key={huntId} huntId={huntId} />
-      ))}
       <StyledToastContainer
         position="bottom-end"
         className="p-3 position-fixed"
       >
-        {/* Newest first, so the toasts to act on sit furthest from the ones
-            that pop up underneath them */}
+        {/* Reversed, so the kinds pushed last (puzzle, bookmark and chat
+            notifications) sit at the top of this bottom-anchored stack: new
+            toasts land above the guess and setup toasts rather than moving
+            them, and within each kind the newest comes first */}
         {messages.toReversed()}
       </StyledToastContainer>
     </>

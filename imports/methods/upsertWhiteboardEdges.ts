@@ -12,7 +12,7 @@ export type WhiteboardEdgeInput = {
   label?: string | null;
   pathStyle?: WhiteboardPathStyle;
   arrowHead?: WhiteboardArrowHead;
-  colour?: WhiteboardColor;
+  color?: WhiteboardColor;
   dashed?: boolean;
 };
 

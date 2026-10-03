@@ -14,7 +14,7 @@ import APIKeys from "../../lib/models/APIKeys";
 import BlobMappings from "../../lib/models/BlobMappings";
 import BookmarkNotifications from "../../lib/models/BookmarkNotifications";
 import Bookmarks from "../../lib/models/Bookmarks";
-import CachedDocuments from "../../lib/models/CachedDocuments";
+import CallActivities from "../../lib/models/CallActivities";
 import ChatMessages from "../../lib/models/ChatMessages";
 import ChatNotifications from "../../lib/models/ChatNotifications";
 import DiscordCache from "../../lib/models/DiscordCache";
@@ -45,7 +45,7 @@ import TransportRequests from "../../lib/models/mediasoup/TransportRequests";
 import TransportStates from "../../lib/models/mediasoup/TransportStates";
 import Transports from "../../lib/models/mediasoup/Transports";
 import PendingAnnouncements from "../../lib/models/PendingAnnouncements";
-import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
+import PuzzleInterests from "../../lib/models/PuzzleInterests";
 import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import Puzzles from "../../lib/models/Puzzles";
 import Servers from "../../lib/models/Servers";
@@ -60,7 +60,7 @@ import { AllModels } from "../../lib/typedModel/Model";
 import { purgeDocumentCache } from "../documentCache";
 import { deleteDocument } from "../gdrive";
 import Blobs from "../models/Blobs";
-import CallActivities from "../models/CallActivities";
+import CachedDocuments from "../models/CachedDocuments";
 import DriveActivityLatests from "../models/DriveActivityLatests";
 import HuntFolders from "../models/HuntFolders";
 import LatestDeploymentTimestamps from "../models/LatestDeploymentTimestamps";
@@ -78,7 +78,7 @@ const COLLECTIONS_TO_PURGE = [
   // Other than that, try to mostly maintain referential integrity
   ChatNotifications,
   PuzzleNotifications,
-  PuzzleFeedbacks,
+  PuzzleInterests,
   ChatMessages,
   Peers,
   Rooms,
@@ -292,7 +292,7 @@ defineJob(purgeHunt, {
       });
     }
 
-    // Delete the hunt's cached placeholder documents from the Google Drive.
+    // Delete the hunt's cached documents from the Google Drive.
     // This goes last so that a refill can't slip in between the files being
     // deleted and the rows being removed; the rows go here either way.
     if (await Flags.activeAsync("disable.google")) {

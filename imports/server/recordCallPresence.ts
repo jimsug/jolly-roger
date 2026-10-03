@@ -1,7 +1,7 @@
 import { ACTIVITY_GRANULARITY } from "../lib/config/activityTracking";
+import CallActivities from "../lib/models/CallActivities";
 import roundedTime from "../lib/roundedTime";
 import ignoringDuplicateKeyErrors from "./ignoringDuplicateKeyErrors";
-import CallActivities from "./models/CallActivities";
 import recordPuzzleStatus, { refreshPuzzleStatus } from "./recordPuzzleStatus";
 
 // We insert-and-ignore-duplicates rather than upsert so we never clobber a

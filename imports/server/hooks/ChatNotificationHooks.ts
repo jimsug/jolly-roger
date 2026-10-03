@@ -1,7 +1,7 @@
 import Flags from "../../Flags";
 import {
+  dingwordsMatchingMessage,
   normalizedForDingwordSearch,
-  normalizedMessageDingsUserByDingword,
   SUPPRESS_ALL_DINGWORDS,
 } from "../../lib/dingwordLogic";
 import isReaction from "../../lib/isReaction";
@@ -9,6 +9,7 @@ import ChatMessages from "../../lib/models/ChatMessages";
 import ChatNotifications from "../../lib/models/ChatNotifications";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import nodeIsMention from "../../lib/nodeIsMention";
+import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import { queryOperatorsForHunt } from "../../lib/permission_stubs";
 import Subscribers from "../models/Subscribers";
@@ -150,7 +151,8 @@ const ChatNotificationHooks: Hookset = {
             _id: 1,
             dingwords: 1,
             dingwordsOpenMatch: 1,
-            suppressedDingwords: 1,
+            // Only this puzzle's mutes (Random ids have no dots to split on)
+            [`suppressedDingwords.${chatMessage.hunt}.${chatMessage.puzzle}`]: 1,
           },
         },
       )) {
@@ -165,10 +167,9 @@ const ChatNotificationHooks: Hookset = {
         if (suppressed.includes(SUPPRESS_ALL_DINGWORDS)) {
           continue;
         }
-        const matches = normalizedMessageDingsUserByDingword(
-          normalizedText,
-          u,
-        ).filter((word) => !suppressed.includes(word));
+        const matches = dingwordsMatchingMessage(normalizedText, u).filter(
+          (word) => !suppressed.includes(word),
+        );
         if (matches.length > 0) {
           notifyDingwords(u._id, matches);
         }
@@ -178,6 +179,13 @@ const ChatNotificationHooks: Hookset = {
     // Create notifications for each user who should be dinged by this message.
     const thread =
       chatMessage.thread ?? (chatMessage.comment ? chatMessage._id : undefined);
+    const mentionedPuzzles = [
+      ...new Set(
+        chatMessage.content.children
+          .filter(nodeIsPuzzle)
+          .map((child) => child.puzzleId),
+      ),
+    ];
     await Promise.all(
       [...usersToNotify].map(async ([userId, { mentioned, dingwords }]) => {
         await ChatNotifications.insertAsync({
@@ -194,6 +202,8 @@ const ChatNotificationHooks: Hookset = {
           mentioned,
           // The comment thread the message is in, or starts
           ...(thread ? { thread } : {}),
+          // So the publication can send the linked puzzles' titles along
+          ...(mentionedPuzzles.length > 0 ? { mentionedPuzzles } : {}),
         });
       }),
     );

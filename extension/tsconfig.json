@@ -2,13 +2,15 @@
   "compilerOptions": {
     "strict": true,
     "target": "es6",
+    "lib": ["es2022", "dom", "dom.iterable"],
     "moduleResolution": "bundler",
     "module": "ES6",
     "esModuleInterop": true,
     "sourceMap": false,
     "rootDir": "src",
     "noEmitOnError": true,
-    "jsx": "react",
-    "typeRoots": ["node_modules/@types"]
+    "jsx": "react-jsx",
+    "typeRoots": ["node_modules/@types"],
+    "types": ["chrome", "node"]
   }
 }

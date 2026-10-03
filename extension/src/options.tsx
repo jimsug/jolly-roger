@@ -24,15 +24,15 @@ const Options = () => {
     })();
   }, []);
 
-  const saveOptions: React.FormEventHandler = useCallback(
-    (e: React.FormEvent) => {
+  const saveOptions: React.SubmitEventHandler<HTMLFormElement> = useCallback(
+    (e: React.SubmitEvent<HTMLFormElement>) => {
       e.preventDefault();
       setStatus("");
       setSaving(true);
       let hostUrl: URL;
       try {
         hostUrl = new URL(jollyRogerInstance);
-      } catch (error) {
+      } catch {
         setStatus("Invalid instance URL.");
         setSaving(false);
         return;
@@ -118,7 +118,7 @@ const Options = () => {
   );
 };
 
-const root = createRoot(document.getElementById("root")!);
+const root = createRoot(document.querySelector("#root")!);
 
 root.render(
   <React.StrictMode>

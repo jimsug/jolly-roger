@@ -1,7 +1,6 @@
 import Announcements from "./Announcements";
 import BlobMappings from "./BlobMappings";
 import Bookmarks from "./Bookmarks";
-import CachedDocuments from "./CachedDocuments";
 import ChatMessages from "./ChatMessages";
 import ChatNotifications from "./ChatNotifications";
 import DiscordCache from "./DiscordCache";
@@ -28,7 +27,7 @@ import TransportRequests from "./mediasoup/TransportRequests";
 import TransportStates from "./mediasoup/TransportStates";
 import Transports from "./mediasoup/Transports";
 import PendingAnnouncements from "./PendingAnnouncements";
-import PuzzleFeedbacks from "./PuzzleFeedbacks";
+import PuzzleInterests from "./PuzzleInterests";
 import PuzzleNotifications from "./PuzzleNotifications";
 import Puzzles from "./Puzzles";
 import Servers from "./Servers";
@@ -40,7 +39,6 @@ const Models = {
   Announcements,
   BlobMappings,
   Bookmarks,
-  CachedDocuments,
   ChatMessages,
   ChatNotifications,
   DiscordCache,
@@ -69,7 +67,7 @@ const Models = {
     TransportStates,
   },
   PendingAnnouncements,
-  PuzzleFeedbacks,
+  PuzzleInterests,
   PuzzleNotifications,
   Puzzles,
   Servers,

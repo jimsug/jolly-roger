@@ -1,7 +1,6 @@
 import { check, Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
-import Flags from "../Flags";
 import Logger from "../Logger";
 import type { GdriveMimeTypesType } from "../lib/GdriveMimeTypes";
 import GdriveMimeTypes from "../lib/GdriveMimeTypes";
@@ -10,9 +9,12 @@ import MeteorUsers from "../lib/models/MeteorUsers";
 import Puzzles from "../lib/models/Puzzles";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import GlobalHooks from "./GlobalHooks";
-import { deleteUnusedDocument, ensureDocument } from "./gdrive";
+import {
+  deleteUnusedDocument,
+  ensureDocument,
+  isGoogleAvailable,
+} from "./gdrive";
 import getOrCreateTagByName from "./getOrCreateTagByName";
-import GoogleClient from "./googleClientRefresher";
 import { deferSyncPuzzlesOnBoard } from "./whiteboard";
 import withLock from "./withLock";
 
@@ -59,7 +61,7 @@ async function createDocumentAndInsertPuzzle(
   // else has a chance to create a document with the wrong config. (This
   // requires us to have an _id for the puzzle, which is why we generate it
   // manually above instead of letting Meteor do it)
-  if (GoogleClient.ready() && !(await Flags.activeAsync("disable.google"))) {
+  if (await isGoogleAvailable()) {
     await ensureDocument(fullPuzzle, docType);
   }
 
@@ -119,6 +121,9 @@ export default async function addPuzzle({
   check(completedWithNoAnswer, Match.Optional(Boolean));
   check(locked, Match.Optional(Boolean));
   check(lockedSummary, Match.Optional(String));
+  if (title === "") {
+    throw new Meteor.Error(400, "Puzzle title is required");
+  }
 
   const hunt = await Hunts.findOneAsync(huntId);
   if (!hunt) {

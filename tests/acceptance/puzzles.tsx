@@ -2,16 +2,16 @@ import { promisify } from "node:util";
 import { Meteor } from "meteor/meteor";
 import { assert } from "chai";
 import type { EditableHuntType } from "../../imports/lib/models/Hunts";
-import PuzzleFeedbacks from "../../imports/lib/models/PuzzleFeedbacks";
+import PuzzleInterests from "../../imports/lib/models/PuzzleInterests";
 import Puzzles from "../../imports/lib/models/Puzzles";
-import puzzleFeedbacksForHunt from "../../imports/lib/publications/puzzleFeedbacksForHunt";
+import puzzleInterestsForHunt from "../../imports/lib/publications/puzzleInterestsForHunt";
 import puzzlesForPuzzleList from "../../imports/lib/publications/puzzlesForPuzzleList";
 import { computeSolvedness } from "../../imports/lib/solvedness";
 import addHuntUser from "../../imports/methods/addHuntUser";
 import createHunt from "../../imports/methods/createHunt";
 import createPuzzle from "../../imports/methods/createPuzzle";
-import providePuzzleFeedback from "../../imports/methods/providePuzzleFeedback";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
+import registerPuzzleInterest from "../../imports/methods/registerPuzzleInterest";
 import unlockPuzzle from "../../imports/methods/unlockPuzzle";
 import updatePuzzle from "../../imports/methods/updatePuzzle";
 import withdrawPuzzleInterest from "../../imports/methods/withdrawPuzzleInterest";
@@ -50,26 +50,35 @@ if (Meteor.isClient) {
     await login(USER_EMAIL, USER_PASSWORD);
     const huntId = await createHunt.callPromise({
       ...huntFields,
-      initialTags: "",
+      initialTags: [],
     });
     await addHuntUser.callPromise({ huntId, email: USER_EMAIL });
     return huntId;
+  };
+
+  // Stopped after each test (or before it switches users), so a failed
+  // assertion can't leave a subscription running into the next test
+  const subscriptionStops: (() => void)[] = [];
+  const stopSubscriptions = () => {
+    for (const stop of subscriptionStops.splice(0)) {
+      stop();
+    }
   };
 
   const subscribeToHunt = async (huntId: string) => {
     const puzzleSub = await typedSubscribe.async(puzzlesForPuzzleList, {
       huntId,
     });
-    const feedbackSub = await typedSubscribe.async(puzzleFeedbacksForHunt, {
+    subscriptionStops.push(() => puzzleSub.stop());
+    const interestSub = await typedSubscribe.async(puzzleInterestsForHunt, {
       huntId,
     });
-    return () => {
-      puzzleSub.stop();
-      feedbackSub.stop();
-    };
+    subscriptionStops.push(() => interestSub.stop());
   };
 
   describe("puzzles", function () {
+    afterEach(stopSubscriptions);
+
     describe("locked puzzles", function () {
       it("take interest votes until an operator unlocks them", async function () {
         this.timeout(10000);
@@ -90,7 +99,7 @@ if (Meteor.isClient) {
           displayName: "Hunter",
         });
         await addHuntUser.callPromise({ huntId, email: HUNTER_EMAIL });
-        await providePuzzleFeedback.callPromise({
+        await registerPuzzleInterest.callPromise({
           puzzleId,
           score: 1,
           comment: "Looks fun",
@@ -98,61 +107,61 @@ if (Meteor.isClient) {
 
         await promisify(Meteor.logout)();
         await login(HUNTER_EMAIL, HUNTER_PASSWORD);
-        let stop = await subscribeToHunt(huntId);
+        await subscribeToHunt(huntId);
         const puzzle = await Puzzles.findOneAsync(puzzleId);
         assert.isTrue(puzzle?.locked);
         assert.equal(puzzle?.lockedSummary, "Behind a door");
 
-        await providePuzzleFeedback.callPromise({
+        await registerPuzzleInterest.callPromise({
           puzzleId,
           score: 1,
           comment: " Ornithology ",
         });
         // Voting again updates the vote in place; a blank comment clears it
-        await providePuzzleFeedback.callPromise({
+        await registerPuzzleInterest.callPromise({
           puzzleId,
           score: 1,
           comment: "",
         });
-        const ownVotes = await PuzzleFeedbacks.find({
+        const ownVotes = await PuzzleInterests.find({
           puzzle: puzzleId,
         }).fetchAsync();
         assert.lengthOf(ownVotes, 1, "Members only see their own vote");
         assert.equal(ownVotes[0]!.createdBy, hunterId);
         assert.notProperty(ownVotes[0]!, "comment");
-        await providePuzzleFeedback.callPromise({
+        await registerPuzzleInterest.callPromise({
           puzzleId,
           score: 1,
           comment: "Birds",
         });
         assert.equal(
-          (await PuzzleFeedbacks.findOneAsync({ puzzle: puzzleId }))?.comment,
+          (await PuzzleInterests.findOneAsync({ puzzle: puzzleId }))?.comment,
           "Birds",
         );
         // Votes can't be weighted: the count operators see is a sum of scores
         await assert.isRejected(
-          providePuzzleFeedback.callPromise({ puzzleId, score: 0 }),
+          registerPuzzleInterest.callPromise({ puzzleId, score: 0 }),
           /score of 1/,
         );
         await assert.isRejected(
-          providePuzzleFeedback.callPromise({ puzzleId, score: 2 }),
+          registerPuzzleInterest.callPromise({ puzzleId, score: 2 }),
           /score of 1/,
         );
         assert.equal(
-          (await PuzzleFeedbacks.findOneAsync({ puzzle: puzzleId }))?.score,
+          (await PuzzleInterests.findOneAsync({ puzzle: puzzleId }))?.score,
           1,
         );
         await assert.isRejected(
           unlockPuzzle.callPromise({ puzzleId }),
           /may not unlock/,
         );
-        stop();
+        stopSubscriptions();
 
         await promisify(Meteor.logout)();
         await login(USER_EMAIL, USER_PASSWORD);
-        stop = await subscribeToHunt(huntId);
+        await subscribeToHunt(huntId);
         assert.sameMembers(
-          (await PuzzleFeedbacks.find({ puzzle: puzzleId }).fetchAsync()).map(
+          (await PuzzleInterests.find({ puzzle: puzzleId }).fetchAsync()).map(
             (vote) => vote.createdBy,
           ),
           [adminId, hunterId],
@@ -168,19 +177,18 @@ if (Meteor.isClient) {
         assert.notProperty(unlocked ?? {}, "lockedSummary");
         assert.equal(unlocked?.url, "https://example.com/unlocked");
         await assert.isRejected(
-          providePuzzleFeedback.callPromise({ puzzleId, score: 1 }),
+          registerPuzzleInterest.callPromise({ puzzleId, score: 1 }),
           /not locked/,
         );
 
         // Stale votes can still be withdrawn, one's own only
         await withdrawPuzzleInterest.callPromise({ puzzleId });
         assert.sameMembers(
-          (await PuzzleFeedbacks.find({ puzzle: puzzleId }).fetchAsync()).map(
+          (await PuzzleInterests.find({ puzzle: puzzleId }).fetchAsync()).map(
             (vote) => vote.createdBy,
           ),
           [hunterId],
         );
-        stop();
       });
 
       it("can be locked and unlocked from the edit form where the hunt allows it", async function () {
@@ -195,7 +203,7 @@ if (Meteor.isClient) {
           locked: true,
           lockedSummary: "Behind a door",
         });
-        const stop = await subscribeToHunt(huntId);
+        await subscribeToHunt(huntId);
 
         await updatePuzzle.callPromise({
           puzzleId,
@@ -219,12 +227,11 @@ if (Meteor.isClient) {
         const relocked = await Puzzles.findOneAsync(puzzleId);
         assert.isTrue(relocked?.locked);
         assert.equal(relocked?.lockedSummary, "Behind another door");
-        stop();
 
         const plainHuntId = await createHunt.callPromise({
           ...huntFields,
           allowUnlockablePuzzles: false,
-          initialTags: "",
+          initialTags: [],
         });
         await assert.isRejected(
           createPuzzle.callPromise({
@@ -250,7 +257,7 @@ if (Meteor.isClient) {
           expectedAnswerCount: -1,
           docType: "spreadsheet",
         });
-        const stop = await subscribeToHunt(huntId);
+        await subscribeToHunt(huntId);
         const puzzle = await Puzzles.findOneAsync(puzzleId);
         assert.isDefined(puzzle);
         assert.equal(puzzle.expectedAnswerCount, -1);
@@ -266,7 +273,36 @@ if (Meteor.isClient) {
           }),
         );
         assert.equal(await Puzzles.find({ hunt: huntId }).countAsync(), 1);
-        stop();
+      });
+    });
+
+    describe("updatePuzzle", function () {
+      it("clears the URL when completedWithNoAnswer is left unset too", async function () {
+        const huntId = await setUpHunt("puzzles update clears url");
+        const puzzleId = await createPuzzle.callPromise({
+          huntId,
+          title: "Linked",
+          url: "https://example.com/linked",
+          tags: [],
+          expectedAnswerCount: 1,
+          docType: "spreadsheet",
+        });
+        await subscribeToHunt(huntId);
+        assert.equal(
+          (await Puzzles.findOneAsync(puzzleId))?.url,
+          "https://example.com/linked",
+        );
+
+        await updatePuzzle.callPromise({
+          puzzleId,
+          title: "Linked",
+          tags: [],
+          expectedAnswerCount: 1,
+        });
+        const updated = await Puzzles.findOneAsync(puzzleId);
+        assert.isDefined(updated);
+        assert.notProperty(updated, "url");
+        assert.notProperty(updated, "completedWithNoAnswer");
       });
     });
   });

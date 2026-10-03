@@ -1,12 +1,16 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
+import { Random } from "meteor/random";
 import { assert } from "chai";
+import { GaxiosError } from "gaxios";
 import sinon from "sinon";
+import type { GdriveMimeTypesType } from "../../../../imports/lib/GdriveMimeTypes";
+import { GLOBAL_SCOPE } from "../../../../imports/lib/isAdmin";
 import purgeHuntJob from "../../../../imports/lib/jobs/purgeHunt";
-import CachedDocuments from "../../../../imports/lib/models/CachedDocuments";
+import purgeHuntDocumentCacheJob from "../../../../imports/lib/jobs/purgeHuntDocumentCache";
 import Documents from "../../../../imports/lib/models/Documents";
 import FeatureFlags from "../../../../imports/lib/models/FeatureFlags";
 import Hunts from "../../../../imports/lib/models/Hunts";
+import Jobs from "../../../../imports/lib/models/Jobs";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
 import { addUserToRole } from "../../../../imports/lib/permission_stubs";
@@ -22,7 +26,13 @@ import {
   replenishDocumentCache,
   waitForDocumentCacheIdle,
 } from "../../../../imports/server/documentCache";
-import { ensureHuntFolder } from "../../../../imports/server/gdrive";
+import {
+  ensureDocument,
+  ensureHuntFolder,
+} from "../../../../imports/server/gdrive";
+import CachedDocuments from "../../../../imports/server/models/CachedDocuments";
+import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import installFakeGoogleClient from "../../../lib/fakeGoogleClient";
 import resetDatabase from "../../../lib/resetDatabase";
 import runJob from "../../../lib/runJob";
@@ -31,7 +41,21 @@ import waitForAssertion from "../../../lib/waitForAssertion";
 const SHEET_MIME = "application/vnd.google-apps.spreadsheet";
 const DOC_MIME = "application/vnd.google-apps.document";
 
-type CachedType = keyof typeof DOCUMENT_CACHE_TARGETS;
+const SHEET_TARGET = DOCUMENT_CACHE_TARGETS.get("spreadsheet")!;
+const DOC_TARGET = DOCUMENT_CACHE_TARGETS.get("document")!;
+
+// What Drive's API client rejects with for a file that doesn't exist
+function notFoundError(fileId: string) {
+  const config = {
+    url: new URL(`https://www.googleapis.com/drive/v3/files/${fileId}`),
+    headers: new Headers(),
+  };
+  const response = Object.assign(new Response(null, { status: 404 }), {
+    config,
+    data: undefined,
+  });
+  return new GaxiosError("File not found", config, response);
+}
 
 describe("document cache", function () {
   this.timeout(30000);
@@ -39,15 +63,12 @@ describe("document cache", function () {
   let huntId: string;
   let folderId: string;
   let adminId: string;
-  let memberId: string;
   let fake: ReturnType<typeof installFakeGoogleClient>;
   const savedDelays = { ...documentCacheSettings };
 
-  const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-    DDP._CurrentMethodInvocation.withValue({ userId }, fn);
   const asAdmin = <T>(fn: () => Promise<T>) => asUser(adminId, fn);
 
-  const availableCount = (type: CachedType) =>
+  const availableCount = (type: GdriveMimeTypesType) =>
     CachedDocuments.find({
       hunt: huntId,
       status: "available",
@@ -55,7 +76,7 @@ describe("document cache", function () {
     }).countAsync();
 
   const insertCached = (
-    type: CachedType,
+    type: GdriveMimeTypesType,
     id: string,
     {
       createdAt = new Date(),
@@ -67,23 +88,11 @@ describe("document cache", function () {
       status,
       provider: "google",
       value: { type, id, folder: folderId },
-      createdBy: adminId,
       createdAt,
     });
 
   const insertHunt = (name: string, isArchived = false) =>
-    asAdmin(() =>
-      Hunts.insertAsync({
-        name,
-        mailingLists: [],
-        openSignups: false,
-        hasGuessQueue: true,
-        defaultRoles: [],
-        allowUnlockablePuzzles: false,
-        isArchived,
-        customLinkEmbed: false,
-      }),
-    );
+    createTestHunt(adminId, { name, isArchived });
 
   const insertPuzzle = (hunt: string, createdAt = new Date()) =>
     asAdmin(() =>
@@ -98,12 +107,21 @@ describe("document cache", function () {
       }),
     );
 
+  const setFlag = (name: "disable.google" | "disable.gdrive_document_cache") =>
+    FeatureFlags.upsertAsync(
+      { name },
+      { $set: { type: "on", createdBy: adminId } },
+    );
+
   const createdFiles = (mimeType: string) =>
     fake.drive.files.create
       .getCalls()
       .filter((call) => call.args[0].requestBody.mimeType === mimeType);
 
-  const createPuzzle = (title: string, docType: CachedType = "spreadsheet") =>
+  const createPuzzle = (
+    title: string,
+    docType: GdriveMimeTypesType = "spreadsheet",
+  ) =>
     asAdmin(() =>
       addPuzzle({
         huntId,
@@ -118,14 +136,8 @@ describe("document cache", function () {
   // so waits for that to land so it can't spill into the next test.
   const awaitRefill = () =>
     waitForAssertion(async () => {
-      assert.equal(
-        await availableCount("spreadsheet"),
-        DOCUMENT_CACHE_TARGETS.spreadsheet,
-      );
-      assert.equal(
-        await availableCount("document"),
-        DOCUMENT_CACHE_TARGETS.document,
-      );
+      assert.equal(await availableCount("spreadsheet"), SHEET_TARGET);
+      assert.equal(await availableCount("document"), DOC_TARGET);
     }, 5000);
 
   this.beforeAll(async function () {
@@ -134,17 +146,9 @@ describe("document cache", function () {
       email: "admin@example.com",
       password: "password",
     });
-    await addUserToRole(adminId, "__GLOBAL__", "admin");
-    memberId = await Accounts.createUserAsync({
-      email: "member@example.com",
-      password: "password",
-    });
+    await addUserToRole(adminId, GLOBAL_SCOPE, "admin");
     huntId = await insertHunt("Cached hunt");
-    await MeteorUsers.updateAsync(
-      { _id: { $in: [adminId, memberId] } },
-      { $set: { hunts: [huntId] } },
-      { multi: true },
-    );
+    await MeteorUsers.updateAsync(adminId, { $set: { hunts: [huntId] } });
 
     documentCacheSettings.creationDelayMs = 0;
     documentCacheSettings.deletionDelayMs = 0;
@@ -164,36 +168,37 @@ describe("document cache", function () {
     await Documents.removeAsync({});
     await Puzzles.removeAsync({});
     await FeatureFlags.removeAsync({});
+    await Jobs.removeAsync({});
     await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
     // Fresh stubs for each test
     fake.uninstall();
     fake = installFakeGoogleClient();
   });
 
-  it("fills an empty cache to its targets with placeholders in the hunt folder", async function () {
+  it("names cached documents so they stand out in Drive", function () {
+    assert.equal(
+      cachedDocumentName("spreadsheet"),
+      "[CACHED] SPREADSHEET - DO NOT DELETE",
+    );
+    assert.equal(
+      cachedDocumentName("document"),
+      "[CACHED] DOCUMENT - DO NOT DELETE",
+    );
+  });
+
+  it("fills an empty cache to its targets with cached documents in the hunt folder", async function () {
     await replenishDocumentCache(huntId);
 
-    assert.equal(
-      await availableCount("spreadsheet"),
-      DOCUMENT_CACHE_TARGETS.spreadsheet,
-    );
-    assert.equal(
-      await availableCount("document"),
-      DOCUMENT_CACHE_TARGETS.document,
-    );
+    assert.equal(await availableCount("spreadsheet"), SHEET_TARGET);
+    assert.equal(await availableCount("document"), DOC_TARGET);
     for (const cached of await CachedDocuments.find({
       hunt: huntId,
     }).fetchAsync()) {
-      assert.equal(
-        cached.createdBy,
-        adminId,
-        "the oldest admin is the creator",
-      );
       assert.equal(cached.value.folder, folderId);
     }
 
     const sheets = createdFiles(SHEET_MIME);
-    assert.lengthOf(sheets, DOCUMENT_CACHE_TARGETS.spreadsheet);
+    assert.lengthOf(sheets, SHEET_TARGET);
     assert.isTrue(
       sheets.every(
         (call) =>
@@ -201,21 +206,21 @@ describe("document cache", function () {
       ),
     );
     const docs = createdFiles(DOC_MIME);
-    assert.lengthOf(docs, DOCUMENT_CACHE_TARGETS.document);
+    assert.lengthOf(docs, DOC_TARGET);
     assert.equal(
       docs[0]!.args[0].requestBody.name,
       cachedDocumentName("document"),
     );
-    // Placeholders are set up like any other document
+    // Cached documents are set up like any other document
     assert.equal(
       fake.sheets.spreadsheets.batchUpdate.callCount,
-      DOCUMENT_CACHE_TARGETS.spreadsheet,
+      SHEET_TARGET,
       "external URL access is enabled on each sheet",
     );
     assert.equal(
       fake.drive.permissions.create.callCount,
-      DOCUMENT_CACHE_TARGETS.spreadsheet + DOCUMENT_CACHE_TARGETS.document,
-      "each placeholder is shared",
+      SHEET_TARGET + DOC_TARGET,
+      "each cached document is shared",
     );
 
     // A full cache is left alone
@@ -251,10 +256,7 @@ describe("document cache", function () {
     assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 0);
     await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
 
-    await FeatureFlags.upsertAsync(
-      { name: "disable.google" },
-      { $set: { type: "on", createdBy: adminId } },
-    );
+    await setFlag("disable.google");
     await replenishDocumentCache(huntId);
     assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 0);
     await FeatureFlags.removeAsync({});
@@ -264,6 +266,42 @@ describe("document cache", function () {
     assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 0);
     fake = installFakeGoogleClient();
     assert.equal(fake.drive.files.create.callCount, 0);
+  });
+
+  it("leaves the cache alone while disable.gdrive_document_cache is on, but still purges it", async function () {
+    await insertCached("spreadsheet", "sheet-kept");
+    // Recent puzzle activity, so the sweep would otherwise refill the hunt
+    await insertPuzzle(huntId);
+    await setFlag("disable.gdrive_document_cache");
+
+    await replenishDocumentCache(huntId);
+    await replenishAllDocumentCaches();
+    assert.equal(fake.drive.files.create.callCount, 0, "nothing is refilled");
+
+    const doc = await asAdmin(() =>
+      ensureDocument({
+        _id: Random.id(),
+        title: "Uncached puzzle",
+        hunt: huntId,
+      }),
+    );
+    assert.notEqual(doc.value.id, "sheet-kept");
+    assert.isTrue(
+      fake.drive.files.create.calledWithMatch({
+        requestBody: { name: "↔️ Uncached puzzle" },
+      }),
+      "the puzzle's file is created on the spot",
+    );
+    assert.isDefined(
+      await CachedDocuments.findOneAsync({ "value.id": "sheet-kept" }),
+      "the cached document isn't claimed",
+    );
+
+    await runJob(purgeHuntDocumentCacheJob, { huntId }, { userId: adminId });
+    assert.isTrue(
+      fake.drive.files.delete.calledWithMatch({ fileId: "sheet-kept" }),
+    );
+    assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 0);
   });
 
   it("claims the oldest cached file for a new puzzle, renames it and refills", async function () {
@@ -352,14 +390,32 @@ describe("document cache", function () {
     await awaitRefill();
   });
 
+  it("refuses an empty title before claiming or creating a document", async function () {
+    await insertCached("spreadsheet", "sheet-unused");
+
+    await assert.isRejected(createPuzzle(""), /Puzzle title is required/);
+    assert.equal(fake.drive.files.create.callCount, 0);
+    assert.equal(
+      fake.drive.files.update.callCount,
+      0,
+      "nothing is claimed and renamed",
+    );
+    assert.isDefined(
+      await CachedDocuments.findOneAsync({ "value.id": "sheet-unused" }),
+    );
+  });
+
   it("deletes the document again when the puzzle fails to save", async function () {
     await insertCached("spreadsheet", "sheet-doomed");
 
-    await assert.isRejected(
-      createPuzzle(""),
-      /Document failed validation/,
-      "an empty title fails the schema",
-    );
+    const insert = sinon
+      .stub(Puzzles, "insertAsync")
+      .rejects(new Error("Insert failed"));
+    try {
+      await assert.isRejected(createPuzzle("Doomed puzzle"), /Insert failed/);
+    } finally {
+      insert.restore();
+    }
     assert.isTrue(
       fake.drive.files.delete.calledWithMatch({ fileId: "sheet-doomed" }),
     );
@@ -368,7 +424,7 @@ describe("document cache", function () {
     assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 0);
   });
 
-  it("deletes a placeholder whose setup fails rather than stranding it", async function () {
+  it("deletes a cached document whose setup fails rather than stranding it", async function () {
     fake.sheets.spreadsheets.batchUpdate.rejects(
       new Error("Request had insufficient authentication scopes"),
     );
@@ -385,7 +441,7 @@ describe("document cache", function () {
     );
     assert.equal(
       await availableCount("document"),
-      DOCUMENT_CACHE_TARGETS.document,
+      DOC_TARGET,
       "the other type is unaffected",
     );
   });
@@ -416,10 +472,7 @@ describe("document cache", function () {
     try {
       await replenishAllDocumentCaches();
 
-      assert.equal(
-        await availableCount("spreadsheet"),
-        DOCUMENT_CACHE_TARGETS.spreadsheet,
-      );
+      assert.equal(await availableCount("spreadsheet"), SHEET_TARGET);
       assert.equal(
         await CachedDocuments.find({ hunt: emptyHuntId }).countAsync(),
         0,
@@ -448,13 +501,13 @@ describe("document cache", function () {
     }
   });
 
-  it("creates a fresh file when the claimed placeholder is gone from Drive", async function () {
+  it("creates a fresh file when the claimed cached document is gone from Drive", async function () {
     await insertCached("spreadsheet", "sheet-gone");
     fake.drive.files.update
       .withArgs(sinon.match({ fileId: "sheet-gone" }))
-      .rejects(Object.assign(new Error("File not found"), { status: 404 }));
+      .rejects(notFoundError("sheet-gone"));
 
-    const puzzleId = await createPuzzle("Lost placeholder");
+    const puzzleId = await createPuzzle("Lost cached document");
 
     const doc = await Documents.findOneAsync({ puzzle: puzzleId });
     assert.isDefined(doc);
@@ -462,11 +515,13 @@ describe("document cache", function () {
     assert.isTrue(
       fake.drive.files.create
         .getCalls()
-        .some((call) => call.args[0].requestBody.name === "↔️ Lost placeholder"),
+        .some(
+          (call) => call.args[0].requestBody.name === "↔️ Lost cached document",
+        ),
     );
     assert.isUndefined(
       await CachedDocuments.findOneAsync({ "value.id": "sheet-gone" }),
-      "the dead placeholder is flushed from the cache",
+      "the dead cached document is flushed from the cache",
     );
 
     await awaitRefill();
@@ -495,10 +550,7 @@ describe("document cache", function () {
 
   it("purging a hunt with Google disabled still drops the cache rows", async function () {
     await insertCached("spreadsheet", "sheet-a");
-    await FeatureFlags.upsertAsync(
-      { name: "disable.google" },
-      { $set: { type: "on", createdBy: adminId } },
-    );
+    await setFlag("disable.google");
 
     await runJob(purgeHuntJob, { huntId }, { userId: adminId });
 
@@ -506,27 +558,49 @@ describe("document cache", function () {
     assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 0);
   });
 
-  it("lets admins, and only admins, purge the cache by hand", async function () {
+  it("lets admins purge the cache by hand, through a job", async function () {
     await insertCached("spreadsheet", "sheet-a");
 
-    await assert.isRejected(
-      asUser(memberId, () => purgeHuntDocumentCache.callPromise({ huntId })),
-      /Must be admin/,
-    );
-    assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 1);
-    assert.equal(fake.drive.files.delete.callCount, 0);
-
     await asAdmin(() => purgeHuntDocumentCache.callPromise({ huntId }));
+    const job = await Jobs.findOneAsync({
+      type: purgeHuntDocumentCacheJob.name,
+    });
+    assert.isDefined(job);
+    assert.deepEqual(job.args, { huntId });
+    assert.equal(fake.drive.files.delete.callCount, 0, "the job does the work");
+
+    await runJob(
+      purgeHuntDocumentCacheJob,
+      { huntId },
+      { userId: adminId, jobId: job._id },
+    );
     assert.isTrue(
       fake.drive.files.delete.calledWithMatch({ fileId: "sheet-a" }),
     );
     assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 0);
+  });
 
+  it("tells admins why a purge can't be queued without Google", async function () {
+    await insertCached("spreadsheet", "sheet-a");
+
+    await setFlag("disable.google");
     await assert.isRejected(
-      asAdmin(() =>
-        purgeHuntDocumentCache.callPromise({ huntId: "nonexistent" }),
-      ),
-      /Unknown hunt/,
+      asAdmin(() => purgeHuntDocumentCache.callPromise({ huntId })),
+      /Google integration is disabled\./,
     );
+    await FeatureFlags.removeAsync({});
+
+    fake.uninstall();
+    try {
+      await assert.isRejected(
+        asAdmin(() => purgeHuntDocumentCache.callPromise({ huntId })),
+        /Google Drive client is not configured\./,
+      );
+    } finally {
+      fake = installFakeGoogleClient();
+    }
+
+    assert.equal(await Jobs.find({}).countAsync(), 0);
+    assert.equal(await CachedDocuments.find({ hunt: huntId }).countAsync(), 1);
   });
 });

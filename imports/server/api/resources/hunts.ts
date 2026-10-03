@@ -17,27 +17,37 @@ import expressAsyncWrapper from "../../expressAsyncWrapper";
 const hunts = express.Router();
 hunts.use(bodyParser.json());
 
-// Returns the hunt if it exists and the API key's user is a member of it;
-// otherwise answers the request itself and returns undefined.
-const huntForMember = async (huntId: string, res: express.Response) => {
+// Whether the API key's user is a member of the hunt; if not, answers the
+// request itself.
+const userIsHuntMember = async (huntId: string, res: express.Response) => {
   const userId = Meteor.userId();
   check(userId, String);
 
+  const user = await MeteorUsers.findOneAsync({ _id: userId });
+  if (!user) {
+    // Should never happen if the API key passed authentication.
+    res.sendStatus(500);
+    return false;
+  }
+
+  if (!user.hunts?.includes(huntId)) {
+    res.sendStatus(403);
+    return false;
+  }
+
+  return true;
+};
+
+// Returns the hunt if it exists and the API key's user is a member of it;
+// otherwise answers the request itself and returns undefined.
+const huntForMember = async (huntId: string, res: express.Response) => {
   const hunt = await Hunts.findOneAsync(huntId);
   if (!hunt) {
     res.sendStatus(404);
     return undefined;
   }
 
-  const user = await MeteorUsers.findOneAsync({ _id: userId });
-  if (!user) {
-    // Should never happen if the API key passed authentication.
-    res.sendStatus(500);
-    return undefined;
-  }
-
-  if (!user.hunts?.includes(huntId)) {
-    res.sendStatus(403);
+  if (!(await userIsHuntMember(huntId, res))) {
     return undefined;
   }
 
@@ -75,20 +85,9 @@ hunts.get(
 hunts.get(
   "/:huntId/tags",
   expressAsyncWrapper(async (req, res) => {
-    const userId = Meteor.userId();
-
-    check(userId, String);
     check(req.params.huntId, String);
 
-    const user = await MeteorUsers.findOneAsync({ _id: userId });
-    if (!user) {
-      // Should never happen if the API key passed authentication.
-      res.sendStatus(500);
-      return;
-    }
-
-    if (!user.hunts?.includes(req.params.huntId)) {
-      res.sendStatus(403);
+    if (!(await userIsHuntMember(req.params.huntId, res))) {
       return;
     }
 
@@ -117,7 +116,7 @@ hunts.get(
 
     const puzzles = await Puzzles.find(
       { hunt: hunt._id, url },
-      { projection: { hunt: 1, title: 1 } },
+      { projection: { hunt: 1 } },
     ).mapAsync((puzzle) => renderPuzzle(puzzle));
     res.json({
       puzzles,
@@ -203,7 +202,6 @@ const renderHunt = function renderHunt(hunt: HuntType) {
 const renderPuzzle = function renderPuzzle(puzzle: PuzzleType) {
   return {
     _id: puzzle._id,
-    title: puzzle.title,
     jollyRogerUrl: puzzlePageUrl(puzzle.hunt, puzzle._id),
   };
 };

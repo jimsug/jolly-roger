@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useCallback } from "react";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
 import { useTranslation } from "react-i18next";
@@ -12,22 +12,55 @@ import {
   WhiteboardPathStyles,
 } from "../../../lib/models/WhiteboardEdges";
 import type { WhiteboardColor } from "../../../lib/models/WhiteboardNodes";
+import type { LineStyle } from "../../../lib/whiteboard/lineStyle";
 import ColorPicker from "./ColorPicker";
-import { STROKE_COLORS } from "./colors";
-import { ArrowHeadIcon, DashedIcon, PathStyleIcon } from "./LineStyleIcon";
-
-export interface LineStyle {
-  pathStyle: WhiteboardPathStyle;
-  arrowHead: WhiteboardArrowHead;
-  colour: WhiteboardColor;
-  dashed: boolean;
-}
+import colors from "./colors";
+import LineStyleIcon from "./LineStyleIcon";
 
 export const DEFAULT_LINE_STYLE: LineStyle = {
   pathStyle: "curved",
   arrowHead: "end",
-  colour: "black",
+  color: "black",
   dashed: false,
+};
+
+// One choice among the styles, which sets that style when pressed.
+const StyleButton = ({
+  patch,
+  active,
+  title,
+  onChange,
+  children,
+}: {
+  patch: Partial<LineStyle>;
+  active: boolean;
+  title: string;
+  onChange: (patch: Partial<LineStyle>) => void;
+  children: React.ReactNode;
+}) => {
+  const onClick = useCallback(() => onChange(patch), [onChange, patch]);
+  return (
+    <Button
+      variant={active ? "primary" : "outline-secondary"}
+      title={title}
+      aria-label={title}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  );
+};
+
+const PATH_PATCHES: Record<WhiteboardPathStyle, Partial<LineStyle>> = {
+  curved: { pathStyle: "curved" },
+  straight: { pathStyle: "straight" },
+  elbow: { pathStyle: "elbow" },
+};
+const ARROW_PATCHES: Record<WhiteboardArrowHead, Partial<LineStyle>> = {
+  none: { arrowHead: "none" },
+  end: { arrowHead: "end" },
+  both: { arrowHead: "both" },
 };
 
 // Path, arrowheads, dashes and colour, for the line tool and for restyling
@@ -55,6 +88,14 @@ const LineStyleControls = ({
     ),
   };
   const dashed = t("whiteboard.lineStyle.dashed", "Dashed");
+  const toggleDashed = useCallback(
+    () => onChange({ dashed: !value.dashed }),
+    [onChange, value.dashed],
+  );
+  const onColor = useCallback(
+    (color: WhiteboardColor) => onChange({ color }),
+    [onChange],
+  );
   return (
     <>
       <ButtonGroup
@@ -62,15 +103,15 @@ const LineStyleControls = ({
         aria-label={t("whiteboard.lineStyle.path", "Line path")}
       >
         {WhiteboardPathStyles.map((kind) => (
-          <Button
+          <StyleButton
             key={kind}
-            variant={value.pathStyle === kind ? "primary" : "outline-secondary"}
+            patch={PATH_PATCHES[kind]}
+            active={value.pathStyle === kind}
             title={pathTitles[kind]}
-            aria-label={pathTitles[kind]}
-            onClick={() => onChange({ pathStyle: kind })}
+            onChange={onChange}
           >
-            <PathStyleIcon kind={kind} />
-          </Button>
+            <LineStyleIcon kind={kind} />
+          </StyleButton>
         ))}
       </ButtonGroup>
       <ButtonGroup
@@ -78,15 +119,15 @@ const LineStyleControls = ({
         aria-label={t("whiteboard.lineStyle.arrowheads", "Arrowheads")}
       >
         {WhiteboardArrowHeads.map((kind) => (
-          <Button
+          <StyleButton
             key={kind}
-            variant={value.arrowHead === kind ? "primary" : "outline-secondary"}
+            patch={ARROW_PATCHES[kind]}
+            active={value.arrowHead === kind}
             title={arrowTitles[kind]}
-            aria-label={arrowTitles[kind]}
-            onClick={() => onChange({ arrowHead: kind })}
+            onChange={onChange}
           >
-            <ArrowHeadIcon kind={kind} />
-          </Button>
+            <LineStyleIcon kind={kind} />
+          </StyleButton>
         ))}
       </ButtonGroup>
       <Button
@@ -94,14 +135,15 @@ const LineStyleControls = ({
         variant={value.dashed ? "primary" : "outline-secondary"}
         title={dashed}
         aria-label={dashed}
-        onClick={() => onChange({ dashed: !value.dashed })}
+        aria-pressed={value.dashed}
+        onClick={toggleDashed}
       >
-        <DashedIcon />
+        <LineStyleIcon kind="dashed" />
       </Button>
       <ColorPicker
-        value={value.colour}
-        palette={STROKE_COLORS}
-        onChange={(colour) => onChange({ colour })}
+        value={value.color}
+        palette={colors.stroke}
+        onChange={onColor}
         fallback={theme.colors.text}
       />
     </>

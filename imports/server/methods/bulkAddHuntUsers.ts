@@ -2,7 +2,7 @@ import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
-import { userMayBulkAddToHunt } from "../../lib/permission_stubs";
+import { userMayAddUsersToHunt } from "../../lib/permission_stubs";
 import bulkAddHuntUsers from "../../methods/bulkAddHuntUsers";
 import addUserToHunt from "../addUserToHunt";
 import defineMethod from "./defineMethod";
@@ -25,7 +25,7 @@ defineMethod(bulkAddHuntUsers, {
       throw new Meteor.Error(404, "Unknown hunt");
     }
 
-    if (!userMayBulkAddToHunt(await MeteorUsers.findOneAsync(userId), hunt)) {
+    if (!userMayAddUsersToHunt(await MeteorUsers.findOneAsync(userId), hunt)) {
       throw new Meteor.Error(
         401,
         `User ${userId} may not bulk-invite to hunt ${huntId}`,

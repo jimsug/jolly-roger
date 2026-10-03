@@ -5,7 +5,7 @@ import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type React from "react";
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import {
   useCallback,
   useId,
@@ -33,8 +33,11 @@ import styled from "styled-components";
 import { formatDiscordName } from "../../lib/discord";
 import isAdmin from "../../lib/isAdmin";
 import type { HuntType } from "../../lib/models/Hunts";
-import { userIsOperatorForHunt } from "../../lib/permission_stubs";
-import type { UserStatusSummary } from "../../lib/userStatusesToLastSeen";
+import {
+  huntGrantsRoleByDefault,
+  userIsOperatorForHunt,
+} from "../../lib/permission_stubs";
+import type { UserStatusSummary } from "../../lib/summarizeUserStatuses";
 import clearHuntInvitationCode from "../../methods/clearHuntInvitationCode";
 import demoteOperator from "../../methods/demoteOperator";
 import generateHuntInvitationCode from "../../methods/generateHuntInvitationCode";
@@ -66,6 +69,10 @@ const ImageBlock = styled.div`
   flex-direction: column;
   align-items: center;
   justify-content: center;
+`;
+
+const StatusBlock = styled.div`
+  margin-left: 0.5rem;
 `;
 
 const OperatorBox = styled.div`
@@ -254,7 +261,7 @@ const OperatorControls = ({
       userIsAdmin: isAdmin(user),
       // When the hunt makes every member an operator there is nothing to
       // promote or demote, so only the badge is shown.
-      operatorByDefault: hunt.defaultRoles?.includes("operator") ?? false,
+      operatorByDefault: huntGrantsRoleByDefault(hunt, "operator"),
     };
   }, [user, hunt]);
 
@@ -432,7 +439,7 @@ const ProfileList = ({
   users,
   roles,
   invitationCode,
-  invitedCount,
+  title,
   presence,
 }: {
   hunt?: HuntType;
@@ -443,8 +450,8 @@ const ProfileList = ({
   users: Meteor.User[];
   roles?: Record<string, string[]>;
   invitationCode?: string;
-  // Number of pending invitations (admins only, on the all-users list)
-  invitedCount?: number;
+  // Replaces the default heading, "List of hunters"
+  title?: ReactNode;
   // Presence per user, the titles of the puzzles it refers to and the clock
   // the badges age against (hunt lists only)
   presence?: {
@@ -719,18 +726,7 @@ const ProfileList = ({
 
   return (
     <div>
-      <h1>
-        {t("hunterList.title", "List of hunters")}
-        {invitedCount !== undefined && (
-          <>
-            {" "}
-            <Badge as={Link} to="/users/invited" bg="info">
-              {t("hunterList.invitedBadge", "Invited")}{" "}
-              <Badge bg="secondary">{invitedCount}</Badge>
-            </Badge>
-          </>
-        )}
-      </h1>
+      <h1>{title ?? t("hunterList.title", "List of hunters")}</h1>
       <ProfilesSummary>
         {t("hunterList.totalHunters", "Total hunters")}: {users.length}
       </ProfilesSummary>
@@ -780,13 +776,15 @@ const ProfileList = ({
                   {name}
                 </Link>
                 {hunt && presence && (
-                  <UserStatusBadge
-                    summary={presence.userStatuses[user._id]}
-                    huntId={hunt._id}
-                    puzzleTitles={presence.puzzleTitles}
-                    whiteboardPuzzle={presence.whiteboardPuzzle}
-                    now={presence.now}
-                  />
+                  <StatusBlock>
+                    <UserStatusBadge
+                      summary={presence.userStatuses[user._id]}
+                      huntId={hunt._id}
+                      puzzleTitles={presence.puzzleTitles}
+                      whiteboardPuzzle={presence.whiteboardPuzzle}
+                      now={presence.now}
+                    />
+                  </StatusBlock>
                 )}
                 {hunt && canMakeOperator && (
                   <OperatorControls hunt={hunt} user={user} />

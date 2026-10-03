@@ -121,3 +121,25 @@ export default async function withLock<T>(
     }
   }
 }
+
+// withLock only learns that the lock is still wanted when renew() is called,
+// and a single slow call (a Drive request with gaxios's retries, say) can
+// outlast the preemption timeout, which would let another server take the
+// lock. This renews on a timer for the whole critical section, as the Discord
+// daemon does. A failed renewal aborts the signal, which the critical section
+// checks between steps.
+export function withRenewedLock<T>(
+  name: string,
+  critSection: (preempted: AbortSignal) => Promise<T>,
+) {
+  return withLock(name, async (renew) => {
+    using cleanup = new DisposableStack();
+    const preempted = new AbortController();
+    cleanup.use(
+      setInterval(() => {
+        renew().catch((error: unknown) => preempted.abort(error));
+      }, PREEMPT_TIMEOUT / 2),
+    );
+    return await critSection(preempted.signal);
+  });
+}

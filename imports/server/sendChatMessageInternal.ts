@@ -7,6 +7,7 @@ import Puzzles from "../lib/models/Puzzles";
 import nodeIsPuzzle from "../lib/nodeIsPuzzle";
 import type { CommentAnchorInput } from "../methods/sendChatMessage";
 import GlobalHooks from "./GlobalHooks";
+import withLock from "./withLock";
 
 export async function assertHuntMember(userId: string, huntId: string) {
   const user = await MeteorUsers.findOneAsync(userId, {
@@ -30,6 +31,8 @@ export default async function sendChatMessageInternal({
 }: {
   puzzleId: string;
   content: ChatMessageContentType;
+  // A user's message has been checked for membership by the caller; without
+  // a sender, it's a system message from the server itself.
   sender: string | undefined;
   pinTs?: Date;
   parentId?: string;
@@ -40,11 +43,6 @@ export default async function sendChatMessageInternal({
   const puzzle = await Puzzles.findOneAsync(puzzleId);
   if (!puzzle) {
     throw new Meteor.Error(404, "Unknown puzzle");
-  }
-
-  // System messages (no sender) come from the server itself.
-  if (sender !== undefined) {
-    await assertHuntMember(sender, puzzle.hunt);
   }
 
   // A reply at any depth in a whiteboard comment thread belongs to that
@@ -61,23 +59,6 @@ export default async function sendChatMessageInternal({
       );
     }
     thread = parent.comment ? parent._id : parent.thread;
-
-    // One reaction per emoji per user on a message: a double click or a
-    // second tab reacting again lands on the existing one. The puzzle is in
-    // the selector so the { deleted, puzzle } index serves the lookup.
-    if (sender !== undefined && isReaction({ content, parentId })) {
-      const emoji = reactionEmoji({ content, parentId });
-      const existing = await ChatMessages.find(
-        { puzzle: puzzleId, parentId, sender },
-        { projection: { content: 1, parentId: 1 } },
-      ).fetchAsync();
-      const duplicate = existing.find(
-        (message) => isReaction(message) && reactionEmoji(message) === emoji,
-      );
-      if (duplicate) {
-        return duplicate._id;
-      }
-    }
   }
 
   const mentionedPuzzles = content.children
@@ -99,17 +80,52 @@ export default async function sendChatMessageInternal({
     }
   }
 
-  const msgId = await ChatMessages.insertAsync({
-    puzzle: puzzleId,
-    hunt: puzzle.hunt,
-    content,
-    sender,
-    timestamp: new Date(),
-    ...(pinTs ? { pinTs } : {}),
-    ...(parentId ? { parentId } : {}),
-    ...(comment ? { comment } : {}),
-    ...(thread ? { thread } : {}),
-  });
+  const insert = () =>
+    ChatMessages.insertAsync({
+      puzzle: puzzleId,
+      hunt: puzzle.hunt,
+      content,
+      sender,
+      timestamp: new Date(),
+      ...(pinTs ? { pinTs } : {}),
+      ...(parentId ? { parentId } : {}),
+      ...(comment ? { comment } : {}),
+      ...(thread ? { thread } : {}),
+    });
+
+  let msgId: string;
+  if (
+    sender !== undefined &&
+    parentId !== undefined &&
+    isReaction({ content, parentId })
+  ) {
+    // One reaction per emoji per user on a message: a double click or a
+    // second tab reacting again lands on the existing one. The lock keeps two
+    // at once from both missing the other and inserting. The puzzle is in the
+    // selector so the { deleted, puzzle } index serves the lookup.
+    const emoji = reactionEmoji({ content, parentId });
+    const reaction = await withLock(
+      `chat-message:${parentId}:reactions:${sender}`,
+      async () => {
+        const existing = await ChatMessages.find(
+          { puzzle: puzzleId, parentId, sender },
+          { projection: { content: 1, parentId: 1 } },
+        ).fetchAsync();
+        const duplicate = existing.find(
+          (message) => isReaction(message) && reactionEmoji(message) === emoji,
+        );
+        return duplicate
+          ? { id: duplicate._id, isNew: false }
+          : { id: await insert(), isNew: true };
+      },
+    );
+    if (!reaction.isNew) {
+      return reaction.id;
+    }
+    msgId = reaction.id;
+  } else {
+    msgId = await insert();
+  }
 
   // Replying to a resolved thread reopens it. Reacting to it doesn't.
   if (thread && !isReaction({ content, parentId })) {

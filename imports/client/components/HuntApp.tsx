@@ -1,11 +1,12 @@
 import { Meteor } from "meteor/meteor";
-import { useSubscribe, useTracker } from "meteor/react-meteor-data";
-import React, { useCallback, useEffect, useMemo } from "react";
+import { useTracker } from "meteor/react-meteor-data";
+import React, { useCallback, useMemo } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import ButtonToolbar from "react-bootstrap/ButtonToolbar";
 import Modal from "react-bootstrap/Modal";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { Outlet, useNavigate, useParams } from "react-router";
 import type { HuntType } from "../../lib/models/Hunts";
 import Hunts from "../../lib/models/Hunts";
@@ -15,9 +16,9 @@ import {
   userMayUpdateHunt,
 } from "../../lib/permission_stubs";
 import huntForHuntApp from "../../lib/publications/huntForHuntApp";
+import userStatusForHuntApp from "../../lib/publications/userStatusForHuntApp";
 import acceptUserHuntTerms from "../../methods/acceptUserHuntTerms";
 import addHuntUser from "../../methods/addHuntUser";
-import setUserStatus from "../../methods/setUserStatus";
 import undestroyHunt from "../../methods/undestroyHunt";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import useDocumentTitle from "../hooks/useDocumentTitle";
@@ -67,6 +68,8 @@ const HuntDeletedError = React.memo(
 
 const HuntMemberError = React.memo(
   ({ hunt, canJoin }: { hunt: HuntType; canJoin: boolean }) => {
+    const { t } = useTranslation();
+
     const join = useCallback(() => {
       const user = Meteor.user();
       if (!user) {
@@ -83,12 +86,15 @@ const HuntMemberError = React.memo(
       if (canJoin) {
         return (
           <Button variant="primary" onClick={join}>
-            Use admin permissions to join
+            {t(
+              "huntApp.joinWithAdminPermissions",
+              "Use admin permissions to join",
+            )}
           </Button>
         );
       }
       return null;
-    }, [canJoin, join]);
+    }, [canJoin, join, t]);
 
     const navigate = useNavigate();
     const goBack = useCallback(() => {
@@ -138,30 +144,15 @@ const HuntApp = React.memo(() => {
   );
 
   // Presence in the hunt: online while the tab is visible, away while it's
-  // hidden, offline once we leave. The subscription's stop handler is what
-  // notices a closed tab or a dropped connection; the method call covers
-  // visibility changes and leaving the hunt page.
+  // hidden, offline once we leave. This subscription is the only thing that
+  // records it. It's made again with the new status when the tab is shown or
+  // hidden, and stopping it (leaving the hunt, closing the tab, losing the
+  // connection) marks this connection offline.
   const visible = useDocumentVisible();
-  const presence = visible ? "online" : "away";
-  useSubscribe(member ? "userStatus.inc" : undefined, huntId, presence);
-  useEffect(() => {
-    if (!member) {
-      return;
-    }
-    setUserStatus.call({ hunt: huntId, type: "status", status: presence });
-  }, [huntId, member, presence]);
-  useEffect(() => {
-    if (!member) {
-      return undefined;
-    }
-    return () => {
-      // After a logout, or once removed from the hunt, the method would only
-      // reject; the subscription stopping marks the connection offline anyway
-      if (Meteor.user()?.hunts?.includes(huntId)) {
-        setUserStatus.call({ hunt: huntId, type: "status", status: "offline" });
-      }
-    };
-  }, [huntId, member]);
+  useTypedSubscribe(member ? userStatusForHuntApp : undefined, {
+    hunt: huntId,
+    status: visible ? "online" : "away",
+  });
 
   useBreadcrumb({
     title: loading || !hunt ? "loading..." : hunt.name,

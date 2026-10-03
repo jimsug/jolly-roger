@@ -4,8 +4,8 @@ import {
   WhiteboardColors,
   WhiteboardStrokeWidths,
 } from "../../lib/models/WhiteboardNodes";
-import type { WhiteboardLiveState } from "../../methods/setWhiteboardLive";
 import setWhiteboardLive from "../../methods/setWhiteboardLive";
+import { InkPointPattern } from "../whiteboardEdits";
 import { setLive } from "../whiteboardLive";
 import defineMethod from "./defineMethod";
 
@@ -23,13 +23,12 @@ defineMethod(setWhiteboardLive, {
         },
       ]),
       stroke: Match.OneOf(null, {
-        colour: Match.OneOf(...WhiteboardColors),
+        color: Match.OneOf(...WhiteboardColors),
         strokeWidth: Match.OneOf(...WhiteboardStrokeWidths),
-        points: [[Number]],
+        points: [InkPointPattern],
       }),
     });
-    // Point arity is checked in setLive.
-    return arg as { boardId: string } & WhiteboardLiveState;
+    return arg;
   },
 
   async run({ boardId, cursor, drag, stroke }) {

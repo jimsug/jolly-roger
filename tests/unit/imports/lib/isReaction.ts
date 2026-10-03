@@ -5,7 +5,7 @@ import type { ChatMessageContentNodeType } from "../../../../imports/lib/models/
 // A reply to some other message
 const message = (
   children: ChatMessageContentNodeType[],
-  parentId: string | null | undefined = "parent",
+  parentId = "parent",
 ) => ({
   content: { type: "message" as const, children },
   parentId,
@@ -32,7 +32,6 @@ describe("isReaction", function () {
 
   it("needs a parent: an emoji on its own is just a message", function () {
     assert.isFalse(isReaction(topLevel([{ text: "👍" }])));
-    assert.isFalse(isReaction(message([{ text: "👍" }], null)));
   });
 
   it("needs exactly one text node holding nothing but emoji", function () {

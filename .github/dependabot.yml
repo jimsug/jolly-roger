@@ -66,6 +66,20 @@ updates:
         patterns:
           - "typescript-eslint"
           - "@typescript-eslint/*"
+  # The browser extension's own package
+  - package-ecosystem: "npm"
+    directory: "/extension"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+    groups:
+      fontawesome:
+        patterns:
+          - "@fortawesome/*"
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

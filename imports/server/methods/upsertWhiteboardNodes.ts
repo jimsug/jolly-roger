@@ -4,9 +4,8 @@ import {
   WhiteboardNodeKinds,
   WhiteboardStrokeWidths,
 } from "../../lib/models/WhiteboardNodes";
-import type { WhiteboardNodeInput } from "../../methods/upsertWhiteboardNodes";
 import upsertWhiteboardNodes from "../../methods/upsertWhiteboardNodes";
-import { upsertNodes } from "../whiteboardEdits";
+import { InkPointPattern, upsertNodes } from "../whiteboardEdits";
 import defineMethod from "./defineMethod";
 
 const NodeInputPattern = {
@@ -20,8 +19,8 @@ const NodeInputPattern = {
   hidden: Match.Optional(Boolean),
   text: Match.Optional(Match.OneOf(String, null)),
   label: Match.Optional(Match.OneOf(String, null)),
-  colour: Match.Optional(Match.OneOf(...WhiteboardColors)),
-  points: Match.Optional([[Number]]),
+  color: Match.Optional(Match.OneOf(...WhiteboardColors)),
+  points: Match.Optional([InkPointPattern]),
   strokeWidth: Match.Optional(Match.OneOf(...WhiteboardStrokeWidths)),
   stroke: Match.Optional(String),
 };
@@ -29,8 +28,7 @@ const NodeInputPattern = {
 defineMethod(upsertWhiteboardNodes, {
   validate(arg) {
     check(arg, { boardId: String, nodes: [NodeInputPattern] });
-    // Ink point arity is checked when the nodes are applied.
-    return arg as { boardId: string; nodes: WhiteboardNodeInput[] };
+    return arg;
   },
 
   async run({ boardId, nodes }) {

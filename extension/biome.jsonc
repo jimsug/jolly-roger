@@ -1,0 +1,6 @@
+{
+  "$schema": "../node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": ["../biome.jsonc"],
+  // The root's .gitignore covers the extension's build output
+  "vcs": { "root": ".." }
+}

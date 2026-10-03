@@ -2,9 +2,11 @@ import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import type React from "react";
 import { useEffect, useState } from "react";
+import Col from "react-bootstrap/Col";
 import Container from "react-bootstrap/Container";
 import Navbar from "react-bootstrap/Navbar";
 import Row from "react-bootstrap/Row";
+import { useTranslation } from "react-i18next";
 import { Link, Navigate, useLocation } from "react-router";
 import App from "./App";
 import SplashPage from "./SplashPage";
@@ -70,17 +72,17 @@ export const UnauthenticatedPage = ({
 };
 
 /* Renders the same whether or not anyone is logged in */
-export const NoAuthenticationPage = ({
-  children,
-}: {
-  children: React.ReactNode;
-}) => {
+export const PublicPage = ({ children }: { children: React.ReactNode }) => {
+  const { t } = useTranslation();
+
   return (
     <Container>
       <Navbar>
-        <Link to="/">Jolly Roger</Link>
+        <Link to="/">{t("publicPage.homeLink", "Jolly Roger")}</Link>
       </Navbar>
-      <Row>{children}</Row>
+      <Row>
+        <Col>{children}</Col>
+      </Row>
     </Container>
   );
 };

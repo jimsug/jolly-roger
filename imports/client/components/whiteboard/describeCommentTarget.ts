@@ -23,6 +23,8 @@ function snippet(text: string | undefined, t: TFunction): string | undefined {
       line.length > SNIPPET_LENGTH
         ? `${line.slice(0, SNIPPET_LENGTH - 1)}…`
         : line,
+    // React escapes text, so i18next's escaping would only show entities.
+    // Goes once both i18n inits stop escaping.
     interpolation: { escapeValue: false },
   });
 }

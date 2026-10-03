@@ -1,6 +1,6 @@
 name: Build and test Docker image
 
-# Run builds on main commits and when PRs are opened or updated
+# Run builds on main commits, release tags and PRs (images are only pushed from main)
 on:
   push:
     branches:

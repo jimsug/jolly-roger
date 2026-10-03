@@ -7,11 +7,11 @@ import Tags from "../../../lib/models/Tags";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
 import { frameLabel } from "../../../lib/whiteboard/layout";
 import { MAX_LABEL_LENGTH } from "../../../lib/whiteboard/limits";
-import { FILL_COLORS } from "./colors";
+import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
+import colors from "./colors";
 import EditableText from "./EditableText";
 import NodeChrome from "./NodeChrome";
 import NodeContributors from "./NodeContributors";
-import useDetail from "./useDetail";
 import { useWhiteboard } from "./WhiteboardContext";
 
 type FrameNodeType = Node<{ doc: WhiteboardNodeType }, "frame">;
@@ -50,7 +50,7 @@ const Label = styled.div`
 const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
   const { readOnly, updateNodes, editOnAppear, clearEditOnAppear } =
     useWhiteboard();
-  const detail = useDetail();
+  const detail = useWhiteboardDetail();
   const { t } = useTranslation();
   const { doc } = data;
 
@@ -64,7 +64,7 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
     (text: string) => updateNodes([{ _id: id, label: text || null }]),
     [id, updateNodes],
   );
-  const fill = doc.colour ? FILL_COLORS[doc.colour] : undefined;
+  const fill = doc.color ? colors.fill[doc.color] : undefined;
   // Seeded frames take their name from the tag, so only hand-made frames
   // have an editable label.
   const editable = doc.frameKind === "user" && !readOnly;
@@ -75,8 +75,8 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
         id={id}
         kind="frame"
         selected={selected}
-        color={doc.colour}
-        palette={FILL_COLORS}
+        color={doc.color}
+        palette={colors.fill}
       />
       {detail === "far" ? null : (
         <Header>

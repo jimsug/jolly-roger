@@ -7,7 +7,6 @@ import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDouble
 import { faArrowDown } from "@fortawesome/free-solid-svg-icons/faArrowDown";
 import { faChevronLeft } from "@fortawesome/free-solid-svg-icons/faChevronLeft";
 import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
-import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
@@ -23,11 +22,6 @@ import { faThumbtack } from "@fortawesome/free-solid-svg-icons/faThumbtack";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import type { EmojiClickData } from "emoji-picker-react";
-import EmojiPicker, {
-  Theme as EmojiPickerTheme,
-  EmojiStyle,
-} from "emoji-picker-react";
 import type { ComponentPropsWithRef, FC } from "react";
 import React, {
   useCallback,
@@ -52,13 +46,8 @@ import FormLabel from "react-bootstrap/FormLabel";
 import FormText from "react-bootstrap/FormText";
 import InputGroup from "react-bootstrap/InputGroup";
 import Modal from "react-bootstrap/Modal";
-import Offcanvas from "react-bootstrap/Offcanvas";
-import Overlay from "react-bootstrap/Overlay";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
-import Popover from "react-bootstrap/Popover";
 import Row from "react-bootstrap/Row";
-import Tab from "react-bootstrap/Tab";
-import Tabs from "react-bootstrap/Tabs";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import Tooltip from "react-bootstrap/Tooltip";
@@ -66,14 +55,14 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Link, Navigate, useLocation, useParams } from "react-router";
 import type { Descendant } from "slate";
-import styled, { css, keyframes, useTheme } from "styled-components";
+import styled, { css, keyframes } from "styled-components";
 import {
   calendarTimeFormat,
   shortCalendarTimeFormat,
 } from "../../lib/calendarTimeFormat";
 import chatMessagePlainText from "../../lib/chatMessagePlainText";
 import { messageDingsUser } from "../../lib/dingwordLogic";
-import isReaction, { reactionEmoji } from "../../lib/isReaction";
+import isReaction from "../../lib/isReaction";
 import { indexedById, sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import type { ChatMessageType } from "../../lib/models/ChatMessages";
@@ -83,21 +72,18 @@ import Documents from "../../lib/models/Documents";
 import type { GuessType } from "../../lib/models/Guesses";
 import Guesses from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";
-import MeteorUsers from "../../lib/models/MeteorUsers";
-import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import Tags from "../../lib/models/Tags";
-import nodeIsMention from "../../lib/nodeIsMention";
 import {
-  listAllRolesForHunt,
+  listAssignedRolesForHunt,
   userMayUpdateGuessesForHunt,
   userMayWritePuzzlesForHunt,
 } from "../../lib/permission_stubs";
 import chatMessagesForPuzzle from "../../lib/publications/chatMessagesForPuzzle";
-import puzzleFeedbacksForHunt from "../../lib/publications/puzzleFeedbacksForHunt";
 import puzzleForPuzzlePage from "../../lib/publications/puzzleForPuzzlePage";
+import puzzleInterestsForHunt from "../../lib/publications/puzzleInterestsForHunt";
 import { computeSolvedness } from "../../lib/solvedness";
 import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import addPuzzleAnswer from "../../methods/addPuzzleAnswer";
@@ -105,7 +91,6 @@ import addPuzzleTag from "../../methods/addPuzzleTag";
 import createChatImageUpload from "../../methods/createChatImageUpload";
 import createGuess from "../../methods/createGuess";
 import ensurePuzzleDocument from "../../methods/ensurePuzzleDocument";
-import removeChatMessage from "../../methods/removeChatMessage";
 import removePuzzleAnswer from "../../methods/removePuzzleAnswer";
 import removePuzzleTag from "../../methods/removePuzzleTag";
 import sendChatMessage from "../../methods/sendChatMessage";
@@ -129,30 +114,45 @@ import type { Action, CallState, JoinCallOptions } from "../hooks/useCallState";
 import useCallState from "../hooks/useCallState";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import useDocumentVisible from "../hooks/useDocumentVisible";
+import useMentionableUsers from "../hooks/useMentionableUsers";
+import usePuzzleInterest from "../hooks/usePuzzleInterest";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import { trace } from "../tracing";
 import BookmarkButton from "./BookmarkButton";
 import ChatMessage from "./ChatMessage";
+import ChatMessageReactions from "./ChatMessageReactions";
 import ChatPeople from "./ChatPeople";
+import type { TickerSyncMessage, TickerToastType } from "./ChatTicker";
+import ChatTicker, { isTickerSyncMessage, tickerDuration } from "./ChatTicker";
 import CopyToClipboardButton from "./CopyToClipboardButton";
-import DocumentDisplay, { DocumentMessage } from "./DocumentDisplay";
+import DocumentDisplay, {
+  DocumentMessage,
+  googleDocumentUrl,
+} from "./DocumentDisplay";
 import type { FancyEditorHandle } from "./FancyEditor";
 import FancyEditor from "./FancyEditor";
 import GuessState from "./GuessState";
-import { GuessConfidenceBadge, GuessDirectionBadge } from "./guessDetails";
+import {
+  GUESS_CONFIDENCE_LEVELS,
+  GUESS_DIRECTION_LEVELS,
+  GuessConfidenceBadge,
+  GuessDirectionBadge,
+} from "./guessDetails";
+import HighlightsPanel from "./HighlightsPanel";
 import InsertImage from "./InsertImage";
 import Markdown from "./Markdown";
 import MinimizedChatInfo from "./MinimizedChatInfo";
 import type { ModalFormHandle } from "./ModalForm";
 import ModalForm from "./ModalForm";
+import PinnedMessagePane from "./PinnedMessagePane";
 import PuzzleAnswer from "./PuzzleAnswer";
 import PuzzleInterestPopover from "./PuzzleInterestPopover";
 import type { PuzzleModalFormSubmitPayload } from "./PuzzleModalForm";
 import PuzzleModalForm from "./PuzzleModalForm";
-import type { PuzzleUnlockModalHandle } from "./PuzzleUnlockModal";
 import PuzzleUnlockModal from "./PuzzleUnlockModal";
+import ReplyThreadPopover from "./ReplyThreadPopover";
 import SplitPaneMinus from "./SplitPaneMinus";
 import Breakable from "./styling/Breakable";
 import { MonospaceFontFamily } from "./styling/constants";
@@ -194,16 +194,8 @@ export const MinimumDesktopWidth = MinimumSidebarWidth + MinimumDocumentWidth;
 const PULSE_MS = 1000;
 // How far from the bottom (in px) still counts as reading the latest messages
 const NEAR_BOTTOM_PX = 60;
-// How many ancestors the reply popover shows before offering "More"
-const MAX_REPLY_ANCESTORS = 3;
-// Ticker toasts stay between these bounds, scaled by the message length
-const TICKER_MIN_MS = 3000;
-const TICKER_MAX_MS = 8000;
-const TICKER_MS_PER_CHAR = 50;
-// How many ticker toasts show at once; the rest are counted in a pill
-const MAX_VISIBLE_TICKERS = 3;
-// After the chat pane is restored, give its layout a moment to settle before
-// the final scroll
+// How long a chat history that opens on a message waits before landing on it
+// a second time (see ChatHistory)
 const RESTORE_SETTLE_MS = 100;
 
 // PuzzlePage has some pretty unique properties:
@@ -273,7 +265,7 @@ const UnreadPill = styled.button`
   left: 50%;
   transform: translateX(-50%);
   background-color: ${({ theme }) => theme.colors.primary};
-  color: white;
+  color: ${({ theme }) => theme.colors.chatBadgeText};
   border: none;
   padding: 6px 16px;
   border-radius: 20px;
@@ -289,19 +281,13 @@ const UnreadPill = styled.button`
   }
 `;
 
-const PinnedMessageDiv = styled.div`
-  flex: none;
-  max-height: 12em;
-  overflow-y: auto;
-  overflow-x: hidden;
-  border-bottom: 4px double ${({ theme }) => theme.colors.border};
-`;
-
 const PUZZLE_PAGE_PADDING = 8;
 
+// Keyframes can't read the theme, so the message sets the colour it starts
+// from
 const pulse = keyframes`
   0% {
-    background-color: rgb(255 193 7 / 70%);
+    background-color: var(--chat-message-pulse-color);
   }
 
   100% {
@@ -338,8 +324,7 @@ const ChatMessageDiv = styled.div<{
   ${({ $isPinned }) =>
     $isPinned &&
     css`
-      background-color: ${({ theme }) =>
-        theme.colors.pinnedChatMessageBackground};
+      background-color: ${({ theme }) => theme.colors.pinnedMessageBackground};
     `}
 
   ${({ $isReplyTarget }) =>
@@ -356,6 +341,9 @@ const ChatMessageDiv = styled.div<{
   ${({ $isPulsing }) =>
     $isPulsing &&
     css`
+      --chat-message-pulse-color: ${({ theme }) =>
+        theme.colors.pulseChatMessageBackground};
+
       animation: ${pulse} ${PULSE_MS}ms ease-out;
     `}
 `;
@@ -400,8 +388,7 @@ const PillSection = styled.button`
 
   &:hover {
     color: ${({ theme }) => theme.colors.hoverReplyButtonText};
-    background-color: ${({ theme }) =>
-      theme.colors.matchCandidateSelectedBackground};
+    background-color: ${({ theme }) => theme.colors.chatActionHoverBackground};
   }
 `;
 
@@ -409,22 +396,6 @@ const ChatMessageSender = styled.span`
   display: flex;
   align-items: center;
   gap: 4px;
-`;
-
-const ReplyIconButton = styled.button`
-  border: none;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  color: ${({ theme }) => theme.colors.replyButtonText};
-
-  &:hover {
-    color: ${({ theme }) => theme.colors.hoverReplyButtonText};
-  }
-`;
-
-const ReplyPopover = styled(Popover)`
-  max-width: min(400px, 90vw);
 `;
 
 // Under a whiteboard comment: what it's on, and a way to find it.
@@ -437,43 +408,6 @@ const CommentNoteLink = styled(Button)`
   padding: 0;
   font-size: inherit;
   vertical-align: baseline;
-`;
-
-const ReplyPopoverContent = styled.div`
-  max-height: 200px;
-  overflow-y: auto;
-`;
-
-const ReplyPopoverMessage = styled.div`
-  border-bottom: 1px solid ${({ theme }) => theme.colors.border};
-
-  &:last-child {
-    border-bottom: none;
-  }
-`;
-
-const ReactionContainer = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-`;
-
-const ReactionPill = styled.button<{ $mine: boolean }>`
-  background-color: ${({ $mine, theme }) =>
-    $mine
-      ? theme.colors.selfMentionSpanBackground
-      : theme.colors.fancyEditorBackground};
-  color: ${({ theme }) => theme.colors.text};
-  padding: 2px 8px;
-  margin: 2px 4px 2px 0;
-  border-radius: 16px;
-  cursor: pointer;
-  border: 1px solid
-    ${({ $mine, theme }) => ($mine ? theme.colors.primary : "transparent")};
-`;
-
-const EmojiPickerContainer = styled.div`
-  z-index: 1000;
 `;
 
 const ChatInputRow = styled.div`
@@ -510,23 +444,6 @@ const ReplyingToCancel = styled.button`
   padding: 0 4px;
   color: inherit;
   cursor: pointer;
-`;
-
-const HighlightsRow = styled.div`
-  flex: none;
-  padding: 0 ${PUZZLE_PAGE_PADDING}px ${PUZZLE_PAGE_PADDING}px;
-`;
-
-// A message in the highlights panel; the whole thing is the link to it
-const HighlightRow = styled.button`
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: none;
-  background: none;
-  padding: 0;
-  color: inherit;
-  font: inherit;
 `;
 
 const ChatMessageTimestamp = styled.span`
@@ -712,8 +629,6 @@ const ChatHistoryMessage = React.memo(
     imageOnLoad: () => void;
   }) => {
     const { t, i18n } = useTranslation();
-    const theme = useTheme();
-    const idPrefix = useId();
     const ts = shortCalendarTimeFormat(message.timestamp, t, i18n.language);
 
     // On the whiteboard, comments and their replies can be found on the
@@ -729,6 +644,11 @@ const ChatHistoryMessage = React.memo(
           : undefined,
       [boardFocus, isComment, commentNode, t],
     );
+    const showOnBoard = useCallback(() => {
+      if (commentThread) {
+        boardFocus?.focusComment(commentThread);
+      }
+    }, [boardFocus, commentThread]);
 
     const senderDisplayName =
       message.sender !== undefined
@@ -743,106 +663,38 @@ const ChatHistoryMessage = React.memo(
       [registerMessageRef, messageId],
     );
 
-    // The chain of messages this one replies to, nearest last, plus the id
-    // of the next one up when the chain goes on past what the popover shows
-    const parentId = message.parentId ?? undefined;
-    const thread = useTracker(() => {
-      const ancestors: FilteredChatMessageType[] = [];
-      let next = parentId;
-      while (next && ancestors.length < MAX_REPLY_ANCESTORS) {
-        const ancestor = ChatMessages.findOne(next);
-        if (!ancestor) {
-          // The chain goes on into messages we can't see, so there is
-          // nothing to scroll to
-          next = undefined;
-          break;
-        }
-        ancestors.push(ancestor);
-        next = ancestor.parentId ?? undefined;
-      }
-      ancestors.reverse();
-      return { ancestors, more: next };
-    }, [parentId]);
-
-    const [showThread, setShowThread] = useState(false);
-    const threadHideTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
-    const replyIconRef = useRef<HTMLButtonElement>(null);
-    const openThread = useCallback(() => {
-      clearTimeout(threadHideTimeout.current);
-      setShowThread(true);
-    }, []);
-    // Leave the popover up long enough to move the mouse into it
-    const closeThreadSoon = useCallback(() => {
-      clearTimeout(threadHideTimeout.current);
-      threadHideTimeout.current = setTimeout(() => setShowThread(false), 300);
-    }, []);
-    useEffect(() => () => clearTimeout(threadHideTimeout.current), []);
-
-    // emoji -> reacting user -> that user's reactions (one, apart from
-    // duplicates written before the server kept them out)
-    const reactionsByEmoji = useMemo(() => {
-      const byEmoji = new Map<string, Map<string, string[]>>();
-      reactions.forEach((reaction) => {
-        if (!reaction.sender) {
-          return;
-        }
-        const emoji = reactionEmoji(reaction);
-        let users = byEmoji.get(emoji);
-        if (!users) {
-          users = new Map();
-          byEmoji.set(emoji, users);
-        }
-        let theirs = users.get(reaction.sender);
-        if (!theirs) {
-          theirs = [];
-          users.set(reaction.sender, theirs);
-        }
-        theirs.push(reaction._id);
-      });
-      return byEmoji;
-    }, [reactions]);
-
-    const toggleReaction = useCallback(
-      (emoji: string) => {
-        const mine = reactionsByEmoji.get(emoji)?.get(selfUserId);
-        if (mine) {
-          mine.forEach((id) => removeChatMessage.call({ messageId: id }));
-        } else {
-          sendChatMessage.call({
-            puzzleId: message.puzzle,
-            content: JSON.stringify({
-              type: "message",
-              children: [{ text: emoji }],
-            }),
-            parentId: messageId,
-          });
-        }
-      },
-      [reactionsByEmoji, selfUserId, message.puzzle, messageId],
-    );
+    const parentId = message.parentId;
 
     const [showPicker, setShowPicker] = useState(false);
     const pickerTargetRef = useRef<HTMLButtonElement>(null);
     const togglePicker = useCallback(() => setShowPicker((s) => !s), []);
     const hidePicker = useCallback(() => setShowPicker(false), []);
-    const onEmojiClick = useCallback(
-      (data: EmojiClickData) => {
-        toggleReaction(data.emoji);
-        setShowPicker(false);
-      },
-      [toggleReaction],
-    );
 
+    // A react, unreact or pin that failed, shown under the message
+    const [actionError, setActionError] = useState<string>();
+    const showActionError = useCallback((error: unknown) => {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }, []);
+    const clearActionError = useCallback(() => setActionError(undefined), []);
+
+    const [pinning, setPinning] = useState(false);
     const togglePin = useCallback(() => {
-      setChatMessagePin.call({ messageId, pinned: !message.pinTs });
-    }, [messageId, message.pinTs]);
+      setPinning(true);
+      void (async () => {
+        try {
+          await setChatMessagePin.callPromise({
+            messageId,
+            pinned: !message.pinTs,
+          });
+        } catch (error) {
+          showActionError(error);
+        } finally {
+          setPinning(false);
+        }
+      })();
+    }, [messageId, message.pinTs, showActionError]);
 
     const reply = useCallback(() => onReply(messageId), [onReply, messageId]);
-    const scrollToParent = useCallback(() => {
-      if (parentId) {
-        scrollToMessage(parentId);
-      }
-    }, [scrollToMessage, parentId]);
 
     return (
       <ChatMessageDiv
@@ -867,7 +719,7 @@ const ChatHistoryMessage = React.memo(
               <PillSection
                 type="button"
                 title={t("whiteboard.chat.showOnBoard", "Show on board")}
-                onClick={() => boardFocus.focusComment(commentThread)}
+                onClick={showOnBoard}
               >
                 <FontAwesomeIcon icon={faLocationCrosshairs} />
               </PillSection>
@@ -886,112 +738,24 @@ const ChatHistoryMessage = React.memo(
                   ? t("chat.unpin", "Remove pin")
                   : t("chat.pin", "Pin")
               }
+              disabled={pinning}
               onClick={togglePin}
             >
               <FontAwesomeIcon icon={faThumbtack} />
             </PillSection>
           </SplitPill>
         </ChatMessageActions>
-        <Overlay
-          target={pickerTargetRef}
-          show={showPicker}
-          placement="top-start"
-          rootClose
-          onHide={hidePicker}
-        >
-          {({
-            placement: _placement,
-            arrowProps: _arrowProps,
-            show: _show,
-            popper: _popper,
-            hasDoneInitialMeasure: _hasDoneInitialMeasure,
-            ...overlayProps
-          }) => (
-            <EmojiPickerContainer {...overlayProps}>
-              <EmojiPicker
-                onEmojiClick={onEmojiClick}
-                autoFocusSearch={false}
-                emojiStyle={EmojiStyle.NATIVE}
-                skinTonesDisabled
-                lazyLoadEmojis
-                reactionsDefaultOpen
-                reactions={["2705", "274e", "2757", "2753", "2194-fe0f"]}
-                previewConfig={{ showPreview: false }}
-                theme={
-                  theme.basicMode === "dark"
-                    ? EmojiPickerTheme.DARK
-                    : EmojiPickerTheme.LIGHT
-                }
-                width={300}
-                height={350}
-              />
-            </EmojiPickerContainer>
-          )}
-        </Overlay>
         {!suppressSender && <ChatMessageTimestamp>{ts}</ChatMessageTimestamp>}
         {(!suppressSender || parentId) && (
           <ChatMessageSender>
             {parentId && (
-              <>
-                <ReplyIconButton
-                  type="button"
-                  ref={replyIconRef}
-                  title={t(
-                    "chat.showReplyTarget",
-                    "Show the message this replies to",
-                  )}
-                  onClick={scrollToParent}
-                  onMouseEnter={openThread}
-                  onMouseLeave={closeThreadSoon}
-                  onFocus={openThread}
-                  onBlur={closeThreadSoon}
-                >
-                  <FontAwesomeIcon icon={faReply} />
-                </ReplyIconButton>
-                <Overlay
-                  target={replyIconRef}
-                  show={showThread}
-                  placement="top"
-                >
-                  <ReplyPopover
-                    id={`${idPrefix}-thread`}
-                    onMouseEnter={openThread}
-                    onMouseLeave={closeThreadSoon}
-                  >
-                    <Popover.Header as="h3">
-                      {t("chat.replyingToHeader", "Replying to:")}
-                    </Popover.Header>
-                    <Popover.Body>
-                      <ReplyPopoverContent>
-                        {thread.more && (
-                          <Button
-                            variant="link"
-                            size="sm"
-                            onClick={() => scrollToMessage(thread.more!)}
-                          >
-                            {t("chat.moreReplies", "More…")}
-                          </Button>
-                        )}
-                        {thread.ancestors.map((ancestor) => (
-                          <ReplyPopoverMessage key={ancestor._id}>
-                            <strong>
-                              {ancestor.sender
-                                ? (displayNames.get(ancestor.sender) ?? "???")
-                                : "jolly-roger"}
-                            </strong>
-                            <ChatMessage
-                              message={ancestor.content}
-                              displayNames={displayNames}
-                              selfUserId={selfUserId}
-                              roles={roles}
-                            />
-                          </ReplyPopoverMessage>
-                        ))}
-                      </ReplyPopoverContent>
-                    </Popover.Body>
-                  </ReplyPopover>
-                </Overlay>
-              </>
+              <ReplyThreadPopover
+                parentId={parentId}
+                displayNames={displayNames}
+                selfUserId={selfUserId}
+                roles={roles}
+                scrollToMessage={scrollToMessage}
+              />
             )}
             {isPinned && (
               <span title={t("chat.pinned", "Pinned")}>
@@ -1013,40 +777,34 @@ const ChatHistoryMessage = React.memo(
             <FontAwesomeIcon icon={faComment} />{" "}
             {t("whiteboard.chat.commentOn", "Comment on {{target}}", {
               target: commentTarget,
+              // The target lands in a text node, so escaping would only show
+              // entities; this goes once both i18n inits switch escapeValue off
               interpolation: { escapeValue: false },
             })}
             {message.comment.resolvedAt
               ? ` ${t("whiteboard.comments.resolvedMark", "(resolved)")}`
               : ""}
             {" · "}
-            <CommentNoteLink
-              variant="link"
-              onClick={() => boardFocus.focusComment(message._id)}
-            >
+            <CommentNoteLink variant="link" onClick={showOnBoard}>
               {t("whiteboard.chat.showOnBoard", "Show on board")}
             </CommentNoteLink>
           </CommentNote>
         )}
-        {reactionsByEmoji.size > 0 && (
-          <ReactionContainer>
-            {[...reactionsByEmoji].map(([emoji, users]) => {
-              const names = [...users.keys()]
-                .map((userId) => displayNames.get(userId) ?? "???")
-                .toSorted();
-              return (
-                <ReactionPill
-                  key={emoji}
-                  type="button"
-                  $mine={users.has(selfUserId)}
-                  title={names.join("\n")}
-                  onClick={() => toggleReaction(emoji)}
-                >
-                  {emoji}
-                  {users.size > 1 ? ` ${users.size}` : ""}
-                </ReactionPill>
-              );
-            })}
-          </ReactionContainer>
+        <ChatMessageReactions
+          messageId={messageId}
+          puzzleId={message.puzzle}
+          reactions={reactions}
+          displayNames={displayNames}
+          selfUserId={selfUserId}
+          pickerTarget={pickerTargetRef}
+          showPicker={showPicker}
+          onHidePicker={hidePicker}
+          onError={showActionError}
+        />
+        {actionError && (
+          <Alert variant="danger" dismissible onClose={clearActionError}>
+            {actionError}
+          </Alert>
         )}
       </ChatMessageDiv>
     );
@@ -1069,6 +827,8 @@ const ChatHistory = React.memo(
     roles,
     replyingTo,
     onReply,
+    initialMessageId,
+    onInitialMessageShown,
     ref,
   }: {
     chatMessages: FilteredChatMessageType[];
@@ -1078,6 +838,9 @@ const ChatHistory = React.memo(
     roles: string[];
     replyingTo: string | undefined;
     onReply: (messageId: string) => void;
+    // A message to land on when the history mounts, rather than the bottom
+    initialMessageId: string | undefined;
+    onInitialMessageShown: () => void;
     ref: React.Ref<ChatHistoryHandle>;
   }) => {
     // Reactions are shown on the message they belong to, not as messages
@@ -1202,18 +965,46 @@ const ChatHistory = React.memo(
       return () => clearTimeout(timeout);
     }, [pulsingMessageId]);
 
-    useImperativeHandle(ref, () => ({
-      saveScrollBottomTarget,
-      snapToBottom,
-      scrollToTarget,
-      scrollToMessage,
-    }));
+    // Kept across renders, so the panes around the history can scroll it from
+    // their own layout effects before this one saves where it is
+    useImperativeHandle(
+      ref,
+      () => ({
+        saveScrollBottomTarget,
+        snapToBottom,
+        scrollToTarget,
+        scrollToMessage,
+      }),
+      [saveScrollBottomTarget, snapToBottom, scrollToTarget, scrollToMessage],
+    );
 
+    // Only the value at mount counts: the parent forgets it once shown
+    const [landingMessageId] = useState(initialMessageId);
     useLayoutEffect(() => {
-      // Scroll to end of chat on initial mount.
+      // Scroll to end of chat on initial mount, then on to the message it was
+      // opened for, if any.
       trace("ChatHistory snapToBottom on mount");
       snapToBottom();
-    }, [snapToBottom]);
+      if (!landingMessageId) {
+        return undefined;
+      }
+      scrollToMessage(landingMessageId);
+      onInitialMessageShown();
+      // ChatPeople renders nothing until its own subscriptions are ready, and
+      // keeping the distance from the bottom as it appears cuts the smooth
+      // scroll short, so land on the message again a moment later. It can
+      // still stop short when they take longer than that.
+      const timeout = setTimeout(
+        () => scrollToMessage(landingMessageId),
+        RESTORE_SETTLE_MS,
+      );
+      return () => clearTimeout(timeout);
+    }, [
+      snapToBottom,
+      scrollToMessage,
+      landingMessageId,
+      onInitialMessageShown,
+    ]);
 
     useEffect(() => {
       // Add resize handler that scrolls to target
@@ -1222,19 +1013,6 @@ const ChatHistory = React.memo(
       return () => {
         window.removeEventListener("resize", scrollToTarget);
       };
-    }, [scrollToTarget]);
-
-    useEffect(() => {
-      // The box also changes size without the window doing so: the pinned
-      // pane and the people list come and go, the input grows. Keep the same
-      // distance from the bottom through all of it.
-      const history = historyRef.current;
-      if (!history) {
-        return undefined;
-      }
-      const observer = new ResizeObserver(() => scrollToTarget());
-      observer.observe(history);
-      return () => observer.disconnect();
     }, [scrollToTarget]);
 
     const scrollChat = useCallback(() => {
@@ -1336,51 +1114,6 @@ const ChatHistory = React.memo(
   },
 );
 
-// The most recently pinned message, kept in view above the history
-const PinnedMessagePane = React.memo(
-  ({
-    message,
-    reactions,
-    displayNames,
-    selfUserId,
-    roles,
-    scrollToMessage,
-    onReply,
-  }: {
-    message: FilteredChatMessageType;
-    reactions: FilteredChatMessageType[];
-    displayNames: Map<string, string>;
-    selfUserId: string;
-    roles: string[];
-    scrollToMessage: (messageId: string) => void;
-    onReply: (messageId: string) => void;
-  }) => {
-    const noop = useCallback(() => {
-      /* images in the pane don't move the history */
-    }, []);
-    return (
-      <PinnedMessageDiv>
-        <ChatHistoryMessage
-          message={message}
-          reactions={reactions}
-          displayNames={displayNames}
-          isSystemMessage={message.sender === undefined}
-          isHighlighted={false}
-          isPinned
-          isReplyTarget={false}
-          isPulsing={false}
-          suppressSender={false}
-          selfUserId={selfUserId}
-          roles={roles}
-          scrollToMessage={scrollToMessage}
-          onReply={onReply}
-          imageOnLoad={noop}
-        />
-      </PinnedMessageDiv>
-    );
-  },
-);
-
 const StyledFancyEditor = styled(FancyEditor)`
   flex: 1;
   display: block;
@@ -1424,23 +1157,12 @@ const ChatInput = React.memo(
     scrollToMessage: (messageId: string) => void;
     ref: React.Ref<ChatInputHandle>;
   }) => {
-    // We want to have hunt profile data around so we can autocomplete from multiple fields.
-    const profilesLoadingFunc = useSubscribe("huntProfiles", huntId);
-    const profilesLoading = profilesLoadingFunc();
+    const users = useMentionableUsers(huntId);
     const [uploadImageError, setUploadImageError] = useState<string>();
     const clearUploadImageError = useCallback(
       () => setUploadImageError(undefined),
       [],
     );
-    const users = useTracker(() => {
-      return profilesLoading
-        ? []
-        : MeteorUsers.find({
-            hunts: huntId,
-            displayName: { $ne: undefined }, // no point completing a user with an unset displayName
-          }).fetch();
-    }, [huntId, profilesLoading]);
-
     const onHeightChangeCb = useCallback(
       (newHeight: number) => {
         if (onHeightChange) {
@@ -1484,6 +1206,12 @@ const ChatInput = React.memo(
     // A reply is only sent as one while its target is here to be shown; a
     // parent that has gone would be rejected and the message lost
     const parentId = replyTargetName === undefined ? undefined : replyingTo;
+
+    // The reply bar takes its height from the history, so say when it comes,
+    // goes or changes, as ChatPeople does
+    useLayoutEffect(() => {
+      onHeightChange();
+    }, [onHeightChange, parentId, replyTargetName]);
 
     const sendContentMessage = useCallback(() => {
       if (hasNonTrivialContent && !hasLoadingImage) {
@@ -1619,6 +1347,9 @@ const ChatInput = React.memo(
               <FontAwesomeIcon icon={faReply} />{" "}
               {t("chat.replyingTo", "Replying to {{name}}", {
                 name: replyTargetName,
+                // The name lands in a text node, so escaping would only show
+                // entities; this goes once both i18n inits switch escapeValue
+                // off
                 interpolation: { escapeValue: false },
               })}
             </ReplyingToTarget>
@@ -1671,160 +1402,10 @@ const ChatInput = React.memo(
   },
 );
 
-// A button under the chat input that opens a panel of the messages worth a
-// second look: replies to the user, mentions of them, pins and system
-// messages. Picking one scrolls the history to it.
-const HighlightsPanel = React.memo(
-  ({
-    chatMessages,
-    displayNames,
-    selfUserId,
-    roles,
-    scrollToMessage,
-  }: {
-    chatMessages: FilteredChatMessageType[];
-    displayNames: Map<string, string>;
-    selfUserId: string;
-    roles: string[];
-    scrollToMessage: (messageId: string) => void;
-  }) => {
-    const { t, i18n } = useTranslation();
-    const [show, setShow] = useState(false);
-    const open = useCallback(() => setShow(true), []);
-    const close = useCallback(() => setShow(false), []);
-    const [activeKey, setActiveKey] = useState<string>();
-    const onSelectTab = useCallback(
-      (key: string | null) => setActiveKey(key ?? undefined),
-      [],
-    );
-
-    const tabs = useMemo(() => {
-      const messages = chatMessages.filter((m) => !isReaction(m));
-      const messagesById = indexedById(messages);
-      const all = [
-        {
-          key: "replies",
-          title: t("chat.highlights.replies", "Replies"),
-          messages: messages.filter(
-            (m) =>
-              m.parentId && messagesById.get(m.parentId)?.sender === selfUserId,
-          ),
-        },
-        {
-          key: "mentions",
-          title: t("chat.highlights.mentions", "Mentions"),
-          messages: messages.filter((m) =>
-            m.content.children.some(
-              (node) => nodeIsMention(node) && node.userId === selfUserId,
-            ),
-          ),
-        },
-        {
-          key: "pins",
-          title: t("chat.highlights.pins", "Pins"),
-          messages: messages.filter((m) => m.pinTs),
-        },
-        {
-          key: "system",
-          title: t("chat.highlights.system", "System"),
-          messages: messages.filter((m) => !m.sender),
-        },
-      ];
-      return all.filter((tab) => tab.messages.length > 0);
-    }, [chatMessages, selfUserId, t]);
-    const total = tabs.reduce((sum, tab) => sum + tab.messages.length, 0);
-
-    const pick = useCallback(
-      (messageId: string) => {
-        setShow(false);
-        scrollToMessage(messageId);
-      },
-      [scrollToMessage],
-    );
-
-    const idPrefix = useId();
-
-    if (total === 0) {
-      return null;
-    }
-
-    const activeTab = tabs.some((tab) => tab.key === activeKey)
-      ? activeKey
-      : tabs[0]!.key;
-
-    return (
-      <HighlightsRow>
-        <Button size="sm" variant="secondary" onClick={open}>
-          {t("chat.highlights.button", "Highlights ({{shown}})", {
-            shown: total > 99 ? "99+" : total,
-          })}
-        </Button>
-        <Offcanvas show={show} onHide={close}>
-          <Offcanvas.Header closeButton>
-            <Offcanvas.Title>
-              {t("chat.highlights.title", "Highlights")}
-            </Offcanvas.Title>
-          </Offcanvas.Header>
-          <Offcanvas.Body>
-            <Tabs
-              id={`${idPrefix}-highlights`}
-              activeKey={activeTab}
-              onSelect={onSelectTab}
-              justify
-              className="mb-3"
-            >
-              {tabs.map(({ key, title, messages }) => (
-                <Tab
-                  key={key}
-                  eventKey={key}
-                  title={`${title} (${messages.length})`}
-                >
-                  {messages.map((message) => (
-                    <HighlightRow
-                      key={message._id}
-                      type="button"
-                      onClick={() => pick(message._id)}
-                    >
-                      <ChatMessageDiv
-                        $isSystemMessage={!message.sender}
-                        $isHighlighted={false}
-                        $isPinned={!!message.pinTs}
-                      >
-                        <ChatMessageTimestamp>
-                          {shortCalendarTimeFormat(
-                            message.timestamp,
-                            t,
-                            i18n.language,
-                          )}
-                        </ChatMessageTimestamp>
-                        <strong>
-                          {message.sender
-                            ? (displayNames.get(message.sender) ?? "???")
-                            : "jolly-roger"}
-                        </strong>
-                        <ChatMessage
-                          message={message.content}
-                          displayNames={displayNames}
-                          selfUserId={selfUserId}
-                          roles={roles}
-                        />
-                      </ChatMessageDiv>
-                    </HighlightRow>
-                  ))}
-                </Tab>
-              ))}
-            </Tabs>
-          </Offcanvas.Body>
-        </Offcanvas>
-      </HighlightsRow>
-    );
-  },
-);
-
 interface ChatSectionHandle {
   scrollHistoryToTarget: () => void;
-  scrollToMessage: (messageId: string) => void;
-  snapToBottom: () => void;
+  // Says whether the history was there to scroll
+  scrollToMessage: (messageId: string) => boolean;
 }
 
 const ChatSection = React.memo(
@@ -1840,6 +1421,8 @@ const ChatSection = React.memo(
     callDispatch,
     joinCall,
     selfUser,
+    initialMessageId,
+    onInitialMessageShown,
     ref,
   }: {
     chatDataLoading: boolean;
@@ -1853,6 +1436,9 @@ const ChatSection = React.memo(
     callDispatch: React.Dispatch<Action>;
     joinCall: (options?: JoinCallOptions) => void;
     selfUser: Meteor.User;
+    // A message for the history to land on when it mounts
+    initialMessageId: string | undefined;
+    onInitialMessageShown: () => void;
     ref: React.Ref<ChatSectionHandle>;
   }) => {
     const historyRef = useRef<React.ComponentRef<typeof ChatHistory>>(null);
@@ -1876,39 +1462,43 @@ const ChatSection = React.memo(
       }
     }, []);
 
-    // The message a reply is being written to
-    const [replyingTo, setReplyingTo] = useState<string>();
-    // The page is reused when the route changes puzzle in place; a reply
-    // doesn't follow it there
-    useEffect(() => {
-      setReplyingTo(undefined);
-    }, [puzzleId]);
-    const onReply = useCallback((messageId: string) => {
-      setReplyingTo(messageId);
-      inputRef.current?.focus();
-    }, []);
-    const cancelReply = useCallback(() => setReplyingTo(undefined), []);
+    // The message a reply is being written to. The page is reused when the
+    // route changes puzzle in place, and a reply only counts on the puzzle it
+    // was started on.
+    const [replyTarget, setReplyTarget] = useState<{
+      puzzleId: string;
+      messageId: string;
+    }>();
+    const replyingTo =
+      replyTarget?.puzzleId === puzzleId ? replyTarget.messageId : undefined;
+    const onReply = useCallback(
+      (messageId: string) => {
+        setReplyTarget({ puzzleId, messageId });
+        inputRef.current?.focus();
+      },
+      [puzzleId],
+    );
+    const cancelReply = useCallback(() => setReplyTarget(undefined), []);
 
     const onMessageSent = useCallback(() => {
       trace("ChatSection onMessageSent", { hasRef: !!historyRef.current });
-      setReplyingTo(undefined);
+      setReplyTarget(undefined);
       if (historyRef.current) {
         historyRef.current.snapToBottom();
       }
     }, []);
 
     const scrollToMessage = useCallback((messageId: string) => {
-      historyRef.current?.scrollToMessage(messageId);
-    }, []);
-
-    const snapToBottom = useCallback(() => {
-      historyRef.current?.snapToBottom();
+      if (!historyRef.current) {
+        return false;
+      }
+      historyRef.current.scrollToMessage(messageId);
+      return true;
     }, []);
 
     useImperativeHandle(ref, () => ({
       scrollHistoryToTarget,
       scrollToMessage,
-      snapToBottom,
     }));
 
     useLayoutEffect(() => {
@@ -1922,8 +1512,11 @@ const ChatSection = React.memo(
       }
     });
 
+    // Assigned roles only, on purpose: an @operator mention only notifies
+    // assigned operators (queryOperatorsForHunt), so the hunt's default roles
+    // don't highlight it either
     const roles = useMemo(
-      () => listAllRolesForHunt(selfUser, { _id: huntId }),
+      () => listAssignedRolesForHunt(selfUser, { _id: huntId }),
       [selfUser, huntId],
     );
 
@@ -1959,6 +1552,9 @@ const ChatSection = React.memo(
       });
       return newest;
     }, [chatMessages]);
+    const pinnedReactions =
+      (pinnedMessage && reactionsByParent.get(pinnedMessage._id)) ??
+      NO_REACTIONS;
 
     trace("ChatSection render", { chatDataLoading });
 
@@ -1977,17 +1573,31 @@ const ChatSection = React.memo(
           callDispatch={callDispatch}
           joinCall={joinCall}
         />
-        {pinnedMessage && (
-          <PinnedMessagePane
-            message={pinnedMessage}
-            reactions={reactionsByParent.get(pinnedMessage._id) ?? NO_REACTIONS}
-            displayNames={displayNames}
-            selfUserId={selfUser._id}
-            roles={roles}
-            scrollToMessage={scrollToMessage}
-            onReply={onReply}
-          />
-        )}
+        <PinnedMessagePane
+          messageId={pinnedMessage?._id}
+          reactionCount={pinnedReactions.length}
+          onHeightChange={scrollHistoryToTarget}
+        >
+          {pinnedMessage && (
+            <ChatHistoryMessage
+              key={pinnedMessage._id}
+              message={pinnedMessage}
+              reactions={pinnedReactions}
+              displayNames={displayNames}
+              isSystemMessage={pinnedMessage.sender === undefined}
+              isHighlighted={false}
+              isPinned
+              isReplyTarget={false}
+              isPulsing={false}
+              suppressSender={false}
+              selfUserId={selfUser._id}
+              roles={roles}
+              scrollToMessage={scrollToMessage}
+              onReply={onReply}
+              imageOnLoad={scrollHistoryToTarget}
+            />
+          )}
+        </PinnedMessagePane>
         <ChatHistory
           ref={historyRef}
           chatMessages={chatMessages}
@@ -1997,6 +1607,8 @@ const ChatSection = React.memo(
           roles={roles}
           replyingTo={replyingTo}
           onReply={onReply}
+          initialMessageId={initialMessageId}
+          onInitialMessageShown={onInitialMessageShown}
         />
         <ChatInput
           ref={inputRef}
@@ -2017,14 +1629,61 @@ const ChatSection = React.memo(
           selfUserId={selfUser._id}
           roles={roles}
           scrollToMessage={scrollToMessage}
+          onHeightChange={scrollHistoryToTarget}
         />
       </ChatSectionDiv>
     );
   },
 );
 
+// The desktop layout embeds the document, so the metadata only needs a way to
+// copy its link out
+const DocumentCopyLinkButton = ({
+  document,
+  user,
+}: {
+  document: DocumentType;
+  user: Meteor.User;
+}) => {
+  const { t } = useTranslation();
+  const url = googleDocumentUrl(document, user);
+  let tooltipText: string;
+  switch (document.value.type) {
+    case "spreadsheet":
+      tooltipText = t(
+        "puzzle.document.copySheetLink",
+        "Copy link to spreadsheet for sharing or advanced features",
+      );
+      break;
+    case "document":
+      tooltipText = t(
+        "puzzle.document.copyDocLink",
+        "Copy link to document for sharing or advanced features",
+      );
+      break;
+    default:
+      return null;
+  }
+  if (!url) {
+    return null;
+  }
+  return (
+    <CopyToClipboardButton
+      variant="link"
+      size="sm"
+      tooltipPlacement="right"
+      tooltipText={tooltipText}
+      text={url}
+    >
+      <FontAwesomeIcon icon={faCopy} />
+    </CopyToClipboardButton>
+  );
+};
+
 const PuzzlePageMetadata = ({
   puzzle,
+  allPuzzles,
+  renderAsLocked,
   bookmarked,
   displayNames,
   document,
@@ -2033,6 +1692,10 @@ const PuzzlePageMetadata = ({
   onMinimizeMetadata,
 }: {
   puzzle: PuzzleType;
+  // The hunt's puzzles, for the related puzzles under each tag
+  allPuzzles: PuzzleType[];
+  // Takes interest votes instead of guesses
+  renderAsLocked: boolean;
   bookmarked: boolean;
   displayNames: Map<string, string>;
   document?: DocumentType;
@@ -2051,10 +1714,6 @@ const PuzzlePageMetadata = ({
     [hunt],
   );
 
-  const allPuzzles = useTracker(
-    () => Puzzles.find({ hunt: huntId }).fetch(),
-    [huntId],
-  );
   const allTags = useTracker(
     () => Tags.find({ hunt: huntId }).fetch(),
     [huntId],
@@ -2064,43 +1723,18 @@ const PuzzlePageMetadata = ({
     [huntId, puzzleId],
   );
 
-  // While locked (and the hunt allows locked puzzles) the puzzle takes
-  // interest votes instead of guesses.
-  const renderAsLocked =
-    (puzzle.locked ?? false) && (hunt?.allowUnlockablePuzzles ?? false);
-  const feedbacks = useTracker(
-    () =>
-      renderAsLocked ? PuzzleFeedbacks.find({ puzzle: puzzleId }).fetch() : [],
-    [puzzleId, renderAsLocked],
-  );
-  const myFeedback = useTracker(
-    () =>
-      renderAsLocked
-        ? PuzzleFeedbacks.findOne({
-            puzzle: puzzleId,
-            createdBy: Meteor.userId()!,
-          })
-        : undefined,
-    [puzzleId, renderAsLocked],
-  );
-  const interestScore = feedbacks.reduce((acc, f) => acc + f.score, 0);
-  const [showInterestPopover, setShowInterestPopover] = useState(false);
-  const interestButtonRef = useRef<HTMLButtonElement>(null);
-  const toggleInterestPopover = useCallback(() => {
-    setShowInterestPopover((shown) => !shown);
-  }, []);
-  const hideInterestPopover = useCallback(() => {
-    setShowInterestPopover(false);
-  }, []);
-  const [renderUnlockModal, setRenderUnlockModal] = useState(false);
-  const unlockModalRef = useRef<PuzzleUnlockModalHandle>(null);
-  const showUnlockModal = useCallback(() => {
-    if (renderUnlockModal && unlockModalRef.current) {
-      unlockModalRef.current.show();
-    } else {
-      setRenderUnlockModal(true);
-    }
-  }, [renderUnlockModal]);
+  const {
+    interests,
+    myInterest,
+    interestScore,
+    showInterestPopover,
+    interestButtonRef,
+    toggleInterestPopover,
+    hideInterestPopover,
+    renderUnlockModal,
+    unlockModalRef,
+    showUnlockModal,
+  } = usePuzzleInterest(puzzleId, renderAsLocked);
 
   const editModalRef = useRef<React.ComponentRef<typeof PuzzleModalForm>>(null);
   const guessModalRef =
@@ -2249,15 +1883,14 @@ const PuzzlePageMetadata = ({
       <InsertImage documentId={document._id} />
     );
 
-  // The desktop layout embeds the document, so it only needs a way to copy
-  // its link out; narrower layouts link to it instead.
-  const documentLink = document ? (
-    <DocumentDisplay
-      document={document}
-      displayMode={isDesktop ? "copy" : "link"}
-      user={selfUser}
-    />
-  ) : null;
+  const documentLink =
+    document && !isDesktop ? (
+      <DocumentDisplay document={document} displayMode="link" user={selfUser} />
+    ) : null;
+  const documentCopyLink =
+    document && isDesktop ? (
+      <DocumentCopyLinkButton document={document} user={selfUser} />
+    ) : null;
 
   const { t } = useTranslation();
 
@@ -2284,9 +1917,9 @@ const PuzzlePageMetadata = ({
           onClick={toggleInterestPopover}
         >
           <FontAwesomeIcon
-            icon={myFeedback ? faLightbulbSolid : faLightbulbRegular}
+            icon={myInterest ? faLightbulbSolid : faLightbulbRegular}
           />{" "}
-          {myFeedback
+          {myInterest
             ? t("puzzle.interest.update", "Update interest")
             : t("puzzle.interest.register", "I'm interested")}
           {interestScore > 0 && (
@@ -2301,7 +1934,7 @@ const PuzzlePageMetadata = ({
         <PuzzleInterestPopover
           puzzleId={puzzleId}
           lockedSummary={puzzle.lockedSummary}
-          myFeedback={myFeedback}
+          myInterest={myInterest}
           target={interestButtonRef.current}
           show={showInterestPopover}
           placement="bottom"
@@ -2317,7 +1950,7 @@ const PuzzlePageMetadata = ({
           <PuzzleUnlockModal
             ref={unlockModalRef}
             puzzle={puzzle}
-            feedbacks={feedbacks}
+            interests={interests}
             showOnMount
           />
         )}
@@ -2406,6 +2039,7 @@ const PuzzlePageMetadata = ({
         />
         {puzzleLink}
         {documentLink}
+        {documentCopyLink}
         {!tagsOnOwnRow && tagList}
         <PuzzleMetadataButtons>
           {editButton}
@@ -2564,201 +2198,6 @@ const MinimizeChatButton = styled.button`
   height: 40px;
 `;
 
-// While the chat pane is minimised, new messages roll past as toasts in the
-// bottom-left corner.
-
-const slideIn = keyframes`
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-`;
-
-const TickerContainer = styled.div`
-  position: fixed;
-  bottom: 20px;
-  left: 20px;
-  z-index: 1050;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  width: 350px;
-  max-width: calc(100vw - 40px);
-`;
-
-const TickerQueuePill = styled.div`
-  background-color: ${({ theme }) => theme.colors.secondary};
-  color: white;
-  font-size: 0.75rem;
-  font-weight: bold;
-  padding: 2px 10px;
-  border-radius: 12px;
-  box-shadow: 0 2px 4px rgb(0 0 0 / 20%);
-  animation: ${slideIn} 0.3s ease;
-`;
-
-const TickerToast = styled.div`
-  width: 100%;
-  background-color: ${({ theme }) => theme.colors.background};
-  color: ${({ theme }) => theme.colors.text};
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-left: 4px solid ${({ theme }) => theme.colors.secondary};
-  box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
-  border-radius: 4px;
-  overflow: hidden;
-  position: relative;
-  font-size: 0.9rem;
-  animation: ${slideIn} 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
-`;
-
-const TickerToastBody = styled.div`
-  padding: 10px 12px;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  position: relative;
-  z-index: 1;
-`;
-
-// Clicking the message dismisses the toast
-const TickerToastContent = styled.button`
-  flex: 1;
-  overflow: hidden;
-  overflow-wrap: break-word;
-  text-align: left;
-  border: none;
-  background: none;
-  padding: 0;
-  color: inherit;
-  font: inherit;
-`;
-
-// The width is set inline: it moves every frame, and each distinct value
-// in a styled prop would become another class in the stylesheet
-const TickerProgress = styled.div`
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  background-color: ${({ theme }) => theme.colors.secondary};
-  opacity: 0.15;
-  z-index: 0;
-`;
-
-type TickerToastType = {
-  id: string;
-  text: string;
-  sender: string;
-  duration: number;
-};
-
-// Other tabs on the same puzzle hear about dismissals, so a toast cleared in
-// one tab clears everywhere
-type TickerSyncMessage =
-  | { type: "DISMISS_TICKER"; id: string }
-  | { type: "DISMISS_TICKER_AUTO"; id: string }
-  | { type: "CLEAR_QUEUE" };
-
-// Anything on the same origin can post to the channel, so check the shape
-const isTickerSyncMessage = (data: unknown): data is TickerSyncMessage => {
-  if (typeof data !== "object" || data === null) {
-    return false;
-  }
-  const { type, id } = data as { type?: unknown; id?: unknown };
-  switch (type) {
-    case "DISMISS_TICKER":
-    case "DISMISS_TICKER_AUTO":
-      return typeof id === "string";
-    case "CLEAR_QUEUE":
-      return true;
-    default:
-      return false;
-  }
-};
-
-const tickerDuration = (text: string) =>
-  Math.min(
-    TICKER_MAX_MS,
-    Math.max(TICKER_MIN_MS, text.length * TICKER_MS_PER_CHAR),
-  );
-
-const ManagedTickerToast = ({
-  msg,
-  isPaused,
-  dismiss,
-  onRestore,
-}: {
-  msg: TickerToastType;
-  isPaused: boolean;
-  dismiss: (id: string, auto: boolean) => void;
-  onRestore: (id: string) => void;
-}) => {
-  const { t } = useTranslation();
-  const [remaining, setRemaining] = useState(msg.duration);
-  const lastTick = useRef(Date.now());
-
-  useEffect(() => {
-    lastTick.current = Date.now();
-    let frame = 0;
-    const tick = () => {
-      const now = Date.now();
-      const delta = now - lastTick.current;
-      lastTick.current = now;
-      // Hidden tabs don't count the time down either
-      if (!isPaused && document.visibilityState === "visible") {
-        setRemaining((prev) => Math.max(0, prev - delta));
-      }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [isPaused]);
-
-  useEffect(() => {
-    if (remaining <= 0) {
-      dismiss(msg.id, true);
-    }
-  }, [remaining, dismiss, msg.id]);
-
-  const onDismiss = useCallback(
-    () => dismiss(msg.id, false),
-    [dismiss, msg.id],
-  );
-  const restore = useCallback(() => onRestore(msg.id), [onRestore, msg.id]);
-
-  return (
-    <TickerToast>
-      <TickerProgress
-        style={{ width: `${(remaining / msg.duration) * 100}%` }}
-      />
-      <TickerToastBody>
-        <TickerToastContent
-          type="button"
-          title={t("chat.ticker.dismiss", "Dismiss")}
-          onClick={onDismiss}
-        >
-          <strong>{msg.sender}:</strong> {msg.text}
-        </TickerToastContent>
-        <Button
-          variant="outline-primary"
-          size="sm"
-          onClick={restore}
-          title={t("chat.ticker.openChat", "Open Chat")}
-        >
-          <FontAwesomeIcon icon={faComments} />
-        </Button>
-      </TickerToastBody>
-    </TickerToast>
-  );
-};
-
 enum PuzzleGuessSubmitState {
   IDLE = "idle",
   FAILED = "failed",
@@ -2810,24 +2249,16 @@ const PuzzleGuessModal = ({
       setConfirmingSubmit(false);
     }, []);
 
-  const onDirectionInputChange = useCallback((value: number) => {
-    setDirectionInput(value);
-  }, []);
-
-  const onConfidenceInputChange = useCallback((value: number) => {
-    setConfidenceInput(value);
-  }, []);
-
   const solvedness = useMemo(() => {
     return computeSolvedness(puzzle);
   }, [puzzle]);
 
   // Operators mark guesses from the notification toasts, which stay hidden
   // while the operator interface is off
-  const hunt = useTracker(() => Hunts.findOne(puzzle.hunt), [puzzle.hunt]);
   const canUpdateGuesses = useTracker(
-    () => userMayUpdateGuessesForHunt(Meteor.user(), hunt),
-    [hunt],
+    () =>
+      userMayUpdateGuessesForHunt(Meteor.user(), Hunts.findOne(puzzle.hunt)),
+    [puzzle.hunt],
   );
   const [operatorActionsHidden] = useOperatorActionsHiddenForHunt(puzzle.hunt);
 
@@ -2956,65 +2387,28 @@ const PuzzleGuessModal = ({
       </FormGroup>
 
       <FormGroup as={Row} className="mb-3">
-        <FormLabel column xs={3}>
+        <FormLabel column xs={3} id={`${idPrefix}-guess-direction-label`}>
           {t("puzzle.answerOrGuess.direction", "Solve direction")}:
         </FormLabel>
         <Col xs={9}>
           <ToggleButtonGroup
             type="radio"
             name={`${idPrefix}-guess-direction`}
+            aria-labelledby={`${idPrefix}-guess-direction-label`}
             value={directionInput}
-            onChange={onDirectionInputChange}
+            onChange={setDirectionInput}
           >
-            <ToggleButton
-              id={`${idPrefix}-guess-direction-back`}
-              variant="outline-secondary"
-              value={-10}
-              disabled={puzzle.deleted}
-            >
-              {t("puzzle.answerOrGuess.directionOption.backsolve", "Backsolve")}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-guess-direction-mostly-back`}
-              variant="outline-secondary"
-              value={-5}
-              disabled={puzzle.deleted}
-            >
-              {t(
-                "puzzle.answerOrGuess.directionOption.mostlyBack",
-                "Mostly back",
-              )}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-guess-direction-mixed`}
-              variant="outline-secondary"
-              value={0}
-              disabled={puzzle.deleted}
-            >
-              {t("puzzle.answerOrGuess.directionOption.mixed", "Mixed")}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-guess-direction-mostly-forward`}
-              variant="outline-secondary"
-              value={5}
-              disabled={puzzle.deleted}
-            >
-              {t(
-                "puzzle.answerOrGuess.directionOption.mostlyForward",
-                "Mostly forward",
-              )}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-guess-direction-forward`}
-              variant="outline-primary"
-              value={10}
-              disabled={puzzle.deleted}
-            >
-              {t(
-                "puzzle.answerOrGuess.directionOption.forwardsolve",
-                "Forwardsolve",
-              )}
-            </ToggleButton>
+            {GUESS_DIRECTION_LEVELS.map(({ level, value, toggle }) => (
+              <ToggleButton
+                key={level}
+                id={`${idPrefix}-guess-direction-${level}`}
+                variant={toggle.variant}
+                value={value}
+                disabled={puzzle.deleted}
+              >
+                {t(toggle.key, toggle.label)}
+              </ToggleButton>
+            ))}
           </ToggleButtonGroup>
           <FormText>
             {t(
@@ -3026,40 +2420,28 @@ const PuzzleGuessModal = ({
       </FormGroup>
 
       <FormGroup as={Row} className="mb-3">
-        <FormLabel column xs={3}>
+        <FormLabel column xs={3} id={`${idPrefix}-guess-confidence-label`}>
           {t("puzzle.answerOrGuess.confidence", "Confidence")}
         </FormLabel>
         <Col xs={9}>
           <ToggleButtonGroup
             type="radio"
             name={`${idPrefix}-guess-confidence`}
+            aria-labelledby={`${idPrefix}-guess-confidence-label`}
             value={confidenceInput}
-            onChange={onConfidenceInputChange}
+            onChange={setConfidenceInput}
           >
-            <ToggleButton
-              id={`${idPrefix}-guess-confidence-low`}
-              variant="outline-danger"
-              value={0}
-              disabled={puzzle.deleted}
-            >
-              {t("puzzle.answerOrGuess.confidenceLevel.low", "Low")}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-guess-confidence-medium`}
-              variant="outline-warning"
-              value={50}
-              disabled={puzzle.deleted}
-            >
-              {t("puzzle.answerOrGuess.confidenceLevel.medium", "Medium")}
-            </ToggleButton>
-            <ToggleButton
-              id={`${idPrefix}-guess-confidence-high`}
-              variant="outline-success"
-              value={100}
-              disabled={puzzle.deleted}
-            >
-              {t("puzzle.answerOrGuess.confidenceLevel.high", "High")}
-            </ToggleButton>
+            {GUESS_CONFIDENCE_LEVELS.map(({ level, value, toggle }) => (
+              <ToggleButton
+                key={level}
+                id={`${idPrefix}-guess-confidence-${level}`}
+                variant={toggle.variant}
+                value={value}
+                disabled={puzzle.deleted}
+              >
+                {t(toggle.key, toggle.label)}
+              </ToggleButton>
+            ))}
           </ToggleButtonGroup>
           <FormText>
             {t(
@@ -3132,18 +2514,14 @@ const PuzzleGuessModal = ({
           </GuessTable>
           {canUpdateGuesses && (
             <Alert variant="info" className="mt-3">
-              {t(
-                "puzzle.answerOrGuess.operatorHint.useAlerts",
-                "To mark answers correct or incorrect, use the popup alerts.",
-              )}{" "}
               {operatorActionsHidden
                 ? t(
                     "puzzle.answerOrGuess.operatorHint.switchToDeputy",
-                    'To see alerts, turn on Deputy View: open the profile menu in the top-right, and choose "Switch to Deputy".',
+                    'To mark answers correct or incorrect, use the popup alerts. To see alerts, turn on Deputy View: open the profile menu in the top-right, and choose "Switch to Deputy".',
                   )
                 : t(
                     "puzzle.answerOrGuess.operatorHint.reload",
-                    "If you've dismissed them, reload the page.",
+                    "To mark answers correct or incorrect, use the popup alerts. If you've dismissed them, reload the page.",
                   )}
             </Alert>
           )}
@@ -3545,8 +2923,6 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
     puzzleId,
     huntId,
   });
-  // Interest in locked puzzles; fine for it to trickle in
-  useTypedSubscribe(puzzleFeedbacksForHunt, { huntId });
 
   const chatMessagesLoading = useTypedSubscribe(chatMessagesForPuzzle, {
     puzzleId,
@@ -3623,6 +2999,20 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
     [puzzleId],
   );
 
+  // While locked (and the hunt allows locked puzzles) the puzzle takes
+  // interest votes instead of guesses
+  const allowUnlockablePuzzles = useTracker(
+    () => Hunts.findOne(huntId)?.allowUnlockablePuzzles ?? false,
+    [huntId],
+  );
+  const renderAsLocked =
+    (activePuzzle?.locked ?? false) && allowUnlockablePuzzles;
+  // The interest in it; fine for it to trickle in
+  useTypedSubscribe(renderAsLocked ? puzzleInterestsForHunt : undefined, {
+    huntId,
+    puzzleId,
+  });
+
   const selfUser = useTracker(() => Meteor.user()!, []);
 
   const { t } = useTranslation();
@@ -3658,25 +3048,37 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
 
   // Messages that arrive while the chat is minimised show as ticker toasts
   // and count on the restore button until it is restored or they are
-  // dismissed
+  // dismissed. The page is reused when the route changes puzzle in place, so
+  // each is kept with its puzzle and only shown on that one.
   const [tickerQueue, setTickerQueue] = useState<TickerToastType[]>([]);
   const [messagesWhileMinimized, setMessagesWhileMinimized] = useState<
-    string[]
+    { puzzleId: string; id: string }[]
   >([]);
+  const tickerToasts = useMemo(
+    () => tickerQueue.filter((m) => m.puzzleId === puzzleId),
+    [tickerQueue, puzzleId],
+  );
+  const missedMessages = useMemo(
+    () => messagesWhileMinimized.filter((m) => m.puzzleId === puzzleId),
+    [messagesWhileMinimized, puzzleId],
+  );
   const [isTickerHovered, setIsTickerHovered] = useState(false);
   const tickerHoverTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
   const tickerChannel = useRef<BroadcastChannel>(undefined);
   const lastSeenMessageTs = useRef(0);
-  // The puzzle that timestamp belongs to: the page is reused when the route
-  // changes puzzle in place
+  // The puzzle that timestamp belongs to
   const lastSeenPuzzleId = useRef(puzzleId);
-  // A message to scroll to once the chat pane is back
-  const pendingScrollTo = useRef<string>(undefined);
+  // A message for the chat history to land on when it next mounts, rather
+  // than the bottom: one a ticker toast or a #msg= link brings the chat back
+  // for, or a link followed before the history is showing. The history says
+  // once it has.
+  const [pendingScrollTo, setPendingScrollTo] = useState<string>();
+  const clearPendingScrollTo = useCallback(
+    () => setPendingScrollTo(undefined),
+    [],
+  );
 
   useEffect(() => {
-    if (!("BroadcastChannel" in window)) {
-      return undefined;
-    }
     const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
     channel.addEventListener("message", (event: MessageEvent) => {
       const message: unknown = event.data;
@@ -3684,16 +3086,15 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
         return;
       }
       switch (message.type) {
-        case "DISMISS_TICKER":
+        case "dismiss":
           setTickerQueue((prev) => prev.filter((m) => m.id !== message.id));
-          setMessagesWhileMinimized((prev) =>
-            prev.filter((id) => id !== message.id),
-          );
+          if (!message.auto) {
+            setMessagesWhileMinimized((prev) =>
+              prev.filter((m) => m.id !== message.id),
+            );
+          }
           break;
-        case "DISMISS_TICKER_AUTO":
-          setTickerQueue((prev) => prev.filter((m) => m.id !== message.id));
-          break;
-        case "CLEAR_QUEUE":
+        case "clear":
           setTickerQueue([]);
           setMessagesWhileMinimized([]);
           break;
@@ -3716,24 +3117,25 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
     setTickerQueue([]);
     setMessagesWhileMinimized([]);
     setIsTickerHovered(false);
-    broadcastTicker({ type: "CLEAR_QUEUE" });
+    broadcastTicker({ type: "clear" });
   }, [broadcastTicker]);
 
   const minimizeChat = useCallback(() => {
     setIsChatMinimized(true);
   }, []);
 
-  const restoreChat = useCallback(() => {
-    setIsChatMinimized(false);
-    clearTicker();
-  }, [clearTicker]);
-
   const restoreChatToMessage = useCallback(
-    (messageId: string) => {
-      pendingScrollTo.current = messageId;
-      restoreChat();
+    (messageId?: string) => {
+      setPendingScrollTo(messageId);
+      setIsChatMinimized(false);
+      clearTicker();
     },
-    [restoreChat],
+    [clearTicker],
+  );
+
+  const restoreChat = useCallback(
+    () => restoreChatToMessage(),
+    [restoreChatToMessage],
   );
 
   useEffect(() => {
@@ -3744,49 +3146,47 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
     }
     const newest = chatMessages.at(-1)?.timestamp.getTime() ?? 0;
     if (lastSeenPuzzleId.current !== puzzleId) {
-      // Another puzzle's history is not news, and the last puzzle's toasts
-      // are not this one's
+      // Another puzzle's history is not news
       lastSeenPuzzleId.current = puzzleId;
       lastSeenMessageTs.current = newest;
-      setTickerQueue([]);
-      setMessagesWhileMinimized([]);
       setIsTickerHovered(false);
-      pendingScrollTo.current = undefined;
       return;
     }
     if (!isChatMinimized) {
       lastSeenMessageTs.current = newest;
       return;
     }
-    const arrived = chatMessages.filter(
-      (message) =>
-        message.timestamp.getTime() > lastSeenMessageTs.current &&
-        message.sender !== undefined &&
-        !isReaction(message),
-    );
+    const lastSeen = lastSeenMessageTs.current;
     lastSeenMessageTs.current = newest;
-    if (arrived.length === 0) {
+    const toasts: TickerToastType[] = [];
+    for (const message of chatMessages) {
+      if (
+        message.sender === undefined ||
+        message.timestamp.getTime() <= lastSeen ||
+        isReaction(message)
+      ) {
+        continue;
+      }
+      const text = chatMessagePlainText(
+        message.content,
+        displayNames,
+        puzzleTitles,
+      );
+      toasts.push({
+        puzzleId,
+        id: message._id,
+        text,
+        sender: displayNames.get(message.sender) ?? "???",
+        duration: tickerDuration(text),
+      });
+    }
+    if (toasts.length === 0) {
       return;
     }
-    setTickerQueue((prev) => [
-      ...prev,
-      ...arrived.map((message) => {
-        const text = chatMessagePlainText(
-          message.content,
-          displayNames,
-          puzzleTitles,
-        );
-        return {
-          id: message._id,
-          text,
-          sender: displayNames.get(message.sender!) ?? "???",
-          duration: tickerDuration(text),
-        };
-      }),
-    ]);
+    setTickerQueue((prev) => [...prev, ...toasts]);
     setMessagesWhileMinimized((prev) => [
       ...prev,
-      ...arrived.map((message) => message._id),
+      ...toasts.map((toast) => ({ puzzleId, id: toast.id })),
     ]);
   }, [
     chatMessages,
@@ -3800,13 +3200,11 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
   const dismissTickerMessage = useCallback(
     (id: string, auto: boolean) => {
       setTickerQueue((prev) => prev.filter((m) => m.id !== id));
-      if (auto) {
-        broadcastTicker({ type: "DISMISS_TICKER_AUTO", id });
-      } else {
+      if (!auto) {
         // Dismissed by hand counts as read
-        setMessagesWhileMinimized((prev) => prev.filter((mid) => mid !== id));
-        broadcastTicker({ type: "DISMISS_TICKER", id });
+        setMessagesWhileMinimized((prev) => prev.filter((m) => m.id !== id));
       }
+      broadcastTicker({ type: "dismiss", id, auto });
     },
     [broadcastTicker],
   );
@@ -3833,55 +3231,22 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
     }
   }, [isDesktop]);
 
-  // Once the chat pane is back, land on the requested message or the bottom,
-  // again after the layout has had a moment to settle
-  const wasChatMinimized = useRef(isChatMinimized);
+  // Each link is followed once: a new location.key is a new one, even to the
+  // same message, but minimising the chat afterwards isn't
+  const followedLink = useRef<string>(undefined);
   useEffect(() => {
-    const justRestored = wasChatMinimized.current && !isChatMinimized;
-    wasChatMinimized.current = isChatMinimized;
-    if (!justRestored) {
-      return undefined;
+    const link = `${location.key}#msg=${messageIdFromHash}`;
+    if (!messageIdFromHash || followedLink.current === link) {
+      return;
     }
-    const settle = () => {
-      const section = chatSectionRef.current;
-      if (!section) {
-        return;
-      }
-      section.scrollHistoryToTarget();
-      if (pendingScrollTo.current) {
-        section.scrollToMessage(pendingScrollTo.current);
-      } else {
-        section.snapToBottom();
-      }
-    };
-    const frame = requestAnimationFrame(settle);
-    const timer = setTimeout(() => {
-      settle();
-      pendingScrollTo.current = undefined;
-    }, RESTORE_SETTLE_MS);
-    return () => {
-      cancelAnimationFrame(frame);
-      clearTimeout(timer);
-    };
-  }, [isChatMinimized]);
-
-  useEffect(() => {
-    if (!messageIdFromHash || chatDataLoading) {
-      return undefined;
+    followedLink.current = link;
+    if (isChatMinimized) {
+      restoreChatToMessage(messageIdFromHash);
+    } else if (!chatSectionRef.current?.scrollToMessage(messageIdFromHash)) {
+      // Still loading, as on arriving by the link
+      setPendingScrollTo(messageIdFromHash);
     }
-    if (chatSectionRef.current) {
-      const frame = requestAnimationFrame(() => {
-        chatSectionRef.current?.scrollToMessage(messageIdFromHash);
-      });
-      return () => cancelAnimationFrame(frame);
-    }
-    // The chat is minimised; the restore settles on the message
-    pendingScrollTo.current = messageIdFromHash;
-    restoreChat();
-    return undefined;
-    // location.key is a dependency so following the same link again scrolls
-    // again
-  }, [messageIdFromHash, chatDataLoading, location.key, restoreChat]);
+  }, [messageIdFromHash, location.key, isChatMinimized, restoreChatToMessage]);
 
   const onChangeSideBarSize = useCallback(
     (newSize: number) => {
@@ -3938,8 +3303,9 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
     },
     // Use scrollbarWidth as a trigger for this effect (even though it's not
     // actually used in the effect) so that when the sidebar width changes, we
-    // scroll to the target
-    [sidebarWidth],
+    // scroll to the target. Likewise isMetadataMinimized: on narrow screens
+    // the metadata sits above the chat.
+    [sidebarWidth, isMetadataMinimized],
   );
 
   useEffect(() => {
@@ -3995,6 +3361,8 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
     isMetadataMinimized || content ? null : (
       <PuzzlePageMetadata
         puzzle={activePuzzle}
+        allPuzzles={puzzles}
+        renderAsLocked={renderAsLocked}
         bookmarked={bookmarked}
         document={document}
         displayNames={displayNames}
@@ -4023,6 +3391,8 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
         callDispatch={dispatch}
         joinCall={joinCall}
         selfUser={selfUser}
+        initialMessageId={pendingScrollTo}
+        onInitialMessageShown={clearPendingScrollTo}
       />
     </BoardFocusContext>
   );
@@ -4093,41 +3463,23 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
       </OverlayTrigger>
     ) : null;
 
-  const visibleTickers = tickerQueue.slice(0, MAX_VISIBLE_TICKERS);
-  const overflowCount = tickerQueue.length - visibleTickers.length;
-  const tickerPortal =
-    isChatMinimized && tickerQueue.length > 0
-      ? createPortal(
-          <TickerContainer
-            onMouseEnter={onTickerMouseEnter}
-            onMouseLeave={onTickerMouseLeave}
-          >
-            {overflowCount > 0 && (
-              <TickerQueuePill>
-                {t("chat.ticker.moreMessages", { count: overflowCount })}
-              </TickerQueuePill>
-            )}
-            {visibleTickers.map((msg, index) => (
-              <ManagedTickerToast
-                key={msg.id}
-                msg={msg}
-                // Only the oldest toast counts down, and not while the stack
-                // is hovered
-                isPaused={isTickerHovered || index !== 0}
-                dismiss={dismissTickerMessage}
-                onRestore={restoreChatToMessage}
-              />
-            ))}
-          </TickerContainer>,
-          window.document.body,
-        )
-      : null;
+  const ticker =
+    isChatMinimized && tickerToasts.length > 0 ? (
+      <ChatTicker
+        toasts={tickerToasts}
+        isHovered={isTickerHovered}
+        onMouseEnter={onTickerMouseEnter}
+        onMouseLeave={onTickerMouseLeave}
+        dismiss={dismissTickerMessage}
+        onRestore={restoreChatToMessage}
+      />
+    ) : null;
 
   if (isDesktop) {
     return (
       <>
         {deletedModal}
-        {tickerPortal}
+        {ticker}
         <FixedLayout ref={puzzlePageDivRef}>
           {isChatMinimized ? (
             <MinimizedChatInfo
@@ -4137,7 +3489,7 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
               callDispatch={dispatch}
               joinCall={joinCall}
               onRestore={restoreChat}
-              missedMessages={messagesWhileMinimized.length}
+              missedMessages={missedMessages.length}
             />
           ) : (
             <OverlayTrigger

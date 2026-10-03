@@ -172,6 +172,18 @@ export function ancestorsOf(
   return result;
 }
 
+// Nodes in an order React Flow can take, which needs every parent before its
+// children: shallowest first, otherwise as they were.
+export function sortParentsFirst<T extends { id: string; parentId?: string }>(
+  nodes: T[],
+): T[] {
+  const parents = new Map(nodes.map((n) => [n.id, { parent: n.parentId }]));
+  return nodes
+    .map((n, i) => ({ n, i, d: ancestorsOf(parents, n.id).length }))
+    .toSorted((a, b) => a.d - b.d || a.i - b.i)
+    .map(({ n }) => n);
+}
+
 // Splits a selection into the units that align and distribute as one, keyed
 // by node id, "stroke:<id>" or "line:<edge id>", each listing the nodes to
 // move:

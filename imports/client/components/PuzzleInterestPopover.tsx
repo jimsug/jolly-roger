@@ -3,15 +3,15 @@ import Alert from "react-bootstrap/Alert";
 import Overlay from "react-bootstrap/Overlay";
 import Popover from "react-bootstrap/Popover";
 import { useTranslation } from "react-i18next";
-import type { PuzzleFeedbackType } from "../../lib/models/PuzzleFeedbacks";
-import PuzzleFeedbackForm from "./PuzzleFeedbackForm";
+import type { PuzzleInterestType } from "../../lib/models/PuzzleInterests";
+import PuzzleInterestForm from "./PuzzleInterestForm";
 
 // The "I'm interested" popover for a locked puzzle, anchored to whichever
 // button opened it (the puzzle list row or the puzzle page).
 const PuzzleInterestPopover = ({
   puzzleId,
   lockedSummary,
-  myFeedback,
+  myInterest,
   target,
   show,
   placement,
@@ -19,7 +19,7 @@ const PuzzleInterestPopover = ({
 }: {
   puzzleId: string;
   lockedSummary?: string;
-  myFeedback?: PuzzleFeedbackType;
+  myInterest?: PuzzleInterestType;
   target: HTMLElement | null;
   show: boolean;
   placement: "right" | "bottom";
@@ -49,10 +49,10 @@ const PuzzleInterestPopover = ({
               {lockedSummary}
             </Alert>
           )}
-          <PuzzleFeedbackForm
+          <PuzzleInterestForm
             puzzleId={puzzleId}
-            initialComment={myFeedback?.comment}
-            canWithdraw={myFeedback !== undefined}
+            initialComment={myInterest?.comment}
+            canWithdraw={myInterest !== undefined}
             onSuccess={onHide}
           />
         </Popover.Body>

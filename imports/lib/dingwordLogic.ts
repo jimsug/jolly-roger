@@ -1,9 +1,13 @@
 import type { Meteor } from "meteor/meteor";
 import type { ChatMessageType } from "./models/ChatMessages";
+import type { HuntType } from "./models/Hunts";
 import nodeIsMention from "./nodeIsMention";
 import nodeIsRoleMention from "./nodeIsRoleMention";
 import nodeIsText from "./nodeIsText";
-import { listAllRolesForHunt } from "./permission_stubs";
+import {
+  listAllRolesForHunt,
+  listAssignedRolesForHunt,
+} from "./permission_stubs";
 
 type NeededChatFields = "content" | "sender" | "hunt";
 type PartialChatMessageType = Pick<ChatMessageType, NeededChatFields>;
@@ -35,6 +39,12 @@ export function normalizedForDingwordSearch(
   );
 }
 
+// A tag name as text to search for dingwords in, with colons splitting words
+// the way spaces do.
+export function normalizedTagForDingwordSearch(name: string): string {
+  return normalizeDingwordText(name.replaceAll(":", " "));
+}
+
 // A word character for the purpose of dingword boundaries: letters, digits
 // and underscore, in any script. Both are sticky so they test one position
 // of the message rather than scanning it.
@@ -52,9 +62,9 @@ function wordCharAt(text: string, index: number): boolean {
 }
 
 // Whether a normalised dingword appears in the normalised message. The
-// dingword must start at a word boundary; in the default mode it must end at
-// one too, while "open match" lets it match the start of a longer word
-// ("logic" dings on "logician").
+// dingword must start at a word boundary; matching whole words (the default)
+// it must end at one too, while matching word starts (openMatch) it can be
+// the start of a longer word ("logic" dings on "logician").
 function dingwordAppears(
   message: string,
   dingword: string,
@@ -77,7 +87,7 @@ function dingwordAppears(
 
 // Returns the dingwords that appear in the message, so callers can tell the
 // user which word dinged them (and offer to mute it).
-export function normalizedMessageDingsUserByDingword(
+export function dingwordsMatchingMessage(
   normalizedMessage: string,
   user: Pick<Meteor.User, "dingwords" | "dingwordsOpenMatch">,
 ): string[] {
@@ -106,10 +116,14 @@ export function dingedByMentions(
 export function dingedByRoleMentions(
   chatMessage: PartialChatMessageType,
   user: Meteor.User,
-  // Pass the hunt document to honour its default roles
-  hunt?: Parameters<typeof listAllRolesForHunt>[1],
+  // Pass the hunt document to honour its default roles. Without it only
+  // assigned roles count, on purpose: an @operator mention only notifies
+  // assigned operators (queryOperatorsForHunt).
+  hunt?: Pick<HuntType, "_id" | "defaultRoles">,
 ): boolean {
-  const roles = listAllRolesForHunt(user, hunt ?? { _id: chatMessage.hunt });
+  const roles = hunt
+    ? listAllRolesForHunt(user, hunt)
+    : listAssignedRolesForHunt(user, { _id: chatMessage.hunt });
   return (chatMessage.content?.children ?? []).some((child) => {
     if (nodeIsRoleMention(child)) {
       return roles.includes(child.roleId);
@@ -129,7 +143,7 @@ export function messageDingsUser(
   }
   const normalizedText = normalizedForDingwordSearch(chatMessage);
   const dingedByDingwords =
-    normalizedMessageDingsUserByDingword(normalizedText, user).length > 0;
+    dingwordsMatchingMessage(normalizedText, user).length > 0;
   return (
     dingedByDingwords ||
     dingedByMentions(chatMessage, user) ||

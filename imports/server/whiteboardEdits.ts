@@ -1,3 +1,4 @@
+import { Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import isReaction from "../lib/isReaction";
 import ChatMessages from "../lib/models/ChatMessages";
@@ -5,7 +6,9 @@ import ChatNotifications from "../lib/models/ChatNotifications";
 import Hunts from "../lib/models/Hunts";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import Puzzles from "../lib/models/Puzzles";
-import WhiteboardEdges from "../lib/models/WhiteboardEdges";
+import WhiteboardEdges, {
+  LINE_STYLE_FIELDS,
+} from "../lib/models/WhiteboardEdges";
 import type {
   WhiteboardContributorType,
   WhiteboardNodeType,
@@ -14,6 +17,7 @@ import WhiteboardNodes from "../lib/models/WhiteboardNodes";
 import Whiteboards from "../lib/models/Whiteboards";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import { Id } from "../lib/typedModel/regexes";
+import type { InkPoint } from "../lib/whiteboard/ink";
 import isWhiteboardPuzzle from "../lib/whiteboard/isWhiteboardPuzzle";
 import { CARD_HEIGHT, CARD_WIDTH, POINT_SIZE } from "../lib/whiteboard/layout";
 import {
@@ -45,6 +49,15 @@ const badRequest = (message: string) => new Meteor.Error(400, message);
 
 export const inRange = (n: number) =>
   Number.isFinite(n) && Math.abs(n) <= MAX_COORDINATE;
+
+// An ink sample's shape, [x, y, pressure], for the methods' check(). Whether
+// it's on the board is up to isInkPoint.
+export const InkPointPattern = Match.Where(
+  (point: unknown): point is InkPoint =>
+    Array.isArray(point) &&
+    point.length === 3 &&
+    point.every((n) => typeof n === "number"),
+);
 
 // [x, y, pressure] on the board, with the pressure between 0 and 1.
 export function isInkPoint(point: number[]) {
@@ -219,8 +232,8 @@ async function updateNode(
   if (existing.type === "frame") {
     setContent("label", input.label);
   }
-  if (input.colour !== undefined && input.colour !== existing.colour) {
-    $set.colour = input.colour;
+  if (input.color !== undefined && input.color !== existing.color) {
+    $set.color = input.color;
     contentChanged = true;
   }
 
@@ -300,7 +313,7 @@ async function insertNode(
     frameKind: input.type === "frame" ? "user" : undefined,
     label: input.type === "frame" ? label : undefined,
     text: input.type === "sticky" || input.type === "text" ? text : undefined,
-    colour: input.type === "point" ? undefined : input.colour,
+    color: input.type === "point" ? undefined : input.color,
     points: input.type === "ink" ? input.points : undefined,
     strokeWidth: input.type === "ink" ? input.strokeWidth : undefined,
     stroke: input.type === "ink" ? input.stroke : undefined,
@@ -562,8 +575,7 @@ export async function upsertEdges(
       if (input.target) $set.target = input.target;
       // Restyling or relabelling is authorship; moving an end isn't.
       let contentChanged = false;
-      const style = ["pathStyle", "arrowHead", "colour", "dashed"] as const;
-      style.forEach((field) => {
+      LINE_STYLE_FIELDS.forEach((field) => {
         if (input[field] !== undefined && input[field] !== existing[field]) {
           $set[field] = input[field];
           contentChanged = true;
@@ -604,7 +616,7 @@ export async function upsertEdges(
         label,
         pathStyle: input.pathStyle,
         arrowHead: input.arrowHead,
-        colour: input.colour,
+        color: input.color,
         dashed: input.dashed,
         contributors: appendContributor([], userId),
         createdBy: userId,

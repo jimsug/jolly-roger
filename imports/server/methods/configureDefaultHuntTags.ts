@@ -1,8 +1,9 @@
 import { check, Match } from "meteor/check";
+import { Meteor } from "meteor/meteor";
 import { parseInitialTags } from "../../lib/defaultHuntTags";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Settings from "../../lib/models/Settings";
-import { checkAdmin } from "../../lib/permission_stubs";
+import { userMayConfigureDefaultHuntTags } from "../../lib/permission_stubs";
 import configureDefaultHuntTags from "../../methods/configureDefaultHuntTags";
 import defineMethod from "./defineMethod";
 
@@ -16,7 +17,16 @@ defineMethod(configureDefaultHuntTags, {
 
   async run({ defaultHuntTags }) {
     check(this.userId, String);
-    checkAdmin(await MeteorUsers.findOneAsync(this.userId));
+    if (
+      !userMayConfigureDefaultHuntTags(
+        await MeteorUsers.findOneAsync(this.userId),
+      )
+    ) {
+      throw new Meteor.Error(
+        401,
+        "Must be admin to configure default hunt tags",
+      );
+    }
 
     // Store the list in canonical form; a blank list means "use the built-in
     // defaults", so the override is dropped rather than stored empty.

@@ -15,6 +15,7 @@
     "callersContext_0": "no callers",
     "callersContext": "{{count}} caller",
     "callersContext_other": "{{count}} callers",
+
     "caller_one": "caller",
     "caller_other": "callers"
   },
@@ -22,6 +23,7 @@
     "viewersContext_0": "No viewers",
     "viewersContext": "{{count}} viewer",
     "viewersContext_other": "{{count}} viewers",
+
     "viewer_one": "viewer",
     "viewer_other": "viewers",
     "newMessages_one": "{{shown}} new message",
@@ -55,20 +57,20 @@
   },
   "history": {
     "detail": {
-      "sentMessages_one": "sent <strong>{{count}} message</strong>",
-      "sentMessages_other": "sent <strong>{{count}} messages</strong>",
-      "mentionedIn_one": "were mentioned in <strong>{{count}} message</strong>",
-      "mentionedIn_other": "were mentioned in <strong>{{count}} messages</strong>",
-      "editedDocument_one": "were seen editing the sheet <strong>once</strong>",
-      "editedDocument_other": "were seen editing the sheet <strong>{{count}} times</strong>",
-      "guesses_one": "submitted <strong>{{count}} guess</strong>",
-      "guesses_other": "submitted <strong>{{count}} guesses</strong>",
-      "correctGuesses_one": "and <strong>it was correct</strong>",
-      "correctGuesses_other": "and <strong>{{count}} were correct</strong>"
+      "sentMessages_one": "You sent <strong>{{count}} message</strong>",
+      "sentMessages_other": "You sent <strong>{{count}} messages</strong>",
+      "mentionedIn_one": "You were mentioned in <strong>{{count}} message</strong>",
+      "mentionedIn_other": "You were mentioned in <strong>{{count}} messages</strong>",
+      "editedDocument_one": "You edited the sheet <strong>once</strong>",
+      "editedDocument_other": "You edited the sheet <strong>{{count}} times</strong>",
+      "guesses_one": "You submitted <strong>{{count}} guess</strong>",
+      "guesses_other": "You submitted <strong>{{count}} guesses</strong>",
+      "guessesWithCorrect_one": "You submitted <strong>{{count}} guess</strong> (<strong>correct</strong>)",
+      "guessesWithCorrect_other": "You submitted <strong>{{count}} guesses</strong> (<strong>{{correct}} correct</strong>)"
     },
     "graph": {
-      "activitySummary_one": "Total: {{count}} activity ({{breakdown}}) on {{day}}s at {{from}} - {{to}}",
-      "activitySummary_other": "Total: {{count}} activities ({{breakdown}}) on {{day}}s at {{from}} - {{to}}"
+      "activitySummary_one": "{{day}} {{from}} - {{to}}: {{count}} activity ({{breakdown}})",
+      "activitySummary_other": "{{day}} {{from}} - {{to}}: {{count}} activities ({{breakdown}})"
     }
   },
   "whiteboard": {

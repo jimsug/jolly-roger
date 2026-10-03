@@ -2,7 +2,6 @@
   "manifest_version": 3,
   "name": "Jolly Roger Browser Extension",
   "description": "Browser extension for use with Jolly Roger",
-  "version": "1.0",
   "icons": {
     "48": "icon48.png",
     "128": "icon128.png"

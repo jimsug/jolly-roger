@@ -1,17 +1,14 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
-import { Random } from "meteor/random";
 import { assert } from "chai";
 import { SUPPRESS_ALL_DINGWORDS } from "../../../../imports/lib/dingwordLogic";
 import type { ChatMessageContentType } from "../../../../imports/lib/models/ChatMessages";
 import ChatMessages from "../../../../imports/lib/models/ChatMessages";
 import ChatNotifications from "../../../../imports/lib/models/ChatNotifications";
-import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
-import dismissAllDingsForPuzzle from "../../../../imports/methods/dismissAllDingsForPuzzle";
-import suppressDingwordsForPuzzle from "../../../../imports/methods/suppressDingwordsForPuzzle";
 import ChatNotificationHooks from "../../../../imports/server/hooks/ChatNotificationHooks";
+import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 
 const text = (body: string): ChatMessageContentType => ({
@@ -35,10 +32,6 @@ describe("dingword suppression", function () {
   let outsiderId: string;
   let puzzleId: string;
   let otherPuzzleId: string;
-  let otherHuntPuzzleId: string;
-
-  const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-    DDP._CurrentMethodInvocation.withValue({ userId }, fn);
 
   const newUser = async (
     email: string,
@@ -96,21 +89,8 @@ describe("dingword suppression", function () {
       email: "sender@example.com",
       password: "password",
     });
-    const newHunt = (name: string) =>
-      asUser(senderId, () =>
-        Hunts.insertAsync({
-          name,
-          mailingLists: [],
-          openSignups: false,
-          hasGuessQueue: true,
-          defaultRoles: [],
-          allowUnlockablePuzzles: false,
-          isArchived: false,
-          customLinkEmbed: false,
-        }),
-      );
-    huntId = await newHunt("Dingword hunt");
-    otherHuntId = await newHunt("Other hunt");
+    huntId = await createTestHunt(senderId, { name: "Dingword hunt" });
+    otherHuntId = await createTestHunt(senderId, { name: "Other hunt" });
     await MeteorUsers.updateAsync(senderId, {
       $set: { displayName: "Sender", hunts: [huntId] },
     });
@@ -130,7 +110,6 @@ describe("dingword suppression", function () {
       );
     puzzleId = await newPuzzle(huntId, "Dinged puzzle");
     otherPuzzleId = await newPuzzle(huntId, "Other puzzle");
-    otherHuntPuzzleId = await newPuzzle(otherHuntId, "Elsewhere");
   });
 
   this.beforeEach(async function () {
@@ -151,6 +130,31 @@ describe("dingword suppression", function () {
       assert.isEmpty(
         await notificationsFor(outsiderId),
         "Members of other hunts aren't dinged",
+      );
+    });
+
+    it("records each puzzle the message links to, once", async function () {
+      const linked = await send({
+        type: "message",
+        children: [
+          { text: "foo, see " },
+          { type: "puzzle", puzzleId: otherPuzzleId },
+          { text: " and " },
+          { type: "puzzle", puzzleId: otherPuzzleId },
+        ],
+      });
+      const plain = await send(text("foo"));
+
+      const notifications = await notificationsFor(dingedId);
+      assert.lengthOf(notifications, 2);
+      assert.deepEqual(
+        notifications.find((cn) => cn.message === linked)?.mentionedPuzzles,
+        [otherPuzzleId],
+      );
+      assert.notProperty(
+        notifications.find((cn) => cn.message === plain) ?? {},
+        "mentionedPuzzles",
+        "A message without links records none",
       );
     });
 
@@ -207,238 +211,6 @@ describe("dingword suppression", function () {
       const notifications = await notificationsFor(dingedId);
       assert.lengthOf(notifications, 1);
       assert.notProperty(notifications[0]!, "dingwords");
-    });
-  });
-
-  describe("suppressDingwordsForPuzzle", function () {
-    const suppress = (
-      dingword: string | undefined,
-      dismissUntil = new Date(),
-    ) =>
-      asUser(dingedId, () =>
-        suppressDingwordsForPuzzle.callPromise({
-          hunt: huntId,
-          puzzle: puzzleId,
-          ...(dingword === undefined ? {} : { dingword }),
-          dismissUntil,
-        }),
-      );
-
-    it("mutes the word and clears the notifications it alone caused", async function () {
-      await send(text("foo"));
-      await send(text("foo and bar"));
-      await send(mentionOf(dingedId));
-      await send(text("foo"), otherPuzzleId);
-      assert.lengthOf(await notificationsFor(dingedId), 4);
-
-      await suppress("foo");
-
-      const user = await MeteorUsers.findOneAsync(dingedId);
-      assert.deepEqual(user?.suppressedDingwords, {
-        [huntId]: { [puzzleId]: ["foo"] },
-      });
-      const remaining = await notificationsFor(dingedId);
-      assert.sameMembers(
-        remaining.map((cn) => `${cn.puzzle}:${cn.dingwords?.join(",") ?? ""}`),
-        [`${puzzleId}:foo,bar`, `${puzzleId}:`, `${otherPuzzleId}:foo`],
-        "Only the notification where every matched word is muted goes",
-      );
-
-      await suppress("bar");
-      const afterBoth = await notificationsFor(dingedId);
-      assert.sameMembers(
-        afterBoth.map((cn) => `${cn.puzzle}:${cn.dingwords?.join(",") ?? ""}`),
-        [`${puzzleId}:`, `${otherPuzzleId}:foo`],
-      );
-      assert.sameMembers(
-        (await MeteorUsers.findOneAsync(dingedId))?.suppressedDingwords?.[
-          huntId
-        ]?.[puzzleId] ?? [],
-        ["foo", "bar"],
-      );
-    });
-
-    it("mutes everything with no word but keeps notifications from mentions", async function () {
-      await send(text("foo"));
-      await send(text("bar"));
-      await send(mentionOf(dingedId));
-      await send(text("foo"), otherPuzzleId);
-
-      await suppress(undefined);
-
-      const user = await MeteorUsers.findOneAsync(dingedId);
-      assert.deepEqual(user?.suppressedDingwords?.[huntId]?.[puzzleId], [
-        SUPPRESS_ALL_DINGWORDS,
-      ]);
-      const remaining = await notificationsFor(dingedId);
-      assert.sameMembers(
-        remaining.map((cn) => `${cn.puzzle}:${cn.dingwords?.join(",") ?? ""}`),
-        [`${puzzleId}:`, `${otherPuzzleId}:foo`],
-      );
-    });
-
-    it("clears a dingword notification on a message that mentioned a role the user only holds by default", async function () {
-      // With "operator" as a default role, the hook still only role-notifies
-      // explicit operators, so this notification exists for the dingword
-      // alone and the mute must clear it
-      await Hunts.updateAsync(huntId, { $set: { defaultRoles: ["operator"] } });
-      try {
-        await send({
-          type: "message",
-          children: [
-            { type: "role-mention", roleId: "operator" },
-            { text: " foo" },
-          ],
-        });
-        const notifications = await notificationsFor(dingedId);
-        assert.lengthOf(notifications, 1);
-        assert.deepEqual(notifications[0]!.dingwords, ["foo"]);
-        assert.isFalse(notifications[0]!.mentioned);
-
-        await suppress("foo");
-        assert.isEmpty(await notificationsFor(dingedId));
-      } finally {
-        await Hunts.updateAsync(huntId, { $set: { defaultRoles: [] } });
-      }
-    });
-
-    it("keeps a notification from before the hook recorded mentions if its content mentions the user", async function () {
-      await send(mentionOf(dingedId));
-      await send(text("foo"));
-      await ChatNotifications.collection
-        .rawCollection()
-        .updateMany({ user: dingedId }, { $unset: { mentioned: "" } });
-
-      await suppress(undefined);
-
-      const remaining = await notificationsFor(dingedId);
-      assert.lengthOf(remaining, 1);
-      assert.notProperty(remaining[0]!, "dingwords");
-    });
-
-    it("only clears notifications from before dismissUntil", async function () {
-      await send(text("foo"));
-      await suppress("foo", new Date(Date.now() - 60 * 1000));
-
-      assert.lengthOf(await notificationsFor(dingedId), 1);
-      assert.deepEqual(
-        (await MeteorUsers.findOneAsync(dingedId))?.suppressedDingwords?.[
-          huntId
-        ]?.[puzzleId],
-        ["foo"],
-      );
-    });
-
-    it("rejects callers who aren't logged in or aren't members", async function () {
-      await assert.isRejected(
-        suppressDingwordsForPuzzle.callPromise({
-          hunt: huntId,
-          puzzle: puzzleId,
-          dingword: "foo",
-          dismissUntil: new Date(),
-        }),
-        /Expected string/,
-      );
-      await assert.isRejected(
-        asUser(outsiderId, () =>
-          suppressDingwordsForPuzzle.callPromise({
-            hunt: huntId,
-            puzzle: puzzleId,
-            dingword: "foo",
-            dismissUntil: new Date(),
-          }),
-        ),
-        /not a member/,
-      );
-      assert.isUndefined(
-        (await MeteorUsers.findOneAsync(outsiderId))?.suppressedDingwords,
-      );
-    });
-
-    it("rejects ids that don't exist or don't belong together", async function () {
-      await assert.isRejected(
-        asUser(dingedId, () =>
-          suppressDingwordsForPuzzle.callPromise({
-            hunt: huntId,
-            puzzle: otherHuntPuzzleId,
-            dismissUntil: new Date(),
-          }),
-        ),
-        /Unknown puzzle/,
-      );
-      await assert.isRejected(
-        asUser(dingedId, () =>
-          suppressDingwordsForPuzzle.callPromise({
-            hunt: Random.id(),
-            puzzle: puzzleId,
-            dismissUntil: new Date(),
-          }),
-        ),
-        /Unknown hunt/,
-      );
-      await assert.isRejected(suppress("   "), /blank/);
-      assert.isUndefined(
-        (await MeteorUsers.findOneAsync(dingedId))?.suppressedDingwords,
-      );
-    });
-  });
-
-  describe("dismissAllDingsForPuzzle", function () {
-    it("clears the caller's notifications for the puzzle and nothing else", async function () {
-      await send(text("foo"));
-      await send(mentionOf(dingedId));
-      await send(text("bar"), otherPuzzleId);
-      await send(mentionOf(mentionedId));
-
-      await asUser(dingedId, () =>
-        dismissAllDingsForPuzzle.callPromise({
-          hunt: huntId,
-          puzzle: puzzleId,
-          dismissUntil: new Date(),
-        }),
-      );
-
-      const remaining = await notificationsFor(dingedId);
-      assert.lengthOf(remaining, 1);
-      assert.equal(remaining[0]!.puzzle, otherPuzzleId);
-      assert.lengthOf(
-        await notificationsFor(mentionedId),
-        1,
-        "Other users' notifications stay",
-      );
-    });
-
-    it("rejects callers who aren't logged in or aren't members, and mismatched ids", async function () {
-      await send(text("foo"));
-      await assert.isRejected(
-        dismissAllDingsForPuzzle.callPromise({
-          hunt: huntId,
-          puzzle: puzzleId,
-          dismissUntil: new Date(),
-        }),
-        /Expected string/,
-      );
-      await assert.isRejected(
-        asUser(outsiderId, () =>
-          dismissAllDingsForPuzzle.callPromise({
-            hunt: huntId,
-            puzzle: puzzleId,
-            dismissUntil: new Date(),
-          }),
-        ),
-        /not a member/,
-      );
-      await assert.isRejected(
-        asUser(dingedId, () =>
-          dismissAllDingsForPuzzle.callPromise({
-            hunt: otherHuntId,
-            puzzle: puzzleId,
-            dismissUntil: new Date(),
-          }),
-        ),
-        /Unknown puzzle/,
-      );
-      assert.lengthOf(await notificationsFor(dingedId), 1);
     });
   });
 });

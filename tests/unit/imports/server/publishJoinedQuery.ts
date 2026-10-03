@@ -1,4 +1,3 @@
-import type { Meteor, Subscription } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import Guesses from "../../../../imports/lib/models/Guesses";
@@ -7,74 +6,9 @@ import Tags from "../../../../imports/lib/models/Tags";
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
 import publishJoinedQuery from "../../../../imports/server/publishJoinedQuery";
 import resetDatabase from "../../../lib/resetDatabase";
+import StubSubscription from "../../../lib/StubSubscription";
 import waitForAssertion from "../../../lib/waitForAssertion";
 import withWriteFence from "../../../lib/withWriteFence";
-
-class StubSubscription implements Subscription {
-  stopHooks: (() => void)[] = [];
-
-  onStop(func: () => void): void {
-    this.stopHooks.push(func);
-  }
-
-  data: Map<
-    string /* collection */,
-    Map<string /* id */, Record<string, any> /* fields */>
-  > = new Map();
-
-  added(collection: string, id: string, fields: Record<string, any>): void {
-    let collectionMap = this.data.get(collection);
-    if (!collectionMap) {
-      collectionMap = new Map();
-      this.data.set(collection, collectionMap);
-    }
-    collectionMap.set(id, fields);
-  }
-
-  changed(collection: string, id: string, fields: Record<string, any>): void {
-    const collectionMap = this.data.get(collection);
-    if (!collectionMap) {
-      throw new Error(`Collection ${collection} not found`);
-    }
-    const doc = collectionMap.get(id);
-    if (!doc) {
-      throw new Error(`Document ${id} not found in collection ${collection}`);
-    }
-    collectionMap.set(id, { ...doc, ...fields });
-  }
-
-  removed(collection: string, id: string): void {
-    const collectionMap = this.data.get(collection);
-    if (!collectionMap) {
-      throw new Error(`Collection ${collection} not found`);
-    }
-    if (!collectionMap.delete(id)) {
-      throw new Error(`Document ${id} not found in collection ${collection}`);
-    }
-  }
-
-  ready() {
-    /* noop */
-  }
-
-  stop() {
-    this.stopHooks.forEach((hook) => hook());
-  }
-
-  error(_error: Error) {
-    /* noop */
-  }
-
-  unblock() {
-    /* noop */
-  }
-
-  userId: string | null = null;
-
-  get connection(): Meteor.Connection {
-    throw new Error("Method not implemented.");
-  }
-}
 
 describe("publishJoinedQuery", function () {
   // Stop observers per-test: a leftover observer would share its multiplexer

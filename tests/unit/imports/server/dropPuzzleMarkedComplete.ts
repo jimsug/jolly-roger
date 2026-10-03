@@ -2,29 +2,32 @@ import { Random } from "meteor/random";
 import { assert } from "chai";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
 import { computeSolvedness } from "../../../../imports/lib/solvedness";
-import { dropPuzzleMarkedComplete } from "../../../../imports/server/migrations/56-drop-puzzle-marked-complete";
+import dropPuzzleMarkedComplete from "../../../../imports/server/dropPuzzleMarkedComplete";
 import resetDatabase from "../../../lib/resetDatabase";
 
 // Inserts a puzzle shaped like one the fork wrote. Document validation is
 // bypassed because that is the point.
 async function insertLegacyPuzzle(extra: Record<string, unknown> = {}) {
   const _id = Random.id();
-  await Puzzles.collection.rawCollection().insertOne(
-    {
-      _id,
-      hunt: Random.id(),
-      title: "Legacy puzzle",
-      tags: [],
-      answers: [],
-      expectedAnswerCount: 1,
-      deleted: false,
-      createdAt: new Date(),
-      createdBy: Random.id(),
-      updatedAt: new Date(),
-      ...extra,
-    } as any,
-    { bypassDocumentValidation: true },
-  );
+  await Puzzles.collection
+    .rawDatabase()
+    .collection<{ _id: string; [field: string]: unknown }>("jr_puzzles")
+    .insertOne(
+      {
+        _id,
+        hunt: Random.id(),
+        title: "Legacy puzzle",
+        tags: [],
+        answers: [],
+        expectedAnswerCount: 1,
+        deleted: false,
+        createdAt: new Date(),
+        createdBy: Random.id(),
+        updatedAt: new Date(),
+        ...extra,
+      },
+      { bypassDocumentValidation: true },
+    );
   return _id;
 }
 

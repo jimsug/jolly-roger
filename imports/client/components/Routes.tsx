@@ -1,5 +1,3 @@
-import { Meteor } from "meteor/meteor";
-import { useTracker } from "meteor/react-meteor-data";
 import React, { Suspense, useEffect } from "react";
 import type { RouteObject } from "react-router";
 import { Navigate, useRoutes } from "react-router";
@@ -13,7 +11,7 @@ import AllProfileListPage from "./AllProfileListPage";
 import AnnouncementsPage from "./AnnouncementsPage";
 import {
   AuthenticatedPage,
-  NoAuthenticationPage,
+  PublicPage,
   UnauthenticatedPage,
 } from "./authentication";
 import CustomLinkEmbedPage from "./CustomLinkEmbedPage";
@@ -33,10 +31,11 @@ import InvitedUserListPage from "./InvitedUserListPage";
 import JoinHunt from "./JoinHunt";
 import Loading from "./Loading";
 import LoginForm from "./LoginForm";
-import MoreAppPage from "./MoreAppPage";
+import MorePage from "./MorePage";
 import NotesPage from "./NotesPage";
 import PasswordResetForm from "./PasswordResetForm";
 import ProfilePage from "./ProfilePage";
+import ProfileRedirector from "./ProfileRedirector";
 import PuzzleListPage from "./PuzzleListPage";
 import PuzzlePage from "./PuzzlePage";
 import RootRedirector from "./RootRedirector";
@@ -47,14 +46,8 @@ import VerifyEmailPage from "./VerifyEmailPage";
 const HuntEditPage = React.lazy(() => import("./HuntEditPage"));
 const SetupPage = React.lazy(() => import("./SetupPage"));
 const RTCDebugPage = React.lazy(() => import("./RTCDebugPage"));
-const UserPuzzleHistory = React.lazy(() => import("./UserPuzzleHistory"));
+const PuzzleHistoryPage = React.lazy(() => import("./PuzzleHistoryPage"));
 const WhiteboardPage = React.lazy(() => import("./WhiteboardPage"));
-
-// /profile is a stable link to the current user's own profile page
-const ProfileRedirect = () => {
-  const userId = useTracker(() => Meteor.userId(), []);
-  return <Navigate to={userId ? `/users/${userId}` : "/login"} replace />;
-};
 
 /* Authenticated routes - if user not logged in, get redirected to /login */
 export const AuthenticatedRouteList: RouteObject[] = [
@@ -84,7 +77,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
           { path: "notes", element: <NotesPage /> },
           { path: "whiteboard", element: <WhiteboardPage /> },
           { path: "custom-link", element: <CustomLinkEmbedPage /> },
-          { path: "more", element: <MoreAppPage /> },
+          { path: "more", element: <MorePage /> },
           { path: "edit", element: <HuntEditPage /> },
           { path: "", element: <Navigate to="puzzles" replace /> },
         ],
@@ -93,8 +86,8 @@ export const AuthenticatedRouteList: RouteObject[] = [
       { path: "", element: <HuntListPage /> },
     ],
   },
-  { path: "/profile", element: <ProfileRedirect /> },
-  { path: "/history", element: <UserPuzzleHistory /> },
+  { path: "/profile", element: <ProfileRedirector /> },
+  { path: "/history", element: <PuzzleHistoryPage /> },
   {
     path: "/users",
     element: <UsersApp />,
@@ -126,11 +119,11 @@ export const UnauthenticatedRouteList: RouteObject[] = [
 });
 
 /* Public routes - rendered the same whether or not the user is logged in */
-export const NoAuthenticationRouteList: RouteObject[] = [
+export const PublicRouteList: RouteObject[] = [
   { path: "/extension-privacy-policy", element: <ExtensionPrivacyPolicy /> },
 ].map((r) => {
   return Object.assign(r, {
-    element: <NoAuthenticationPage>{r.element}</NoAuthenticationPage>,
+    element: <PublicPage>{r.element}</PublicPage>,
   });
 });
 
@@ -140,7 +133,7 @@ export const RouteList: RouteObject[] = [
     path: "/",
     element: <RootRedirector />,
   },
-  ...NoAuthenticationRouteList,
+  ...PublicRouteList,
   ...AuthenticatedRouteList,
   ...UnauthenticatedRouteList,
   // JoinHunt handles both authenticated and unauthenticated users.

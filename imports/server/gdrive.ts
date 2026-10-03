@@ -1,10 +1,11 @@
 import { Meteor } from "meteor/meteor";
 import type { drive_v3 as drive } from "@googleapis/drive";
+import { GaxiosError } from "gaxios";
 import Flags from "../Flags";
 import Logger from "../Logger";
 import type { GdriveMimeTypesType } from "../lib/GdriveMimeTypes";
 import GdriveMimeTypes from "../lib/GdriveMimeTypes";
-import CachedDocuments from "../lib/models/CachedDocuments";
+import type { DocumentType } from "../lib/models/Documents";
 import Documents from "../lib/models/Documents";
 import FolderPermissions from "../lib/models/FolderPermissions";
 import Hunts from "../lib/models/Hunts";
@@ -13,10 +14,11 @@ import Settings from "../lib/models/Settings";
 import getTeamName from "./getTeamName";
 import GoogleClient from "./googleClientRefresher";
 import ignoringDuplicateKeyErrors from "./ignoringDuplicateKeyErrors";
+import CachedDocuments from "./models/CachedDocuments";
 import HuntFolders from "./models/HuntFolders";
 import withLock from "./withLock";
 
-async function checkClientOk() {
+export async function checkClientOk() {
   if (!GoogleClient.ready()) {
     throw new Meteor.Error(500, "Google Drive client is not configured.");
   }
@@ -24,6 +26,12 @@ async function checkClientOk() {
   if (await Flags.activeAsync("disable.google")) {
     throw new Meteor.Error(500, "Google integration is disabled.");
   }
+}
+
+// checkClientOk as a boolean, for callers that skip their Drive work rather
+// than fail without it
+export async function isGoogleAvailable() {
+  return GoogleClient.ready() && !(await Flags.activeAsync("disable.google"));
 }
 
 async function createFolder(name: string, parentId?: string) {
@@ -168,8 +176,8 @@ export async function huntFolderName(huntName: string) {
   return `${huntName}: ${await getTeamName()}`;
 }
 
-// Short and recognisable in Drive's recents list, where the team name just
-// added noise. Also applied when a puzzle is renamed.
+// Prefixed so puzzle files are easy to pick out in Drive's recents list. Used
+// on creation and on rename.
 export function puzzleDocumentName(puzzleTitle: string) {
   return `↔️ ${puzzleTitle}`;
 }
@@ -177,7 +185,9 @@ export function puzzleDocumentName(puzzleTitle: string) {
 export async function renameDocument(id: string, name: string) {
   await checkClientOk();
   if (!GoogleClient.drive) return;
-  // It's unclear if this can ever return an error
+  // files.update rejects with a 404 for a missing file, and
+  // renameClaimedDocument relies on that to skip cached documents that are
+  // gone from Drive
   await GoogleClient.drive.files.update({
     fileId: id,
     requestBody: { name },
@@ -381,10 +391,16 @@ export async function ensureDocument(
       if (!doc) {
         const name = puzzleDocumentName(puzzle.title);
 
-        // A placeholder from the hunt's document cache saves the Drive
-        // round trips (and the wait) that creating a file costs.
-        const cached = await claimCachedDocument(puzzle.hunt, type);
-        let value: { type: GdriveMimeTypesType; id: string; folder?: string };
+        // A cached document from the hunt's document cache saves the Drive
+        // round trips (and the wait) that creating a file costs. With the
+        // cache switched off, the file is created on the spot instead.
+        const cacheDisabled = await Flags.activeAsync(
+          "disable.gdrive_document_cache",
+        );
+        const cached = cacheDisabled
+          ? undefined
+          : await claimCachedDocument(puzzle.hunt, type);
+        let value: DocumentType["value"];
         if (
           cached &&
           (await renameClaimedDocument(cached.value.id, name, puzzle._id))
@@ -425,37 +441,24 @@ export async function ensureDocument(
   return doc!;
 }
 
-// Takes the oldest available placeholder of the requested type out of the
-// hunt's document cache. The status flip is atomic, so two puzzles can't
-// claim the same file; the row is removed straight away since the file now
-// belongs to the puzzle.
+// Takes the oldest available cached document of the requested type out of the
+// hunt's document cache. Deleting the row is atomic, so two puzzles can't
+// claim the same file, and from then on the file belongs to the puzzle.
 async function claimCachedDocument(huntId: string, type: GdriveMimeTypesType) {
   const claimed = await CachedDocuments.collection
     .rawCollection()
-    .findOneAndUpdate(
+    .findOneAndDelete(
       { hunt: huntId, "value.type": type, status: "available" },
-      { $set: { status: "claimed" } },
-      { sort: { createdAt: 1 }, returnDocument: "after" },
+      { sort: { createdAt: 1 } },
     );
-  if (!claimed) {
-    return undefined;
-  }
-  await CachedDocuments.removeAsync(claimed._id);
-  return claimed;
+  return claimed ?? undefined;
 }
 
-function isNotFoundError(error: unknown) {
-  const gaxiosError = error as
-    | { status?: unknown; response?: { status?: unknown } }
-    | undefined;
-  return gaxiosError?.status === 404 || gaxiosError?.response?.status === 404;
-}
-
-// Renames a freshly claimed placeholder to its puzzle. The rename doubles as
-// a check that the file still exists: a placeholder deleted in Drive behind
-// the cache's back (despite its name) must not be attached to the puzzle,
-// since nothing would repair that later. Other failures leave the file
-// attached under its placeholder name, which the next rename puts right.
+// Renames a freshly claimed cached document for its puzzle. The rename
+// doubles as a check that the file still exists: a cached document deleted in
+// Drive behind the cache's back (despite its name) must not be attached to the
+// puzzle, since nothing would repair that later. Other failures leave the file
+// attached under its cached name, which the next rename puts right.
 async function renameClaimedDocument(
   fileId: string,
   name: string,
@@ -469,7 +472,7 @@ async function renameClaimedDocument(
     await renameDocument(fileId, name);
     return true;
   } catch (error) {
-    if (isNotFoundError(error)) {
+    if (error instanceof GaxiosError && error.status === 404) {
       Logger.error("Cached document no longer exists in Drive; skipping it", {
         puzzle: puzzleId,
         fileId,

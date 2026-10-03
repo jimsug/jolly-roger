@@ -23,10 +23,14 @@ import type { DiscordAccountType } from "../../lib/models/DiscordAccount";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import CallHistories from "../../lib/models/mediasoup/CallHistories";
 import Peers from "../../lib/models/mediasoup/Peers";
+import type { ViewerStatus } from "../../lib/presenceStatus";
+import { viewerStatus } from "../../lib/presenceStatus";
 import relativeTimeFormat from "../../lib/relativeTimeFormat";
 import type { Action, CallState, JoinCallOptions } from "../hooks/useCallState";
 import { CallJoinState } from "../hooks/useCallState";
+import useDocumentVisible from "../hooks/useDocumentVisible";
 import useNow from "../hooks/useNow";
+import usePushToTalk from "../hooks/usePushToTalk";
 import useSubscribeAvatars from "../hooks/useSubscribeAvatars";
 import { Subscribers } from "../subscribers";
 import { trace } from "../tracing";
@@ -42,45 +46,11 @@ import {
   PeopleListDiv,
 } from "./styling/PeopleComponents";
 
-// A viewer whose tab is hidden counts as online this long after it was last
-// seen, idle for a while after that, then away
-const ACTIVE_SLACK_MS = 60 * 1000;
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-
-type ViewerStatus = "online" | "idle" | "away";
+// Viewers are listed online first, then idle, then away
 const VIEWER_STATUS_RANK: Record<ViewerStatus, number> = {
   online: 0,
   idle: 1,
   away: 2,
-};
-
-// Ctrl+Space has its own meaning while typing (the chat editor is a
-// contenteditable), so push-to-talk stays out of the way of text entry.
-// Inputs that take no text (a focused radio in a ToggleButtonGroup, say)
-// don't count.
-const NON_TEXT_INPUT_TYPES = new Set([
-  "button",
-  "checkbox",
-  "color",
-  "file",
-  "image",
-  "radio",
-  "range",
-  "reset",
-  "submit",
-]);
-const isTypingTarget = (element: Element | null) => {
-  if (!(element instanceof HTMLElement)) {
-    return false;
-  }
-  if (element instanceof HTMLInputElement) {
-    return !NON_TEXT_INPUT_TYPES.has(element.type);
-  }
-  return (
-    element.isContentEditable ||
-    element instanceof HTMLTextAreaElement ||
-    element instanceof HTMLSelectElement
-  );
 };
 
 interface ViewerSubscriber {
@@ -107,11 +77,11 @@ const ActivityDot = styled.div<{ $status: ViewerStatus }>`
   background-color: ${({ $status, theme }) => {
     switch ($status) {
       case "online":
-        return theme.colors.success;
+        return theme.colors.presence.online;
       case "idle":
-        return theme.colors.warning;
+        return theme.colors.presence.idle;
       case "away":
-        return theme.colors.secondary;
+        return theme.colors.presence.away;
       default:
         return $status satisfies never;
     }
@@ -238,8 +208,10 @@ const ChatPeople = ({
 
   const { t } = useTranslation();
 
-  // Viewer status dots age out, so refresh them every minute
-  const now = useNow(60 * 1000);
+  // Viewer status dots age out, so refresh them every minute while the tab is
+  // visible
+  const visible = useDocumentVisible();
+  const now = useNow(visible ? 60 * 1000 : null);
 
   useEffect(() => {
     let interval: number | undefined;
@@ -310,24 +282,12 @@ const ChatPeople = ({
         return;
       }
 
-      // Online while a tab is visible (or was until a moment ago), idle once
-      // every tab has been hidden a while, away after that
-      let status: ViewerStatus = "online";
-      if (!(s.visible ?? true)) {
-        const sinceSeen = now.getTime() - (s.updatedAt?.getTime() ?? 0);
-        if (sinceSeen >= IDLE_TIMEOUT_MS) {
-          status = "away";
-        } else if (sinceSeen >= ACTIVE_SLACK_MS) {
-          status = "idle";
-        }
-      }
-
       viewersAcc.push({
         user: s.user,
         name: user.displayName,
         discordAccount: user.discordAccount,
         tab: undefined,
-        status,
+        status: viewerStatus(s, now),
       });
     });
 
@@ -366,67 +326,11 @@ const ChatPeople = ({
     joinCall({ muted: true });
   }, [joinCall]);
 
-  // Push-to-talk: while muted, holding Ctrl+Space unmutes until Space is
-  // released. The keydown checks read the mute state through a ref so the
-  // dispatch doesn't re-register the listeners mid-press; set-muted is
-  // idempotent, so a keyup that lands after the call has ended (navigating
-  // away mid-press resets the call state from an effect, one render before
-  // the listeners come off) is a no-op rather than a reducer error.
-  const audioControlsRef = useRef(audioControls);
-  useEffect(() => {
-    audioControlsRef.current = audioControls;
-  }, [audioControls]);
-  const pushToTalkHeld = useRef(false);
-  const inCall = callState.callState === CallJoinState.IN_CALL;
-  useEffect(() => {
-    if (!inCall) {
-      return undefined;
-    }
-
-    const release = () => {
-      if (!pushToTalkHeld.current) {
-        return;
-      }
-      pushToTalkHeld.current = false;
-      callDispatch({ type: "set-muted", muted: true });
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (
-        e.key !== " " ||
-        !e.ctrlKey ||
-        e.repeat ||
-        pushToTalkHeld.current ||
-        isTypingTarget(document.activeElement)
-      ) {
-        return;
-      }
-      const current = audioControlsRef.current;
-      if (!current.muted || current.deafened) {
-        return;
-      }
-      e.preventDefault();
-      pushToTalkHeld.current = true;
-      callDispatch({ type: "set-muted", muted: false });
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key !== " " || !pushToTalkHeld.current) {
-        return;
-      }
-      e.preventDefault();
-      release();
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    // Losing the window mid-press would otherwise leave the mic open
-    window.addEventListener("blur", release);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", release);
-      pushToTalkHeld.current = false;
-    };
-  }, [inCall, callDispatch]);
+  usePushToTalk({
+    inCall: callState.callState === CallJoinState.IN_CALL,
+    audioControls,
+    callDispatch,
+  });
 
   useLayoutEffect(() => {
     trace("ChatPeople useLayoutEffect", {

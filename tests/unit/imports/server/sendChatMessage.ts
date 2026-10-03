@@ -1,17 +1,17 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import type { ChatMessageContentType } from "../../../../imports/lib/models/ChatMessages";
 import ChatMessages, {
   contentFromMessage,
 } from "../../../../imports/lib/models/ChatMessages";
-import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
 import nodeIsText from "../../../../imports/lib/nodeIsText";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import sendChatMessageInternal from "../../../../imports/server/sendChatMessageInternal";
+import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 
 const text = (body: string): ChatMessageContentType => ({
@@ -29,9 +29,6 @@ describe("sendChatMessage", function () {
   let puzzleId: string;
   let otherPuzzleId: string;
   let otherHuntPuzzleId: string;
-
-  const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-    DDP._CurrentMethodInvocation.withValue({ userId }, fn);
 
   const send = (
     userId: string,
@@ -59,21 +56,8 @@ describe("sendChatMessage", function () {
       email: "outsider@example.com",
       password: "password",
     });
-    const newHunt = (name: string) =>
-      asUser(memberId, () =>
-        Hunts.insertAsync({
-          name,
-          mailingLists: [],
-          openSignups: false,
-          hasGuessQueue: true,
-          defaultRoles: [],
-          allowUnlockablePuzzles: false,
-          isArchived: false,
-          customLinkEmbed: false,
-        }),
-      );
-    huntId = await newHunt("Chat hunt");
-    otherHuntId = await newHunt("Other hunt");
+    huntId = await createTestHunt(memberId, { name: "Chat hunt" });
+    otherHuntId = await createTestHunt(memberId, { name: "Other hunt" });
     await MeteorUsers.updateAsync(memberId, {
       $set: { displayName: "Member", hunts: [huntId] },
     });
@@ -122,9 +106,16 @@ describe("sendChatMessage", function () {
     assert.isEmpty(await messagesOn(otherPuzzleId));
   });
 
+  it("rejects an unknown puzzle", async function () {
+    await assert.isRejected(
+      send(memberId, text("hello"), { puzzleId: Random.id() }),
+      /Unknown puzzle/,
+    );
+  });
+
   it("still lets the server post system messages", async function () {
-    // The membership check goes on the sender, not on whoever's method the
-    // server is posting from
+    // The membership check is the method's, so the server can post from
+    // inside anyone's method call
     await asUser(outsiderId, () =>
       sendChatMessageInternal({
         puzzleId,

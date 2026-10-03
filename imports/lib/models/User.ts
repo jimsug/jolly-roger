@@ -30,8 +30,8 @@ declare module "meteor/meteor" {
       discordAccount?: DiscordAccountType;
       phoneNumber?: string;
       dingwords?: string[];
-      // When set, a dingword also matches the start of a longer word
-      // ("logic" dings on "logician"); otherwise only whole words match.
+      // How dingwords match: set for "prefix" (Match word starts, so "logic"
+      // dings on "logician"), unset or false for "word" (Match whole words).
       dingwordsOpenMatch?: boolean;
       // Dingwords muted per puzzle: hunt id -> puzzle id -> words (or the
       // SUPPRESS_ALL_DINGWORDS sentinel for every dingword on that puzzle).
@@ -109,6 +109,4 @@ export type ProfileFields =
   | "googleAccount"
   | "discordAccount"
   | "phoneNumber"
-  | "dingwords"
-  | "dingwordsOpenMatch"
-  | "isOffsite";
+  | "dingwords";

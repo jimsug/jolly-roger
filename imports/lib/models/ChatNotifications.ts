@@ -36,6 +36,10 @@ const ChatNotification = withCommon(
     // The whiteboard comment thread the message belongs to (the root
     // comment's id), including when it is the root.
     thread: foreignKey.optional(),
+    // The puzzles the message links to, published alongside the
+    // notification so the toast can show their titles. Rows written before
+    // this field existed lack it.
+    mentionedPuzzles: foreignKey.array().optional(),
   }),
 );
 

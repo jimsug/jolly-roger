@@ -384,7 +384,7 @@ if (Meteor.isClient) {
               [0, height, 0.5],
             ],
             strokeWidth: "medium",
-            colour: "black",
+            color: "black",
             stroke: Random.id(),
           },
         ],

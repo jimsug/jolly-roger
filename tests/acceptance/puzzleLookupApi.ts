@@ -77,13 +77,13 @@ if (Meteor.isClient) {
       });
       await promisify(Meteor.loginWithPassword)(USER_EMAIL, USER_PASSWORD);
 
-      huntId = await createHunt.callPromise({ ...huntFields, initialTags: "" });
+      huntId = await createHunt.callPromise({ ...huntFields, initialTags: [] });
       await addHuntUser.callPromise({ huntId, email: USER_EMAIL });
       // Creating a hunt doesn't join it, so this one's off limits
       otherHuntId = await createHunt.callPromise({
         ...huntFields,
         name: "Someone Else's Hunt",
-        initialTags: "",
+        initialTags: [],
       });
 
       const newPuzzle = (title: string, url: string, hunt = huntId) =>
@@ -117,7 +117,6 @@ if (Meteor.isClient) {
           puzzles: [
             {
               _id: firstPuzzleId,
-              title: "First",
               jollyRogerUrl: puzzlePage(huntId, firstPuzzleId),
             },
           ],

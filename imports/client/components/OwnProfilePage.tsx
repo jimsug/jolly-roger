@@ -422,7 +422,7 @@ const OwnProfilePage = ({
     }, []);
 
   const handleDingwordsModeChange = useCallback((mode: string) => {
-    setDingwordsOpenMatch(mode === "open");
+    setDingwordsOpenMatch(mode === "prefix");
   }, []);
 
   const handleIsOffsiteChange = useCallback(
@@ -536,36 +536,36 @@ const OwnProfilePage = ({
         <FormText>
           {t(
             "profile.dingwords.matchingHelp",
-            "If anyone sends a chat message, or adds a tag, that contains one of your dingwords, you'll get a notification. Separate dingwords by commas; spaces are allowed. Matching ignores case and only matches whole words or phrases, unless you pick “Match start” below.",
+            "If anyone sends a chat message, or adds a tag, that contains one of your dingwords, you'll get a notification. Separate dingwords by commas; spaces are allowed. Matching ignores case and only matches whole words or phrases, unless you pick “Match word starts” below.",
           )}
         </FormText>
       </FormGroup>
 
-      <FormGroup className="mb-3" controlId={`${idPrefix}-dingwords-mode`}>
-        <FormLabel>
+      <fieldset className="mb-3">
+        <legend className="form-label fs-6">
           {t("profile.dingwordsMode.label", "Dingwords matching mode")}
-        </FormLabel>
+        </legend>
         <LabelledRadioGroup
           header=""
           options={[
             {
-              value: "exact",
+              value: "word",
               label: (
                 <Trans
-                  i18nKey="profile.dingwordsMode.exact"
+                  i18nKey="profile.dingwordsMode.word"
                   t={t}
-                  defaults="<strong>Match precisely:</strong> dingwords and phrases must match the typed text <em>exactly</em> in order to trigger an alert."
-                  components={{ strong: <strong />, em: <em /> }}
+                  defaults="<strong>Match whole words:</strong> dingwords must match whole words or phrases (case doesn't matter)."
+                  components={{ strong: <strong /> }}
                 />
               ),
             },
             {
-              value: "open",
+              value: "prefix",
               label: (
                 <Trans
-                  i18nKey="profile.dingwordsMode.open"
+                  i18nKey="profile.dingwordsMode.prefix"
                   t={t}
-                  defaults="<strong>Match start:</strong> dingwords and phrases only need to match the <em>start</em> of a typed word or phrase. For example, the dingword <code>logic</code> would match “logic”, “logician”, and “logical”, but not “illogical”."
+                  defaults="<strong>Match word starts:</strong> dingwords only need to match the <em>start</em> of a word or phrase. For example, the dingword <code>logic</code> would match “logic”, “logician”, and “logical”, but not “illogical”."
                   components={{
                     strong: <strong />,
                     em: <em />,
@@ -575,17 +575,18 @@ const OwnProfilePage = ({
               ),
             },
           ]}
-          initialValue={dingwordsOpenMatch ? "open" : "exact"}
+          initialValue={dingwordsOpenMatch ? "prefix" : "word"}
           help=""
           onChange={handleDingwordsModeChange}
         />
-      </FormGroup>
+      </fieldset>
 
-      <FormGroup className="mb-3" controlId={`${idPrefix}-is-offsite`}>
-        <FormLabel>
+      <FormGroup className="mb-3">
+        <div className="form-label">
           {t("profile.offsite.label", "Are you hunting remotely?")}
-        </FormLabel>
+        </div>
         <FormCheck
+          id={`${idPrefix}-is-offsite`}
           type="checkbox"
           checked={isOffsite}
           disabled={shouldDisableForm}

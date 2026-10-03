@@ -19,7 +19,7 @@ export type WhiteboardNodeInput = {
   hidden?: boolean;
   text?: string | null;
   label?: string | null;
-  colour?: WhiteboardColor;
+  color?: WhiteboardColor;
   points?: [number, number, number][];
   strokeWidth?: WhiteboardStrokeWidth;
   stroke?: string;

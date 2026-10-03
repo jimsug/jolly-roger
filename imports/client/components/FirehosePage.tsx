@@ -1,6 +1,7 @@
 import { useTracker } from "meteor/react-meteor-data";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { TFunction } from "i18next";
 import React, {
   useCallback,
   useEffect,
@@ -19,16 +20,13 @@ import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router";
 import styled from "styled-components";
 import { shortCalendarTimeFormat } from "../../lib/calendarTimeFormat";
+import { firehosePlainText } from "../../lib/chatMessagePlainText";
 import isReaction from "../../lib/isReaction";
 import { indexedById } from "../../lib/listUtils";
 import type { ChatMessageType } from "../../lib/models/ChatMessages";
 import ChatMessages from "../../lib/models/ChatMessages";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
-import nodeIsImage from "../../lib/nodeIsImage";
-import nodeIsMention from "../../lib/nodeIsMention";
-import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
-import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import chatMessagesForFirehose from "../../lib/publications/chatMessagesForFirehose";
 import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import { useBreadcrumb } from "../hooks/breadcrumb";
@@ -68,22 +66,9 @@ function asFlatString(
   chatMessage: ChatMessageType,
   displayNames: Map<string, string>,
   puzzles: Map<string, PuzzleType>,
+  t: TFunction,
 ): string {
-  return chatMessage.content.children
-    .map((child) => {
-      if (nodeIsMention(child)) {
-        return ` @${displayNames.get(child.userId) ?? "???"} `;
-      } else if (nodeIsRoleMention(child)) {
-        return ` @${child.roleId} `;
-      } else if (nodeIsPuzzle(child)) {
-        return `[puzzle: ${puzzles.get(child.puzzleId)?.title ?? "???"}]`;
-      } else if (nodeIsImage(child)) {
-        return `[image]`;
-      } else {
-        return child.text;
-      }
-    })
-    .join(" ");
+  return firehosePlainText(chatMessage.content, displayNames, puzzles, t);
 }
 
 const Message = React.memo(
@@ -93,7 +78,7 @@ const Message = React.memo(
     const displayName = msg.sender
       ? (displayNames.get(msg.sender) ?? "???")
       : "jolly-roger";
-    const messageText = asFlatString(msg, displayNames, puzzles);
+    const messageText = asFlatString(msg, displayNames, puzzles, t);
     const hasNewline = messageText.includes("\n");
     return (
       <div>
@@ -146,6 +131,7 @@ function compileChatMessageMatcher(
   puzzles: Map<string, PuzzleType>,
   displayNames: Map<string, string>,
   searchKeys: string[],
+  t: TFunction,
 ): (c: ChatMessageType) => boolean {
   // Given a set of puzzles, display names, and search keys,
   // compileChatMessageMatcher returns a function that, given a chat message,
@@ -157,6 +143,7 @@ function compileChatMessageMatcher(
       chatMessage,
       displayNames,
       puzzles,
+      t,
     ).toLowerCase();
     const senderDisplayName = (
       chatMessage.sender
@@ -267,13 +254,14 @@ const FirehosePage = () => {
           puzzles,
           displayNames,
           searchKeysWithEmptyKeysRemoved,
+          t,
         );
         interestingChatMessages = allChatMessages.filter(isInteresting);
       }
 
       return interestingChatMessages;
     },
-    [searchString, puzzles, displayNames],
+    [searchString, puzzles, displayNames, t],
   );
 
   const [shouldScrollBottom, setShouldScrollBottom] = useState(true);

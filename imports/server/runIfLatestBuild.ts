@@ -3,6 +3,7 @@ import { Meteor } from "meteor/meteor";
 import Logger from "../Logger";
 import ignoringDuplicateKeyErrors from "./ignoringDuplicateKeyErrors";
 import LatestDeploymentTimestamps from "./models/LatestDeploymentTimestamps";
+import { markStartupComplete } from "./startupComplete";
 
 export const hooks = new Set<() => Promise<void>>();
 
@@ -12,15 +13,6 @@ export const hooks = new Set<() => Promise<void>>();
 export default function runIfLatestBuild(fn: () => Promise<void>) {
   hooks.add(fn);
 }
-
-let markStartupComplete: () => void;
-// Resolves once the startup hooks have run (or been skipped). The test runner
-// starts server tests without waiting for them, so test helpers wait on this
-// before touching the database; wiping it while migrations are still being
-// applied corrupts the migration control record.
-export const startupComplete = new Promise<void>((resolve) => {
-  markStartupComplete = resolve;
-});
 
 Meteor.startup(async () => {
   // Meteor async startup hooks will block startup until they resolve, which is

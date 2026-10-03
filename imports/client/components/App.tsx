@@ -322,7 +322,7 @@ const AppNavbar = ({
               {t("navigation.myProfile", "My profile")}
             </DropdownItem>
             <DropdownItem as={Link} to="/history" eventKey="5">
-              {t("navigation.myPuzzleHistory", "My Puzzle History")}
+              {t("navigation.myPuzzleHistory", "My puzzle history")}
             </DropdownItem>
             <DropdownItem
               eventKey="2"

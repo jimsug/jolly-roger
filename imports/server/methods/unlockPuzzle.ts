@@ -73,7 +73,16 @@ defineMethod(unlockPuzzle, {
     if (trimmedUrl) {
       update.$set = { url: trimmedUrl };
     }
-    await Puzzles.updateAsync(puzzleId, update);
+    // Only the unlock that clears the lock posts the chat line and announces
+    // the puzzle, so two at once (a double click, or two operators) do it
+    // once between them.
+    const unlocked = await Puzzles.updateAsync(
+      { _id: puzzleId, locked: true },
+      update,
+    );
+    if (unlocked === 0) {
+      return;
+    }
 
     const message = i18n.t(
       "puzzle.unlock.chatMessage",

@@ -1,10 +1,11 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import Documents from "../../../../imports/lib/models/Documents";
+import FeatureFlags from "../../../../imports/lib/models/FeatureFlags";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
+import asUser from "../../../lib/asUser";
 import resetDatabase from "../../../lib/resetDatabase";
 
 const DOCUMENT_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz";
@@ -20,15 +21,24 @@ describe("updatePuzzleNote API", function () {
   this.timeout(30000);
 
   const huntId = Random.id();
+  let userId: string;
   let puzzleId: string;
 
-  this.beforeAll(async function () {
+  // Each test starts from this note, posted through the API
+  const postBaselineNote = async () => {
+    assert.equal(
+      (await postNote(huntId, DOCUMENT_ID, { flavor: "Hm" })).status,
+      200,
+    );
+  };
+
+  this.beforeEach(async function () {
     await resetDatabase("updatePuzzleNote");
-    const userId = await Accounts.createUserAsync({
+    userId = await Accounts.createUserAsync({
       email: "notes@example.com",
       password: "password",
     });
-    await DDP._CurrentMethodInvocation.withValue({ userId }, async () => {
+    await asUser(userId, async () => {
       puzzleId = await Puzzles.insertAsync({
         hunt: huntId,
         title: "Noted",
@@ -65,16 +75,15 @@ describe("updatePuzzleNote API", function () {
     assert.instanceOf(puzzle?.noteUpdateTs, Date);
 
     // A later post replaces the whole note
-    assert.equal(
-      (await postNote(huntId, DOCUMENT_ID, { flavor: "Hm" })).status,
-      200,
-    );
+    await postBaselineNote();
     assert.deepEqual((await Puzzles.findOneAsync(puzzleId))?.noteContent, {
       flavor: "Hm",
     });
   });
 
   it("rejects notes for unknown documents and malformed bodies", async function () {
+    await postBaselineNote();
+
     assert.equal(
       (await postNote(huntId, "nope", { summary: "x" })).status,
       404,
@@ -102,10 +111,29 @@ describe("updatePuzzleNote API", function () {
   });
 
   it("caps the size of a note", async function () {
+    await postBaselineNote();
+
     const response = await postNote(huntId, DOCUMENT_ID, {
       summary: "x".repeat(66 * 1024),
     });
     assert.equal(response.status, 413);
+    assert.deepEqual((await Puzzles.findOneAsync(puzzleId))?.noteContent, {
+      flavor: "Hm",
+    });
+  });
+
+  it("refuses notes while the disable.puzzle_notes circuit breaker is on", async function () {
+    await postBaselineNote();
+    await FeatureFlags.insertAsync({
+      name: "disable.puzzle_notes",
+      type: "on",
+      createdBy: userId,
+    });
+
+    assert.equal(
+      (await postNote(huntId, DOCUMENT_ID, { summary: "x" })).status,
+      503,
+    );
     assert.deepEqual((await Puzzles.findOneAsync(puzzleId))?.noteContent, {
       flavor: "Hm",
     });

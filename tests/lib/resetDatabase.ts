@@ -17,7 +17,7 @@ if (Meteor.isServer) {
     require("../../imports/server/migrations/Migrations").default;
   const {
     startupComplete,
-  }: typeof import("../../imports/server/runIfLatestBuild") = require("../../imports/server/runIfLatestBuild");
+  }: typeof import("../../imports/server/startupComplete") = require("../../imports/server/startupComplete");
 
   // We track a few bits of information here to make it easier to tell what's
   // going on in the event that the server receives concurrent `resetDatabase`

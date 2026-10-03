@@ -829,9 +829,6 @@ async function main() {
           await guessBtn.click();
           await p.waitForSelector(".modal-dialog", { timeout: 5_000 });
           await p.locator("[id$='-guess']").fill("BRAZENLY EVIL");
-          await p.locator("[id$='-guess-direction']").fill("10");
-          await p.locator("[id$='-guess-confidence']").fill("100");
-          // Click the modal title to dismiss any slider tooltip
           await p.locator(".modal-title").click();
           await p.waitForTimeout(300);
         },

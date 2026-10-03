@@ -9,9 +9,12 @@ type PuzzleStatus = {
   status: PuzzleStatusSource;
 };
 
-// Notes the puzzle a user just interacted with (chat, sheet edit, call), one
-// row per user per hunt. These rows have no owning server, so they only go
-// away through the collection's TTL index.
+// Notes the puzzle a user just interacted with (chat, sheet edit, call). That's
+// one row per user per hunt in practice, but nothing enforces it: concurrent
+// upserts (the chat hook, the Drive fetcher and the call sweep, on any server)
+// can leave a duplicate behind. Readers take the newest row, and the
+// collection's TTL index clears the stale one. These rows have no owning
+// server, so the TTL index is the only thing that removes them.
 export default async function recordPuzzleStatus({
   hunt,
   user,

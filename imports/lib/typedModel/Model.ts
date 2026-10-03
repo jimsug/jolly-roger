@@ -226,8 +226,9 @@ class Model<
   }
 
   // Inserts several documents in one round trip, filling in defaults and
-  // auto-populated fields the same way insertAsync does. Ids are generated
-  // here, since the raw driver would otherwise assign ObjectIds.
+  // auto-populated fields the same way insertAsync does. A new puzzle, for
+  // one, writes a notification row for every member of its hunt. Ids are
+  // generated here, since the raw driver would otherwise assign ObjectIds.
   async insertManyAsync(
     docs: InsertModelType<SchemaWithId<Schema, IdSchema>>[],
   ): Promise<output<IdSchema>[]> {
@@ -247,10 +248,11 @@ class Model<
     }
 
     // The raw driver skips Meteor's write bookkeeping, so do it here the way
-    // Meteor's own insert does: count the write against the current write
-    // fence (so a method's result waits for observers to see the rows) and
-    // tell the invalidation crossbar, which is how observers learn about
-    // writes when there is no oplog to tail.
+    // MongoConnection's insertAsync does in mongo@2.3.0 (Meteor 3.4.1): count
+    // the write against the current write fence (so a method's result waits
+    // for observers to see the rows) and tell the invalidation crossbar,
+    // which is how observers learn about writes when there is no oplog to
+    // tail. Both are Meteor internals, so re-check this on Meteor upgrades.
     const write =
       MongoInternals.defaultRemoteCollectionDriver().mongo._maybeBeginWrite();
     try {

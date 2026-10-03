@@ -1,13 +1,14 @@
-import { Meteor } from "meteor/meteor";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
-import isAdmin from "../../lib/isAdmin";
+import Badge from "react-bootstrap/Badge";
+import { useTranslation } from "react-i18next";
+import { Link } from "react-router";
 import MeteorUsers from "../../lib/models/MeteorUsers";
-import invitedUsers from "../../lib/publications/invitedUsers";
 import sortUsersByDisplayName from "../../lib/sortUsersByDisplayName";
-import useTypedSubscribe from "../hooks/useTypedSubscribe";
+import usePendingInvitees from "../hooks/usePendingInvitees";
 import ProfileList from "./ProfileList";
 
 const AllProfileListPage = () => {
+  const { t } = useTranslation();
   const profilesLoading = useSubscribe("allProfiles");
   const loading = profilesLoading();
 
@@ -20,24 +21,31 @@ const AllProfileListPage = () => {
   }, [loading]);
 
   // Only admins can see pending invitations, so only they get the count.
-  const canSeeInvited = useTracker(() => isAdmin(Meteor.user()), []);
-  const invitedLoading = useTypedSubscribe(
-    canSeeInvited ? invitedUsers : undefined,
-  );
-  const invitedReady = canSeeInvited && !invitedLoading();
-  const invitedCount = useTracker(() => {
-    if (!invitedReady) {
-      return undefined;
-    }
-    return MeteorUsers.find({
-      "services.password.enroll": { $exists: true },
-    }).count();
-  }, [invitedReady]);
+  const {
+    canView: canSeeInvited,
+    loading: invitedLoading,
+    invitees,
+  } = usePendingInvitees();
 
   if (loading) {
     return <div>loading...</div>;
   }
-  return <ProfileList users={users} invitedCount={invitedCount} />;
+
+  const title = (
+    <>
+      {t("hunterList.title", "List of hunters")}
+      {canSeeInvited && !invitedLoading && (
+        <>
+          {" "}
+          <Badge as={Link} to="/users/invited" bg="info">
+            {t("hunterList.invitedBadge", "Invited")}{" "}
+            <Badge bg="secondary">{invitees.length}</Badge>
+          </Badge>
+        </>
+      )}
+    </>
+  );
+  return <ProfileList users={users} title={title} />;
 };
 
 export default AllProfileListPage;

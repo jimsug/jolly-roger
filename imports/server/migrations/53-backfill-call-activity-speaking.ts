@@ -1,4 +1,4 @@
-import CallActivities from "../models/CallActivities";
+import CallActivities from "../../lib/models/CallActivities";
 import Migrations from "./Migrations";
 
 Migrations.add({

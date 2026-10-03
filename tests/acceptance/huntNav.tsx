@@ -71,7 +71,7 @@ if (Meteor.isClient) {
       await login(USER_EMAIL, USER_PASSWORD);
       huntId = await createHunt.callPromise({
         ...huntFields,
-        initialTags: "",
+        initialTags: [],
       });
       await addHuntUser.callPromise({ huntId, email: USER_EMAIL });
       await createTestUser.callPromise({

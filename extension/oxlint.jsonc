@@ -1,0 +1,12 @@
+{
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
+  // The root's rules, for code that runs in browser extension pages. Not
+  // named .oxlintrc.json, which the root's own run would pick up as a nested
+  // config and lint the extension with.
+  "extends": ["../.oxlintrc.json"],
+  "env": {
+    "browser": true,
+    "webextensions": true
+  },
+  "ignorePatterns": ["dist/**"]
+}

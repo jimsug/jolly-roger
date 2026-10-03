@@ -2,7 +2,7 @@ import { useTracker } from "meteor/react-meteor-data";
 import { faInfo } from "@fortawesome/free-solid-svg-icons/faInfo";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type React from "react";
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
@@ -23,7 +23,7 @@ import { useNavigate, useParams } from "react-router";
 import type { MultiValue } from "react-select";
 import Select from "react-select";
 import { useTheme } from "styled-components";
-import { DEFAULT_HUNT_TAGS } from "../../lib/defaultHuntTags";
+import { DEFAULT_HUNT_TAGS, parseInitialTags } from "../../lib/defaultHuntTags";
 import DiscordCache from "../../lib/models/DiscordCache";
 import type {
   EditableHuntType,
@@ -492,7 +492,16 @@ const HuntEditPage = () => {
       if (huntId) {
         updateHunt.call({ huntId, value: state }, onFormCallback);
       } else {
-        createHunt.call({ ...state, initialTags }, onFormCallback);
+        createHunt.call(
+          {
+            ...state,
+            initialTags:
+              initialTags === undefined
+                ? undefined
+                : parseInitialTags(initialTags),
+          },
+          onFormCallback,
+        );
       }
     },
     [
@@ -550,10 +559,18 @@ const HuntEditPage = () => {
 
   const idPrefix = useId();
 
-  const roleOptions: RoleSelectOption[] = HUNT_DEFAULT_ROLES.map((role) => ({
-    value: role,
-    label: role,
-  }));
+  const roleOptions = useMemo(() => {
+    const labels: Record<HuntDefaultRole, string> = {
+      operator: t("hunterList.operator", "Operator"),
+    };
+    return HUNT_DEFAULT_ROLES.map(
+      (role): RoleSelectOption => ({ value: role, label: labels[role] }),
+    );
+  }, [t]);
+  const selectedRoleOptions = useMemo(
+    () => roleOptions.filter((option) => defaultRoles.includes(option.value)),
+    [roleOptions, defaultRoles],
+  );
 
   return (
     <Container>
@@ -657,7 +674,8 @@ const HuntEditPage = () => {
                 "huntEdit.moreInfo.help",
                 `This message (rendered as markdown) will be shown to members
                 on the hunt's More page. It's a good place for links to
-                resources and other static information.`,
+                resources and other static information. Anyone signed in to
+                Jolly Roger can read it, so don't put anything private here.`,
               )}
             </FormText>
           </Col>
@@ -677,17 +695,17 @@ const HuntEditPage = () => {
               isMulti
               isDisabled={disableForm}
               options={roleOptions}
-              value={defaultRoles.map(
-                (role): RoleSelectOption => ({ value: role, label: role }),
-              )}
+              value={selectedRoleOptions}
               onChange={onDefaultRolesChanged}
               theme={theme.reactSelectTheme}
             />
             <FormText>
               {t(
                 "huntEdit.defaultRoles.help",
-                `Every member of this hunt is treated as having these roles,
-                without the roles being assigned to their accounts.`,
+                `Every member of this hunt gets these roles' permissions
+                without the roles being assigned to their accounts, but not
+                operator notifications (guesses to check, @operator mentions)
+                or the right to promote and demote operators.`,
               )}
             </FormText>
           </Col>

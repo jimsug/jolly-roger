@@ -109,7 +109,9 @@ async function insertTopLevelFrame(
     ...frame,
     createdBy,
   });
-  return (await WhiteboardNodes.findOneAsync(_id))!;
+  // Read back for the fields the model fills in. Should it already be gone,
+  // the puzzle is placed as though there were no frame.
+  return WhiteboardNodes.findOneAsync(_id);
 }
 
 async function placePuzzle(
@@ -228,7 +230,9 @@ async function syncAutoEdges(board: WhiteboardType, puzzle: PuzzleType) {
     board: board._id,
     type: "puzzle",
   }).fetchAsync();
-  const cardsByPuzzle = new Map(cards.map((c) => [c.puzzle!, c]));
+  const cardsByPuzzle = new Map(
+    cards.flatMap((c) => (c.puzzle ? [[c.puzzle, c] as const] : [])),
+  );
   const puzzles = await Puzzles.find({
     hunt: board.hunt,
     _id: { $in: [...cardsByPuzzle.keys()] },
@@ -352,17 +356,25 @@ async function seedBoard(
   });
   await WhiteboardNodes.insertManyAsync(nodeDocs);
 
+  // seedLayout gives every puzzle a card, so both ends are always there.
   await WhiteboardEdges.insertManyAsync(
-    edges.map(({ feeder, meta }) => ({
-      hunt: board.hunt,
-      board: board._id,
-      source: cardsByPuzzle.get(feeder)!,
-      target: cardsByPuzzle.get(meta)!,
-      auto: true,
-      feeder,
-      meta,
-      createdBy: board.createdBy,
-    })),
+    edges.flatMap(({ feeder, meta }) => {
+      const source = cardsByPuzzle.get(feeder);
+      const target = cardsByPuzzle.get(meta);
+      if (!source || !target) return [];
+      return [
+        {
+          hunt: board.hunt,
+          board: board._id,
+          source,
+          target,
+          auto: true,
+          feeder,
+          meta,
+          createdBy: board.createdBy,
+        },
+      ];
+    }),
   );
 }
 
@@ -417,7 +429,9 @@ export async function ensureWhiteboard(
       } catch (error) {
         await Puzzles.removeAsync(puzzleId);
         if (!isDuplicateKeyError(error)) throw error;
-        return (await Whiteboards.findOneAsync({ hunt: huntId }))!._id;
+        const existing = await Whiteboards.findOneAsync({ hunt: huntId });
+        if (!existing) throw error;
+        return existing._id;
       }
 
       await seedBoard({ _id: boardId, hunt: huntId, createdBy: userId });

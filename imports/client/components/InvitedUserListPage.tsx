@@ -1,13 +1,10 @@
-import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import Alert from "react-bootstrap/Alert";
 import { useTranslation } from "react-i18next";
-import isAdmin from "../../lib/isAdmin";
 import Hunts from "../../lib/models/Hunts";
-import MeteorUsers from "../../lib/models/MeteorUsers";
 import huntsAll from "../../lib/publications/huntsAll";
-import invitedUsers from "../../lib/publications/invitedUsers";
 import { useBreadcrumb } from "../hooks/breadcrumb";
+import usePendingInvitees from "../hooks/usePendingInvitees";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import InvitedUserList from "./InvitedUserList";
 
@@ -19,20 +16,13 @@ const InvitedUserListPage = () => {
     path: "/users/invited",
   });
 
-  const canView = useTracker(() => isAdmin(Meteor.user()), []);
-
-  const invitedLoading = useTypedSubscribe(canView ? invitedUsers : undefined);
+  const {
+    canView,
+    loading: inviteesLoading,
+    invitees: users,
+  } = usePendingInvitees();
   const huntsLoading = useTypedSubscribe(canView ? huntsAll : undefined);
-  const loading = invitedLoading() || huntsLoading();
-
-  const users = useTracker(() => {
-    return loading
-      ? []
-      : MeteorUsers.find(
-          { "services.password.enroll": { $exists: true } },
-          { sort: { "services.password.enroll.when": 1 } },
-        ).fetch();
-  }, [loading]);
+  const loading = inviteesLoading || huntsLoading();
 
   const huntNames = useTracker(() => {
     return Object.fromEntries(

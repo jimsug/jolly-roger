@@ -17,6 +17,9 @@ declare module "meteor/mongo" {
       // Starts a write on the current DDP write fence, if there is one, the
       // way every write made through a Mongo.Collection does. Call committed()
       // once the write is done and observers have been told about it.
+      // Model.insertManyAsync uses it to mirror MongoConnection's insertAsync
+      // in mongo@2.3.0 (Meteor 3.4.1); it's internal, so re-check this on
+      // Meteor upgrades.
       _maybeBeginWrite(): { committed(): Promise<void> | void };
     }
   }

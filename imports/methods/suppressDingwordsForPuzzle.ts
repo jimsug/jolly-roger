@@ -13,4 +13,4 @@ export default new TypedMethod<
     dismissUntil: Date;
   },
   void
->("Users.methods.suppressDingwordForPuzzle");
+>("Users.methods.suppressDingwordsForPuzzle");

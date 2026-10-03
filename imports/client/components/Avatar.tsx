@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import styled, { css } from "styled-components";
 import { getAvatarCdnUrl } from "../../lib/discord";
 import type { DiscordAccountType } from "../../lib/models/DiscordAccount";
@@ -140,13 +140,16 @@ const Avatar = React.memo(
     // A Discord avatar that fails to load (the CDN URL has gone stale) falls
     // back to the initial
     const [imageFailed, setImageFailed] = useState(false);
+    const onImageError = useCallback(() => {
+      setImageFailed(true);
+    }, []);
     const content =
       discordAccount && getAvatarCdnUrl(discordAccount) && !imageFailed ? (
         <DiscordAvatarInner
           size={size}
           displayName={displayName}
           discordAccount={discordAccount}
-          onError={() => setImageFailed(true)}
+          onError={onImageError}
         />
       ) : (
         <DefaultAvatarInner _id={_id} displayName={displayName} />

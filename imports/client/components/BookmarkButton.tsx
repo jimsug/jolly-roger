@@ -56,7 +56,7 @@ const BookmarkButton: BookmarkButtonType = ({
     >
       <FontAwesomeIcon
         icon={bookmarked ? faBookmarkSolid : faBookmarkRegular}
-        color={bookmarked ? theme.colors.warning : theme.colors.text}
+        color={bookmarked ? theme.colors.bookmarkedIcon : theme.colors.text}
         beat={animateBookmark}
         onAnimationEnd={onAnimationEnd}
         style={{

@@ -14,6 +14,7 @@ import { faPen } from "@fortawesome/free-solid-svg-icons/faPen";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type {
   AriaLabelConfig,
+  EdgeChange,
   Node,
   NodeChange,
   OnBeforeDelete,
@@ -69,6 +70,7 @@ import {
   alignItems,
   companionsOf,
   distributeItems,
+  sortParentsFirst,
 } from "../../../lib/whiteboard/arrange";
 import { commentPosition, isUnread } from "../../../lib/whiteboard/comments";
 import type { AttachHit } from "../../../lib/whiteboard/connectors";
@@ -100,8 +102,10 @@ import {
   MAX_FRAME_DEPTH,
   MAX_LIVE_DRAG_NODES,
 } from "../../../lib/whiteboard/limits";
+import type { LineStyle } from "../../../lib/whiteboard/lineStyle";
 import deleteWhiteboardEdges from "../../../methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
+import type { WhiteboardLiveState } from "../../../methods/setWhiteboardLive";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
 import upsertWhiteboardEdges from "../../../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../../../methods/upsertWhiteboardNodes";
@@ -116,7 +120,19 @@ import {
 } from "../../hooks/persisted-state";
 import usePuzzlePeople from "../../hooks/usePuzzlePeople";
 import useTypedSubscribe from "../../hooks/useTypedSubscribe";
+import useWhiteboardComments, {
+  useSeenComments,
+} from "../../hooks/useWhiteboardComments";
 import useWhiteboardLive from "../../hooks/useWhiteboardLive";
+import type {
+  LineLabels,
+  RemoteDrag,
+  WhiteboardFlowEdge,
+  WhiteboardFlowNode,
+} from "../../hooks/useWhiteboardSync";
+import useWhiteboardSync, {
+  selectionUnits,
+} from "../../hooks/useWhiteboardSync";
 import WhiteboardPresence from "../../WhiteboardPresence";
 import ArrangeIcon from "./ArrangeIcon";
 import ColorPicker from "./ColorPicker";
@@ -124,29 +140,22 @@ import type { CommentPin } from "./CommentLayer";
 import CommentLayer from "./CommentLayer";
 import CommentPanel from "./CommentPanel";
 import CursorLayer from "./CursorLayer";
-import { FILL_COLORS, STROKE_COLORS } from "./colors";
+import colors from "./colors";
 import describeCommentTarget from "./describeCommentTarget";
 import FrameLabelLayer from "./FrameLabelLayer";
 import FrameNode from "./FrameNode";
-import { boxOf } from "./floatingEdge";
+import { boxOf } from "./floatingEdgeParams";
 import InkNode from "./InkNode";
-import type { LineStyle } from "./LineStyleControls";
 import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
-import { ArrowHeadIcon } from "./LineStyleIcon";
+import LineStyleIcon from "./LineStyleIcon";
 import { MIN_SIZES } from "./NodeChrome";
+import PeopleContext from "./PeopleContext";
 import PointNode from "./PointNode";
 import PuzzleCardNode from "./PuzzleCardNode";
 import StickyNode from "./StickyNode";
 import TextNode from "./TextNode";
-import useComments, { useSeenComments } from "./useComments";
-import type { RemoteDrag, WhiteboardFlowNode } from "./useWhiteboardSync";
-import useWhiteboardSync, {
-  selectionUnits,
-  sortParentsFirst,
-} from "./useWhiteboardSync";
 import type { WhiteboardActions } from "./WhiteboardContext";
-import { PeopleContext, WhiteboardContext } from "./WhiteboardContext";
-import type { WhiteboardFlowEdge } from "./WhiteboardEdge";
+import WhiteboardContext from "./WhiteboardContext";
 import WhiteboardEdge from "./WhiteboardEdge";
 
 const nodeTypes = {
@@ -254,13 +263,6 @@ const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
   .react-flow__handle.connectingto {
     opacity: 1;
   }
-
-  /* Stickies, cards and text have their own selection styling. */
-  .react-flow__node.selected,
-  .react-flow__node:focus,
-  .react-flow__node:focus-visible {
-    outline: none;
-  }
 `;
 
 const ToolBox = styled.div`
@@ -319,7 +321,7 @@ const PlaceGhost = styled.div<{ $tool: PlaceTool }>`
   border: 2px dashed ${({ theme }) => theme.colors.primary};
   border-radius: ${({ $tool }) => ($tool === "frame" ? "10px" : "2px")};
   background: ${({ $tool }) =>
-    $tool === "sticky" ? `${FILL_COLORS.yellow}99` : "transparent"};
+    $tool === "sticky" ? `${colors.fill.yellow}99` : "transparent"};
 `;
 
 const LocalStroke = styled.svg`
@@ -329,6 +331,23 @@ const LocalStroke = styled.svg`
   overflow: visible;
   pointer-events: none;
 `;
+
+type LiveDrag = NonNullable<WhiteboardLiveState["drag"]>[number];
+
+// Whether two lists of other people's drags would put everything in the same
+// place.
+const sameDrags = (a: LiveDrag[], b: LiveDrag[]) =>
+  a.length === b.length &&
+  a.every((drag, i) => {
+    const other = b[i];
+    return (
+      !!other &&
+      drag.node === other.node &&
+      drag.x === other.x &&
+      drag.y === other.y &&
+      (drag.parent ?? null) === (other.parent ?? null)
+    );
+  });
 
 function chunks<T>(items: T[], size: number): T[][] {
   const result: T[][] = [];
@@ -360,9 +379,92 @@ const AttachOutline = React.memo(({ id }: { id: string }) => {
   );
 });
 
+// A tool on the toolbar. Its title says what it does, and names it for
+// screen readers too.
+const ToolButton = ({
+  tool,
+  active,
+  title,
+  onSelect,
+  children,
+}: {
+  tool: Tool;
+  active: boolean;
+  title: string;
+  onSelect: (tool: Tool) => void;
+  children: React.ReactNode;
+}) => {
+  const onClick = useCallback(() => onSelect(tool), [onSelect, tool]);
+  return (
+    <Button
+      variant={active ? "primary" : "outline-secondary"}
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      aria-pressed={active}
+    >
+      {children}
+    </Button>
+  );
+};
+
+// Lines up or spaces out the selection one way.
+const ArrangeButton = <Kind extends AlignMode | DistributeAxis>({
+  kind,
+  title,
+  label,
+  disabled,
+  onArrange,
+}: {
+  kind: Kind;
+  title: string;
+  label: string;
+  disabled?: boolean;
+  onArrange: (kind: Kind) => void;
+}) => {
+  const onClick = useCallback(() => onArrange(kind), [onArrange, kind]);
+  return (
+    <Button
+      variant="outline-secondary"
+      title={title}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <ArrangeIcon kind={kind} />
+    </Button>
+  );
+};
+
+// A puzzle that isn't on the board, with a way to put it back.
+interface MissingCard {
+  id: string | undefined;
+  puzzle: string;
+  title: string;
+}
+
+const MissingCardRow = ({
+  card,
+  onPutBack,
+}: {
+  card: MissingCard;
+  onPutBack: (card: MissingCard) => void;
+}) => {
+  const { t } = useTranslation();
+  const onClick = useCallback(() => onPutBack(card), [onPutBack, card]);
+  return (
+    <HiddenRow>
+      <span title={card.title}>{card.title}</span>
+      <Button size="sm" variant="link" onClick={onClick}>
+        {t("whiteboard.hidden.putBack", "Put back")}
+      </Button>
+    </HiddenRow>
+  );
+};
+
 interface Drawing {
   stroke: string;
-  colour: WhiteboardColor;
+  color: WhiteboardColor;
   strokeWidth: WhiteboardStrokeWidth;
   segmenter: InkSegmenter;
   committed: number;
@@ -419,32 +521,28 @@ const CanvasInner = ({
   // Cursors move constantly, but only what people are dragging matters here
   // (CursorLayer draws the rest). Reading just that means cursor moves don't
   // re-render the canvas, and nodes are only rebuilt when a drag changes.
-  const dragsKey = useTracker(
+  const drags = useTracker(
     () =>
-      JSON.stringify(
-        liveEnabled
-          ? WhiteboardPresence.find(
-              { board: boardId },
-              { projection: { drag: 1 } },
-            )
-              .fetch()
-              .flatMap((p) => p.drag ?? [])
-              .map((d) => [d.node, d.x, d.y, d.parent ?? null])
-          : [],
-      ),
+      liveEnabled
+        ? WhiteboardPresence.find(
+            { board: boardId },
+            { projection: { drag: 1 } },
+          )
+            .fetch()
+            .flatMap((p) => p.drag ?? [])
+        : [],
     [boardId, liveEnabled],
+    sameDrags,
   );
   const remoteDrags = useMemo(
     () =>
       new Map(
-        (JSON.parse(dragsKey) as [string, number, number, string | null][]).map(
-          ([node, x, y, parent]): [string, RemoteDrag] => [
-            node,
-            { x, y, parent: parent ?? undefined },
-          ],
-        ),
+        drags.map(({ node, x, y, parent }): [string, RemoteDrag] => [
+          node,
+          { x, y, parent: parent ?? undefined },
+        ]),
       ),
-    [dragsKey],
+    [drags],
   );
 
   const livePuzzles = useTracker(
@@ -467,6 +565,9 @@ const CanvasInner = ({
   const [initialViewport] = useState(savedViewport);
   const [showFeederArrows, setShowFeederArrows] = useWhiteboardFeederArrows();
   const [tool, setTool] = useState<Tool>("select");
+  // A board that becomes read-only (say, the hunt is archived) puts any
+  // drawing tool down.
+  if (readOnly && tool !== "select") setTool("select");
   const [penColor, setPenColor] = useWhiteboardPenColor();
   const [penWidth, setPenWidth] = useWhiteboardPenWidth();
   const [showHidden, setShowHidden] = useState(false);
@@ -475,6 +576,21 @@ const CanvasInner = ({
   const [draft, setDraft] = useState<ChatMessageCommentAnchorType>();
   const [pulse, setPulse] = useState<string | undefined>();
   const pulseTimer = useRef<number | undefined>(undefined);
+  // Timeouts that only tidy up this component's state, cleared with it.
+  const tidyTimers = useRef(new Set<number>());
+  const tidyLater = useCallback((tidy: () => void, ms: number) => {
+    const timer = window.setTimeout(() => {
+      tidyTimers.current.delete(timer);
+      tidy();
+    }, ms);
+    tidyTimers.current.add(timer);
+  }, []);
+  useEffect(() => {
+    const timers = tidyTimers.current;
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, []);
   const commentPress = useRef<XYPosition | undefined>(undefined);
   // A comment just sent, to open once it comes back from the server.
   const sentDraft = useRef<
@@ -496,17 +612,29 @@ const CanvasInner = ({
   // ink stroke), saved when the move ends.
   const companions = useRef(new Set<string>());
   const dragActive = useRef(false);
-  // Nodes moved with the arrow keys, saved shortly after the last press.
+  // Nodes moved with the arrow keys, saved shortly after the last press by
+  // saveNudges (further down, after the helpers it uses).
   const nudged = useRef(new Set<string>());
   const nudgeTimer = useRef<number | undefined>(undefined);
+  const saveNudgesRef = useRef<() => void>(undefined);
   const lineColors = useMemo(
     () => ({ text: theme.colors.text, muted: theme.colors.textSecondary }),
     [theme],
   );
+  const lineLabels = useMemo(
+    (): LineLabels => ({
+      line: t("whiteboard.line.ariaLabel", "Line"),
+      feeder: t("whiteboard.line.feederAriaLabel", "Feeder arrow"),
+    }),
+    [t],
+  );
   const [editOnAppear, setEditOnAppear] = useState<string | undefined>();
   const [erasingStrokes, setErasingStrokes] = useState<Set<string>>(new Set());
-  const [drawingPoints, setDrawingPoints] = useState<InkPoint[]>([]);
   const drawing = useRef<Drawing | undefined>(undefined);
+  // The stroke being drawn, as it's shown until it's saved.
+  const [localStroke, setLocalStroke] = useState<
+    Pick<Drawing, "color" | "strokeWidth"> & { points: InkPoint[] }
+  >();
   const myStrokes = useRef<string[]>([]);
   const spaceHeld = useRef(false);
 
@@ -527,6 +655,7 @@ const CanvasInner = ({
     remoteDrags,
     erasingStrokes,
     lineColors,
+    lineLabels,
   });
 
   const updateNodes = useCallback(
@@ -732,63 +861,30 @@ const CanvasInner = ({
     [flow, setNodes, markPending],
   );
 
-  const saveNudgesRef = useRef<() => void>(undefined);
-  saveNudgesRef.current = () => {
-    const inputs: WhiteboardNodeInput[] = [];
-    const nudgedIds = new Set(nudged.current);
-    const frames = frameRects();
-    const moves: NodeMoves = new Map();
-    nudgedIds.forEach((id) => {
-      const node = flow.getNode(id);
-      if (!node) return;
-      // Like a drop, something nudged into or out of a frame joins or leaves
-      // it. Things carried along (free line ends, the rest of a stroke) and
-      // things inside a frame that moved too keep their frame.
-      const carried =
-        companions.current.has(id) ||
-        [...nudgedIds].some((other) => other !== id && isWithin(id, other));
-      const rect = carried ? undefined : absoluteRect(id);
-      if (rect) {
-        const { parent, position } = placementFor(id, rect, nudgedIds, frames);
-        if (parent !== node.parentId) {
-          inputs.push({ _id: id, position, parent: parent ?? null });
-          markPending(id, { position, parent: parent ?? null });
-          moves.set(id, { position, parent });
-          return;
-        }
-      }
-      inputs.push({ _id: id, position: node.position });
-      markPending(id, { position: node.position });
-    });
-    nudged.current.clear();
-    companions.current.clear();
-    showMoves(moves);
-    updateNodes(inputs);
-  };
-
   const onEdgesChange = useCallback(
-    (changes: Parameters<typeof applyEdgeChanges>[0]) => {
-      setEdges((eds) => applyEdgeChanges(changes, eds) as typeof eds);
+    (changes: EdgeChange<WhiteboardFlowEdge>[]) => {
+      setEdges((eds) => applyEdgeChanges(changes, eds));
     },
     [setEdges],
   );
 
   // We delete on the server and let the echo update the canvas, so that
   // children of a deleted frame stay put rather than going with it.
-  const onBeforeDelete: OnBeforeDelete<WhiteboardFlowNode> = useCallback(
-    ({ nodes: doomedNodes, edges: doomedEdges }) => {
-      const nodeIds = doomedNodes.filter((n) => n.selected).map((n) => n.id);
-      const edgeIds = doomedEdges.filter((e) => e.selected).map((e) => e.id);
-      if (nodeIds.length > 0) deleteNodes(nodeIds);
-      if (edgeIds.length > 0) {
-        chunks(edgeIds, MAX_BATCH).forEach((batch) =>
-          deleteWhiteboardEdges.call({ boardId, edgeIds: batch }),
-        );
-      }
-      return Promise.resolve(false);
-    },
-    [boardId, deleteNodes],
-  );
+  const onBeforeDelete: OnBeforeDelete<WhiteboardFlowNode, WhiteboardFlowEdge> =
+    useCallback(
+      ({ nodes: doomedNodes, edges: doomedEdges }) => {
+        const nodeIds = doomedNodes.filter((n) => n.selected).map((n) => n.id);
+        const edgeIds = doomedEdges.filter((e) => e.selected).map((e) => e.id);
+        if (nodeIds.length > 0) deleteNodes(nodeIds);
+        if (edgeIds.length > 0) {
+          chunks(edgeIds, MAX_BATCH).forEach((batch) =>
+            deleteWhiteboardEdges.call({ boardId, edgeIds: batch }),
+          );
+        }
+        return Promise.resolve(false);
+      },
+      [boardId, deleteNodes],
+    );
 
   const absoluteRect = useCallback(
     (id: string) => {
@@ -887,6 +983,52 @@ const CanvasInner = ({
     [frameAt, isWithin, absoluteRect],
   );
 
+  // Saves the nodes nudged with the arrow keys.
+  const saveNudges = useCallback(() => {
+    const inputs: WhiteboardNodeInput[] = [];
+    const nudgedIds = new Set(nudged.current);
+    const frames = frameRects();
+    const moves: NodeMoves = new Map();
+    nudgedIds.forEach((id) => {
+      const node = flow.getNode(id);
+      if (!node) return;
+      // Like a drop, something nudged into or out of a frame joins or leaves
+      // it. Things carried along (free line ends, the rest of a stroke) and
+      // things inside a frame that moved too keep their frame.
+      const carried =
+        companions.current.has(id) ||
+        [...nudgedIds].some((other) => other !== id && isWithin(id, other));
+      const rect = carried ? undefined : absoluteRect(id);
+      if (rect) {
+        const { parent, position } = placementFor(id, rect, nudgedIds, frames);
+        if (parent !== node.parentId) {
+          inputs.push({ _id: id, position, parent: parent ?? null });
+          markPending(id, { position, parent: parent ?? null });
+          moves.set(id, { position, parent });
+          return;
+        }
+      }
+      inputs.push({ _id: id, position: node.position });
+      markPending(id, { position: node.position });
+    });
+    nudged.current.clear();
+    companions.current.clear();
+    showMoves(moves);
+    updateNodes(inputs);
+  }, [
+    flow,
+    frameRects,
+    isWithin,
+    absoluteRect,
+    placementFor,
+    markPending,
+    showMoves,
+    updateNodes,
+  ]);
+  useEffect(() => {
+    saveNudgesRef.current = saveNudges;
+  }, [saveNudges]);
+
   // What a line end dropped here attaches to: the topmost thing under it, or
   // failing that the nearest thing just beside it (frames only by their
   // border; never ink), or nothing.
@@ -967,8 +1109,8 @@ const CanvasInner = ({
 
   const onNodeDrag: OnNodeDrag<WhiteboardFlowNode> = useCallback(
     (_event, _node, dragged) => {
-      const onto =
-        dragged.length === 1 ? droppedEnd(dragged[0]!)?.onto : undefined;
+      const only = dragged.length === 1 ? dragged[0] : undefined;
+      const onto = only && droppedEnd(only)?.onto;
       setAttachPreview((current) => (current === onto ? current : onto));
       const carried = [...companions.current]
         .map((id) => flow.getNode(id))
@@ -1203,20 +1345,20 @@ const CanvasInner = ({
           width: Math.round(rect.width),
           height: Math.round(rect.height),
           parent: parent ?? null,
-          colour: type === "sticky" ? "yellow" : undefined,
+          color: type === "sticky" ? "yellow" : undefined,
         },
       ]);
       setEditOnAppear(_id);
       // If the new node can't open for editing (e.g. a frame placed while
       // zoomed right out shows no label), don't let it grab focus later.
-      window.setTimeout(
+      tidyLater(
         () =>
           setEditOnAppear((current) => (current === _id ? undefined : current)),
         3000,
       );
       setTool("select");
     },
-    [placementFor, updateNodes],
+    [placementFor, updateNodes, tidyLater],
   );
 
   const placementRect = useCallback(
@@ -1257,7 +1399,7 @@ const CanvasInner = ({
     return {
       pathStyle: doc?.pathStyle ?? DEFAULT_LINE_STYLE.pathStyle,
       arrowHead: doc?.arrowHead ?? DEFAULT_LINE_STYLE.arrowHead,
-      colour: doc?.colour ?? DEFAULT_LINE_STYLE.colour,
+      color: doc?.color ?? DEFAULT_LINE_STYLE.color,
       dashed: doc?.dashed ?? DEFAULT_LINE_STYLE.dashed,
     };
   }, [selectedLines]);
@@ -1381,7 +1523,7 @@ const CanvasInner = ({
     ],
   );
 
-  const hiddenCards = useMemo(() => {
+  const hiddenCards = useMemo((): MissingCard[] => {
     const titles = new Map(livePuzzles.map((p) => [p._id, p.title]));
     const onBoard = new Set(nodeDocs.map((d) => d.puzzle).filter(Boolean));
     const hidden = nodeDocs.flatMap((d) => {
@@ -1399,7 +1541,7 @@ const CanvasInner = ({
   }, [livePuzzles, nodeDocs]);
 
   const putBack = useCallback(
-    (card: { id: string | undefined; puzzle: string }) => {
+    (card: MissingCard) => {
       const center = paneCenter();
       const position = {
         x: Math.round(center.x - CARD_WIDTH / 2),
@@ -1441,7 +1583,7 @@ const CanvasInner = ({
           parent: state.parent ?? null,
           points: relativeTo(points, bounds),
           strokeWidth: state.strokeWidth,
-          colour: state.colour,
+          color: state.color,
           stroke: state.stroke,
         },
       ]);
@@ -1451,9 +1593,11 @@ const CanvasInner = ({
   );
 
   const selfId = useTracker(() => Meteor.userId() ?? undefined, []);
-  const threads = useComments(puzzleId);
+  const threads = useWhiteboardComments(puzzleId);
   const [seenComments, markCommentSeen] = useSeenComments(boardId, threads);
+  // A thread that has gone (deleted, say) counts as closed.
   const openThreadData = openThread ? threads.get(openThread) : undefined;
+  const openThreadId = openThreadData?.root._id;
 
   // A comment goes on the topmost thing under it (anything but ink and line
   // ends), so it moves with it; otherwise it's pinned to the board.
@@ -1512,7 +1656,7 @@ const CanvasInner = ({
   useEffect(() => {
     const sent = sentDraft.current;
     if (!sent) return;
-    if (draft || openThread) {
+    if (draft || openThreadId) {
       sentDraft.current = undefined;
       return;
     }
@@ -1532,11 +1676,7 @@ const CanvasInner = ({
       sentDraft.current = undefined;
       setOpenThread(match.root._id);
     }
-  }, [threads, selfId, draft, openThread]);
-
-  useEffect(() => {
-    if (openThread && !threads.has(openThread)) setOpenThread(undefined);
-  }, [openThread, threads]);
+  }, [threads, selfId, draft, openThreadId]);
 
   useEffect(() => {
     if (openThreadData) {
@@ -1573,7 +1713,14 @@ const CanvasInner = ({
 
   // A comment asked for before the board has its nodes laid out, or before
   // the thread has reached this client, is shown as soon as both are ready.
-  const [pendingFocus, setPendingFocus] = useState<string | undefined>();
+  // One from the page's ?comment= link waits the same way, each time the
+  // link changes.
+  const [pendingFocus, setPendingFocus] = useState(initialComment);
+  const [linkedComment, setLinkedComment] = useState(initialComment);
+  if (initialComment !== linkedComment) {
+    setLinkedComment(initialComment);
+    if (initialComment) setPendingFocus(initialComment);
+  }
   const readyToShow = useCallback(
     (threadId: string) => {
       const anchor = threads.get(threadId)?.root.comment;
@@ -1595,10 +1742,6 @@ const CanvasInner = ({
     },
     [readyToShow, showComment],
   );
-
-  useEffect(() => {
-    if (initialComment) setPendingFocus(initialComment);
-  }, [initialComment]);
 
   // React Flow takes in new nodes before this component's effects run, so
   // this is rechecked whenever they change.
@@ -1632,7 +1775,7 @@ const CanvasInner = ({
       if (
         thread.resolved &&
         !showResolved &&
-        id !== openThread &&
+        id !== openThreadId &&
         id !== pulse
       ) {
         return;
@@ -1657,7 +1800,7 @@ const CanvasInner = ({
       });
     }
     return pins;
-  }, [threads, showResolved, openThread, pulse, seenComments, selfId, draft]);
+  }, [threads, showResolved, openThreadId, pulse, seenComments, selfId, draft]);
 
   const resolvedCount = useMemo(
     () => [...threads.values()].filter((t) => t.resolved).length,
@@ -1715,8 +1858,8 @@ const CanvasInner = ({
       .map((n) => n.id);
     deleteNodes(ids);
     // Leave them faded until the server removes them.
-    window.setTimeout(() => setErasingStrokes(new Set()), 1500);
-  }, [flow, erasingStrokes, deleteNodes]);
+    tidyLater(() => setErasingStrokes(new Set()), 1500);
+  }, [flow, erasingStrokes, deleteNodes, tidyLater]);
 
   const onPointerDownCapture = useCallback(
     (event: React.PointerEvent) => {
@@ -1764,7 +1907,7 @@ const CanvasInner = ({
       const stroke = Random.id();
       const state: Drawing = {
         stroke,
-        colour: penColor,
+        color: penColor,
         strokeWidth: penWidth,
         segmenter: new InkSegmenter(),
         committed: 0,
@@ -1776,7 +1919,11 @@ const CanvasInner = ({
           ? event.pressure
           : 0.5;
       state.segmenter.push([point.x, point.y, pressure]);
-      setDrawingPoints([...state.segmenter.points]);
+      setLocalStroke({
+        color: state.color,
+        strokeWidth: state.strokeWidth,
+        points: [...state.segmenter.points],
+      });
     },
     [
       readOnly,
@@ -1836,7 +1983,10 @@ const CanvasInner = ({
     refreshAttachPreview();
   }, [nodes, refreshAttachPreview]);
 
-  refreshAttachPreviewRef.current = refreshAttachPreview;
+  // onMove, further up, refreshes it as the view moves.
+  useEffect(() => {
+    refreshAttachPreviewRef.current = refreshAttachPreview;
+  }, [refreshAttachPreview]);
 
   const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
@@ -1890,9 +2040,13 @@ const CanvasInner = ({
         const full = state.segmenter.push([p.x, p.y, pressure]);
         if (full) commitSegment(state, full);
       });
-      setDrawingPoints([...state.segmenter.points]);
+      setLocalStroke({
+        color: state.color,
+        strokeWidth: state.strokeWidth,
+        points: [...state.segmenter.points],
+      });
       live.setStroke({
-        colour: state.colour,
+        color: state.color,
         strokeWidth: state.strokeWidth,
         points: state.segmenter.points,
       });
@@ -1978,7 +2132,7 @@ const CanvasInner = ({
       const rest = state.segmenter.finish(state.committed > 0);
       if (rest) commitSegment(state, rest);
       myStrokes.current.push(state.stroke);
-      setDrawingPoints([]);
+      setLocalStroke(undefined);
       live.setStroke(null);
     },
     [
@@ -2112,12 +2266,6 @@ const CanvasInner = ({
     ],
   );
 
-  // A board that becomes read-only (say, the hunt is archived) puts any
-  // drawing tool down.
-  useEffect(() => {
-    if (readOnly) setTool("select");
-  }, [readOnly]);
-
   // Switching tools drops anything half-finished, and a drawing tool clears
   // the selection, whose resize handles and toolbars would otherwise get in
   // the way.
@@ -2156,6 +2304,23 @@ const CanvasInner = ({
         setTool("select");
         return;
       }
+      // Enter on a focused sticky or text box starts editing it, as a
+      // double-click does. Held back from the note's new editor, where it
+      // would start a new line.
+      const note = event.target;
+      if (
+        event.key === "Enter" &&
+        !readOnly &&
+        tool === "select" &&
+        note instanceof HTMLElement &&
+        note.matches(".react-flow__node-sticky, .react-flow__node-text") &&
+        wrapperRef.current?.contains(note) &&
+        note.dataset.id
+      ) {
+        event.preventDefault();
+        setEditOnAppear(note.dataset.id);
+        return;
+      }
       if (
         !readOnly &&
         (event.ctrlKey || event.metaKey) &&
@@ -2183,11 +2348,32 @@ const CanvasInner = ({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [readOnly, flow, deleteNodes]);
+  }, [readOnly, tool, flow, deleteNodes]);
 
   const toggleFeederArrows = useCallback(
     () => setShowFeederArrows((current) => !current),
     [setShowFeederArrows],
+  );
+  const toggleHidden = useCallback(() => {
+    setShowHidden((current) => !current);
+    closeComment();
+  }, [closeComment]);
+  const onPenWidth = useCallback(
+    (event: React.ChangeEvent<HTMLSelectElement>) => {
+      const width = WhiteboardStrokeWidths.find(
+        (w) => w === event.target.value,
+      );
+      if (width) setPenWidth(width);
+    },
+    [setPenWidth],
+  );
+  const alignBy = useCallback(
+    (mode: AlignMode) => arrange({ kind: "align", mode }),
+    [arrange],
+  );
+  const distributeBy = useCallback(
+    (axis: DistributeAxis) => arrange({ kind: "distribute", axis }),
+    [arrange],
   );
 
   const drawingTool = tool !== "select";
@@ -2213,11 +2399,36 @@ const CanvasInner = ({
     "whiteboard.toolbar.showResolved",
     "Show resolved comments",
   );
+  // The toggles show a count beside their icon, so their names carry it too.
+  const showResolvedLabel =
+    resolvedCount > 0
+      ? t(
+          "whiteboard.toolbar.showResolvedCount",
+          "Show resolved comments ({{count}})",
+          { count: resolvedCount },
+        )
+      : showResolvedTitle;
   const penWidthNames: Record<WhiteboardStrokeWidth, string> = {
-    thin: t("whiteboard.toolbar.penWidthThin", "thin"),
-    medium: t("whiteboard.toolbar.penWidthMedium", "medium"),
-    thick: t("whiteboard.toolbar.penWidthThick", "thick"),
+    thin: t("whiteboard.toolbar.penWidthThin", "Thin"),
+    medium: t("whiteboard.toolbar.penWidthMedium", "Medium"),
+    thick: t("whiteboard.toolbar.penWidthThick", "Thick"),
   };
+  const feederArrowsTitle = t(
+    "whiteboard.toolbar.feederArrows",
+    "Show feeder arrows",
+  );
+  const hiddenPuzzlesTitle = t(
+    "whiteboard.toolbar.hiddenPuzzles",
+    "Puzzles not on the board",
+  );
+  const hiddenPuzzlesLabel =
+    hiddenCards.length > 0
+      ? t(
+          "whiteboard.toolbar.hiddenPuzzlesCount",
+          "Puzzles not on the board ({{count}})",
+          { count: hiddenCards.length },
+        )
+      : hiddenPuzzlesTitle;
   const alignModes = [
     ["left", t("whiteboard.arrange.left", "Align left edges")],
     ["center", t("whiteboard.arrange.center", "Align centres horizontally")],
@@ -2288,7 +2499,7 @@ const CanvasInner = ({
           onPointerCancel={onPointerCancel}
           onPointerLeave={onPointerLeave}
         >
-          <ReactFlow<WhiteboardFlowNode>
+          <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
@@ -2329,22 +2540,20 @@ const CanvasInner = ({
             <CursorLayer boardId={boardId} liveEnabled={liveEnabled} />
             <CommentLayer
               pins={commentPins}
-              openId={openThread ?? (draft ? "draft" : undefined)}
+              openId={openThreadId ?? (draft ? "draft" : undefined)}
               pulseId={pulse}
               onOpen={openComment}
             />
-            {drawingPoints.length > 0 && drawing.current && (
+            {localStroke && localStroke.points.length > 0 && (
               <ViewportPortal>
                 <LocalStroke>
                   <path
                     d={inkPath(
-                      drawingPoints,
-                      drawing.current.strokeWidth,
+                      localStroke.points,
+                      localStroke.strokeWidth,
                       false,
                     )}
-                    fill={
-                      STROKE_COLORS[drawing.current.colour] ?? theme.colors.text
-                    }
+                    fill={colors.stroke[localStroke.color] ?? theme.colors.text}
                   />
                 </LocalStroke>
               </ViewportPortal>
@@ -2407,6 +2616,8 @@ const CanvasInner = ({
                       variant={showResolved ? "secondary" : "outline-secondary"}
                       onClick={toggleShowResolved}
                       title={showResolvedTitle}
+                      aria-label={showResolvedLabel}
+                      aria-pressed={showResolved}
                     >
                       <FontAwesomeIcon icon={faCircleCheck} /> {resolvedCount}
                     </Button>
@@ -2417,49 +2628,47 @@ const CanvasInner = ({
               <Panel position="top-left">
                 <ToolBox>
                   <ButtonGroup size="sm">
-                    <Button
-                      variant={
-                        tool === "select" ? "primary" : "outline-secondary"
-                      }
-                      onClick={() => setTool("select")}
+                    <ToolButton
+                      tool="select"
+                      active={tool === "select"}
+                      onSelect={setTool}
                       title={t(
                         "whiteboard.toolbar.select",
                         "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add)",
                       )}
                     >
                       <FontAwesomeIcon icon={faArrowPointer} />
-                    </Button>
-                    <Button
-                      variant={tool === "pen" ? "primary" : "outline-secondary"}
-                      onClick={() => setTool("pen")}
+                    </ToolButton>
+                    <ToolButton
+                      tool="pen"
+                      active={tool === "pen"}
+                      onSelect={setTool}
                       title={t(
                         "whiteboard.toolbar.pen",
                         "Draw (hold Space to pan)",
                       )}
                     >
                       <FontAwesomeIcon icon={faPen} />
-                    </Button>
-                    <Button
-                      variant={
-                        tool === "eraser" ? "primary" : "outline-secondary"
-                      }
-                      onClick={() => setTool("eraser")}
+                    </ToolButton>
+                    <ToolButton
+                      tool="eraser"
+                      active={tool === "eraser"}
+                      onSelect={setTool}
                       title={t("whiteboard.toolbar.eraser", "Erase strokes")}
                     >
                       <FontAwesomeIcon icon={faEraser} />
-                    </Button>
-                    <Button
-                      variant={
-                        tool === "connector" ? "primary" : "outline-secondary"
-                      }
-                      onClick={() => setTool("connector")}
+                    </ToolButton>
+                    <ToolButton
+                      tool="connector"
+                      active={tool === "connector"}
+                      onSelect={setTool}
                       title={t(
                         "whiteboard.toolbar.line",
                         "Line: drag between two things to connect them, or anywhere for a free line (Shift snaps the angle)",
                       )}
                     >
-                      <ArrowHeadIcon kind="end" />
-                    </Button>
+                      <LineStyleIcon kind="end" />
+                    </ToolButton>
                   </ButtonGroup>
                   {tool === "connector" && (
                     <LineStyleControls
@@ -2471,16 +2680,14 @@ const CanvasInner = ({
                     <>
                       <ColorPicker
                         value={penColor}
-                        palette={STROKE_COLORS}
+                        palette={colors.stroke}
                         onChange={setPenColor}
                         fallback={theme.colors.text}
                       />
                       <PenWidthSelect
                         size="sm"
                         value={penWidth}
-                        onChange={(e) =>
-                          setPenWidth(e.target.value as WhiteboardStrokeWidth)
-                        }
+                        onChange={onPenWidth}
                         aria-label={t(
                           "whiteboard.toolbar.penWidth",
                           "Pen width",
@@ -2495,60 +2702,58 @@ const CanvasInner = ({
                     </>
                   )}
                   <ButtonGroup size="sm">
-                    <Button
-                      variant={
-                        tool === "sticky" ? "primary" : "outline-secondary"
-                      }
-                      onClick={() => setTool("sticky")}
+                    <ToolButton
+                      tool="sticky"
+                      active={tool === "sticky"}
+                      onSelect={setTool}
                       title={t(
                         "whiteboard.toolbar.sticky",
                         "Sticky note: click to place, or drag to size",
                       )}
                     >
                       <FontAwesomeIcon icon={faNoteSticky} />
-                    </Button>
-                    <Button
-                      variant={
-                        tool === "text" ? "primary" : "outline-secondary"
-                      }
-                      onClick={() => setTool("text")}
+                    </ToolButton>
+                    <ToolButton
+                      tool="text"
+                      active={tool === "text"}
+                      onSelect={setTool}
                       title={t(
                         "whiteboard.toolbar.text",
                         "Text: click to place, or drag to size",
                       )}
                     >
                       <FontAwesomeIcon icon={faFont} />
-                    </Button>
-                    <Button
-                      variant={
-                        tool === "frame" ? "primary" : "outline-secondary"
-                      }
-                      onClick={() => setTool("frame")}
+                    </ToolButton>
+                    <ToolButton
+                      tool="frame"
+                      active={tool === "frame"}
+                      onSelect={setTool}
                       title={t(
                         "whiteboard.toolbar.frame",
                         "Frame: click to place, or drag to size",
                       )}
                     >
                       <FontAwesomeIcon icon={faObjectGroup} />
-                    </Button>
+                    </ToolButton>
                   </ButtonGroup>
                   <ButtonGroup size="sm">
-                    <Button
-                      variant={
-                        tool === "comment" ? "primary" : "outline-secondary"
-                      }
-                      onClick={() => setTool("comment")}
+                    <ToolButton
+                      tool="comment"
+                      active={tool === "comment"}
+                      onSelect={setTool}
                       title={t(
                         "whiteboard.toolbar.comment",
                         "Comment: click on something to start a thread about it",
                       )}
                     >
                       <FontAwesomeIcon icon={faComment} />
-                    </Button>
+                    </ToolButton>
                     <Button
                       variant={showResolved ? "secondary" : "outline-secondary"}
                       onClick={toggleShowResolved}
                       title={showResolvedTitle}
+                      aria-label={showResolvedLabel}
+                      aria-pressed={showResolved}
                     >
                       <FontAwesomeIcon icon={faCircleCheck} />
                       {resolvedCount > 0 && ` ${resolvedCount}`}
@@ -2560,23 +2765,18 @@ const CanvasInner = ({
                         showFeederArrows ? "secondary" : "outline-secondary"
                       }
                       onClick={toggleFeederArrows}
-                      title={t(
-                        "whiteboard.toolbar.feederArrows",
-                        "Show feeder arrows",
-                      )}
+                      title={feederArrowsTitle}
+                      aria-label={feederArrowsTitle}
+                      aria-pressed={showFeederArrows}
                     >
                       <FontAwesomeIcon icon={faDiagramProject} />
                     </Button>
                     <Button
                       variant={showHidden ? "secondary" : "outline-secondary"}
-                      onClick={() => {
-                        setShowHidden((s) => !s);
-                        closeComment();
-                      }}
-                      title={t(
-                        "whiteboard.toolbar.hiddenPuzzles",
-                        "Puzzles not on the board",
-                      )}
+                      onClick={toggleHidden}
+                      title={hiddenPuzzlesTitle}
+                      aria-label={hiddenPuzzlesLabel}
+                      aria-pressed={showHidden}
                     >
                       <FontAwesomeIcon icon={faEyeSlash} />
                       {hiddenCards.length > 0 && ` ${hiddenCards.length}`}
@@ -2603,15 +2803,13 @@ const CanvasInner = ({
                     aria-label={t("whiteboard.arrange.align", "Align")}
                   >
                     {alignModes.map(([mode, title]) => (
-                      <Button
+                      <ArrangeButton
                         key={mode}
-                        variant="outline-secondary"
+                        kind={mode}
                         title={title}
-                        aria-label={title}
-                        onClick={() => arrange({ kind: "align", mode })}
-                      >
-                        <ArrangeIcon kind={mode} />
-                      </Button>
+                        label={title}
+                        onArrange={alignBy}
+                      />
                     ))}
                   </ButtonGroup>
                   <ButtonGroup
@@ -2622,9 +2820,9 @@ const CanvasInner = ({
                     )}
                   >
                     {distributeAxes.map(([axis, title]) => (
-                      <Button
+                      <ArrangeButton
                         key={axis}
-                        variant="outline-secondary"
+                        kind={axis}
                         title={
                           selectedUnitCount < 3
                             ? t(
@@ -2632,17 +2830,18 @@ const CanvasInner = ({
                                 "{{action}} (select three or more)",
                                 {
                                   action: title,
+                                  // React escapes attributes, so i18next's
+                                  // escaping would only show entities. Goes
+                                  // once both i18n inits stop escaping.
                                   interpolation: { escapeValue: false },
                                 },
                               )
                             : title
                         }
-                        aria-label={title}
+                        label={title}
                         disabled={selectedUnitCount < 3}
-                        onClick={() => arrange({ kind: "distribute", axis })}
-                      >
-                        <ArrangeIcon kind={axis} />
-                      </Button>
+                        onArrange={distributeBy}
+                      />
                     ))}
                   </ButtonGroup>
                 </ToolBox>
@@ -2654,7 +2853,7 @@ const CanvasInner = ({
                   key={
                     draft
                       ? `draft:${draft.node ?? ""}:${draft.x}:${draft.y}`
-                      : (openThread ?? "")
+                      : (openThreadId ?? "")
                   }
                   huntId={huntId}
                   puzzleId={puzzleId}
@@ -2682,16 +2881,11 @@ const CanvasInner = ({
                     </div>
                   )}
                   {hiddenCards.map((card) => (
-                    <HiddenRow key={card.puzzle}>
-                      <span title={card.title}>{card.title}</span>
-                      <Button
-                        size="sm"
-                        variant="link"
-                        onClick={() => putBack(card)}
-                      >
-                        {t("whiteboard.hidden.putBack", "Put back")}
-                      </Button>
-                    </HiddenRow>
+                    <MissingCardRow
+                      key={card.puzzle}
+                      card={card}
+                      onPutBack={putBack}
+                    />
                   ))}
                 </SidePanel>
               </Panel>

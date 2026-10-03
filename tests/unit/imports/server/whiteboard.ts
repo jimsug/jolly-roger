@@ -1,7 +1,5 @@
-import { setTimeout } from "node:timers/promises";
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
-import type { Meteor } from "meteor/meteor";
+import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import sinon from "sinon";
@@ -23,6 +21,7 @@ import Tags from "../../../../imports/lib/models/Tags";
 import WhiteboardEdges from "../../../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../../../imports/lib/models/WhiteboardNodes";
 import Whiteboards from "../../../../imports/lib/models/Whiteboards";
+import whiteboardPresence from "../../../../imports/lib/publications/whiteboardPresence";
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
@@ -44,6 +43,7 @@ import setWhiteboardLive from "../../../../imports/methods/setWhiteboardLive";
 import updatePuzzle from "../../../../imports/methods/updatePuzzle";
 import upsertWhiteboardNodes from "../../../../imports/methods/upsertWhiteboardNodes";
 import addPuzzle from "../../../../imports/server/addPuzzle";
+import GlobalHooks from "../../../../imports/server/GlobalHooks";
 import { cleanupDeadServer } from "../../../../imports/server/garbage-collection";
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
 import WhiteboardPresence from "../../../../imports/server/models/WhiteboardPresence";
@@ -61,6 +61,7 @@ import {
   removePresence,
   setLive,
 } from "../../../../imports/server/whiteboardLive";
+import asUser from "../../../lib/asUser";
 import resetDatabase from "../../../lib/resetDatabase";
 import runJob from "../../../lib/runJob";
 import StubSubscription, {
@@ -95,16 +96,6 @@ function fakeConnection() {
     close: () => closers.forEach((cb) => cb()),
   };
 }
-
-const asUser = <T>(
-  userId: string,
-  fn: () => Promise<T>,
-  connection?: Meteor.Connection,
-) => {
-  // Meteor hands the calling invocation's connection on to the method
-  const invocation = { userId, connection };
-  return DDP._CurrentMethodInvocation.withValue(invocation, fn);
-};
 
 describe("whiteboard", function () {
   this.timeout(30000);
@@ -200,22 +191,34 @@ describe("whiteboard", function () {
     });
 
     it("doesn't create a document or announce the backing puzzle", async function () {
-      const boardId = await ensureWhiteboard(operator, huntId);
-      const board = (await Whiteboards.findOneAsync(boardId))!;
-      // Anything the creation hooks would have done happens deferred
-      await setTimeout(100);
-      assert.equal(
-        await Documents.find({ puzzle: board.puzzle }).countAsync(),
-        0,
-      );
-      assert.equal(
-        await PuzzleNotifications.find({ puzzle: board.puzzle }).countAsync(),
-        0,
-      );
-      assert.equal(
-        await ChatMessages.find({ puzzle: board.puzzle }).countAsync(),
-        0,
-      );
+      const created = sinon.spy(GlobalHooks, "runPuzzleCreatedHooks");
+      try {
+        const boardId = await ensureWhiteboard(operator, huntId);
+        // The creation hooks are deferred, and deferred callbacks run in
+        // order, so by the time this one runs any the board deferred have.
+        await new Promise<void>((resolve) => {
+          Meteor.defer(resolve);
+        });
+        assert.isTrue(created.notCalled);
+
+        const board = (await Whiteboards.findOneAsync(boardId))!;
+        assert.equal(
+          await Documents.find({ puzzle: board.puzzle }).countAsync(),
+          0,
+        );
+        assert.equal(
+          await PuzzleNotifications.find({
+            puzzle: board.puzzle,
+          }).countAsync(),
+          0,
+        );
+        assert.equal(
+          await ChatMessages.find({ puzzle: board.puzzle }).countAsync(),
+          0,
+        );
+      } finally {
+        created.restore();
+      }
     });
 
     it("refuses while the whiteboard is switched off", async function () {
@@ -417,7 +420,11 @@ describe("whiteboard", function () {
       await syncPuzzlesOnBoard(huntId, [puzzleId]);
 
       await asUser(member, () =>
-        renameTag.callPromise({ tagId, name: "group:renamed", alias: false }),
+        renameTag.callPromise({
+          tagId,
+          name: "group:renamed",
+          keepOldNameAsAlias: false,
+        }),
       );
       await waitForAssertion(async () => {
         const frame = await frameFor(tagId);
@@ -716,7 +723,7 @@ describe("whiteboard", function () {
         upsertNodes(member, boardId, [{ ...sticky, _id: "not an id!" }]),
         /Invalid node id/,
       );
-      // Through the method, a point with the wrong arity is refused too
+      // Through the method, check() refuses a point with the wrong arity
       await assert.isRejected(
         asUser(member, () =>
           upsertWhiteboardNodes.callPromise({
@@ -732,7 +739,7 @@ describe("whiteboard", function () {
             ],
           }),
         ),
-        /Invalid ink point/,
+        /Match error/,
       );
       assert.equal(
         await WhiteboardNodes.find({
@@ -1194,9 +1201,9 @@ describe("whiteboard", function () {
       await setLive(member, mine.connection, boardId, state);
       await setLive(operator, theirs.connection, boardId, state);
 
-      const cursor = await publishHandler(
-        "Whiteboards.publications.presence",
-      ).call(mine, { boardId });
+      const cursor = await publishHandler(whiteboardPresence.name).call(mine, {
+        boardId,
+      });
       const published = await cursor.fetchAsync();
       assert.deepEqual(
         published.map((doc: { user: string }) => doc.user),
@@ -1218,7 +1225,7 @@ describe("whiteboard", function () {
       assert.equal(await WhiteboardPresence.find({}).countAsync(), 0);
 
       assert.deepEqual(
-        await publishHandler("Whiteboards.publications.presence").call(
+        await publishHandler(whiteboardPresence.name).call(
           new StubSubscription(outsider),
           { boardId },
         ),
@@ -1254,7 +1261,7 @@ describe("whiteboard", function () {
       await setLive(member, fakeConnection().connection, boardId, state);
       assert.equal(await WhiteboardPresence.find({}).countAsync(), 0);
       assert.deepEqual(
-        await publishHandler("Whiteboards.publications.presence").call(
+        await publishHandler(whiteboardPresence.name).call(
           new StubSubscription(member),
           { boardId },
         ),
@@ -1289,7 +1296,7 @@ describe("whiteboard", function () {
         setLive(member, connection, boardId, {
           ...state,
           stroke: {
-            colour: "black",
+            color: "black",
             strokeWidth: "thin",
             points: Array.from(
               { length: 501 },

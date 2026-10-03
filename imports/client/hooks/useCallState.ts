@@ -117,7 +117,7 @@ export type JoinCallOptions = {
 export type Action =
   | { type: "request-capture" }
   | { type: "capture-error"; error: Error }
-  | { type: "join-call"; audioState: AudioState; initialMute?: boolean }
+  | { type: "join-call"; audioState: AudioState; initialMuted?: boolean }
   | { type: "set-device"; device: types.Device | undefined }
   | {
       type: "set-transport";
@@ -182,17 +182,17 @@ function reducer(state: CallState, action: Action): CallState {
         error: action.error,
       };
     case "join-call": {
-      const initialMute = action.initialMute ?? false;
+      const initialMuted = action.initialMuted ?? false;
       return {
         ...state,
         callState: CallJoinState.IN_CALL,
         audioState: action.audioState,
         audioControls: {
-          muted: initialMute,
+          muted: initialMuted,
           deafened: false,
         },
         allowInitialPeerStateNotification: true,
-        initialMuted: initialMute,
+        initialMuted,
         error: undefined,
       };
     }
@@ -411,11 +411,8 @@ const useTransport = (
   // Extract turnConfig sub-fields as strings so they can be listed
   // individually in the useEffect dep array. Using the turnConfig object
   // directly would cause spurious re-fires because Minimongo returns fresh
-  // clones on every reactive recomputation. urls can be a list, which is
-  // cloned the same way, so it's keyed by its JSON encoding.
-  const turnConfigUrlsJson = transportParams?.turnConfig
-    ? JSON.stringify(transportParams.turnConfig.urls)
-    : undefined;
+  // clones on every reactive recomputation.
+  const turnConfigUrls = transportParams?.turnConfig?.urls;
   const turnConfigUsername = transportParams?.turnConfig?.username;
   const turnConfigCredential = transportParams?.turnConfig?.credential;
   useEffect(() => {
@@ -425,9 +422,9 @@ const useTransport = (
       const iceParameters = transportParams.iceParameters;
       const iceCandidates = transportParams.iceCandidates;
       const serverDtlsParameters = transportParams.dtlsParameters;
-      const turnConfig = turnConfigUrlsJson
+      const turnConfig = turnConfigUrls
         ? {
-            urls: JSON.parse(turnConfigUrlsJson) as string | string[],
+            urls: JSON.parse(turnConfigUrls),
             username: turnConfigUsername!,
             credential: turnConfigCredential!,
           }
@@ -502,7 +499,7 @@ const useTransport = (
     transportParams?.iceParameters,
     transportParams?.iceCandidates,
     transportParams?.dtlsParameters,
-    turnConfigUrlsJson,
+    turnConfigUrls,
     turnConfigUsername,
     turnConfigCredential,
   ]);
@@ -1315,7 +1312,7 @@ const useCallState = ({
             mediaSource,
             audioContext,
           },
-          initialMute: muted,
+          initialMuted: muted,
         });
       } else {
         const msg =

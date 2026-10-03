@@ -2,7 +2,7 @@ import type { Node, NodeProps } from "@xyflow/react";
 import React from "react";
 import styled from "styled-components";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
-import { FILL_COLORS } from "./colors";
+import colors from "./colors";
 import NodeChrome from "./NodeChrome";
 import NodeContributors from "./NodeContributors";
 import NoteText from "./NoteText";
@@ -42,11 +42,11 @@ const Attribution = styled.div`
 
 const StickyNode = ({ id, data, selected }: NodeProps<StickyNodeType>) => {
   const { doc } = data;
-  const color = doc.colour ?? "yellow";
+  const color = doc.color ?? "yellow";
 
   return (
     <Paper
-      $fill={FILL_COLORS[color]}
+      $fill={colors.fill[color]}
       $dark={color === "black"}
       $selected={selected}
     >
@@ -55,7 +55,7 @@ const StickyNode = ({ id, data, selected }: NodeProps<StickyNodeType>) => {
         kind="sticky"
         selected={selected}
         color={color}
-        palette={FILL_COLORS}
+        palette={colors.fill}
       />
       <Body>
         <NoteText id={id} text={doc.text} />

@@ -28,13 +28,15 @@ import InputGroup from "react-bootstrap/InputGroup";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Table from "react-bootstrap/Table";
 import ToggleButton from "react-bootstrap/ToggleButton";
-import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import Tooltip from "react-bootstrap/Tooltip";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router";
 import styled, { css } from "styled-components";
 import { indexedById } from "../../lib/listUtils";
-import type { PuzzleType } from "../../lib/models/Puzzles";
+import type {
+  PuzzleNoteContentType,
+  PuzzleType,
+} from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import Tags from "../../lib/models/Tags";
@@ -47,18 +49,16 @@ import {
   useNotesPageViewMode,
 } from "../hooks/persisted-state";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
-import { compilePuzzleMatcher } from "../search";
+import {
+  puzzlesMatchingSearchString,
+  puzzlesMatchingSolvedFilter,
+} from "../search";
 import RelativeTime from "./RelativeTime";
+import ResponsiveToggleButtonGroup from "./styling/ResponsiveToggleButtonGroup";
 import TagList from "./TagList";
 
 const NoteTable = styled(Table)`
   color: ${({ theme }) => theme.colors.text};
-`;
-
-const StyledToggleButtonGroup = styled(ToggleButtonGroup)`
-  @media (width < 360px) {
-    width: 100%;
-  }
 `;
 
 const ControlsContainer = styled.div`
@@ -85,9 +85,17 @@ const StickyHeaderTable = styled(Table)`
     position: sticky;
     top: 0;
     z-index: 10;
-    box-shadow: 0 2px 2px -1px rgb(0 0 0 / 20%);
+    box-shadow: 0 2px 2px -1px ${({ theme }) => theme.colors.notesHeaderShadow};
     border-bottom: 2px solid ${({ theme }) => theme.colors.border};
   }
+`;
+
+const NotesTableHeader = styled.th<{ $width: string }>`
+  width: ${({ $width }) => $width};
+`;
+
+const UpdatedCell = styled.td`
+  min-width: 120px;
 `;
 
 const ExpandableContent = styled.div<{
@@ -255,11 +263,7 @@ const ExpandableCell = ({ text }: { text: string | undefined }) => {
   );
 };
 
-const NoteLink = ({
-  note,
-}: {
-  note: NonNullable<PuzzleType["noteContent"]>;
-}) => {
+const NoteLink = ({ note }: { note: PuzzleNoteContentType }) => {
   if (!note.externalLinkUrl) {
     return null;
   }
@@ -422,19 +426,23 @@ const NotesTable = ({
     <StickyHeaderTable striped bordered hover size="sm">
       <thead>
         <tr>
-          <th style={{ width: "140px" }}>
+          <NotesTableHeader $width="140px">
             {t("notes.columns.updated", "Updated")}
-          </th>
-          <th style={{ width: "20%" }}>
+          </NotesTableHeader>
+          <NotesTableHeader $width="20%">
             {t("notes.columns.puzzle", "Puzzle")}
-          </th>
+          </NotesTableHeader>
           <th>{t("notes.columns.summary", "Summary")}</th>
           <th>{t("notes.columns.theories", "Theories")}</th>
-          <th style={{ width: "10%" }}>
+          <NotesTableHeader $width="10%">
             {t("notes.columns.contact", "Contact")}
-          </th>
-          <th style={{ width: "10%" }}>{t("notes.columns.link", "Link")}</th>
-          <th style={{ width: "15%" }}>{t("notes.columns.tags", "Tags")}</th>
+          </NotesTableHeader>
+          <NotesTableHeader $width="10%">
+            {t("notes.columns.link", "Link")}
+          </NotesTableHeader>
+          <NotesTableHeader $width="15%">
+            {t("notes.columns.tags", "Tags")}
+          </NotesTableHeader>
         </tr>
       </thead>
       <tbody>
@@ -442,9 +450,9 @@ const NotesTable = ({
           const note = puzzle.noteContent;
           return (
             <tr key={puzzle._id}>
-              <td style={{ minWidth: "120px" }}>
+              <UpdatedCell>
                 <NoteUpdatedAt puzzle={puzzle} />
-              </td>
+              </UpdatedCell>
               <td>
                 {computeSolvedness(puzzle) === "solved" && (
                   <div className="mb-1">
@@ -544,18 +552,14 @@ const NotesPage = () => {
     setSearchString("");
   }, []);
 
-  const shownPuzzles = useMemo(() => {
-    const searchKeys = searchString.split(" ").filter((key) => key.length > 0);
-    const matchesSearch =
-      searchKeys.length === 0
-        ? allPuzzles
-        : allPuzzles.filter(compilePuzzleMatcher(allTags, searchKeys));
-    return showSolved
-      ? matchesSearch
-      : matchesSearch.filter(
-          (puzzle) => computeSolvedness(puzzle) !== "solved",
-        );
-  }, [allPuzzles, allTags, searchString, showSolved]);
+  const shownPuzzles = useMemo(
+    () =>
+      puzzlesMatchingSolvedFilter(
+        puzzlesMatchingSearchString(allPuzzles, allTags, searchString),
+        showSolved,
+      ),
+    [allPuzzles, allTags, searchString, showSolved],
+  );
 
   if (loading) {
     return <span>{t("common.loading", "loading")}...</span>;
@@ -568,7 +572,7 @@ const NotesPage = () => {
         <FormGroup>
           <FormLabel>{t("notes.puzzlesLabel", "Puzzles")}</FormLabel>
           <ButtonToolbar>
-            <StyledToggleButtonGroup
+            <ResponsiveToggleButtonGroup
               type="radio"
               name="notes-show-solved"
               value={showSolved ? "show" : "hide"}
@@ -588,14 +592,14 @@ const NotesPage = () => {
               >
                 {t("notes.allPuzzles", "All")}
               </ToggleButton>
-            </StyledToggleButtonGroup>
+            </ResponsiveToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
 
         <FormGroup>
           <FormLabel>{t("notes.viewLabel", "View")}</FormLabel>
           <ButtonToolbar>
-            <StyledToggleButtonGroup
+            <ResponsiveToggleButtonGroup
               type="radio"
               name="notes-view-mode"
               value={viewMode}
@@ -624,7 +628,7 @@ const NotesPage = () => {
                 <FontAwesomeIcon icon={faArrowsLeftRight} />{" "}
                 {t("notes.viewFullWidth", "Full width")}
               </ToggleButton>
-            </StyledToggleButtonGroup>
+            </ResponsiveToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
 
@@ -635,7 +639,7 @@ const NotesPage = () => {
               as="input"
               type="text"
               placeholder={t(
-                "puzzleList.filterByPlaceholder",
+                "notes.filterByPlaceholder",
                 "Filter by title, answer, or tag",
               )}
               value={searchString}
@@ -651,7 +655,7 @@ const NotesPage = () => {
       <NotesToolbar>
         <div>
           {t(
-            "puzzleList.filteredPuzzleCountMessage",
+            "notes.filteredPuzzleCountMessage",
             "Showing {{retainedCount}} of {{allPuzzlesCount}} items",
             {
               retainedCount: shownPuzzles.length,

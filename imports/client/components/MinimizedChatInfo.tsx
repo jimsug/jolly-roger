@@ -58,8 +58,8 @@ const NotificationBadge = styled.span`
   position: absolute;
   top: -4px;
   right: -4px;
-  background-color: ${({ theme }) => theme.colors.danger};
-  color: white;
+  background-color: ${({ theme }) => theme.colors.missedMessagesBadgeBackground};
+  color: ${({ theme }) => theme.colors.chatBadgeText};
   border-radius: 4px;
   padding: 0 3px;
   font-size: 12px;

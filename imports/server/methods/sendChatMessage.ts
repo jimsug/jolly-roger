@@ -2,11 +2,10 @@ import { check, Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import isReaction from "../../lib/isReaction";
 import ChatMessages from "../../lib/models/ChatMessages";
+import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import sendChatMessage from "../../methods/sendChatMessage";
-import sendChatMessageInternal, {
-  assertHuntMember,
-} from "../sendChatMessageInternal";
+import sendChatMessageInternal from "../sendChatMessageInternal";
 import { assertValidCommentAnchor } from "../whiteboardEdits";
 import defineMethod from "./defineMethod";
 
@@ -33,6 +32,23 @@ defineMethod(sendChatMessage, {
 
   async run({ puzzleId, content, parentId, comment }) {
     check(this.userId, String);
+
+    const user = await MeteorUsers.findOneAsync(this.userId, {
+      projection: { hunts: 1 },
+    });
+    const puzzle = await Puzzles.findOneAsync(puzzleId, {
+      projection: { hunt: 1 },
+    });
+    if (!puzzle) {
+      throw new Meteor.Error(404, "Unknown puzzle");
+    }
+    if (!user?.hunts?.includes(puzzle.hunt)) {
+      throw new Meteor.Error(
+        403,
+        `User ${this.userId} is not a member of hunt ${puzzle.hunt}`,
+      );
+    }
+
     const contentObj = JSON.parse(content);
     check(contentObj, {
       type: "message" as const,
@@ -76,17 +92,10 @@ defineMethod(sendChatMessage, {
         contentObj.children.length === 1 &&
         CLEAR_PINS_COMMAND.test(firstChild.text)
       ) {
-        const puzzle = await Puzzles.findOneAsync(puzzleId, {
-          projection: { hunt: 1 },
-        });
-        if (!puzzle) {
-          throw new Meteor.Error(404, "Unknown puzzle");
-        }
-        await assertHuntMember(this.userId, puzzle.hunt);
         // deleted is in the selector so the { deleted, puzzle } index serves
         // the update rather than a collection scan
         await ChatMessages.updateAsync(
-          { deleted: false, puzzle: puzzleId, pinTs: { $ne: null } },
+          { deleted: false, puzzle: puzzle._id, pinTs: { $exists: true } },
           { $unset: { pinTs: "" } },
           { multi: true },
         );

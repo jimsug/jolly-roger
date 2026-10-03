@@ -47,6 +47,25 @@ meteor npm test
 
 This runs the full test suite with Playwright.
 
+## Browser extension
+
+This fork's browser extension, in `extension/`, is a separate npm package with
+its own lockfile, so install and build it there with plain `npm` rather than
+`meteor npm`:
+
+```bash
+cd extension
+npm install
+npm run build
+```
+
+`npm run lint` there runs oxlint, ESLint and Biome with the root's configs and
+packages (so run `meteor npm install` at the top level first), then `tsc` and
+knip. [build-extension.yml](.github/workflows/build-extension.yml) runs the
+lint and the build on every push to `main` that touches the extension, and
+publishes a release for each `v1.2.3` tag. See
+[extension/README.md](extension/README.md) for loading a build into a browser.
+
 ## Setting up a fresh Jolly Roger server
 
 When you start a server with an empty database (development or production),

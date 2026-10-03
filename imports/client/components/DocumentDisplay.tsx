@@ -1,14 +1,11 @@
 import type { Meteor } from "meteor/meteor";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
-import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faFileAlt } from "@fortawesome/free-solid-svg-icons/faFileAlt";
 import { faTable } from "@fortawesome/free-solid-svg-icons/faTable";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import type { DocumentType } from "../../lib/models/Documents";
-import CopyToClipboardButton from "./CopyToClipboardButton";
 
 // Google Sheets steals focus during initialization. The number of times
 // depends on the browser engine: Chromium does it twice, Firefox once, and
@@ -22,11 +19,30 @@ const EXPECTED_FOCUS_STEALS = (() => {
 
 interface DocumentDisplayProps {
   document: DocumentType;
-  // "copy" is a button that copies the document's URL, for layouts that
-  // already embed the document and just need a way to share it.
-  displayMode: "link" | "embed" | "copy";
+  displayMode: "link" | "embed";
   user: Meteor.User;
 }
+
+// The URL a document opens at, or undefined for a type we can't link to.
+export const googleDocumentUrl = (
+  document: DocumentType,
+  user: Meteor.User,
+) => {
+  // If the user has linked their Google account, try to force usage of that specific account.
+  // Otherwise, they may open the document anonymously. If the user isn't signed in, they will be
+  // redirected to the default account in their browser session anyway.
+  const authUserParam = user.googleAccount
+    ? `authuser=${user.googleAccount}&`
+    : "";
+  switch (document.value.type) {
+    case "spreadsheet":
+      return `https://docs.google.com/spreadsheets/d/${document.value.id}/edit?${authUserParam}ui=2&rm=embedded&gid=0#gid=0`;
+    case "document":
+      return `https://docs.google.com/document/d/${document.value.id}/edit?${authUserParam}ui=2&rm=embedded#gid=0`;
+    default:
+      return undefined;
+  }
+};
 
 const StyledDeepLink = styled.a`
   display: inline-block;
@@ -84,7 +100,6 @@ const GoogleDocumentDisplay = ({
   displayMode,
   user,
 }: DocumentDisplayProps) => {
-  const { t } = useTranslation();
   const isSpreadsheet = document.value.type === "spreadsheet";
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastFocusedRef = useRef<Element | null>(null);
@@ -173,23 +188,15 @@ const GoogleDocumentDisplay = ({
     lastStolenAtRef.current ??= Date.now();
   }, []);
 
-  let url: string;
+  const url = googleDocumentUrl(document, user);
   let title: string;
   let icon: IconDefinition;
-  // If the user has linked their Google account, try to force usage of that specific account.
-  // Otherwise, they may open the document anonymously. If the user isn't signed in, they will be
-  // redirected to the default account in their browser session anyway.
-  const authUserParam = user.googleAccount
-    ? `authuser=${user.googleAccount}&`
-    : "";
   switch (document.value.type) {
     case "spreadsheet":
-      url = `https://docs.google.com/spreadsheets/d/${document.value.id}/edit?${authUserParam}ui=2&rm=embedded&gid=0#gid=0`;
       title = "Sheet";
       icon = faTable;
       break;
     case "document":
-      url = `https://docs.google.com/document/d/${document.value.id}/edit?${authUserParam}ui=2&rm=embedded#gid=0`;
       title = "Doc";
       icon = faFileAlt;
       break;
@@ -203,22 +210,6 @@ const GoogleDocumentDisplay = ({
   }
 
   switch (displayMode) {
-    case "copy":
-      return (
-        <CopyToClipboardButton
-          variant="link"
-          size="sm"
-          tooltipPlacement="right"
-          tooltipText={t(
-            "puzzle.document.copyLink",
-            "Copy link to {{type}} for sharing or advanced features",
-            { type: document.value.type },
-          )}
-          text={url}
-        >
-          <FontAwesomeIcon icon={faCopy} />
-        </CopyToClipboardButton>
-      );
     case "link":
       return (
         <StyledDeepLink href={url} target="_blank" rel="noreferrer noopener">

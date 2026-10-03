@@ -14,11 +14,7 @@ import { ensureDocument, puzzleDocumentName, renameDocument } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
 
-type OptionalPuzzleField =
-  | "url"
-  | "completedWithNoAnswer"
-  | "locked"
-  | "lockedSummary";
+type OptionalPuzzleField = "url" | "completedWithNoAnswer" | "lockedSummary";
 
 defineMethod(updatePuzzle, {
   validate(arg) {
@@ -117,13 +113,9 @@ defineMethod(updatePuzzle, {
     }
     // Omitting `locked` leaves the lock as it was, so callers that don't know
     // about locked puzzles can't unlock one by accident.
-    if (locked !== undefined) {
-      if (locked) {
-        update.$set = { ...update.$set, locked };
-      } else {
-        unset("locked");
-      }
-      const trimmedSummary = locked ? lockedSummary?.trim() : undefined;
+    if (locked) {
+      update.$set = { ...update.$set, locked };
+      const trimmedSummary = lockedSummary?.trim();
       if (trimmedSummary) {
         update.$set = { ...update.$set, lockedSummary: trimmedSummary };
       } else {
@@ -131,6 +123,18 @@ defineMethod(updatePuzzle, {
       }
     }
     await Puzzles.updateAsync(puzzleId, update);
+
+    // Unlocking clears the lock in its own update, and only if it's still
+    // there, so when two unlocks race (this and Puzzles.methods.unlock, say)
+    // only the one that clears it announces the puzzle.
+    let unlocked = false;
+    if (locked === false) {
+      const cleared = await Puzzles.updateAsync(
+        { _id: puzzleId, locked: true },
+        { $unset: { locked: "", lockedSummary: "" } },
+      );
+      unlocked = cleared > 0;
+    }
 
     // Run any puzzle update hooks
     Meteor.defer(() => {
@@ -141,7 +145,7 @@ defineMethod(updatePuzzle, {
     // Puzzles.methods.unlock posts, but the puzzle still needs announcing to
     // the world now that it exists. Operators can edit deleted puzzles too,
     // and those stay unannounced.
-    if (oldPuzzle.locked && locked === false && !oldPuzzle.deleted) {
+    if (unlocked && !oldPuzzle.deleted) {
       Meteor.defer(() => {
         void GlobalHooks.runPuzzleCreatedHooks(puzzleId);
       });

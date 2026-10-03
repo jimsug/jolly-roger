@@ -18,8 +18,8 @@ export default async function transitionGuess(
   if (newState === guess.state) return;
 
   // Marking a guess correct with changes replaces its text with the answer
-  // game control accepted, so the puzzle records that rather than what was
-  // typed. The original text survives in the chat message below.
+  // HQ accepted, so the puzzle records that rather than what was typed. The
+  // original text survives in the chat message below.
   const correctedAnswer =
     newState === "correct" && correctAnswer !== undefined
       ? answerify(correctAnswer)
@@ -59,7 +59,7 @@ export default async function transitionGuess(
             {
               lng: serverLanguage,
               submitted: guess.guess,
-              // Escaped once by the message below, like the guess itself
+              // The message below escapes it once, like the guess; drop once both i18n inits stop escaping
               interpolation: { escapeValue: false },
             },
           )

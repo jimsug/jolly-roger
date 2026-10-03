@@ -8,7 +8,7 @@ import {
 import ChatNotifications from "../../lib/models/ChatNotifications";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import suppressDingwordsForPuzzle from "../../methods/suppressDingwordsForPuzzle";
-import checkPuzzleNotificationScope from "../puzzleNotificationScope";
+import checkHuntPuzzleMembership from "../checkHuntPuzzleMembership";
 import defineMethod from "./defineMethod";
 
 defineMethod(suppressDingwordsForPuzzle, {
@@ -32,7 +32,7 @@ defineMethod(suppressDingwordsForPuzzle, {
     }
     const wordToSuppress = word ?? SUPPRESS_ALL_DINGWORDS;
 
-    const { user, hunt: huntDoc } = await checkPuzzleNotificationScope(
+    const { user, hunt: huntDoc } = await checkHuntPuzzleMembership(
       this.userId,
       hunt,
       puzzle,

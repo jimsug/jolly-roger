@@ -16,12 +16,12 @@ import Tags from "../../../lib/models/Tags";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
 import type { Solvedness } from "../../../lib/solvedness";
 import { computeSolvedness } from "../../../lib/solvedness";
+import useAvatarUsers from "../../hooks/useAvatarUsers";
+import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import AvatarStack from "../AvatarStack";
 import PuzzleAnswer from "../PuzzleAnswer";
-import { useAvatarUsers } from "./NodeContributors";
 import NodeHandles from "./NodeHandles";
-import useDetail from "./useDetail";
-import { PeopleContext } from "./WhiteboardContext";
+import PeopleContext from "./PeopleContext";
 
 type PuzzleCardNodeType = Node<{ doc: WhiteboardNodeType }, "puzzle">;
 
@@ -44,15 +44,15 @@ const Card = styled.div<{
   background-color: ${({ theme, $solvedness }) =>
     theme.colors.solvedness[$solvedness]};
   color: ${({ theme }) => theme.colors.text};
-  ${({ $locked }) =>
+  ${({ $locked, theme }) =>
     $locked &&
     css`
       background-image: repeating-linear-gradient(
         -45deg,
         transparent,
         transparent 8px,
-        rgb(128 128 128 / 10%) 8px,
-        rgb(128 128 128 / 10%) 16px
+        ${theme.colors.lockedPuzzleStripe} 8px,
+        ${theme.colors.lockedPuzzleStripe} 16px
       );
     `}
 `;
@@ -73,9 +73,10 @@ const TopRow = styled.div`
   min-height: 18px;
 `;
 
+// The puzzle list's meta badge colour, as a smaller pill.
 const MetaBadge = styled.span`
-  background: #ffc107;
-  color: #000;
+  background: ${({ theme }) => theme.colors.metaBadgeBackground};
+  color: ${({ theme }) => theme.colors.metaBadgeText};
   border-radius: 8px;
   padding: 0 6px;
   font-size: 11px;
@@ -206,7 +207,7 @@ const People = ({ puzzleId }: { puzzleId: string }) => {
 };
 
 const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
-  const detail = useDetail();
+  const detail = useWhiteboardDetail();
   const { t } = useTranslation();
   const puzzle = useTracker(
     () => Puzzles.findOne(data.doc.puzzle),
@@ -234,6 +235,7 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
 
   if (!puzzle) return null;
 
+  const openPuzzle = t("whiteboard.card.openPuzzle", "Open puzzle");
   const solvedness = computeSolvedness(puzzle);
   const locked = !!puzzle.locked && !!hunt?.allowUnlockablePuzzles;
   const answers =
@@ -279,7 +281,8 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
           <OpenLink
             to={`/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`}
             className="nodrag"
-            title={t("whiteboard.card.openPuzzle", "Open puzzle")}
+            title={openPuzzle}
+            aria-label={openPuzzle}
           >
             <FontAwesomeIcon icon={faUpRightFromSquare} />
           </OpenLink>

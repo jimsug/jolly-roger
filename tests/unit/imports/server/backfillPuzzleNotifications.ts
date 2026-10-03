@@ -1,28 +1,33 @@
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import PuzzleNotifications from "../../../../imports/lib/models/PuzzleNotifications";
-import { backfillPuzzleNotifications } from "../../../../imports/server/migrations/55-backfill-puzzle-notifications";
+import backfillPuzzleNotifications from "../../../../imports/server/backfillPuzzleNotifications";
 import resetDatabase from "../../../lib/resetDatabase";
 
 // Inserts a notification shaped like one the fork wrote before `background`
 // existed. Document validation is bypassed because that is the point.
 async function insertLegacyNotification(extra: Record<string, unknown> = {}) {
   const _id = Random.id();
-  await PuzzleNotifications.collection.rawCollection().insertOne(
-    {
-      _id,
-      user: Random.id(),
-      hunt: Random.id(),
-      puzzle: Random.id(),
-      content: "Legacy notification",
-      deleted: false,
-      createdAt: new Date(),
-      createdBy: Random.id(),
-      updatedAt: new Date(),
-      ...extra,
-    } as any,
-    { bypassDocumentValidation: true },
-  );
+  await PuzzleNotifications.collection
+    .rawDatabase()
+    .collection<{ _id: string; [field: string]: unknown }>(
+      "jr_puzzlenotifications",
+    )
+    .insertOne(
+      {
+        _id,
+        user: Random.id(),
+        hunt: Random.id(),
+        puzzle: Random.id(),
+        content: "Legacy notification",
+        deleted: false,
+        createdAt: new Date(),
+        createdBy: Random.id(),
+        updatedAt: new Date(),
+        ...extra,
+      },
+      { bypassDocumentValidation: true },
+    );
   return _id;
 }
 

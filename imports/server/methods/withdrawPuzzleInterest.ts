@@ -1,6 +1,6 @@
 import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
-import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
+import PuzzleInterests from "../../lib/models/PuzzleInterests";
 import Puzzles from "../../lib/models/Puzzles";
 import withdrawPuzzleInterest from "../../methods/withdrawPuzzleInterest";
 import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
@@ -26,7 +26,7 @@ defineMethod(withdrawPuzzleInterest, {
     // Withdrawing is allowed even once the puzzle has been unlocked, so a
     // stale vote can always be cleaned up. The row goes entirely rather than
     // being soft-deleted, so a later vote doesn't trip the unique index.
-    await PuzzleFeedbacks.removeAsync({
+    await PuzzleInterests.removeAsync({
       puzzle: puzzleId,
       createdBy: this.userId,
     });

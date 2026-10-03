@@ -25,7 +25,7 @@ const WhiteboardHooks: Hookset = {
     return syncPuzzle(puzzleId);
   },
 
-  onAddPuzzleTag(puzzleId: string) {
+  onPuzzleTagAdded(puzzleId: string) {
     return syncPuzzle(puzzleId);
   },
 };

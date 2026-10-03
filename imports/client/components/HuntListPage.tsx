@@ -19,6 +19,7 @@ import Modal from "react-bootstrap/Modal";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
+import Flags from "../../Flags";
 import type { HuntType } from "../../lib/models/Hunts";
 import Hunts from "../../lib/models/Hunts";
 import {
@@ -35,6 +36,77 @@ import HuntPurgeModal from "./HuntPurgeModal";
 import type { ModalFormHandle } from "./ModalForm";
 import ModalForm from "./ModalForm";
 
+type DocumentCachePurgeModalHandle = {
+  show: () => void;
+};
+
+const DocumentCachePurgeModal = ({
+  ref,
+  hunt,
+}: {
+  ref: React.Ref<DocumentCachePurgeModalHandle>;
+  hunt: HuntType;
+}) => {
+  const huntId = hunt._id;
+  const formRef = useRef<ModalFormHandle>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+
+  const show = useCallback(() => {
+    setError(undefined);
+    formRef.current?.show();
+  }, []);
+  useImperativeHandle(ref, () => ({ show }), [show]);
+
+  const onSubmit = useCallback(
+    (callback: () => void) => {
+      setSubmitting(true);
+      setError(undefined);
+      purgeHuntDocumentCache.call({ huntId }, (err) => {
+        setSubmitting(false);
+        if (err) {
+          setError(err.message);
+        } else {
+          callback();
+        }
+      });
+    },
+    [huntId],
+  );
+
+  const { t } = useTranslation();
+  return (
+    <ModalForm
+      ref={formRef}
+      title={t(
+        "huntList.purgeDocumentCache.confirm.title",
+        "Purge document cache",
+      )}
+      submitLabel={t("huntList.purgeDocumentCache.confirm.submit", "Purge")}
+      submitStyle="danger"
+      submitting={submitting}
+      onSubmit={onSubmit}
+    >
+      {t(
+        "huntList.purgeDocumentCache.confirm.text",
+        'Delete the cached Google documents for "{{huntName}}"? Documents already attached to puzzles are not affected. The cache refills itself while puzzles are being added or solved, so this is mostly useful once a hunt is over.',
+        {
+          huntName: hunt.name,
+          // Rendered as a text node, so i18next's HTML escaping would only
+          // show entities for a name with & or quotes. This goes once both
+          // i18n inits switch escapeValue off.
+          interpolation: { escapeValue: false },
+        },
+      )}
+      {error && (
+        <Alert variant="danger" className="mt-3">
+          {error}
+        </Alert>
+      )}
+    </ModalForm>
+  );
+};
+
 const Hunt = React.memo(({ hunt }: { hunt: HuntType }) => {
   const huntId = hunt._id;
 
@@ -48,21 +120,16 @@ const Hunt = React.memo(({ hunt }: { hunt: HuntType }) => {
       canPurge: userMayPurgeHunt(Meteor.user(), hunt),
     };
   }, [hunt]);
+  const googleDisabled = useTracker(() => Flags.active("disable.google"), []);
 
   const deleteModalRef = useRef<ModalFormHandle>(null);
   const purgeModalRef = useRef<ModalFormHandle>(null);
-  const purgeDocumentCacheModalRef = useRef<ModalFormHandle>(null);
+  const purgeDocumentCacheModalRef =
+    useRef<DocumentCachePurgeModalHandle>(null);
 
   const onDelete = useCallback(
     (callback: () => void) => {
       destroyHunt.call({ huntId }, callback);
-    },
-    [huntId],
-  );
-
-  const onPurgeDocumentCache = useCallback(
-    (callback: () => void) => {
-      purgeHuntDocumentCache.call({ huntId }, callback);
     },
     [huntId],
   );
@@ -88,22 +155,7 @@ const Hunt = React.memo(({ hunt }: { hunt: HuntType }) => {
   const { t } = useTranslation();
   return (
     <li>
-      <ModalForm
-        ref={purgeDocumentCacheModalRef}
-        title={t(
-          "huntList.purgeDocumentCache.confirm.title",
-          "Purge document cache",
-        )}
-        submitLabel={t("huntList.purgeDocumentCache.confirm.submit", "Purge")}
-        submitStyle="danger"
-        onSubmit={onPurgeDocumentCache}
-      >
-        {t(
-          "huntList.purgeDocumentCache.confirm.text",
-          'Delete the placeholder Google documents cached for "{{huntName}}"? Documents already attached to puzzles are not affected. The cache refills itself while puzzles are being added or solved, so this is mostly useful once a hunt is over.',
-          { huntName: hunt.name, interpolation: { escapeValue: false } },
-        )}
-      </ModalForm>
+      <DocumentCachePurgeModal ref={purgeDocumentCacheModalRef} hunt={hunt} />
       <ModalForm
         ref={deleteModalRef}
         title={t("huntList.delete.confirm.title", "Delete Hunt")}
@@ -128,7 +180,7 @@ const Hunt = React.memo(({ hunt }: { hunt: HuntType }) => {
             <FontAwesomeIcon icon={faEdit} />
           </Link>
         ) : undefined}
-        {canPurge ? (
+        {canPurge && !googleDisabled ? (
           <Button
             onClick={showPurgeDocumentCacheModal}
             variant="outline-danger"
@@ -290,7 +342,7 @@ const HuntListPage = () => {
         <div key="nomyhunts">
           {t(
             "huntList.notInAnyHunt",
-            "You're not a member of any hunts yet. Consider joining one, or asking an operator to invite you.",
+            "You're not a member of any hunts yet. Consider joining one, or asking an admin to invite you.",
           )}
         </div>,
       );

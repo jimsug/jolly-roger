@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 
-// Public, so the browser extension's store listings can link to it
+// Public, so anyone can read it without signing in, such as someone deciding
+// whether to install the browser extension
 const ExtensionPrivacyPolicy = () => {
   const { t } = useTranslation();
 
@@ -9,7 +10,7 @@ const ExtensionPrivacyPolicy = () => {
       <h1>
         {t(
           "extensionPrivacy.title",
-          "Jolly Roger Web Extension Privacy Policy",
+          "Jolly Roger browser extension privacy policy",
         )}
       </h1>
       <h2>

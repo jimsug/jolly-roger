@@ -1,5 +1,5 @@
-import { rmSync } from "fs";
-import { join } from "path";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import CopyPlugin from "copy-webpack-plugin";
 import ZipPlugin from "zip-webpack-plugin";
 
@@ -12,6 +12,19 @@ const distDir = join(import.meta.dirname, "..", "dist");
 const releasesUrl = `https://github.com/${
   process.env.GITHUB_REPOSITORY ?? "Palindrome-Puzzles/jolly-roger"
 }/releases/latest/download`;
+
+// Release builds take their version from the tag (v1.2.3 builds 1.2.3), so it
+// matches the update manifests build-extension.yml publishes beside them.
+// Browsers only take one to four dot-separated integers.
+const version =
+  process.env.GITHUB_REF_TYPE === "tag"
+    ? process.env.GITHUB_REF_NAME.replace(/^v/, "")
+    : JSON.parse(
+        readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"),
+      ).version;
+if (!/^\d+(\.\d+){0,3}$/.test(version)) {
+  throw new Error(`${version} isn't a valid extension version`);
+}
 
 // Clean the dist directory before every build.
 rmSync(distDir, { recursive: true, force: true });
@@ -58,6 +71,7 @@ export default ["chrome", "firefox"].map((browser) => {
                   return input;
                 }
                 const manifest = JSON.parse(input.toString());
+                manifest.version = version;
                 if (browser === "firefox") {
                   // Add the update URL for Firefox for self-hosting and auto-updates.
                   manifest.browser_specific_settings = {

@@ -12,7 +12,7 @@ import nodeIsMention from "../../lib/nodeIsMention";
 import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import { computeSolvedness } from "../../lib/solvedness";
-import { MarkdownText } from "./ChatMarkdown";
+import ChatMarkdown from "./ChatMarkdown";
 import { MentionSpan, PuzzleSpan } from "./FancyEditor";
 
 // This file implements standalone rendering for the MessageElement format
@@ -143,7 +143,7 @@ const ChatMessage = ({
     } else if (nodeIsImage(child)) {
       return <ResponsiveImage key={i} src={child.url} onLoadCB={imageOnLoad} />;
     } else {
-      return <MarkdownText key={i} text={child.text} />;
+      return <ChatMarkdown key={i} text={child.text} />;
     }
   });
 

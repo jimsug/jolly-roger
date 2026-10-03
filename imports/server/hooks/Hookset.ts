@@ -44,7 +44,7 @@ interface Hookset {
   // Triggered when a tag is added to a puzzle through addPuzzleTag (the
   // inline tag editor and the tag manager). Tags set through the puzzle
   // edit form or at creation do not fire this.
-  onAddPuzzleTag?: (
+  onPuzzleTagAdded?: (
     puzzleId: string,
     tagId: string,
     addingUserId: string,

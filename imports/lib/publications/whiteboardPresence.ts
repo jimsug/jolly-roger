@@ -1,5 +1,5 @@
 import TypedPublication from "./TypedPublication";
 
 export default new TypedPublication<{ boardId: string }>(
-  "Whiteboards.publications.presence",
+  "Whiteboards.publications.presenceForBoard",
 );

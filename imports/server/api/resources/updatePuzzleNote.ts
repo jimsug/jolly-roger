@@ -2,6 +2,7 @@ import { Match } from "meteor/check";
 import { MongoInternals } from "meteor/mongo";
 import bodyParser from "body-parser";
 import express from "express";
+import Flags from "../../../Flags";
 import Logger from "../../../Logger";
 import Documents from "../../../lib/models/Documents";
 import type { PuzzleNoteContentType } from "../../../lib/models/Puzzles";
@@ -18,36 +19,34 @@ const updatePuzzleNote = express.Router();
 // Notes are a few cells of text; anything larger is not a note.
 updatePuzzleNote.use(bodyParser.json({ limit: "64kb" }));
 
+// The note's plain text fields. flavorMeanings, a table of cells, is the only
+// other field.
+const NOTE_TEXT_FIELDS = [
+  "flavor",
+  "summary",
+  "theories",
+  "contactPerson",
+  "externalLinkText",
+  "externalLinkUrl",
+] as const;
+
+const optionalString = Match.Optional(String);
+
 const NotePattern = {
-  flavor: Match.Optional(String),
+  // Object.fromEntries loses the keys, so the record type is restated
+  ...(Object.fromEntries(
+    NOTE_TEXT_FIELDS.map((field) => [field, optionalString]),
+  ) as Record<(typeof NOTE_TEXT_FIELDS)[number], typeof optionalString>),
   flavorMeanings: Match.Optional([[String]]),
-  summary: Match.Optional(String),
-  theories: Match.Optional(String),
-  contactPerson: Match.Optional(String),
-  externalLinkText: Match.Optional(String),
-  externalLinkUrl: Match.Optional(String),
 };
 
 // The sheet sends every field, blank or not; the schema only accepts
 // non-empty strings, so blanks are dropped.
-function normalizeNote(body: {
-  flavor?: string;
-  flavorMeanings?: string[][];
-  summary?: string;
-  theories?: string;
-  contactPerson?: string;
-  externalLinkText?: string;
-  externalLinkUrl?: string;
-}): PuzzleNoteContentType {
+function normalizeNote(
+  body: Match.PatternMatch<typeof NotePattern>,
+): PuzzleNoteContentType {
   const note: PuzzleNoteContentType = {};
-  for (const field of [
-    "flavor",
-    "summary",
-    "theories",
-    "contactPerson",
-    "externalLinkText",
-    "externalLinkUrl",
-  ] as const) {
+  for (const field of NOTE_TEXT_FIELDS) {
     const value = body[field]?.trim();
     if (value) {
       note[field] = value;
@@ -67,6 +66,11 @@ function normalizeNote(body: {
 updatePuzzleNote.post(
   "/:huntId/:documentId",
   expressAsyncWrapper(async (req, res) => {
+    if (await Flags.activeAsync("disable.puzzle_notes")) {
+      res.sendStatus(503);
+      return;
+    }
+
     const { huntId, documentId } = req.params;
     if (
       typeof huntId !== "string" ||

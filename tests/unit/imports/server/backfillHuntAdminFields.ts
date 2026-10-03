@@ -1,7 +1,7 @@
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import Hunts from "../../../../imports/lib/models/Hunts";
-import { backfillHuntAdminFields } from "../../../../imports/server/migrations/54-backfill-hunt-admin-fields";
+import backfillHuntAdminFields from "../../../../imports/server/backfillHuntAdminFields";
 import resetDatabase from "../../../lib/resetDatabase";
 
 // Inserts a hunt shaped like one written before the hunt-admin fields
@@ -9,22 +9,25 @@ import resetDatabase from "../../../lib/resetDatabase";
 // dropped. Document validation is bypassed because that is the point.
 async function insertLegacyHunt(extra: Record<string, unknown> = {}) {
   const _id = Random.id();
-  await Hunts.collection.rawCollection().insertOne(
-    {
-      _id,
-      name: "Legacy hunt",
-      mailingLists: [],
-      openSignups: false,
-      hasGuessQueue: true,
-      allowPuzzleEmbed: true,
-      deleted: false,
-      createdAt: new Date(),
-      createdBy: Random.id(),
-      updatedAt: new Date(),
-      ...extra,
-    } as any,
-    { bypassDocumentValidation: true },
-  );
+  await Hunts.collection
+    .rawDatabase()
+    .collection<{ _id: string; [field: string]: unknown }>("jr_hunts")
+    .insertOne(
+      {
+        _id,
+        name: "Legacy hunt",
+        mailingLists: [],
+        openSignups: false,
+        hasGuessQueue: true,
+        allowPuzzleEmbed: true,
+        deleted: false,
+        createdAt: new Date(),
+        createdBy: Random.id(),
+        updatedAt: new Date(),
+        ...extra,
+      },
+      { bypassDocumentValidation: true },
+    );
   return _id;
 }
 

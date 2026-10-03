@@ -1,20 +1,26 @@
 import { setTimeout } from "node:timers/promises";
+import i18n from "i18next";
 import Flags from "../Flags";
 import Logger from "../Logger";
 import type { GdriveMimeTypesType } from "../lib/GdriveMimeTypes";
-import CachedDocuments from "../lib/models/CachedDocuments";
 import Hunts from "../lib/models/Hunts";
-import MeteorUsers from "../lib/models/MeteorUsers";
 import Puzzles from "../lib/models/Puzzles";
-import { createDocument, deleteDocument, ensureHuntFolder } from "./gdrive";
-import GoogleClient from "./googleClientRefresher";
-import withLock, { PREEMPT_TIMEOUT } from "./withLock";
+import {
+  createDocument,
+  deleteDocument,
+  ensureHuntFolder,
+  isGoogleAvailable,
+} from "./gdrive";
+import { serverLanguage } from "./lang";
+import CachedDocuments from "./models/CachedDocuments";
+import { withRenewedLock } from "./withLock";
 
-// How many placeholder files of each type a hunt keeps ready.
-export const DOCUMENT_CACHE_TARGETS = {
-  spreadsheet: 15,
-  document: 1,
-} as const satisfies Partial<Record<GdriveMimeTypesType, number>>;
+// How many cached documents of each type a hunt keeps ready.
+export const DOCUMENT_CACHE_TARGETS: ReadonlyMap<GdriveMimeTypesType, number> =
+  new Map<GdriveMimeTypesType, number>([
+    ["spreadsheet", 15],
+    ["document", 1],
+  ]);
 
 // A type is only topped up once it has fallen this far below its target (or
 // is nearly empty), so a trickle of puzzle creations doesn't cost a Drive
@@ -29,59 +35,40 @@ export const documentCacheSettings = {
 };
 
 export function cachedDocumentName(type: GdriveMimeTypesType) {
-  return `[CACHED] ${type.toUpperCase()} - DO NOT DELETE`;
+  return i18n.t(
+    "gdrive.cachedDocumentName",
+    "[CACHED] {{type}} - DO NOT DELETE",
+    {
+      lng: serverLanguage,
+      type:
+        type === "spreadsheet"
+          ? i18n.t("gdrive.cachedDocumentType.spreadsheet", "SPREADSHEET", {
+              lng: serverLanguage,
+            })
+          : i18n.t("gdrive.cachedDocumentType.document", "DOCUMENT", {
+              lng: serverLanguage,
+            }),
+    },
+  );
 }
 
-export function needsRefill(available: number, target: number) {
+function needsRefill(available: number, target: number) {
   return (
     available < target - REFILL_SLACK ||
     (available < REFILL_SLACK && available < target)
   );
 }
 
-export async function isGoogleAvailable() {
-  return GoogleClient.ready() && !(await Flags.activeAsync("disable.google"));
-}
-
 function lockName(huntId: string) {
   return `hunt:${huntId}:document-cache`;
 }
 
-// withLock only learns that the lock is still wanted when renew() is called,
-// and a single Drive call (with gaxios's retries) can outlast the preemption
-// timeout, which would let another server start on the same hunt. So renew
-// on a timer for the whole critical section, as the Discord daemon does. A
-// failed renewal aborts the signal, which the loops check between Drive
-// calls.
-function withRenewedLock<T>(
-  name: string,
-  critSection: (preempted: AbortSignal) => Promise<T>,
-) {
-  return withLock(name, async (renew) => {
-    using cleanup = new DisposableStack();
-    const preempted = new AbortController();
-    cleanup.use(
-      setInterval(() => {
-        renew().catch((error: unknown) => preempted.abort(error));
-      }, PREEMPT_TIMEOUT / 2),
-    );
-    return await critSection(preempted.signal);
-  });
-}
-
-// Cache rows are written outside any method invocation, so createdBy can't be
-// auto-populated; the longest-standing admin stands in as the system user.
-async function systemUserId() {
-  const admin = await MeteorUsers.findOneAsync(
-    { "roles.__GLOBAL__": "admin" },
-    { sort: { createdAt: 1 }, projection: { _id: 1 } },
-  );
-  return admin?._id;
-}
-
 async function replenishOnce(huntId: string) {
   try {
-    if (!(await isGoogleAvailable())) {
+    if (
+      !(await isGoogleAvailable()) ||
+      (await Flags.activeAsync("disable.gdrive_document_cache"))
+    ) {
       return;
     }
 
@@ -96,21 +83,10 @@ async function replenishOnce(huntId: string) {
       return;
     }
 
-    const createdBy = await systemUserId();
-    if (!createdBy) {
-      Logger.warn("Document cache replenishment skipped: no admin user", {
-        huntId,
-      });
-      return;
-    }
-
     await withRenewedLock(lockName(huntId), async (preempted) => {
       const folderId = await ensureHuntFolder(hunt);
 
-      for (const [type, target] of Object.entries(DOCUMENT_CACHE_TARGETS) as [
-        keyof typeof DOCUMENT_CACHE_TARGETS,
-        number,
-      ][]) {
+      for (const [type, target] of DOCUMENT_CACHE_TARGETS) {
         const available = await CachedDocuments.find({
           hunt: huntId,
           status: "available",
@@ -140,7 +116,6 @@ async function replenishOnce(huntId: string) {
               status: "available",
               provider: "google",
               value: { type, id, folder: folderId },
-              createdBy,
             });
           } catch (error) {
             Logger.error("Failed to replenish document cache", {
@@ -165,10 +140,11 @@ async function replenishOnce(huntId: string) {
 const inFlight = new Map<string, Promise<void>>();
 const rerunRequested = new Set<string>();
 
-// Tops the hunt's cache up to its targets, if it needs it. Never rejects:
-// failures are logged, since callers are hooks and timers with nowhere to
-// report them. Does nothing without a configured Drive client, with the
-// disable.google flag set, or for archived or deleted hunts.
+// Tops the hunt's document cache up to its targets, if it needs it. Never
+// rejects: failures are logged, since callers are hooks and timers with
+// nowhere to report them. Does nothing without a configured Drive client,
+// with the disable.google or disable.gdrive_document_cache flag set, or for
+// archived or deleted hunts.
 export function replenishDocumentCache(huntId: string): Promise<void> {
   const current = inFlight.get(huntId);
   if (current) {
@@ -193,12 +169,15 @@ export const DOCUMENT_CACHE_SWEEP_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 // The periodic sweep. It only tops up hunts with recent puzzle activity: a
 // hunt with no puzzles is either brand new (createHunt pre-fills it) or has
 // been purged, and the sweep shouldn't undo a purge; a hunt whose puzzles
-// haven't changed in weeks is over, archived or not, and placeholders would
-// only clutter its Drive folder. The puzzle hooks refill a hunt as soon as it
-// is in use again. The whiteboard's backing puzzle never gets a document, so
-// making a board doesn't count as activity.
+// haven't changed in weeks is over, archived or not, and cached documents
+// would only clutter its Drive folder. The puzzle hooks refill a hunt as soon
+// as it is in use again. The whiteboard's backing puzzle never gets a
+// document, so making a board doesn't count as activity.
 export async function replenishAllDocumentCaches() {
-  if (!(await isGoogleAvailable())) {
+  if (
+    !(await isGoogleAvailable()) ||
+    (await Flags.activeAsync("disable.gdrive_document_cache"))
+  ) {
     return;
   }
   const hunts = await Hunts.find(
@@ -230,12 +209,12 @@ export async function waitForDocumentCacheIdle() {
   }
 }
 
-// Deletes a hunt's unclaimed placeholder files from Drive and removes all of
+// Deletes a hunt's unclaimed cached documents from Drive and removes all of
 // its cache rows. Each row is removed before its file is deleted, conditioned
 // on the row still being available, so a claim that races with the purge
-// keeps its file (at worst a placeholder leaks in Drive if the delete then
-// fails). Claimed rows are dropped without touching the file, which may by
-// now belong to a puzzle.
+// keeps its file (at worst a cached document leaks in Drive if the delete then
+// fails). A row an earlier version left "claimed" is dropped without touching
+// the file, which may by now belong to a puzzle.
 export async function purgeDocumentCache(
   huntId: string,
   {

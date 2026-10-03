@@ -1,5 +1,4 @@
 import { Accounts } from "meteor/accounts-base";
-import { DDP } from "meteor/ddp";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import { ACTIVITY_COLLECTION } from "../../../../imports/lib/config/activityTracking";
@@ -7,11 +6,12 @@ import isReaction from "../../../../imports/lib/isReaction";
 import type { ChatMessageContentType } from "../../../../imports/lib/models/ChatMessages";
 import ChatMessages from "../../../../imports/lib/models/ChatMessages";
 import ChatNotifications from "../../../../imports/lib/models/ChatNotifications";
-import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
-import removeChatMessage from "../../../../imports/methods/removeChatMessage";
+import removeChatReaction from "../../../../imports/methods/removeChatReaction";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
+import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 import StubSubscription, {
   publishHandler,
@@ -31,9 +31,6 @@ describe("chat reactions", function () {
   let dingedId: string;
   let puzzleId: string;
 
-  const asUser = <T>(userId: string, fn: () => Promise<T>) =>
-    DDP._CurrentMethodInvocation.withValue({ userId }, fn);
-
   const send = (userId: string, content: ChatMessageContentType) =>
     asUser(userId, () =>
       sendChatMessage.callPromise({
@@ -50,7 +47,7 @@ describe("chat reactions", function () {
       }),
     );
   const remove = (userId: string, messageId: string) =>
-    asUser(userId, () => removeChatMessage.callPromise({ messageId }));
+    asUser(userId, () => removeChatReaction.callPromise({ messageId }));
 
   const messagesOn = (puzzle: string) =>
     ChatMessages.find({ puzzle }, { sort: { timestamp: 1 } }).fetchAsync();
@@ -69,18 +66,7 @@ describe("chat reactions", function () {
       email: "dinged@example.com",
       password: "password",
     });
-    huntId = await asUser(memberId, () =>
-      Hunts.insertAsync({
-        name: "Reaction hunt",
-        mailingLists: [],
-        openSignups: false,
-        hasGuessQueue: true,
-        defaultRoles: [],
-        allowUnlockablePuzzles: false,
-        isArchived: false,
-        customLinkEmbed: false,
-      }),
-    );
+    huntId = await createTestHunt(memberId, { name: "Reaction hunt" });
     for (const userId of [memberId, reactorId]) {
       await MeteorUsers.updateAsync(userId, {
         $set: { displayName: userId, hunts: [huntId] },
@@ -150,6 +136,16 @@ describe("chat reactions", function () {
       4,
       "Another emoji, or another user, is a new reaction",
     );
+  });
+
+  it("keeps one reaction when the same one lands twice at once", async function () {
+    await send(memberId, text("Solved it!"));
+    const [parent] = await messagesOn(puzzleId);
+    await Promise.all([
+      react(reactorId, parent!._id, "🎉"),
+      react(reactorId, parent!._id, "🎉"),
+    ]);
+    assert.lengthOf(await messagesOn(puzzleId), 2);
   });
 
   it("refuses to remove someone else's reaction", async function () {

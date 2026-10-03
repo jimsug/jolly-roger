@@ -1,25 +1,23 @@
-import { check } from "meteor/check";
 import type { Meteor, Subscription } from "meteor/meteor";
 import Bookmarks from "../../lib/models/Bookmarks";
+import CallActivities from "../../lib/models/CallActivities";
 import ChatMessages from "../../lib/models/ChatMessages";
 import DocumentActivities from "../../lib/models/DocumentActivities";
 import Guesses from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";
+import MeteorUsers from "../../lib/models/MeteorUsers";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
 import puzzleHistorySummaryForUser from "../../lib/publications/puzzleHistorySummaryForUser";
 import {
+  type ActivityKind,
   PUZZLE_HISTORY_SUMMARIES,
   type PuzzleHistoryItem,
 } from "../../lib/puzzleHistory";
 import { computeSolvedness } from "../../lib/solvedness";
 import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
-import CallActivities from "../models/CallActivities";
-import huntsForPuzzleHistory from "../puzzleHistoryHunts";
 import definePublication from "./definePublication";
-
-type ActivityKind = "bookmark" | "call" | "chat" | "document" | "guess";
 
 type Activity = {
   kind: ActivityKind;
@@ -88,16 +86,15 @@ class UserPuzzleHistoryAggregator {
 
   private closed = false;
 
-  readonly ready: Promise<void>;
+  // Set by get() as soon as the aggregator is registered
+  private ready: Promise<void> | undefined;
 
   private constructor(
     private readonly userId: string,
     // Fixed when the aggregator is created: joining a hunt mid-session shows
     // up once every tab of the history page has been closed and reopened
     private readonly hunts: string[],
-  ) {
-    this.ready = this.initialize();
-  }
+  ) {}
 
   static async get(
     userId: string,
@@ -108,6 +105,7 @@ class UserPuzzleHistoryAggregator {
       if (!aggregator) {
         aggregator = new UserPuzzleHistoryAggregator(userId, hunts);
         UserPuzzleHistoryAggregator.aggregators.set(userId, aggregator);
+        aggregator.ready = aggregator.initialize();
       }
       try {
         await aggregator.ready;
@@ -131,7 +129,7 @@ class UserPuzzleHistoryAggregator {
         observe: (callbacks) =>
           Bookmarks.find(
             { user: this.userId, hunt: huntFilter },
-            { fields: { puzzle: 1, updatedAt: 1 } },
+            { projection: { puzzle: 1, updatedAt: 1 } },
           ).observeChangesAsync(callbacks),
       },
       {
@@ -139,7 +137,7 @@ class UserPuzzleHistoryAggregator {
         observe: (callbacks) =>
           CallActivities.find(
             { user: this.userId, hunt: huntFilter },
-            { fields: { call: 1, ts: 1 } },
+            { projection: { call: 1, ts: 1 } },
           ).observeChangesAsync(callbacks),
       },
       {
@@ -157,7 +155,7 @@ class UserPuzzleHistoryAggregator {
                 },
               ],
             },
-            { fields: { puzzle: 1, timestamp: 1 } },
+            { projection: { puzzle: 1, timestamp: 1 } },
           ).observeChangesAsync(callbacks),
       },
       {
@@ -165,7 +163,7 @@ class UserPuzzleHistoryAggregator {
         observe: (callbacks) =>
           DocumentActivities.find(
             { user: this.userId, hunt: huntFilter },
-            { fields: { puzzle: 1, ts: 1 } },
+            { projection: { puzzle: 1, ts: 1 } },
           ).observeChangesAsync(callbacks),
       },
       {
@@ -173,7 +171,7 @@ class UserPuzzleHistoryAggregator {
         observe: (callbacks) =>
           Guesses.find(
             { createdBy: this.userId, hunt: huntFilter },
-            { fields: { puzzle: 1, createdAt: 1, state: 1 } },
+            { projection: { puzzle: 1, createdAt: 1, state: 1 } },
           ).observeChangesAsync(callbacks),
       },
     ];
@@ -204,7 +202,7 @@ class UserPuzzleHistoryAggregator {
       Puzzles.find(
         { hunt: huntFilter },
         {
-          fields: {
+          projection: {
             title: 1,
             hunt: 1,
             answers: 1,
@@ -216,7 +214,15 @@ class UserPuzzleHistoryAggregator {
         },
       ).observeChangesAsync({
         added: (id, fields) => {
-          this.puzzles.set(id, fields as ObservedPuzzle);
+          this.puzzles.set(id, {
+            title: fields.title ?? "",
+            hunt: fields.hunt ?? "",
+            answers: fields.answers ?? [],
+            tags: fields.tags ?? [],
+            expectedAnswerCount: fields.expectedAnswerCount ?? 1,
+            completedWithNoAnswer: fields.completedWithNoAnswer,
+            kind: fields.kind,
+          });
           this.recompute(id);
         },
         changed: (id, fields) => {
@@ -233,7 +239,7 @@ class UserPuzzleHistoryAggregator {
       }),
       Hunts.find(
         { _id: huntFilter },
-        { fields: { name: 1 } },
+        { projection: { name: 1 } },
       ).observeChangesAsync({
         added: (id, fields) => {
           this.huntNames.set(id, fields.name ?? "");
@@ -251,7 +257,7 @@ class UserPuzzleHistoryAggregator {
       }),
       Tags.find(
         { hunt: huntFilter },
-        { fields: { name: 1 } },
+        { projection: { name: 1 } },
       ).observeChangesAsync({
         added: (id, fields) => {
           this.tagNames.set(id, fields.name ?? "");
@@ -358,25 +364,17 @@ class UserPuzzleHistoryAggregator {
 
     const item: PuzzleHistoryItem = {
       _id: puzzleId,
-      userId: this.userId,
       puzzleId,
       name: puzzle.title,
       huntId: puzzle.hunt,
       huntName: this.huntNames.get(puzzle.hunt) ?? "",
-      firstInteraction: null,
-      lastInteraction: null,
-      interactionCount: 0,
       bookmarkCounter: 0,
       callCounter: 0,
       chatCounter: 0,
       documentCounter: 0,
       guessCounter: 0,
       correctGuessCounter: 0,
-      solvedness: computeSolvedness({
-        answers: puzzle.answers,
-        expectedAnswerCount: puzzle.expectedAnswerCount,
-        completedWithNoAnswer: puzzle.completedWithNoAnswer,
-      } as Parameters<typeof computeSolvedness>[0]),
+      solvedness: computeSolvedness(puzzle),
       answers: puzzle.answers,
       tags: puzzle.tags.map((tag) => this.tagNames.get(tag) ?? ""),
       ...(isWhiteboardPuzzle(puzzle) ? { whiteboard: true } : {}),
@@ -387,7 +385,6 @@ class UserPuzzleHistoryAggregator {
       if (!activity) {
         continue;
       }
-      item.interactionCount += 1;
       if (!item.firstInteraction || activity.ts < item.firstInteraction) {
         item.firstInteraction = activity.ts;
       }
@@ -479,22 +476,20 @@ class UserPuzzleHistoryAggregator {
 }
 
 definePublication(puzzleHistorySummaryForUser, {
-  validate(arg) {
-    check(arg, { userId: String });
-    return arg;
-  },
-
-  async run({ userId }) {
+  async run() {
     if (!this.userId) {
       return [];
     }
 
-    const hunts = await huntsForPuzzleHistory(this.userId, userId);
-    if (!hunts) {
+    const user = await MeteorUsers.findOneAsync(this.userId);
+    if (!user) {
       return [];
     }
 
-    const aggregator = await UserPuzzleHistoryAggregator.get(userId, hunts);
+    const aggregator = await UserPuzzleHistoryAggregator.get(
+      this.userId,
+      user.hunts ?? [],
+    );
     aggregator.addSubscription(this);
     return undefined;
   },

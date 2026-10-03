@@ -11,6 +11,7 @@
     "typescript",
     "oxc"
   ],
+  // extension/ runs this config from its own package (extension/oxlint.jsonc)
   "ignorePatterns": ["eslint/**", "private/**", "extension/**"],
   "categories": {
     "correctness": "error",

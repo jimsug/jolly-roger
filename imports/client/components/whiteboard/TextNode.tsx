@@ -2,11 +2,11 @@ import type { Node, NodeProps } from "@xyflow/react";
 import React from "react";
 import styled from "styled-components";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
-import { STROKE_COLORS } from "./colors";
+import useHoverIntent from "../../hooks/useHoverIntent";
+import colors from "./colors";
 import NodeChrome from "./NodeChrome";
 import NodeContributors from "./NodeContributors";
 import NoteText from "./NoteText";
-import useHoverIntent from "./useHoverIntent";
 
 type TextNodeType = Node<{ doc: WhiteboardNodeType }, "text">;
 
@@ -35,7 +35,7 @@ const TextNode = ({ id, data, selected }: NodeProps<TextNodeType>) => {
 
   return (
     <TextBox
-      $color={doc.colour ? STROKE_COLORS[doc.colour] : undefined}
+      $color={doc.color ? colors.stroke[doc.color] : undefined}
       $selected={selected}
       onMouseEnter={hover.onMouseEnter}
       onMouseLeave={hover.onMouseLeave}
@@ -44,8 +44,8 @@ const TextNode = ({ id, data, selected }: NodeProps<TextNodeType>) => {
         id={id}
         kind="text"
         selected={selected}
-        color={doc.colour}
-        palette={STROKE_COLORS}
+        color={doc.color}
+        palette={colors.stroke}
         fallback="currentColor"
       />
       <NoteText id={id} text={doc.text} />

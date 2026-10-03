@@ -2379,8 +2379,8 @@ const BrandingSection = () => {
           <li>{t("serverSetup.teamNameHelp1", "on the login page")}</li>
           <li>
             {t(
-              "serverSetup.teamNameHelp2",
-              "in the filenames of any Google Docs/Sheets created by Jolly Roger",
+              "serverSetup.teamNameHelpFolders",
+              "in the names of the Google Drive folders Jolly Roger creates for each hunt",
             )}
           </li>
           <li>
@@ -2580,6 +2580,26 @@ const CircuitBreakerSection = () => {
           result, we will hide activity data about Google Drive file edits.
         </p>
       </CircuitBreakerControl>
+      <CircuitBreakerControl
+        title={t(
+          "serverSetup.circuitBreakers.documentCache.title",
+          "Drive document cache",
+        )}
+        flagName="disable.gdrive_document_cache"
+      >
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.documentCache.description",
+            "Each hunt keeps a stock of cached Google documents, created ahead of time, so that adding a puzzle can claim one instead of waiting on Drive. Keeping the stock topped up means creating files in the background, a few seconds apart, when puzzles are added or solved and periodically for hunts with recent puzzle activity.",
+          )}
+        </p>
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.documentCache.disabled",
+            "Disabling this feature stops Jolly Roger topping up the cache, and new puzzles get a document created on the spot, as they would with an empty cache. Documents already in the cache stay there and are used again once the feature is enabled, and the cache can still be purged from the hunt list.",
+          )}
+        </p>
+      </CircuitBreakerControl>
       <CircuitBreakerControl title="WebRTC calls" flagName="disable.webrtc">
         <p>
           Jolly Roger has support for making WebRTC audio calls built into each
@@ -2627,6 +2647,46 @@ const CircuitBreakerSection = () => {
           Disabling this feature means that Jolly Roger will no longer do
           expensive work on each chat message sent, and no new dingword
           notifications will be generated or displayed.
+        </p>
+      </CircuitBreakerControl>
+      <CircuitBreakerControl
+        title={t(
+          "serverSetup.circuitBreakers.newPuzzleNotifications.title",
+          "New puzzle notifications",
+        )}
+        flagName="disable.new_puzzle_notifications"
+      >
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.newPuzzleNotifications.description",
+            "When a puzzle is added, or a locked one is unlocked, every member of the hunt gets a notification about it that dismisses itself after a few seconds. That's a notification written for every member each time, which adds up when a large hunt adds a lot of puzzles at once.",
+          )}
+        </p>
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.newPuzzleNotifications.disabled",
+            "Disabling this feature means puzzles added or unlocked while it's off don't send these notifications. The puzzles still show up on the puzzle list as usual, and dingword and mention notifications carry on.",
+          )}
+        </p>
+      </CircuitBreakerControl>
+      <CircuitBreakerControl
+        title={t(
+          "serverSetup.circuitBreakers.puzzleNotes.title",
+          "Puzzle notes from spreadsheets",
+        )}
+        flagName="disable.puzzle_notes"
+      >
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.puzzleNotes.description",
+            "A script attached to a puzzle's spreadsheet can send the notes kept in the sheet to Jolly Roger, which shows them on the hunt's Notes page and in the puzzle list. The endpoint it posts to takes no API key: anyone who knows a hunt's id and a spreadsheet's id can replace that puzzle's notes.",
+          )}
+        </p>
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.puzzleNotes.disabled",
+            "Disabling this feature makes Jolly Roger refuse incoming notes and hides the Notes link. Notes already received stay on their puzzles.",
+          )}
         </p>
       </CircuitBreakerControl>
       <CircuitBreakerControl

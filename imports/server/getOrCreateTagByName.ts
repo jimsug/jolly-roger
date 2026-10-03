@@ -9,7 +9,7 @@ import {
 
 // Resolves a tag name to a tag id, creating the tag if needed. The name is
 // normalised (see normalizeTagName) and matched against existing tags and
-// their aliases ignoring case, so "Group: Events" resolves to "group:events".
+// their aliases ignoring case, so "  Group:Events " resolves to "group:events".
 export default async function getOrCreateTagByName(
   huntId: string,
   name: string,

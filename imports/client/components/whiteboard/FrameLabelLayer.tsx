@@ -5,8 +5,10 @@ import React from "react";
 import styled from "styled-components";
 import Tags from "../../../lib/models/Tags";
 import { frameLabel } from "../../../lib/whiteboard/layout";
-import useDetail, { useZoom } from "./useDetail";
-import type { WhiteboardFlowNode } from "./useWhiteboardSync";
+import useWhiteboardDetail, {
+  useWhiteboardZoom,
+} from "../../hooks/useWhiteboardDetail";
+import type { WhiteboardFlowNode } from "../../hooks/useWhiteboardSync";
 
 const Label = styled.div`
   position: absolute;
@@ -38,19 +40,24 @@ const Pill = styled.span`
   );
 `;
 
+// A frame, with the document every node on the board carries (see
+// useWhiteboardSync).
+const isFrame = (
+  node: InternalNode,
+): node is InternalNode<WhiteboardFlowNode> =>
+  node.type === "frame" && "doc" in node.data;
+
 // Kept the same between renders, so a store change while the board isn't
 // zoomed right out doesn't re-render the layer.
-const NO_FRAMES: InternalNode[] = [];
+const NO_FRAMES: InternalNode<WhiteboardFlowNode>[] = [];
 
 // Zoomed right out, cards are too small to read, so each round's name is
 // drawn large over its frame instead.
 const FrameLabelLayer = () => {
-  const detail = useDetail();
-  const zoom = useZoom();
+  const detail = useWhiteboardDetail();
+  const zoom = useWhiteboardZoom();
   const frames = useStore((s) =>
-    detail === "far"
-      ? [...s.nodeLookup.values()].filter((n) => n.type === "frame")
-      : NO_FRAMES,
+    detail === "far" ? [...s.nodeLookup.values()].filter(isFrame) : NO_FRAMES,
   );
   const tagNames = useTracker(
     () => new Map(Tags.find().map((tag) => [tag._id, tag.name])),
@@ -66,7 +73,7 @@ const FrameLabelLayer = () => {
   return (
     <ViewportPortal>
       {frames.map((frame) => {
-        const { doc } = (frame as unknown as WhiteboardFlowNode).data;
+        const { doc } = frame.data;
         const label = frameLabel(
           doc,
           doc.tag ? tagNames.get(doc.tag) : undefined,

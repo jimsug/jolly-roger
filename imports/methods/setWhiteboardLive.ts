@@ -10,7 +10,7 @@ export type WhiteboardLiveState = {
   // board), so others can tell a drag apart from a later move between frames.
   drag: { node: string; x: number; y: number; parent?: string | null }[] | null;
   stroke: {
-    colour: WhiteboardColor;
+    color: WhiteboardColor;
     strokeWidth: WhiteboardStrokeWidth;
     points: [number, number, number][];
   } | null;

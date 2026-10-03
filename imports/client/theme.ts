@@ -12,9 +12,6 @@ export interface Theme {
     border: string;
     primary: string;
     secondary: string;
-    success: string;
-    warning: string;
-    danger: string;
     callStateIcon: string;
     mutedIconBorder: string;
     deafenedIconBorder: string;
@@ -30,6 +27,8 @@ export interface Theme {
     selfMentionSpanBackground: string;
     selfMentionSpanText: string;
     selectedMentionSpanShadow: string;
+    puzzleSpanText: string;
+    selectedPuzzleSpanShadow: string;
     autocompleteBackground: string;
     autocompleteShadow: string;
     matchCandidateSelectedBackground: string;
@@ -46,16 +45,46 @@ export interface Theme {
     hoverChatMessageBackground: string;
     systemChatMessageBackground: string;
     pinnedChatMessageBackground: string;
+    // Pinned messages (pinnedChatMessageBackground is the highlight on
+    // messages that ding the viewer)
+    pinnedMessageBackground: string;
+    pulseChatMessageBackground: string;
     replyChatMessageBackground: string;
     replyingToBackground: string;
     replyButtonText: string;
     hoverReplyButtonText: string;
+    chatActionHoverBackground: string;
+    ownReactionBackground: string;
+    ownReactionBorder: string;
+    chatBadgeText: string;
+    missedMessagesBadgeBackground: string;
     fancyEditorBackground: string;
     navBarBottomBorder: string;
     navBarBackground: string;
     setupPageHeaderBackground: string;
     setupPageCircuitBreakerHeaderBackground: string;
     jumbotronBackground: string;
+    bookmarkedIcon: string;
+    priorityHighIcon: string;
+    // The stripes across a locked puzzle's row and board card
+    lockedPuzzleStripe: string;
+    notesHeaderShadow: string;
+    // Someone on a puzzle: online, idle (only hidden tabs for a while) or away,
+    // as the chat pane's dots and the avatar stacks' rings show it
+    presence: {
+      online: string;
+      idle: string;
+      away: string;
+    };
+    // The puzzle history page: the kinds of interaction someone had with a
+    // puzzle, and the solved icon
+    historyActiveInteraction: string;
+    historySolvedIcon: string;
+    // Whiteboard comment pins, cursors and puzzle cards
+    resolvedCommentMarkBackground: string;
+    whiteboardCursorOutline: string;
+    metaBadgeBackground: string;
+    metaBadgeText: string;
     guess: {
       correct: {
         background: string;
@@ -103,9 +132,6 @@ export const lightTheme: Theme = {
     border: "var(--bs-border-color)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
-    success: "var(--bs-success)",
-    warning: "var(--bs-warning)",
-    danger: "var(--bs-danger)",
     callStateIcon: "#dc3545",
     mutedIconBorder: "#0d6efd",
     deafenedIconBorder: "#0d6efd",
@@ -121,6 +147,8 @@ export const lightTheme: Theme = {
     selfMentionSpanBackground: "#ced0ed",
     selfMentionSpanText: "#4649ef",
     selectedMentionSpanShadow: "#b4d5ff",
+    puzzleSpanText: "inherit",
+    selectedPuzzleSpanShadow: "#b4d5ff",
     autocompleteBackground: "white",
     autocompleteShadow: "0 1px 5px rgb(0 0 0 / 20%)",
     matchCandidateSelectedBackground: "#e0ecfc",
@@ -137,16 +165,38 @@ export const lightTheme: Theme = {
     hoverChatMessageBackground: "#f0f0f0",
     systemChatMessageBackground: "#e0e0e0",
     pinnedChatMessageBackground: "#ffff70",
+    pinnedMessageBackground: "#ffff70",
+    pulseChatMessageBackground: "rgb(255 193 7 / 70%)",
     replyChatMessageBackground: "#e0f0ff",
     replyingToBackground: "#eee",
     replyButtonText: "#666",
     hoverReplyButtonText: "#000",
+    chatActionHoverBackground: "#e0ecfc",
+    ownReactionBackground: "#ced0ed",
+    ownReactionBorder: "var(--bs-primary)",
+    chatBadgeText: "white",
+    missedMessagesBadgeBackground: "var(--bs-danger)",
     fancyEditorBackground: "#eee",
     navBarBottomBorder: "#6c757d",
     navBarBackground: "#f0f0f0",
     setupPageHeaderBackground: "#f0f0f0",
     setupPageCircuitBreakerHeaderBackground: "#eef",
     jumbotronBackground: "#e9ecef",
+    bookmarkedIcon: "var(--bs-warning)",
+    priorityHighIcon: "red",
+    lockedPuzzleStripe: "rgb(128 128 128 / 10%)",
+    notesHeaderShadow: "rgb(0 0 0 / 20%)",
+    presence: {
+      online: "var(--bs-success)",
+      idle: "var(--bs-warning)",
+      away: "var(--bs-secondary)",
+    },
+    historyActiveInteraction: "var(--bs-success)",
+    historySolvedIcon: "var(--bs-success)",
+    resolvedCommentMarkBackground: "var(--bs-success)",
+    whiteboardCursorOutline: "#fff",
+    metaBadgeBackground: "var(--bs-warning)",
+    metaBadgeText: "#000",
     guess: {
       correct: {
         background: "#f0fff0",
@@ -221,9 +271,6 @@ export const darkTheme: Theme = {
     border: "var(--bs-border-color)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
-    success: "var(--bs-success)",
-    warning: "var(--bs-warning)",
-    danger: "var(--bs-danger)",
     callStateIcon: "#f8d7da",
     mutedIconBorder: "#6fa8dc",
     deafenedIconBorder: "#6fa8dc",
@@ -239,6 +286,8 @@ export const darkTheme: Theme = {
     selfMentionSpanBackground: "#4649ef",
     selfMentionSpanText: "#fff",
     selectedMentionSpanShadow: "#b4d5ff",
+    puzzleSpanText: "inherit",
+    selectedPuzzleSpanShadow: "#b4d5ff",
     autocompleteBackground: "#333",
     autocompleteShadow: "0 1px 5px rgb(255 255 255 / 20%)",
     matchCandidateSelectedBackground: "#444",
@@ -255,16 +304,38 @@ export const darkTheme: Theme = {
     hoverChatMessageBackground: "#222",
     systemChatMessageBackground: "rgb(31, 31, 31)",
     pinnedChatMessageBackground: "rgb(92, 56, 17)",
+    pinnedMessageBackground: "rgb(92, 56, 17)",
+    pulseChatMessageBackground: "rgb(255 193 7 / 70%)",
     replyChatMessageBackground: "rgb(0, 56, 109)",
     replyingToBackground: "#383838",
     replyButtonText: "#aaa",
     hoverReplyButtonText: "#fff",
+    chatActionHoverBackground: "#444",
+    ownReactionBackground: "#4649ef",
+    ownReactionBorder: "var(--bs-primary)",
+    chatBadgeText: "white",
+    missedMessagesBadgeBackground: "var(--bs-danger)",
     fancyEditorBackground: "#383838",
     navBarBottomBorder: "#6c757d",
     navBarBackground: "#333333",
     setupPageHeaderBackground: "#333333",
     setupPageCircuitBreakerHeaderBackground: "#333355",
     jumbotronBackground: "inherit",
+    bookmarkedIcon: "var(--bs-warning)",
+    priorityHighIcon: "red",
+    lockedPuzzleStripe: "rgb(128 128 128 / 10%)",
+    notesHeaderShadow: "rgb(0 0 0 / 20%)",
+    presence: {
+      online: "var(--bs-success)",
+      idle: "var(--bs-warning)",
+      away: "var(--bs-secondary)",
+    },
+    historyActiveInteraction: "var(--bs-success)",
+    historySolvedIcon: "var(--bs-success)",
+    resolvedCommentMarkBackground: "var(--bs-success)",
+    whiteboardCursorOutline: "#fff",
+    metaBadgeBackground: "var(--bs-warning)",
+    metaBadgeText: "#000",
     guess: {
       correct: {
         background: "#155724",

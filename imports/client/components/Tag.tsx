@@ -1,5 +1,3 @@
-import { Meteor } from "meteor/meteor";
-import { useTracker } from "meteor/react-meteor-data";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faAlignJustify } from "@fortawesome/free-solid-svg-icons/faAlignJustify";
@@ -28,6 +26,7 @@ import { indexedById } from "../../lib/listUtils";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import { sortPuzzlesByRelevanceWithinPuzzleGroup } from "../../lib/puzzle-sort-and-group";
+import useIsOffsite from "../hooks/useIsOffsite";
 import CopyToClipboardButton from "./CopyToClipboardButton";
 import { removePunctuation } from "./PuzzleAnswer";
 import RelatedPuzzleTable from "./RelatedPuzzleTable";
@@ -285,7 +284,7 @@ const Tag = (props: TagProps) => {
   ]);
 
   // The copied list is in the order the popover shows it
-  const isOffsite = useTracker(() => Meteor.user()?.isOffsite ?? false, []);
+  const isOffsite = useIsOffsite();
   const relatedPuzzlesForClipboard = useCallback(() => {
     if (!props.popoverRelated) {
       return "";
@@ -359,12 +358,15 @@ const Tag = (props: TagProps) => {
   name.split(":").forEach((part, i, arr) => {
     const withColon = i < arr.length - 1;
     if (prefixIcon && i === 0) {
+      // Screen readers skip the icon, so the prefix text stays for them (and
+      // for copying), just not on screen
       nameWithBreaks.push(
         <FontAwesomeIcon
           icon={prefixIcon}
           className="me-1"
           key="prefix-icon"
         />,
+        <span className="visually-hidden" key="prefix">{`${part}:`}</span>,
       );
     } else {
       nameWithBreaks.push(`${part}${withColon ? ":" : ""}`);

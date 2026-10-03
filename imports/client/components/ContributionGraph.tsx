@@ -130,17 +130,6 @@ const LegendColor = styled.div<{ $color: string }>`
   border: 1px solid ${({ theme }) => theme.colors.text};
 `;
 
-const VisuallyHidden = styled.span`
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  white-space: nowrap;
-  border-width: 0;
-`;
-
 type Slot = { total: number; byType: Map<string, number> };
 
 const DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
@@ -236,7 +225,7 @@ const ContributionGraph = ({
     if (!slot || slot.total === 0) {
       return t(
         "history.graph.noActivity",
-        "No activity on {{day}}s at {{from}} - {{to}}",
+        "{{day}} {{from}} - {{to}}: no activity",
         when,
       );
     }
@@ -246,7 +235,7 @@ const ContributionGraph = ({
       .join(", ");
     return t(
       "history.graph.activitySummary",
-      "Total: {{count}} activities ({{breakdown}}) on {{day}}s at {{from}} - {{to}}",
+      "{{day}} {{from}} - {{to}}: {{count}} activities ({{breakdown}})",
       { ...when, count: slot.total, breakdown },
     );
   };
@@ -273,7 +262,7 @@ const ContributionGraph = ({
                     $color={colorFor(slot?.total ?? 0)}
                     title={label}
                   >
-                    <VisuallyHidden>{label}</VisuallyHidden>
+                    <span className="visually-hidden">{label}</span>
                   </GraphCell>
                 );
               }),

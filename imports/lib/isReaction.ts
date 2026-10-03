@@ -22,11 +22,8 @@ export default function isReaction(message: PartialChatMessageType): boolean {
     return false;
   }
   const { children } = message.content;
-  if (children.length !== 1) {
-    return false;
-  }
-  const child = children[0]!;
-  if (!nodeIsText(child)) {
+  const [child] = children;
+  if (children.length !== 1 || !child || !nodeIsText(child)) {
     return false;
   }
   const text = child.text.trim();
