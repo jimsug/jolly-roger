@@ -26,6 +26,7 @@ import Peers from "../../lib/models/mediasoup/Peers";
 import relativeTimeFormat from "../../lib/relativeTimeFormat";
 import type { Action, CallState } from "../hooks/useCallState";
 import { CallJoinState } from "../hooks/useCallState";
+import useNow from "../hooks/useNow";
 import useSubscribeAvatars from "../hooks/useSubscribeAvatars";
 import { Subscribers } from "../subscribers";
 import { trace } from "../tracing";
@@ -41,11 +42,25 @@ import {
   PeopleListDiv,
 } from "./styling/PeopleComponents";
 
+// A viewer whose tab is hidden counts as online this long after it was last
+// seen, idle for a while after that, then away
+const ACTIVE_SLACK_MS = 60 * 1000;
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+type ViewerStatus = "online" | "idle" | "away";
+const VIEWER_STATUS_RANK: Record<ViewerStatus, number> = {
+  online: 0,
+  idle: 1,
+  away: 2,
+};
+
 interface ViewerSubscriber {
   user: string;
   name: string | undefined;
   discordAccount: DiscordAccountType | undefined;
   tab: string | undefined;
+  // Viewers only; callers get no dot
+  status?: ViewerStatus;
 }
 
 interface PersonBoxProps extends ViewerSubscriber {
@@ -53,14 +68,45 @@ interface PersonBoxProps extends ViewerSubscriber {
   popperBoundaryRef: React.RefObject<HTMLElement | null>;
 }
 
+const ActivityDot = styled.div<{ $status: ViewerStatus }>`
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  border: 2px solid ${({ theme }) => theme.colors.chatterSectionBackground};
+  background-color: ${({ $status, theme }) => {
+    switch ($status) {
+      case "online":
+        return theme.colors.success;
+      case "idle":
+        return theme.colors.warning;
+      case "away":
+        return theme.colors.secondary;
+      default:
+        return $status satisfies never;
+    }
+  }};
+  z-index: 1;
+`;
+
 const ViewerPersonBox = ({
   user,
   name,
   discordAccount,
   children,
+  status,
   popperBoundaryRef,
 }: PersonBoxProps) => {
   const id = useId();
+  const { t } = useTranslation();
+
+  let statusSuffix = "";
+  if (status === "idle") {
+    statusSuffix = t("chat.viewerIdle", " (idle)");
+  } else if (status === "away") {
+    statusSuffix = t("chat.viewerAway", " (away)");
+  }
 
   return (
     <OverlayTrigger
@@ -77,7 +123,12 @@ const ViewerPersonBox = ({
           },
         ],
       }}
-      overlay={<Tooltip id={id}>{name}</Tooltip>}
+      overlay={
+        <Tooltip id={id}>
+          {name}
+          {statusSuffix}
+        </Tooltip>
+      }
     >
       <PeopleItemDiv>
         <Avatar
@@ -87,6 +138,7 @@ const ViewerPersonBox = ({
           size={44}
         />
         {children}
+        {status && <ActivityDot $status={status} />}
       </PeopleItemDiv>
     </OverlayTrigger>
   );
@@ -157,6 +209,9 @@ const ChatPeople = ({
 
   const { t } = useTranslation();
 
+  // Viewer status dots age out, so refresh them every minute
+  const now = useNow(60 * 1000);
+
   useEffect(() => {
     let interval: number | undefined;
     if (recentVoiceActivity) {
@@ -226,20 +281,39 @@ const ChatPeople = ({
         return;
       }
 
+      // Online while a tab is visible (or was until a moment ago), idle once
+      // every tab has been hidden a while, away after that
+      let status: ViewerStatus = "online";
+      if (!(s.visible ?? true)) {
+        const sinceSeen = now.getTime() - (s.updatedAt?.getTime() ?? 0);
+        if (sinceSeen >= IDLE_TIMEOUT_MS) {
+          status = "away";
+        } else if (sinceSeen >= ACTIVE_SLACK_MS) {
+          status = "idle";
+        }
+      }
+
       viewersAcc.push({
         user: s.user,
         name: user.displayName,
         discordAccount: user.discordAccount,
         tab: undefined,
+        status,
       });
     });
+
+    viewersAcc.sort(
+      (a, b) =>
+        VIEWER_STATUS_RANK[a.status ?? "online"] -
+        VIEWER_STATUS_RANK[b.status ?? "online"],
+    );
 
     return {
       unknown: unknownCount,
       viewers: viewersAcc,
       rtcViewers: rtcViewersAcc,
     };
-  }, [loading, subscriberTopic, huntId, puzzleId]);
+  }, [loading, subscriberTopic, huntId, puzzleId, now]);
 
   const toggleCallersExpanded = useCallback(() => {
     setCallersExpanded((prevState) => {

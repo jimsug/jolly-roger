@@ -4,9 +4,12 @@ import type { TagType } from "../lib/models/Tags";
 
 // Given a set of tags and a set of search keys, produces a function that will
 // evaluate whether a puzzle should be included for the given search filter.
+// extraTerms can add more text to match against per puzzle, such as the
+// names of the people on it.
 function compilePuzzleMatcher(
   allTags: TagType[],
   searchKeys: string[],
+  extraTerms?: (p: PuzzleType) => string[],
 ): (p: PuzzleType) => boolean {
   const tagNames: Record<string, string> = {};
   allTags.forEach((t) => {
@@ -15,11 +18,13 @@ function compilePuzzleMatcher(
   const lowerSearchKeys = searchKeys.map((key) => key.toLowerCase());
   return function (puzzle) {
     const titleWords = puzzle.title.toLowerCase().split(" ");
+    const extra = extraTerms?.(puzzle).map((term) => term.toLowerCase()) ?? [];
     return lowerSearchKeys.every((key) => {
       // Every key should match at least one of the following:
       // * prefix of word in title
       // * substring of any answer
       // * substring of any tag
+      // * substring of any extra term
       if (titleWords.some((word) => word.startsWith(key))) {
         return true;
       }
@@ -41,7 +46,7 @@ function compilePuzzleMatcher(
         return true;
       }
 
-      return false;
+      return extra.some((term) => term.includes(key));
     });
   };
 }

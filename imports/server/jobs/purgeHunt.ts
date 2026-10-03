@@ -51,6 +51,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import Servers from "../../lib/models/Servers";
 import Settings from "../../lib/models/Settings";
 import Tags from "../../lib/models/Tags";
+import UserStatuses from "../../lib/models/UserStatuses";
 import type Model from "../../lib/typedModel/Model";
 import { AllModels } from "../../lib/typedModel/Model";
 import { purgeDocumentCache } from "../documentCache";
@@ -88,6 +89,7 @@ const COLLECTIONS_TO_PURGE = [
   BookmarkNotifications,
   Bookmarks,
   Tags,
+  UserStatuses,
 ];
 
 // In the fullness of time, it would be nice if we only had to list models

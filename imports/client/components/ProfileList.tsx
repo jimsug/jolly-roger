@@ -34,6 +34,7 @@ import { formatDiscordName } from "../../lib/discord";
 import isAdmin from "../../lib/isAdmin";
 import type { HuntType } from "../../lib/models/Hunts";
 import { userIsOperatorForHunt } from "../../lib/permission_stubs";
+import type { UserStatusSummary } from "../../lib/userStatusesToLastSeen";
 import clearHuntInvitationCode from "../../methods/clearHuntInvitationCode";
 import demoteOperator from "../../methods/demoteOperator";
 import generateHuntInvitationCode from "../../methods/generateHuntInvitationCode";
@@ -42,6 +43,7 @@ import syncHuntDiscordRole from "../../methods/syncHuntDiscordRole";
 import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
 import Avatar from "./Avatar";
 import CopyToClipboardButton from "./CopyToClipboardButton";
+import UserStatusBadge from "./UserStatusBadge";
 
 const ProfilesSummary = styled.div`
   text-align: right;
@@ -431,6 +433,7 @@ const ProfileList = ({
   roles,
   invitationCode,
   invitedCount,
+  presence,
 }: {
   hunt?: HuntType;
   canInvite?: boolean;
@@ -442,6 +445,13 @@ const ProfileList = ({
   invitationCode?: string;
   // Number of pending invitations (admins only, on the all-users list)
   invitedCount?: number;
+  // Presence per user, the titles of the puzzles it refers to and the clock
+  // the badges age against (hunt lists only)
+  presence?: {
+    userStatuses: Record<string, UserStatusSummary>;
+    puzzleTitles: Map<string, string>;
+    now: Date;
+  };
 }) => {
   const [searchString, setSearchString] = useState("");
 
@@ -753,22 +763,28 @@ const ProfileList = ({
         {matching.map((user) => {
           const name = user.displayName ?? "<no name provided>";
           return (
-            <ListGroupItem
-              key={user._id}
-              action
-              as={Link}
-              to={
-                hunt
-                  ? `/hunts/${hunt._id}/hunters/${user._id}`
-                  : `/users/${user._id}`
-              }
-              className="p-1"
-            >
+            <ListGroupItem key={user._id} className="p-1">
               <ListItemContainer>
                 <ImageBlock>
                   <Avatar {...user} size={40} />
                 </ImageBlock>
-                {name}
+                <Link
+                  to={
+                    hunt
+                      ? `/hunts/${hunt._id}/hunters/${user._id}`
+                      : `/users/${user._id}`
+                  }
+                >
+                  {name}
+                </Link>
+                {hunt && presence && (
+                  <UserStatusBadge
+                    summary={presence.userStatuses[user._id]}
+                    huntId={hunt._id}
+                    puzzleTitles={presence.puzzleTitles}
+                    now={presence.now}
+                  />
+                )}
                 {hunt && canMakeOperator && (
                   <OperatorControls hunt={hunt} user={user} />
                 )}

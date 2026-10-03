@@ -50,12 +50,18 @@ export const useOperatorActionsHiddenForHunt = (huntId: string) => {
 
 export type LockedDisplayMode = "all" | "unlocked" | "locked";
 
+// Whether the puzzle list shows who is on each puzzle
+export type ShowSolversMode = "hide" | "viewers";
+
 export type PuzzleListState = {
   displayMode: "group" | "unlock";
   showSolved: boolean;
   // Only consulted in hunts that allow locked puzzles. State saved before
   // this field existed lacks it, so readers treat undefined as "all".
   lockedDisplayMode?: LockedDisplayMode;
+  // Saved state may lack this or hold a retired value, so readers treat
+  // anything but "hide" as "viewers".
+  showSolvers?: string;
   collapseGroups: Record<string /* tag ID */, boolean>;
 };
 
@@ -64,9 +70,13 @@ const defaultPuzzleListState = () => {
     displayMode: "group",
     showSolved: true,
     lockedDisplayMode: "all",
+    showSolvers: "viewers",
     collapseGroups: {},
   } as PuzzleListState;
 };
+
+const showSolversMode = (value: string | undefined): ShowSolversMode =>
+  value === "hide" ? "hide" : "viewers";
 export const useHuntPuzzleListState = (huntId: string) => {
   const [puzzleListView, setPuzzleListView] = useLocalStorage<
     Record<string /* huntId */, PuzzleListState>
@@ -150,6 +160,29 @@ export const useHuntPuzzleListLockedDisplayMode = (huntId: string) => {
             lockedDisplayMode:
               typeof update === "function"
                 ? update(prevView.lockedDisplayMode ?? "all")
+                : update,
+          };
+          return newView;
+        });
+      },
+      [setHuntPuzzleListView],
+    ),
+  ] as const;
+};
+
+export const useHuntPuzzleListShowSolvers = (huntId: string) => {
+  const [huntPuzzleListView, setHuntPuzzleListView] =
+    useHuntPuzzleListState(huntId);
+  return [
+    showSolversMode(huntPuzzleListView.showSolvers),
+    useCallback(
+      (update: SetStateAction<ShowSolversMode>) => {
+        setHuntPuzzleListView((prevView) => {
+          const newView = {
+            ...prevView,
+            showSolvers:
+              typeof update === "function"
+                ? update(showSolversMode(prevView.showSolvers))
                 : update,
           };
           return newView;

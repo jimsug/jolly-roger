@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import type { TagType } from "../../lib/models/Tags";
 import type { PuzzleGroup } from "../../lib/puzzle-sort-and-group";
+import type { PuzzleSolvers } from "../../lib/puzzleSolvers";
 import { computeSolvedness } from "../../lib/solvedness";
 import { useHuntPuzzleListCollapseGroup } from "../hooks/persisted-state";
 import RelatedPuzzleList from "./RelatedPuzzleList";
@@ -74,6 +75,8 @@ const RelatedPuzzleGroup = ({
   suppressedTagIds,
   trackPersistentExpand,
   addPuzzleCallback,
+  showSolvers,
+  solvers,
 }: {
   huntId: string;
   group: PuzzleGroup;
@@ -88,6 +91,8 @@ const RelatedPuzzleGroup = ({
   // If present, the group header offers to add a puzzle pre-tagged with the
   // group's tags (and those of any enclosing groups).
   addPuzzleCallback?: (tagIds: string[]) => void;
+  showSolvers?: boolean;
+  solvers?: Record<string, PuzzleSolvers>;
 }) => {
   const [persistentCollapsed, setPersistentCollapsed] =
     useHuntPuzzleListCollapseGroup(
@@ -187,6 +192,8 @@ const RelatedPuzzleGroup = ({
             canUpdate={canUpdate}
             sharedTag={sharedTag}
             suppressedTagIds={allSuppressedTagIds}
+            showSolvers={showSolvers}
+            solvers={solvers}
           />
           {group.subgroups.map((subgroup) => {
             const subgroupSuppressedTagIds = [...allSuppressedTagIds];
@@ -206,6 +213,8 @@ const RelatedPuzzleGroup = ({
                 suppressedTagIds={subgroupSuppressedTagIds}
                 trackPersistentExpand={trackPersistentExpand}
                 addPuzzleCallback={addPuzzleCallback}
+                showSolvers={showSolvers}
+                solvers={solvers}
               />
             );
           })}

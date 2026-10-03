@@ -1,6 +1,6 @@
 import { Meteor } from "meteor/meteor";
-import { useTracker } from "meteor/react-meteor-data";
-import React, { useCallback, useMemo } from "react";
+import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import React, { useCallback, useEffect, useMemo } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import ButtonToolbar from "react-bootstrap/ButtonToolbar";
@@ -17,9 +17,11 @@ import {
 import huntForHuntApp from "../../lib/publications/huntForHuntApp";
 import acceptUserHuntTerms from "../../methods/acceptUserHuntTerms";
 import addHuntUser from "../../methods/addHuntUser";
+import setUserStatus from "../../methods/setUserStatus";
 import undestroyHunt from "../../methods/undestroyHunt";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import useDocumentTitle from "../hooks/useDocumentTitle";
+import useDocumentVisible from "../hooks/useDocumentVisible";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import Markdown from "./Markdown";
 
@@ -134,6 +136,32 @@ const HuntApp = React.memo(() => {
     () => acceptUserHuntTerms.call({ huntId }),
     [huntId],
   );
+
+  // Presence in the hunt: online while the tab is visible, away while it's
+  // hidden, offline once we leave. The subscription's stop handler is what
+  // notices a closed tab or a dropped connection; the method call covers
+  // visibility changes and leaving the hunt page.
+  const visible = useDocumentVisible();
+  const presence = visible ? "online" : "away";
+  useSubscribe(member ? "userStatus.inc" : undefined, huntId, presence);
+  useEffect(() => {
+    if (!member) {
+      return;
+    }
+    setUserStatus.call({ hunt: huntId, type: "status", status: presence });
+  }, [huntId, member, presence]);
+  useEffect(() => {
+    if (!member) {
+      return undefined;
+    }
+    return () => {
+      // After a logout, or once removed from the hunt, the method would only
+      // reject; the subscription stopping marks the connection offline anyway
+      if (Meteor.user()?.hunts?.includes(huntId)) {
+        setUserStatus.call({ hunt: huntId, type: "status", status: "offline" });
+      }
+    };
+  }, [huntId, member]);
 
   useBreadcrumb({
     title: loading || !hunt ? "loading..." : hunt.name,

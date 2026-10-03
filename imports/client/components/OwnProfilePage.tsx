@@ -2,11 +2,13 @@ import { Meteor } from "meteor/meteor";
 import { OAuth } from "meteor/oauth";
 import { useTracker } from "meteor/react-meteor-data";
 import { ServiceConfiguration } from "meteor/service-configuration";
+import type React from "react";
 import { useCallback, useId, useMemo, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import Container from "react-bootstrap/Container";
+import FormCheck from "react-bootstrap/FormCheck";
 import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
@@ -392,6 +394,7 @@ const OwnProfilePage = ({
   const [dingwordsFlat, setDingwordsFlat] = useState(
     initialUser.dingwords ? initialUser.dingwords.join(",") : "",
   );
+  const [isOffsite, setIsOffsite] = useState(initialUser.isOffsite ?? false);
   const [submitState, setSubmitState] = useState(
     OwnProfilePageSubmitState.IDLE,
   );
@@ -414,6 +417,13 @@ const OwnProfilePage = ({
       setDingwordsFlat(e.currentTarget.value);
     }, []);
 
+  const handleIsOffsiteChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setIsOffsite(e.currentTarget.checked);
+    },
+    [],
+  );
+
   const handleSaveForm = useCallback(() => {
     const trimmedDisplayName = displayName.trim();
     if (trimmedDisplayName === "") {
@@ -433,6 +443,7 @@ const OwnProfilePage = ({
       displayName: trimmedDisplayName,
       phoneNumber: phoneNumber !== "" ? phoneNumber : undefined,
       dingwords,
+      isOffsite,
     };
     updateProfile.call(newProfile, (error) => {
       if (error) {
@@ -442,7 +453,7 @@ const OwnProfilePage = ({
         setSubmitState(OwnProfilePageSubmitState.SUCCESS);
       }
     });
-  }, [dingwordsFlat, displayName, phoneNumber]);
+  }, [dingwordsFlat, displayName, phoneNumber, isOffsite]);
 
   const dismissAlert = useCallback(() => {
     setSubmitState(OwnProfilePageSubmitState.IDLE);
@@ -530,6 +541,25 @@ const OwnProfilePage = ({
             containing one of your comma-separated, case-insensitive dingwords
             as a substring. This feature is experimental and may be disabled
             without notice.`,
+          )}
+        </FormText>
+      </FormGroup>
+
+      <FormGroup className="mb-3" controlId={`${idPrefix}-is-offsite`}>
+        <FormLabel>
+          {t("profile.offsite.label", "Are you hunting remotely?")}
+        </FormLabel>
+        <FormCheck
+          type="checkbox"
+          checked={isOffsite}
+          disabled={shouldDisableForm}
+          onChange={handleIsOffsiteChange}
+          label={t("profile.offsite.checkbox", "I'm hunting remotely")}
+        />
+        <FormText>
+          {t(
+            "profile.offsite.help",
+            "Puzzles tagged as needing someone on site sort below the rest of their group for you.",
           )}
         </FormText>
       </FormGroup>

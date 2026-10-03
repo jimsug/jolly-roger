@@ -11,6 +11,8 @@ export interface Theme {
     border: string;
     primary: string;
     secondary: string;
+    success: string;
+    warning: string;
     callStateIcon: string;
     mutedIconBorder: string;
     deafenedIconBorder: string;
@@ -80,6 +82,8 @@ export interface Theme {
       unsolved: string;
       solved: string;
     };
+    // Five steps from "no activity" to "most activity"
+    contributionsGraph: readonly [string, string, string, string, string];
   };
   reactSelectTheme: ThemeConfig;
 }
@@ -92,6 +96,8 @@ export const lightTheme: Theme = {
     border: "var(--bs-border-color)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
+    success: "var(--bs-success)",
+    warning: "var(--bs-warning)",
     callStateIcon: "#dc3545",
     mutedIconBorder: "#0d6efd",
     deafenedIconBorder: "#0d6efd",
@@ -161,6 +167,7 @@ export const lightTheme: Theme = {
       unsolved: "#f0f0f0",
       solved: "#dfffdf",
     },
+    contributionsGraph: ["#ebedf0", "#c6e48b", "#7bc96f", "#239a3b", "#196127"],
   },
   reactSelectTheme: {
     borderRadius: 4,
@@ -201,6 +208,8 @@ export const darkTheme: Theme = {
     border: "var(--bs-border-color)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
+    success: "var(--bs-success)",
+    warning: "var(--bs-warning)",
     callStateIcon: "#f8d7da",
     mutedIconBorder: "#6fa8dc",
     deafenedIconBorder: "#6fa8dc",
@@ -270,6 +279,7 @@ export const darkTheme: Theme = {
       unsolved: "rgb(46, 46, 46)",
       solved: "rgb(32, 66, 32)",
     },
+    contributionsGraph: ["#22272e", "#004225", "#006d32", "#30a14e", "#39d353"],
   },
   reactSelectTheme: {
     borderRadius: 4,

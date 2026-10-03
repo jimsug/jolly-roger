@@ -10,10 +10,12 @@ import DocumentActivities from "../lib/models/DocumentActivities";
 import Documents from "../lib/models/Documents";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import Settings from "../lib/models/Settings";
+import { PASSIVE_VIEWER_WINDOW_MS } from "../lib/puzzleSolvers";
 import roundedTime from "../lib/roundedTime";
 import GoogleClient from "./googleClientRefresher";
 import ignoringDuplicateKeyErrors from "./ignoringDuplicateKeyErrors";
 import DriveActivityLatests from "./models/DriveActivityLatests";
+import recordPuzzleStatus from "./recordPuzzleStatus";
 import withLock, { PREEMPT_TIMEOUT } from "./withLock";
 
 async function recordDriveChanges(
@@ -49,15 +51,33 @@ async function recordDriveChanges(
         { sort: { createdAt: 1 } },
       );
 
-      await ignoringDuplicateKeyErrors(async () => {
-        await DocumentActivities.insertAsync({
+      const inserted = await ignoringDuplicateKeyErrors(() =>
+        DocumentActivities.insertAsync({
           ts: time,
           document: document._id,
           hunt: document.hunt,
           puzzle: document.puzzle,
           user: user?._id,
+        }),
+      );
+
+      // The first edit we see from a user in each activity bucket also makes
+      // this the puzzle they're active on. Every poll re-reads the same
+      // trailing window, so an edit that was already recorded (the insert hit
+      // the unique index) mustn't re-stamp the presence row, and nor should
+      // an old edit picked up by a backfill after an outage.
+      if (
+        inserted &&
+        user &&
+        Date.now() - ts.getTime() < PASSIVE_VIEWER_WINDOW_MS
+      ) {
+        await recordPuzzleStatus({
+          hunt: document.hunt,
+          user: user._id,
+          puzzle: document.puzzle,
+          status: "document",
         });
-      });
+      }
     }
   }
 }

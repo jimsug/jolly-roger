@@ -1,0 +1,143 @@
+import { useId } from "react";
+import OverlayTrigger from "react-bootstrap/OverlayTrigger";
+import Tooltip from "react-bootstrap/Tooltip";
+import { useTranslation } from "react-i18next";
+import styled from "styled-components";
+import type { DiscordAccountType } from "../../lib/models/DiscordAccount";
+import Avatar from "./Avatar";
+
+export interface AvatarStackUser {
+  _id: string;
+  displayName: string;
+  discordAccount?: DiscordAccountType | undefined;
+  // Drawn faded with a warning border: probably here, but not for certain
+  isPassive?: boolean;
+}
+
+const StackContainer = styled.div`
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+
+  /* Room for the hovered avatar to shift without the row jumping */
+  padding-right: 4px;
+`;
+
+const AvatarItem = styled.div<{
+  $overlap: number;
+  $isPassive: boolean;
+}>`
+  margin-right: -${({ $overlap }) => $overlap}px;
+  border: 2px solid
+    ${({ theme, $isPassive }) =>
+      $isPassive ? theme.colors.warning : theme.colors.success};
+  border-radius: 50%;
+  transition: all 0.2s ease-in-out;
+  position: relative;
+  background-color: ${({ theme }) => theme.colors.background};
+  overflow: hidden;
+  opacity: ${({ $isPassive }) => ($isPassive ? 0.8 : 1)};
+
+  &:hover {
+    transform: translateY(-2px);
+    z-index: 10;
+    margin-right: 4px;
+    box-shadow: 0 4px 8px rgb(0 0 0 / 20%);
+  }
+
+  &:last-child {
+    margin-right: 0;
+  }
+`;
+
+const OverflowCount = styled.div<{ $size: number }>`
+  width: ${({ $size }) => $size}px;
+  height: ${({ $size }) => $size}px;
+  border-radius: 50%;
+  background-color: ${({ theme }) => theme.colors.secondary};
+  color: ${({ theme }) => theme.colors.text};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: ${({ $size }) => Math.max(10, $size * 0.4)}px;
+  font-weight: bold;
+  border: 2px solid ${({ theme }) => theme.colors.background};
+  z-index: 0;
+  margin-left: 4px;
+  cursor: default;
+`;
+
+// A row of overlapping avatars, capped at `max` with a "+N" bubble for the
+// rest. The stack's own tooltip lists everyone; turn it off when it sits
+// inside something with its own.
+const AvatarStack = ({
+  users,
+  size = 24,
+  max = 3,
+  className,
+  withTooltip = true,
+}: {
+  users: AvatarStackUser[];
+  size?: number;
+  max?: number;
+  className?: string;
+  withTooltip?: boolean;
+}) => {
+  const id = useId();
+  const { t } = useTranslation();
+
+  if (users.length === 0) {
+    return null;
+  }
+
+  const visibleUsers = users.slice(0, max);
+  const remaining = users.length - max;
+  const overlap = size / 3;
+
+  const stack = (
+    <StackContainer className={className}>
+      {visibleUsers.map((user, i) => (
+        <AvatarItem
+          key={user._id}
+          $overlap={remaining > 0 || i < visibleUsers.length - 1 ? overlap : 0}
+          $isPassive={user.isPassive ?? false}
+        >
+          <Avatar
+            size={size}
+            _id={user._id}
+            displayName={user.displayName}
+            discordAccount={user.discordAccount}
+            rounded
+          />
+        </AvatarItem>
+      ))}
+      {remaining > 0 && (
+        <OverflowCount
+          $size={size}
+          title={t("puzzleList.moreUsers", "{{count}} more users", {
+            count: remaining,
+          })}
+        >
+          +{remaining}
+        </OverflowCount>
+      )}
+    </StackContainer>
+  );
+
+  if (!withTooltip) {
+    return stack;
+  }
+
+  return (
+    <OverlayTrigger
+      placement="left"
+      overlay={
+        <Tooltip id={id}>{users.map((u) => u.displayName).join(", ")}</Tooltip>
+      }
+    >
+      {stack}
+    </OverlayTrigger>
+  );
+};
+
+export default AvatarStack;

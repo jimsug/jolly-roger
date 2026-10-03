@@ -104,6 +104,31 @@ Meteor.publish("mediasoup:metadata", async function (hunt, call) {
   return [Peers.find({ hunt, call }), CallHistories.find({ hunt, call })];
 });
 
+// Who is on a call anywhere in the hunt, for the puzzle list's solver column.
+// Only the fields the column needs: a peer's tab id is what mediasoup:join
+// keys on, so it stays with the per-call publication.
+Meteor.publish("mediasoup:metadataAll", async function (hunt) {
+  check(hunt, String);
+
+  if (!this.userId) {
+    throw new Meteor.Error(401, "Not logged in");
+  }
+
+  if (
+    !userMayJoinCallsForHunt(
+      await MeteorUsers.findOneAsync(this.userId),
+      await Hunts.findOneAsync(hunt),
+    )
+  ) {
+    throw new Meteor.Error(403, "Not a member of this hunt");
+  }
+
+  return Peers.find(
+    { hunt },
+    { projection: { hunt: 1, call: 1, createdBy: 1 } },
+  );
+});
+
 Meteor.publish("mediasoup:join", async function (hunt, call, tab) {
   check(hunt, String);
   check(call, String);

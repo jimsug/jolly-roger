@@ -1,9 +1,12 @@
 import { Meteor } from "meteor/meteor";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { useMemo } from "react";
 import { useParams } from "react-router";
 import Hunts from "../../lib/models/Hunts";
 import InvitationCodes from "../../lib/models/InvitationCodes";
 import MeteorUsers from "../../lib/models/MeteorUsers";
+import Puzzles from "../../lib/models/Puzzles";
+import UserStatuses from "../../lib/models/UserStatuses";
 import {
   listAllRolesForHunt,
   userMayAddUsersToHunt,
@@ -12,7 +15,11 @@ import {
   userMayUseDiscordBotAPIs,
 } from "../../lib/permission_stubs";
 import invitationCodesForHunt from "../../lib/publications/invitationCodesForHunt";
+import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
+import statusesForHuntUsers from "../../lib/publications/statusesForHuntUsers";
 import sortUsersByDisplayName from "../../lib/sortUsersByDisplayName";
+import userStatusesToLastSeen from "../../lib/userStatusesToLastSeen";
+import useNow from "../hooks/useNow";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import ProfileList from "./ProfileList";
 
@@ -24,8 +31,39 @@ const HuntProfileListPage = () => {
   const invitationCodesLoading = useTypedSubscribe(invitationCodesForHunt, {
     huntId,
   });
+  const statusesLoading = useTypedSubscribe(statusesForHuntUsers, { huntId });
+  // Puzzle titles for the "last active on" buttons
+  const puzzlesLoading = useTypedSubscribe(puzzlesForHunt, { huntId });
   const loading =
-    profilesLoading() || userRolesLoading() || invitationCodesLoading();
+    profilesLoading() ||
+    userRolesLoading() ||
+    invitationCodesLoading() ||
+    statusesLoading() ||
+    puzzlesLoading();
+
+  const userStatuses = useTracker(
+    () =>
+      loading
+        ? {}
+        : userStatusesToLastSeen(UserStatuses.find({ hunt: huntId }).fetch()),
+    [huntId, loading],
+  );
+  const puzzleTitles = useTracker(() => {
+    const titles = new Map<string, string>();
+    Puzzles.find({ hunt: huntId }, { projection: { title: 1 } }).forEach(
+      (puzzle) => {
+        titles.set(puzzle._id, puzzle.title);
+      },
+    );
+    return titles;
+  }, [huntId]);
+  // One clock for every badge, so the list re-renders once a minute rather
+  // than one badge at a time
+  const now = useNow(60 * 1000);
+  const presence = useMemo(
+    () => ({ userStatuses, puzzleTitles, now }),
+    [userStatuses, puzzleTitles, now],
+  );
 
   const users = useTracker(
     () =>
@@ -88,6 +126,7 @@ const HuntProfileListPage = () => {
       canMakeOperator={canMakeOperator}
       canUpdateHuntInvitationCode={canUpdateHuntInvitationCode}
       invitationCode={invitationCode}
+      presence={presence}
     />
   );
 };

@@ -30,6 +30,9 @@ declare module "meteor/meteor" {
       discordAccount?: DiscordAccountType;
       phoneNumber?: string;
       dingwords?: string[];
+      // Hunting remotely: puzzles that need someone on site sort below the
+      // rest of their group for this user
+      isOffsite?: boolean;
       mergedInto?: string;
     }
   }
@@ -63,6 +66,7 @@ export const User = z.object({
   discordAccount: DiscordAccount.optional(),
   phoneNumber: nonEmptyString.optional(),
   dingwords: nonEmptyString.array().optional(),
+  isOffsite: z.boolean().optional(),
   mergedInto: foreignKey.optional(),
 });
 validateSchema(User);
@@ -95,4 +99,5 @@ export type ProfileFields =
   | "googleAccount"
   | "discordAccount"
   | "phoneNumber"
-  | "dingwords";
+  | "dingwords"
+  | "isOffsite";

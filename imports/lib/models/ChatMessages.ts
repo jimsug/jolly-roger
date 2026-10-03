@@ -65,6 +65,10 @@ const ChatMessage = withCommon(
 const ChatMessages = new SoftDeletedModel("jr_chatmessages", ChatMessage);
 ChatMessages.addIndex({ deleted: 1, puzzle: 1 });
 ChatMessages.addIndex({ hunt: 1, createdAt: 1 });
+// The puzzle history publications read everything a user sent or was
+// mentioned in across their hunts
+ChatMessages.addIndex({ hunt: 1, sender: 1 });
+ChatMessages.addIndex({ hunt: 1, "content.children.userId": 1 });
 export type ChatMessageType = ModelType<typeof ChatMessages>;
 
 export default ChatMessages;

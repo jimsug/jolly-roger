@@ -7,8 +7,12 @@
 // server record.
 
 import { check, Match } from "meteor/check";
+import type { Subscription } from "meteor/meteor";
 import { Meteor } from "meteor/meteor";
+import type { Mongo } from "meteor/mongo";
+import MeteorUsers from "../lib/models/MeteorUsers";
 import { registerPeriodicCleanupHook } from "./garbage-collection";
+import type { SubscriberType } from "./models/Subscribers";
 import Subscribers from "./models/Subscribers";
 import serverId from "./serverId";
 
@@ -123,6 +127,98 @@ Meteor.publish("subscribers.counts", async function (q: Record<string, any>) {
   return undefined;
 });
 
+type ConnectionPresence = { visible: boolean; updatedAt: Date };
+
+// Whether the subscriber's tab was visible. The client sends a boolean;
+// "visible" is what clients from before the boolean sent.
+function isVisible(context: SubscriberType["context"]): boolean {
+  const { visible } = context;
+  return visible === true || visible === "visible";
+}
+
+// Publishes one "subscribers" record per user for the matching Subscriber
+// rows, folding a user's connections (tabs) together: the user is visible if
+// any tab is, and updatedAt is the newest tab's.
+async function publishAggregatedSubscribers(
+  sub: Subscription,
+  selector: Mongo.Selector<SubscriberType>,
+  keyFor: (doc: SubscriberType) => string,
+) {
+  const groups = new Map<
+    string,
+    {
+      name: string;
+      user: string;
+      connections: Map<string, ConnectionPresence>;
+      published: boolean;
+    }
+  >();
+
+  const publish = (key: string) => {
+    const group = groups.get(key);
+    if (!group) {
+      return;
+    }
+    if (group.connections.size === 0) {
+      groups.delete(key);
+      if (group.published) {
+        sub.removed("subscribers", key);
+      }
+      return;
+    }
+
+    let visible = false;
+    let updatedAt = 0;
+    for (const connection of group.connections.values()) {
+      visible ||= connection.visible;
+      updatedAt = Math.max(updatedAt, connection.updatedAt.getTime());
+    }
+    const payload = {
+      name: group.name,
+      user: group.user,
+      visible,
+      updatedAt: new Date(updatedAt),
+    };
+    if (group.published) {
+      sub.changed("subscribers", key, payload);
+    } else {
+      sub.added("subscribers", key, payload);
+      group.published = true;
+    }
+  };
+
+  const record = (doc: SubscriberType) => {
+    const key = keyFor(doc);
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        name: doc.name,
+        user: doc.user,
+        connections: new Map(),
+        published: false,
+      };
+      groups.set(key, group);
+    }
+    group.connections.set(doc._id, {
+      visible: isVisible(doc.context),
+      updatedAt: doc.updatedAt,
+    });
+    publish(key);
+  };
+
+  const handle = await Subscribers.find(selector).observeAsync({
+    added: record,
+    changed: record,
+    removed: (doc) => {
+      const key = keyFor(doc);
+      groups.get(key)?.connections.delete(doc._id);
+      publish(key);
+    },
+  });
+  sub.onStop(() => handle.stop());
+  sub.ready();
+}
+
 // Unlike subscribers.counts, which takes a query string against the
 // context, we require you to specify the name of a subscription here
 // to avoid fanout.
@@ -133,32 +229,33 @@ Meteor.publish("subscribers.fetch", async function (name) {
     return [];
   }
 
-  const users: Record<string, number> = {};
+  await publishAggregatedSubscribers(
+    this,
+    { name },
+    (doc) => `${name}:${doc.user}`,
+  );
+  return undefined;
+});
 
-  const cursor = Subscribers.find({ name });
-  const handle = await cursor.observeAsync({
-    added: (doc) => {
-      const { user } = doc;
+// Every subscriber in a hunt at once, so the puzzle list doesn't need a
+// subscribers.fetch per puzzle. Records are keyed the same way as
+// subscribers.fetch's, so the two can be mixed on the client.
+Meteor.publish("subscribers.fetchAll", async function (hunt) {
+  check(hunt, String);
 
-      if (!Object.hasOwn(users, user)) {
-        users[user] = 0;
-        this.added("subscribers", `${name}:${user}`, { name, user });
-      }
+  if (!this.userId) {
+    throw new Meteor.Error(401, "Not logged in");
+  }
 
-      users[user]! += 1;
-    },
+  const user = await MeteorUsers.findOneAsync(this.userId);
+  if (!user?.hunts?.includes(hunt)) {
+    throw new Meteor.Error(403, "Not a member of this hunt");
+  }
 
-    removed: (doc) => {
-      const { user } = doc;
-
-      users[user]! -= 1;
-      if (users[user] === 0) {
-        delete users[user];
-        this.removed("subscribers", `${name}:${user}`);
-      }
-    },
-  });
-  this.onStop(() => handle.stop());
-  this.ready();
+  await publishAggregatedSubscribers(
+    this,
+    { "context.hunt": hunt },
+    (doc) => `${doc.name}:${doc.user}`,
+  );
   return undefined;
 });

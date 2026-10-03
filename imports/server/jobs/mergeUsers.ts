@@ -44,6 +44,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import Servers from "../../lib/models/Servers";
 import Settings from "../../lib/models/Settings";
 import Tags from "../../lib/models/Tags";
+import UserStatuses from "../../lib/models/UserStatuses";
 import { AllModels } from "../../lib/typedModel/Model";
 import addUsersToDiscordRole from "../addUsersToDiscordRole";
 import { ensureHuntFolderPermission } from "../gdrive";
@@ -307,6 +308,17 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
     PuzzleNotifications,
     async (source) => {
       await PuzzleNotifications.collection
+        .rawCollection()
+        .deleteMany({ user: source });
+    },
+  ],
+  [
+    UserStatuses,
+    async (source) => {
+      // Presence describes the source account's sessions, which the merge
+      // has just ended. Carrying the rows over could show the target as
+      // online from a session that no longer exists, so they go.
+      await UserStatuses.collection
         .rawCollection()
         .deleteMany({ user: source });
     },

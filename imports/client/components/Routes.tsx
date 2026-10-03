@@ -42,6 +42,7 @@ import VerifyEmailPage from "./VerifyEmailPage";
 const HuntEditPage = React.lazy(() => import("./HuntEditPage"));
 const SetupPage = React.lazy(() => import("./SetupPage"));
 const RTCDebugPage = React.lazy(() => import("./RTCDebugPage"));
+const UserPuzzleHistory = React.lazy(() => import("./UserPuzzleHistory"));
 
 // /profile is a stable link to the current user's own profile page
 const ProfileRedirect = () => {
@@ -86,6 +87,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
     ],
   },
   { path: "/profile", element: <ProfileRedirect /> },
+  { path: "/history", element: <UserPuzzleHistory /> },
   {
     path: "/users",
     element: <UsersApp />,

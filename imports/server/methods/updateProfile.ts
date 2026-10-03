@@ -11,13 +11,20 @@ defineMethod(updateProfile, {
       displayName: String,
       phoneNumber: Match.Optional(String),
       dingwords: [String],
+      isOffsite: Match.Optional(Boolean),
       enrollmentToken: Match.Optional(String),
     });
 
     return arg;
   },
 
-  async run({ displayName, phoneNumber, dingwords, enrollmentToken }) {
+  async run({
+    displayName,
+    phoneNumber,
+    dingwords,
+    isOffsite,
+    enrollmentToken,
+  }) {
     let userId: string;
     if (enrollmentToken) {
       // enrollmentToken is only for the unauthenticated enrollment path.
@@ -27,6 +34,14 @@ defineMethod(updateProfile, {
         throw new Meteor.Error(
           400,
           "Cannot use enrollment token while logged in",
+        );
+      }
+      // The enrollment form only collects the basics; the rest of the
+      // profile is edited once logged in.
+      if (isOffsite !== undefined) {
+        throw new Meteor.Error(
+          400,
+          "Cannot set hunting location while enrolling",
         );
       }
 
@@ -61,6 +76,7 @@ defineMethod(updateProfile, {
         displayName,
         phoneNumber,
         dingwords,
+        ...(isOffsite === undefined ? {} : { isOffsite }),
       },
       $unset: unset,
     });

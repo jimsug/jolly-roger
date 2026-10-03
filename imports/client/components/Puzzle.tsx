@@ -1,5 +1,6 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
+import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
 import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg-icons/faLightbulb";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faAngleDown } from "@fortawesome/free-solid-svg-icons/faAngleDown";
@@ -7,6 +8,7 @@ import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
 import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
+import { faPhone } from "@fortawesome/free-solid-svg-icons/faPhone";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
@@ -30,13 +32,17 @@ import { Link } from "react-router";
 import styled, { css, useTheme } from "styled-components";
 import { indexedById } from "../../lib/listUtils";
 import Hunts from "../../lib/models/Hunts";
+import MeteorUsers from "../../lib/models/MeteorUsers";
 import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
+import type { PuzzleSolvers } from "../../lib/puzzleSolvers";
 import type { Solvedness } from "../../lib/solvedness";
 import { computeSolvedness } from "../../lib/solvedness";
 import updatePuzzle from "../../methods/updatePuzzle";
 import { useOperatorActionsHiddenForHunt } from "../hooks/persisted-state";
+import type { AvatarStackUser } from "./AvatarStack";
+import AvatarStack from "./AvatarStack";
 import BookmarkButton from "./BookmarkButton";
 import PuzzleActivity from "./PuzzleActivity";
 import PuzzleAnswer from "./PuzzleAnswer";
@@ -228,6 +234,41 @@ const MetaBadge = styled(Badge)`
   gap: 0.25em;
 `;
 
+// Who is on the call and who is looking at the puzzle
+const SolversColumn = styled(PuzzleColumn)`
+  flex: 3;
+  cursor: default;
+  ${mediaBreakpointDown(
+    "xs",
+    css`
+      flex: 0 0 100%;
+    `,
+  )}
+`;
+
+const SolverRow = styled.div`
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  line-height: normal;
+`;
+
+const SolverTooltipLine = styled.div<{ $passive?: boolean }>`
+  text-align: left;
+  ${({ $passive }) =>
+    $passive &&
+    css`
+      font-style: italic;
+      opacity: 0.8;
+    `}
+`;
+
+const NO_SOLVER_USERS: {
+  callers: AvatarStackUser[];
+  viewers: AvatarStackUser[];
+} = { callers: [], viewers: [] };
+
 const NOTE_PREVIEW_LENGTH = 250;
 const truncateNote = (text: string) =>
   text.length <= NOTE_PREVIEW_LENGTH
@@ -242,6 +283,8 @@ const Puzzle = React.memo(
     canUpdate,
     suppressTags,
     segmentAnswers,
+    showSolvers = false,
+    solvers,
   }: {
     puzzle: PuzzleType;
     bookmarked: boolean;
@@ -250,6 +293,9 @@ const Puzzle = React.memo(
     canUpdate: boolean;
     suppressTags?: string[];
     segmentAnswers?: boolean;
+    // Whether to show who is on the puzzle, and who that is
+    showSolvers?: boolean;
+    solvers?: PuzzleSolvers;
   }) => {
     const [operatorActionsHidden] = useOperatorActionsHiddenForHunt(
       puzzle.hunt,
@@ -460,6 +506,58 @@ const Puzzle = React.memo(
       );
 
     const tooltipId = useId();
+
+    // Display names and avatars come from the list page's subscriptions
+    const { callers, viewers } = useTracker(() => {
+      if (!showSolvers || !solvers) {
+        return NO_SOLVER_USERS;
+      }
+      const toUsers = (ids: string[], isPassive: boolean): AvatarStackUser[] =>
+        ids.flatMap((id) => {
+          const user = MeteorUsers.findOne(id);
+          return user?.displayName
+            ? [
+                {
+                  _id: id,
+                  displayName: user.displayName,
+                  discordAccount: user.discordAccount,
+                  isPassive,
+                },
+              ]
+            : [];
+        });
+      return {
+        callers: toUsers(solvers.rtcViewers, false),
+        viewers: [
+          ...toUsers(solvers.activeViewers, false),
+          ...toUsers(solvers.passiveViewers, true),
+        ],
+      };
+    }, [showSolvers, solvers]);
+    const activeViewers = viewers.filter((u) => !u.isPassive);
+    const passiveViewers = viewers.filter((u) => u.isPassive);
+    const solversTooltip = (
+      <Tooltip id={`${tooltipId}-solvers`}>
+        {callers.length > 0 && (
+          <SolverTooltipLine>
+            <FontAwesomeIcon icon={faPhone} />{" "}
+            {callers.map((u) => u.displayName).join(", ")}
+          </SolverTooltipLine>
+        )}
+        {activeViewers.length > 0 && (
+          <SolverTooltipLine>
+            <FontAwesomeIcon icon={faEye} />{" "}
+            {activeViewers.map((u) => u.displayName).join(", ")}
+          </SolverTooltipLine>
+        )}
+        {passiveViewers.length > 0 && (
+          <SolverTooltipLine $passive>
+            {passiveViewers.map((u) => u.displayName).join(", ")}
+          </SolverTooltipLine>
+        )}
+      </Tooltip>
+    );
+
     let statusIcon;
     let statusText;
     if (isHighPriority) {
@@ -614,15 +712,40 @@ const Puzzle = React.memo(
             {puzzle.lockedSummary}
           </LockedSummaryColumn>
         ) : (
-          <PuzzleActivityColumn>
-            {solvedness === "unsolved" && (
-              <PuzzleActivity
-                huntId={puzzle.hunt}
-                puzzleId={puzzle._id}
-                unlockTime={puzzle.createdAt}
-              />
+          <>
+            {showSolvers && (
+              <SolversColumn>
+                {solvedness === "unsolved" &&
+                  (callers.length > 0 || viewers.length > 0) && (
+                    <OverlayTrigger placement="left" overlay={solversTooltip}>
+                      <div>
+                        {callers.length > 0 && (
+                          <SolverRow>
+                            <FontAwesomeIcon icon={faPhone} />
+                            <AvatarStack users={callers} withTooltip={false} />
+                          </SolverRow>
+                        )}
+                        {viewers.length > 0 && (
+                          <SolverRow>
+                            <FontAwesomeIcon icon={faEye} />
+                            <AvatarStack users={viewers} withTooltip={false} />
+                          </SolverRow>
+                        )}
+                      </div>
+                    </OverlayTrigger>
+                  )}
+              </SolversColumn>
             )}
-          </PuzzleActivityColumn>
+            <PuzzleActivityColumn>
+              {solvedness === "unsolved" && (
+                <PuzzleActivity
+                  huntId={puzzle.hunt}
+                  puzzleId={puzzle._id}
+                  unlockTime={puzzle.createdAt}
+                />
+              )}
+            </PuzzleActivityColumn>
+          </>
         )}
         <PuzzleLinkColumn>
           {puzzle.url ? (

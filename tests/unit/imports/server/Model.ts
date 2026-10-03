@@ -7,6 +7,10 @@ import {
   stringId,
   updatedTimestamp,
 } from "../../../../imports/lib/typedModel/customTypes";
+import {
+  normalizeIndexOptions,
+  normalizeIndexSpecification,
+} from "../../../../imports/lib/typedModel/indexes";
 import Model, {
   type InsertModelType,
   type ModelType,
@@ -189,6 +193,48 @@ describe("Model", function () {
       await assert.isRejected(
         model.insertAsync({ name: "foo", foo: "x", bar: 3 } as any),
         /Document failed validation/,
+      );
+    });
+  });
+
+  describe("indexes", function () {
+    const schema = z.object({
+      updatedAt: updatedTimestamp,
+    });
+    let model: Model<typeof schema>;
+    this.beforeAll(async function () {
+      model = await createTestModel(schema);
+    });
+
+    it("carries a TTL through to the index the reconciler creates", async function () {
+      model.addIndex({ updatedAt: 1 }, { expireAfterSeconds: 60 });
+      const [spec] = model.indexes;
+      assert.isDefined(spec);
+      assert.equal(spec.name, "updatedAt_1");
+      assert.deepEqual(spec.options, [["expireAfterSeconds", 60]]);
+
+      // Create it the way imports/server/indexes.ts does, then read it back
+      // the way the reconciler does: the two must agree, or the index would
+      // be dropped and recreated on every boot.
+      const collection = model.collection.rawCollection();
+      await collection.createIndexes([
+        {
+          key: Object.fromEntries(spec.index),
+          name: spec.name,
+          ...Object.fromEntries(spec.options),
+        },
+      ]);
+      const existing = (await collection.listIndexes().toArray()).find(
+        (idx) => idx.name === spec.name,
+      );
+      assert.isDefined(existing);
+      const { v: _v, key, name: _name, ...options } = existing;
+      assert.equal(
+        JSON.stringify([
+          normalizeIndexSpecification(key),
+          normalizeIndexOptions(options),
+        ]),
+        spec.stringified,
       );
     });
   });

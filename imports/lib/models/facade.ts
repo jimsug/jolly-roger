@@ -34,6 +34,7 @@ import Puzzles from "./Puzzles";
 import Servers from "./Servers";
 import Settings from "./Settings";
 import Tags from "./Tags";
+import UserStatuses from "./UserStatuses";
 
 const Models = {
   Announcements,
@@ -74,6 +75,7 @@ const Models = {
   Servers,
   Settings,
   Tags,
+  UserStatuses,
 };
 
 export default Models;

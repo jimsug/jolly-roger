@@ -15,7 +15,6 @@
     "callersContext_0": "no callers",
     "callersContext": "{{count}} caller",
     "callersContext_other": "{{count}} callers",
-
     "caller_one": "caller",
     "caller_other": "callers"
   },
@@ -23,7 +22,6 @@
     "viewersContext_0": "No viewers",
     "viewersContext": "{{count}} viewer",
     "viewersContext_other": "{{count}} viewers",
-
     "viewer_one": "viewer",
     "viewer_other": "viewers"
   },
@@ -35,7 +33,9 @@
   },
   "puzzleList": {
     "unsolvedInGroup_one": "{{unsolved}} of {{count}} puzzle unsolved",
-    "unsolvedInGroup_other": "{{unsolved}} of {{count}} puzzles unsolved"
+    "unsolvedInGroup_other": "{{unsolved}} of {{count}} puzzles unsolved",
+    "moreUsers_one": "{{count}} more user",
+    "moreUsers_other": "{{count}} more users"
   },
   "puzzle": {
     "delete": {
@@ -45,6 +45,24 @@
     "answerOrGuess": {
       "Answer_one": "Answer",
       "Answer_other": "Answers"
+    }
+  },
+  "history": {
+    "detail": {
+      "sentMessages_one": "sent <strong>{{count}} message</strong>",
+      "sentMessages_other": "sent <strong>{{count}} messages</strong>",
+      "mentionedIn_one": "were mentioned in <strong>{{count}} message</strong>",
+      "mentionedIn_other": "were mentioned in <strong>{{count}} messages</strong>",
+      "editedDocument_one": "were seen editing the sheet <strong>once</strong>",
+      "editedDocument_other": "were seen editing the sheet <strong>{{count}} times</strong>",
+      "guesses_one": "submitted <strong>{{count}} guess</strong>",
+      "guesses_other": "submitted <strong>{{count}} guesses</strong>",
+      "correctGuesses_one": "and <strong>it was correct</strong>",
+      "correctGuesses_other": "and <strong>{{count}} were correct</strong>"
+    },
+    "graph": {
+      "activitySummary_one": "Total: {{count}} activity ({{breakdown}}) on {{day}}s at {{from}} - {{to}}",
+      "activitySummary_other": "Total: {{count}} activities ({{breakdown}}) on {{day}}s at {{from}} - {{to}}"
     }
   }
 }

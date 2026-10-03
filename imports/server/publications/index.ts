@@ -1,3 +1,4 @@
+import "./activitySummaryForUser";
 import "./announcementsForAnnouncementsPage";
 import "./apiKeysForSelf";
 import "./blobMappingsAll";
@@ -22,8 +23,11 @@ import "./pendingGuessesForSelf";
 import "./puzzleActivityForHunt";
 import "./puzzleFeedbacksForHunt";
 import "./puzzleForPuzzlePage";
+import "./puzzleHistoryForUser";
+import "./puzzleHistorySummaryForUser";
 import "./puzzleNotificationsForSelf";
 import "./puzzlesForHunt";
 import "./puzzlesForPuzzleList";
 import "./settingsAll";
 import "./settingsByName";
+import "./statusesForHuntUsers";

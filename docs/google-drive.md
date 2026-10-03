@@ -40,7 +40,7 @@ files:
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-03T09:00:00Z
+updated: 2026-10-03T18:30:00Z
 ---
 
 # Google Drive Integration
@@ -253,6 +253,16 @@ contains a single record). Activity is tracked in the `DocumentActivities`
 model, with a separate record per user so that we can deduplicate a single user
 acting across Google Drive, voice calls, and Jolly Roger chat in the same time
 bucket.
+
+When an edit can be attributed to a Jolly Roger user, the fetcher also records
+it as that user's most recent puzzle interaction in the `UserStatuses` model
+(`imports/server/recordPuzzleStatus.ts`), which feeds the hunter list's "last
+active on" button and the puzzle list's solver column. That happens once per
+activity bucket, when the `DocumentActivities` record is first inserted: every
+poll re-reads the same trailing window, and each status write is published to
+everyone with those lists open. Edits more than a few minutes old (a backfill
+after an outage) and edits that can't be matched to a user don't get a status
+row.
 
 As a note, we experimented with using Google Drive watches (both
 [drive][changes.watch] and [individual file][files.watch]), but found them to be

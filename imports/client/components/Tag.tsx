@@ -1,3 +1,5 @@
+import { Meteor } from "meteor/meteor";
+import { useTracker } from "meteor/react-meteor-data";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faAlignJustify } from "@fortawesome/free-solid-svg-icons/faAlignJustify";
@@ -282,6 +284,8 @@ const Tag = (props: TagProps) => {
     allPuzzlesIfPresent,
   ]);
 
+  // The copied list is in the order the popover shows it
+  const isOffsite = useTracker(() => Meteor.user()?.isOffsite ?? false, []);
   const relatedPuzzlesForClipboard = useCallback(() => {
     if (!props.popoverRelated) {
       return "";
@@ -293,7 +297,7 @@ const Tag = (props: TagProps) => {
       getRelatedPuzzles(),
       sharedTag,
       tagIndex,
-      false,
+      isOffsite,
     );
     const clipboardData = relatedPuzzles
       .map((puzzle) => {
@@ -323,6 +327,7 @@ const Tag = (props: TagProps) => {
     allTagsIfPresent,
     getRelatedPuzzles,
     segmentAnswers,
+    isOffsite,
   ]);
 
   const name = props.tag.name;

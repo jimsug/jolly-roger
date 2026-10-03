@@ -70,6 +70,7 @@ import "./sendChatMessage";
 import "./sendUserVerificationEmail";
 import "./setFeatureFlag";
 import "./setGuessState";
+import "./setUserStatus";
 import "./syncHuntDiscordRole";
 import "./undestroyHunt";
 import "./undestroyPuzzle";

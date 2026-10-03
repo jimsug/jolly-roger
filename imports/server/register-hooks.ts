@@ -6,6 +6,7 @@ import DiscordHooks from "./hooks/DiscordHooks";
 import DocumentCacheHooks from "./hooks/DocumentCacheHooks";
 import TagCleanupHooks from "./hooks/TagCleanupHooks";
 import TagHooks from "./hooks/TagHooks";
+import UserStatusHooks from "./hooks/UserStatusHooks";
 
 // Some hook implementations may themselves need to trigger other hooks. To
 // avoid import cycles, hook registration is isolated to this file which is
@@ -19,3 +20,4 @@ GlobalHooks.addHookSet(ChatHooks);
 GlobalHooks.addHookSet(BookmarkNotificationHooks);
 GlobalHooks.addHookSet(TagHooks);
 GlobalHooks.addHookSet(DocumentCacheHooks);
+GlobalHooks.addHookSet(UserStatusHooks);

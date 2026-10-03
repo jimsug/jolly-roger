@@ -303,6 +303,9 @@ const AppNavbar = ({
             <DropdownItem as={Link} to={`/users/${userId}`} eventKey="1">
               {t("navigation.myProfile", "My profile")}
             </DropdownItem>
+            <DropdownItem as={Link} to="/history" eventKey="5">
+              {t("navigation.myPuzzleHistory", "My Puzzle History")}
+            </DropdownItem>
             <DropdownItem
               eventKey="2"
               href="https://github.com/deathandmayhem/jolly-roger/issues"

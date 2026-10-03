@@ -96,6 +96,7 @@ import useBlockUpdate from "../hooks/useBlockUpdate";
 import type { Action, CallState } from "../hooks/useCallState";
 import useCallState from "../hooks/useCallState";
 import useDocumentTitle from "../hooks/useDocumentTitle";
+import useDocumentVisible from "../hooks/useDocumentVisible";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
@@ -2202,11 +2203,15 @@ const PuzzlePage = React.memo(() => {
   const puzzleId = useParams<"puzzleId">().puzzleId!;
   const idPrefix = useId();
 
-  // Add the current user to the collection of people viewing this puzzle.
+  // Add the current user to the collection of people viewing this puzzle,
+  // noting whether the tab is actually visible (re-subscribing when that
+  // changes, which is what the viewer list's status dots go on).
   const subscribersTopic = `puzzle:${puzzleId}`;
+  const visible = useDocumentVisible();
   useSubscribe("subscribers.inc", subscribersTopic, {
     puzzle: puzzleId,
     hunt: huntId,
+    visible,
   });
 
   // Get the _list_ of subscribers to this puzzle and the _count_ of subscribers

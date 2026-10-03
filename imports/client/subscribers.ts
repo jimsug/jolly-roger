@@ -10,6 +10,10 @@ export type SubscriberType = {
   _id: string;
   name: string;
   user: string;
+  // Whether any of the user's tabs on this subscription is visible, and when
+  // the newest of them subscribed (subscribers.fetch and subscribers.fetchAll)
+  visible?: boolean;
+  updatedAt?: Date;
 };
 
 export const SubscriberCounters = new Mongo.Collection<SubscriberCounterType>(
