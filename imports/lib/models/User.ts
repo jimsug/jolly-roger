@@ -30,6 +30,12 @@ declare module "meteor/meteor" {
       discordAccount?: DiscordAccountType;
       phoneNumber?: string;
       dingwords?: string[];
+      // When set, a dingword also matches the start of a longer word
+      // ("logic" dings on "logician"); otherwise only whole words match.
+      dingwordsOpenMatch?: boolean;
+      // Dingwords muted per puzzle: hunt id -> puzzle id -> words (or the
+      // SUPPRESS_ALL_DINGWORDS sentinel for every dingword on that puzzle).
+      suppressedDingwords?: Record<string, Record<string, string[]>>;
       // Hunting remotely: puzzles that need someone on site sort below the
       // rest of their group for this user
       isOffsite?: boolean;
@@ -66,6 +72,10 @@ export const User = z.object({
   discordAccount: DiscordAccount.optional(),
   phoneNumber: nonEmptyString.optional(),
   dingwords: nonEmptyString.array().optional(),
+  dingwordsOpenMatch: z.boolean().optional(),
+  suppressedDingwords: z
+    .record(z.string(), z.record(z.string(), nonEmptyString.array()))
+    .optional(),
   isOffsite: z.boolean().optional(),
   mergedInto: foreignKey.optional(),
 });
@@ -100,4 +110,5 @@ export type ProfileFields =
   | "discordAccount"
   | "phoneNumber"
   | "dingwords"
+  | "dingwordsOpenMatch"
   | "isOffsite";

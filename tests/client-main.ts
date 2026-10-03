@@ -5,6 +5,7 @@ chai.use(chaiAsPromised);
 
 import "./unit/imports/lib/calendarTimeFormat";
 import "./unit/imports/lib/defaultHuntTags";
+import "./unit/imports/lib/dingwordLogic";
 import "./unit/imports/lib/guessTitleFromUrl";
 import "./unit/imports/lib/permission_stubs";
 import "./unit/imports/lib/puzzle-sort-and-group";

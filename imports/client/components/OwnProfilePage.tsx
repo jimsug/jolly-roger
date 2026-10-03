@@ -16,7 +16,7 @@ import FormLabel from "react-bootstrap/FormLabel";
 import FormText from "react-bootstrap/FormText";
 import ListGroup from "react-bootstrap/ListGroup";
 import ListGroupItem from "react-bootstrap/ListGroupItem";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import Flags from "../../Flags";
 import { formatDiscordName } from "../../lib/discord";
 import type { APIKeyType } from "../../lib/models/APIKeys";
@@ -35,6 +35,7 @@ import APIKeysTable from "./APIKeysTable";
 import AudioConfig from "./AudioConfig";
 import Avatar from "./Avatar";
 import GoogleLinkBlock from "./GoogleLinkBlock";
+import LabelledRadioGroup from "./LabelledRadioGroup";
 
 enum DiscordLinkBlockLinkState {
   IDLE = "idle",
@@ -394,6 +395,9 @@ const OwnProfilePage = ({
   const [dingwordsFlat, setDingwordsFlat] = useState(
     initialUser.dingwords ? initialUser.dingwords.join(",") : "",
   );
+  const [dingwordsOpenMatch, setDingwordsOpenMatch] = useState(
+    initialUser.dingwordsOpenMatch ?? false,
+  );
   const [isOffsite, setIsOffsite] = useState(initialUser.isOffsite ?? false);
   const [submitState, setSubmitState] = useState(
     OwnProfilePageSubmitState.IDLE,
@@ -416,6 +420,10 @@ const OwnProfilePage = ({
     useCallback((e) => {
       setDingwordsFlat(e.currentTarget.value);
     }, []);
+
+  const handleDingwordsModeChange = useCallback((mode: string) => {
+    setDingwordsOpenMatch(mode === "open");
+  }, []);
 
   const handleIsOffsiteChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -443,6 +451,7 @@ const OwnProfilePage = ({
       displayName: trimmedDisplayName,
       phoneNumber: phoneNumber !== "" ? phoneNumber : undefined,
       dingwords,
+      dingwordsOpenMatch,
       isOffsite,
     };
     updateProfile.call(newProfile, (error) => {
@@ -453,7 +462,7 @@ const OwnProfilePage = ({
         setSubmitState(OwnProfilePageSubmitState.SUCCESS);
       }
     });
-  }, [dingwordsFlat, displayName, phoneNumber, isOffsite]);
+  }, [dingwordsFlat, dingwordsOpenMatch, displayName, phoneNumber, isOffsite]);
 
   const dismissAlert = useCallback(() => {
     setSubmitState(OwnProfilePageSubmitState.IDLE);
@@ -537,12 +546,52 @@ const OwnProfilePage = ({
         <FormText>
           {t(
             "profile.dingwords.help",
-            `Get an in-app notification if anyone sends a chat message
-            containing one of your comma-separated, case-insensitive dingwords
-            as a substring. This feature is experimental and may be disabled
-            without notice.`,
+            `Get an in-app notification if anyone sends a chat message, or adds
+            a tag, containing one of your comma-separated, case-insensitive
+            dingwords. Spaces are allowed. This feature is experimental and may
+            be disabled without notice.`,
           )}
         </FormText>
+      </FormGroup>
+
+      <FormGroup className="mb-3" controlId={`${idPrefix}-dingwords-mode`}>
+        <FormLabel>
+          {t("profile.dingwordsMode.label", "Dingwords matching mode")}
+        </FormLabel>
+        <LabelledRadioGroup
+          header=""
+          options={[
+            {
+              value: "exact",
+              label: (
+                <Trans
+                  i18nKey="profile.dingwordsMode.exact"
+                  t={t}
+                  defaults="<strong>Match precisely:</strong> dingwords and phrases must match the typed text <em>exactly</em> in order to trigger an alert."
+                  components={{ strong: <strong />, em: <em /> }}
+                />
+              ),
+            },
+            {
+              value: "open",
+              label: (
+                <Trans
+                  i18nKey="profile.dingwordsMode.open"
+                  t={t}
+                  defaults="<strong>Match start:</strong> dingwords and phrases only need to match the <em>start</em> of a typed word or phrase. For example, the dingword <code>logic</code> would match “logic”, “logician”, and “logical”, but not “illogical”."
+                  components={{
+                    strong: <strong />,
+                    em: <em />,
+                    code: <code />,
+                  }}
+                />
+              ),
+            },
+          ]}
+          initialValue={dingwordsOpenMatch ? "open" : "exact"}
+          help=""
+          onChange={handleDingwordsModeChange}
+        />
       </FormGroup>
 
       <FormGroup className="mb-3" controlId={`${idPrefix}-is-offsite`}>

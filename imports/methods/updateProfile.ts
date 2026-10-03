@@ -5,6 +5,9 @@ export default new TypedMethod<
     displayName: string;
     phoneNumber?: string;
     dingwords: string[];
+    // Whether dingwords also match the start of longer words. Only accepted
+    // from a logged-in user editing their own profile.
+    dingwordsOpenMatch?: boolean;
     // Whether the user is hunting remotely. Only accepted from a logged-in
     // user editing their own profile.
     isOffsite?: boolean;

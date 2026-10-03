@@ -31,3 +31,4 @@ import "./puzzlesForPuzzleList";
 import "./settingsAll";
 import "./settingsByName";
 import "./statusesForHuntUsers";
+import "./userSuppressedDingwords";

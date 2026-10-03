@@ -1,6 +1,9 @@
 import i18n from "i18next";
 import Flags from "../../Flags";
-import { normalizedMessageDingsUserByDingword } from "../../lib/dingwordLogic";
+import {
+  normalizeDingwordText,
+  normalizedMessageDingsUserByDingword,
+} from "../../lib/dingwordLogic";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import Puzzles from "../../lib/models/Puzzles";
@@ -26,7 +29,7 @@ const TagHooks: Hookset = {
 
     // Dingwords match on whitespace-separated words, so "group:events" is
     // searched as "group events".
-    const normalizedText = tag.name.toLowerCase().replaceAll(":", " ");
+    const normalizedText = normalizeDingwordText(tag.name.replaceAll(":", " "));
     const content = i18n.t(
       "notification.puzzle.tagged",
       "{{puzzle}} has been tagged with '{{tag}}'",
@@ -40,12 +43,14 @@ const TagHooks: Hookset = {
 
     for await (const user of MeteorUsers.find(
       { hunts: puzzle.hunt, "dingwords.0": { $exists: true } },
-      { projection: { dingwords: 1 } },
+      { projection: { dingwords: 1, dingwordsOpenMatch: 1 } },
     )) {
       if (user._id === addingUserId) {
         continue;
       }
-      if (!normalizedMessageDingsUserByDingword(normalizedText, user)) {
+      if (
+        normalizedMessageDingsUserByDingword(normalizedText, user).length === 0
+      ) {
         continue;
       }
       await PuzzleNotifications.insertAsync({

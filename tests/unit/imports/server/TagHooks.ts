@@ -14,13 +14,19 @@ async function createUser(
   email: string,
   huntId: string,
   dingwords: string[],
+  dingwordsOpenMatch = false,
 ): Promise<string> {
   const userId = await Accounts.createUserAsync({
     email,
     password: "password",
   });
   await MeteorUsers.updateAsync(userId, {
-    $set: { displayName: email, hunts: [huntId], dingwords },
+    $set: {
+      displayName: email,
+      hunts: [huntId],
+      dingwords,
+      dingwordsOpenMatch,
+    },
   });
   return userId;
 }
@@ -32,6 +38,8 @@ describe("TagHooks", function () {
   let adderId: string;
   let dingedId: string;
   let quietId: string;
+  let prefixId: string;
+  let openPrefixId: string;
   let elsewhereId: string;
   let puzzleId: string;
   let tagId: string;
@@ -50,6 +58,14 @@ describe("TagHooks", function () {
     adderId = await createUser("adder@example.com", huntId, ["events"]);
     dingedId = await createUser("dinged@example.com", huntId, ["EVENTS"]);
     quietId = await createUser("quiet@example.com", huntId, ["cryptic"]);
+    // "event" only matches "events" for a user who opted into open matching
+    prefixId = await createUser("prefix@example.com", huntId, ["event"]);
+    openPrefixId = await createUser(
+      "open@example.com",
+      huntId,
+      ["event"],
+      true,
+    );
     elsewhereId = await createUser("elsewhere@example.com", Random.id(), [
       "events",
     ]);
@@ -76,10 +92,15 @@ describe("TagHooks", function () {
     const notifications = await PuzzleNotifications.find({}).fetchAsync();
     assert.sameMembers(
       notifications.map((n) => n.user),
-      [dingedId],
-      "Only the matching member who didn't add the tag should be notified",
+      [dingedId, openPrefixId],
+      "Only the matching members who didn't add the tag should be notified",
     );
-    const notification = notifications[0];
+    assert.notInclude(
+      notifications.map((n) => n.user),
+      prefixId,
+      "A dingword that is only a prefix of the tag doesn't match by default",
+    );
+    const notification = notifications.find((n) => n.user === dingedId);
     assert.isDefined(notification);
     assert.equal(notification.hunt, huntId);
     assert.equal(notification.puzzle, puzzleId);

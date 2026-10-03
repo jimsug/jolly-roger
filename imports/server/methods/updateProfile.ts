@@ -11,6 +11,7 @@ defineMethod(updateProfile, {
       displayName: String,
       phoneNumber: Match.Optional(String),
       dingwords: [String],
+      dingwordsOpenMatch: Match.Optional(Boolean),
       isOffsite: Match.Optional(Boolean),
       enrollmentToken: Match.Optional(String),
     });
@@ -22,6 +23,7 @@ defineMethod(updateProfile, {
     displayName,
     phoneNumber,
     dingwords,
+    dingwordsOpenMatch,
     isOffsite,
     enrollmentToken,
   }) {
@@ -42,6 +44,12 @@ defineMethod(updateProfile, {
         throw new Meteor.Error(
           400,
           "Cannot set hunting location while enrolling",
+        );
+      }
+      if (dingwordsOpenMatch !== undefined) {
+        throw new Meteor.Error(
+          400,
+          "Cannot set dingword matching mode while enrolling",
         );
       }
 
@@ -76,6 +84,7 @@ defineMethod(updateProfile, {
         displayName,
         phoneNumber,
         dingwords,
+        ...(dingwordsOpenMatch === undefined ? {} : { dingwordsOpenMatch }),
         ...(isOffsite === undefined ? {} : { isOffsite }),
       },
       $unset: unset,

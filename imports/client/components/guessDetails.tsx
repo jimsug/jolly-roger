@@ -69,7 +69,7 @@ const GuessDirection = ({
 
   const tooltip = (
     <Tooltip id={`${id}-tooltip`}>
-      <strong>{t("puzzle.answerOrGuess.direction", "Solve directon")}:</strong>{" "}
+      <strong>{t("puzzle.answerOrGuess.direction", "Solve direction")}:</strong>{" "}
       {formatGuessDirection(value)}
     </Tooltip>
   );

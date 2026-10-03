@@ -1,7 +1,8 @@
 import { DDP } from "meteor/ddp";
 import { Meteor } from "meteor/meteor";
-import { Mongo } from "meteor/mongo";
+import { Mongo, MongoInternals } from "meteor/mongo";
 import { NpmModuleMongodb } from "meteor/npm-mongo";
+import { Random } from "meteor/random";
 import { z } from "zod";
 import type {
   $ZodObjectConfig,
@@ -222,6 +223,46 @@ class Model<
       formatValidationError(error);
       throw error;
     }
+  }
+
+  // Inserts several documents in one round trip, filling in defaults and
+  // auto-populated fields the same way insertAsync does. Ids are generated
+  // here, since the raw driver would otherwise assign ObjectIds.
+  async insertManyAsync(
+    docs: InsertModelType<SchemaWithId<Schema, IdSchema>>[],
+  ): Promise<output<IdSchema>[]> {
+    if (docs.length === 0) {
+      return [];
+    }
+    const autoPopulated = this.autoPopulatedFields();
+    const finalDocs: any[] = [];
+    for (const doc of docs) {
+      finalDocs.push({
+        _id: Random.id(),
+        ...this.defaultFields(),
+        ...autoPopulated.insert,
+        ...autoPopulated.always,
+        ...doc,
+      });
+    }
+
+    // The raw driver skips Meteor's write bookkeeping, so do it here the way
+    // Meteor's own insert does: count the write against the current write
+    // fence (so a method's result waits for observers to see the rows) and
+    // tell the invalidation crossbar, which is how observers learn about
+    // writes when there is no oplog to tail.
+    const write =
+      MongoInternals.defaultRemoteCollectionDriver().mongo._maybeBeginWrite();
+    try {
+      await this.collection.rawCollection().insertMany(finalDocs);
+      await Meteor.refresh({ collection: this.name });
+    } catch (error) {
+      formatValidationError(error);
+      throw error;
+    } finally {
+      await write.committed();
+    }
+    return finalDocs.map((doc) => doc._id as output<IdSchema>);
   }
 
   autoPopulateModifier(

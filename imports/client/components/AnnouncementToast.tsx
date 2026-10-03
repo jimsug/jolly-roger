@@ -1,3 +1,5 @@
+import { faMicrophoneAlt } from "@fortawesome/free-solid-svg-icons/faMicrophoneAlt";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Toast from "react-bootstrap/Toast";
 import { useTranslation } from "react-i18next";
 import styled, { css } from "styled-components";
@@ -34,6 +36,7 @@ const AnnouncementToast = ({
   return (
     <StyledToast className={className} onClose={onClose}>
       <Toast.Header closeButton={!!onClose}>
+        <FontAwesomeIcon icon={faMicrophoneAlt} className="me-2" />
         <strong className="me-auto">
           {t("announcements.heading", "Announcement from {{name}}", {
             name: displayName,

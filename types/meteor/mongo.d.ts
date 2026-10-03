@@ -11,4 +11,13 @@ declare module "meteor/mongo" {
       _name: string;
     }
   }
+
+  namespace MongoInternals {
+    interface MongoConnection {
+      // Starts a write on the current DDP write fence, if there is one, the
+      // way every write made through a Mongo.Collection does. Call committed()
+      // once the write is done and observers have been told about it.
+      _maybeBeginWrite(): { committed(): Promise<void> | void };
+    }
+  }
 }

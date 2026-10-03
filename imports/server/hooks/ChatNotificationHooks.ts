@@ -2,6 +2,7 @@ import Flags from "../../Flags";
 import {
   normalizedForDingwordSearch,
   normalizedMessageDingsUserByDingword,
+  SUPPRESS_ALL_DINGWORDS,
 } from "../../lib/dingwordLogic";
 import ChatMessages from "../../lib/models/ChatMessages";
 import ChatNotifications from "../../lib/models/ChatNotifications";
@@ -26,8 +27,27 @@ const ChatNotificationHooks: Hookset = {
     const chatMessage = (await ChatMessages.findOneAsync(chatMessageId))!;
     const { sender } = chatMessage;
 
-    // Collect users to notify into a set, and then create notifications at the end.
-    const usersToNotify = new Set<string>();
+    // Collect users to notify, recording why (a mention, the dingwords that
+    // matched, or both), and create notifications at the end.
+    const usersToNotify = new Map<
+      string,
+      { mentioned: boolean; dingwords: Set<string> }
+    >();
+    const reasonFor = (userId: string) => {
+      let reason = usersToNotify.get(userId);
+      if (!reason) {
+        reason = { mentioned: false, dingwords: new Set() };
+        usersToNotify.set(userId, reason);
+      }
+      return reason;
+    };
+    const notifyMention = (userId: string) => {
+      reasonFor(userId).mentioned = true;
+    };
+    const notifyDingwords = (userId: string, words: string[]) => {
+      const reason = reasonFor(userId);
+      words.forEach((word) => reason.dingwords.add(word));
+    };
     if (!sender) {
       // Don't notify for system messages.
       return;
@@ -44,7 +64,7 @@ const ChatNotificationHooks: Hookset = {
             const mentionedUser =
               await MeteorUsers.findOneAsync(mentionedUserId);
             if (mentionedUser?.hunts?.includes(chatMessage.hunt)) {
-              usersToNotify.add(mentionedUserId);
+              notifyMention(mentionedUserId);
             }
           }
         }
@@ -66,12 +86,12 @@ const ChatNotificationHooks: Hookset = {
             );
             active.delete(sender); // don't notify self
             if (active.size > 0) {
-              active.forEach((userId) => usersToNotify.add(userId));
+              active.forEach((userId) => notifyMention(userId));
             } else {
               // No active operators; fall back to all operators
               allOperators.forEach((userId) => {
                 if (userId !== sender) {
-                  usersToNotify.add(userId);
+                  notifyMention(userId);
                 }
               });
             }
@@ -93,7 +113,12 @@ const ChatNotificationHooks: Hookset = {
           "dingwords.0": { $exists: true },
         },
         {
-          projection: { _id: 1, dingwords: 1 },
+          projection: {
+            _id: 1,
+            dingwords: 1,
+            dingwordsOpenMatch: 1,
+            suppressedDingwords: 1,
+          },
         },
       )) {
         // Avoid making users ding themselves.
@@ -101,19 +126,25 @@ const ChatNotificationHooks: Hookset = {
           continue;
         }
 
-        if (normalizedMessageDingsUserByDingword(normalizedText, u)) {
-          usersToNotify.add(u._id);
+        // Leave out the words the user has muted on this puzzle.
+        const suppressed =
+          u.suppressedDingwords?.[chatMessage.hunt]?.[chatMessage.puzzle] ?? [];
+        if (suppressed.includes(SUPPRESS_ALL_DINGWORDS)) {
+          continue;
+        }
+        const matches = normalizedMessageDingsUserByDingword(
+          normalizedText,
+          u,
+        ).filter((word) => !suppressed.includes(word));
+        if (matches.length > 0) {
+          notifyDingwords(u._id, matches);
         }
       }
     }
 
     // Create notifications for each user who should be dinged by this message.
-    const collected: string[] = [];
-    usersToNotify.forEach((userId) => {
-      collected.push(userId);
-    });
     await Promise.all(
-      collected.map(async (userId: string) => {
+      [...usersToNotify].map(async ([userId, { mentioned, dingwords }]) => {
         await ChatNotifications.insertAsync({
           user: userId,
           sender,
@@ -121,6 +152,11 @@ const ChatNotificationHooks: Hookset = {
           hunt: chatMessage.hunt,
           content: chatMessage.content,
           timestamp: chatMessage.timestamp,
+          message: chatMessage._id,
+          // Recorded so the toast can offer to mute the words that dinged,
+          // and so a mute knows which rows it may clear
+          ...(dingwords.size > 0 ? { dingwords: [...dingwords] } : {}),
+          mentioned,
         });
       }),
     );

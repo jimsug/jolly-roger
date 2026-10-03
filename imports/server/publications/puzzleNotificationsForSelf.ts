@@ -10,7 +10,6 @@ definePublication(puzzleNotificationsForSelf, {
     if (!this.userId) {
       return [];
     }
-
     await publishJoinedQuery(
       this,
       {

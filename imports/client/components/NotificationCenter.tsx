@@ -1,13 +1,22 @@
 import { Meteor } from "meteor/meteor";
-import { OAuth } from "meteor/oauth";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { ServiceConfiguration } from "meteor/service-configuration";
+import { faCog } from "@fortawesome/free-solid-svg-icons/faCog";
+import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, { useCallback, useEffect, useId, useState } from "react";
+import Alert from "react-bootstrap/Alert";
+import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
+import ButtonGroup from "react-bootstrap/ButtonGroup";
+import Dropdown from "react-bootstrap/Dropdown";
+import DropdownItem from "react-bootstrap/DropdownItem";
+import DropdownMenu from "react-bootstrap/DropdownMenu";
+import DropdownToggle from "react-bootstrap/DropdownToggle";
 import Form from "react-bootstrap/Form";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Toast from "react-bootstrap/Toast";
@@ -16,10 +25,11 @@ import Tooltip from "react-bootstrap/Tooltip";
 import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import ReactTextareaAutosize from "react-textarea-autosize";
-import styled from "styled-components";
+import styled, { css, useTheme } from "styled-components";
 import { useMediaQuery } from "usehooks-ts";
 import Flags from "../../Flags";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
+import { SUPPRESS_ALL_DINGWORDS } from "../../lib/dingwordLogic";
 import isAdmin from "../../lib/isAdmin";
 import { indexedById } from "../../lib/listUtils";
 import type { AnnouncementType } from "../../lib/models/Announcements";
@@ -45,24 +55,28 @@ import bookmarkNotificationsForSelf from "../../lib/publications/bookmarkNotific
 import pendingAnnouncementsForSelf from "../../lib/publications/pendingAnnouncementsForSelf";
 import pendingGuessesForSelf from "../../lib/publications/pendingGuessesForSelf";
 import puzzleNotificationsForSelf from "../../lib/publications/puzzleNotificationsForSelf";
+import bookmarkPuzzle from "../../methods/bookmarkPuzzle";
 import configureEnsureGoogleScript from "../../methods/configureEnsureGoogleScript";
+import dismissAllDingsForPuzzle from "../../methods/dismissAllDingsForPuzzle";
 import dismissBookmarkNotification from "../../methods/dismissBookmarkNotification";
 import dismissChatNotification from "../../methods/dismissChatNotification";
 import dismissPendingAnnouncement from "../../methods/dismissPendingAnnouncement";
 import dismissPuzzleNotification from "../../methods/dismissPuzzleNotification";
-import linkUserDiscordAccount from "../../methods/linkUserDiscordAccount";
 import setGuessState from "../../methods/setGuessState";
+import suppressDingwordsForPuzzle from "../../methods/suppressDingwordsForPuzzle";
 import { guessURL } from "../../model-helpers";
-import { requestDiscordCredential } from "../discord";
 import GoogleScriptInfo from "../GoogleScriptInfo";
-import { useOperatorActionsHidden } from "../hooks/persisted-state";
+import {
+  useOperatorActionsHidden,
+  useOperatorActionsHiddenForHunt,
+} from "../hooks/persisted-state";
 import { useBlockReasons } from "../hooks/useBlockUpdate";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import AnnouncementToast from "./AnnouncementToast";
 import ChatMessage from "./ChatMessage";
 import CopyToClipboardButton from "./CopyToClipboardButton";
-import { GuessConfidence, GuessDirection } from "./guessDetails";
+import { formatConfidence, formatGuessDirection } from "./guessDetails";
 import Markdown from "./Markdown";
 import PuzzleAnswer from "./PuzzleAnswer";
 import { MinimumDesktopWidth } from "./PuzzlePage";
@@ -99,10 +113,6 @@ const StyledNotificationRow = styled.div`
   }
 `;
 
-const StyledGuessDetails = styled.li`
-  display: contents;
-`;
-
 const StyledGuessHeader = styled.strong`
   overflow-wrap: break-word;
   overflow: hidden;
@@ -114,18 +124,148 @@ const StyledNotificationTimestamp = styled.small`
   text-align: end;
 `;
 
+// Long announcements and chat messages scroll inside the toast instead of
+// pushing the rest of the stack off the screen.
+const cappedToastBody = css`
+  max-height: 22rem;
+  overflow-y: auto;
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+`;
+
+const CappedToastBody = styled(Toast.Body)`
+  ${cappedToastBody}
+`;
+
+const CappedAnnouncementToast = styled(AnnouncementToast)`
+  .toast-body {
+    ${cappedToastBody}
+  }
+`;
+
+const StyledGuessAnswer = styled(StyledNotificationRow)`
+  max-height: 15rem;
+  overflow: hidden;
+`;
+
+// The cog menu in a toast header holding the settings for that kind of
+// notification.
+const ToastSettings = ({
+  id,
+  children,
+}: {
+  id: string;
+  children: React.ReactNode;
+}) => {
+  const theme = useTheme();
+  const { t } = useTranslation();
+  const label = t("notification.settings", "Notification settings");
+
+  return (
+    <Dropdown className="ms-2">
+      <DropdownToggle
+        variant={theme.basicMode}
+        size="sm"
+        id={id}
+        title={label}
+        aria-label={label}
+      >
+        <FontAwesomeIcon icon={faCog} />
+      </DropdownToggle>
+      <DropdownMenu align="end">{children}</DropdownMenu>
+    </Dropdown>
+  );
+};
+
+// A guess's direction and confidence sliders summarised as a word each.
+const GuessDetailBadges = ({ guess }: { guess: GuessType }) => {
+  const { t } = useTranslation();
+
+  const direction = guess.direction ?? 0;
+  let directionLabel: string;
+  let directionVariant: string;
+  if (direction > 5) {
+    directionLabel = t(
+      "notification.guessMessage.direction.forward",
+      "Forward",
+    );
+    directionVariant = "primary";
+  } else if (direction > 0) {
+    directionLabel = t(
+      "notification.guessMessage.direction.mostlyForward",
+      "Forward*",
+    );
+    directionVariant = "primary";
+  } else if (direction < -5) {
+    directionLabel = t("notification.guessMessage.direction.back", "Back");
+    directionVariant = "danger";
+  } else if (direction < 0) {
+    directionLabel = t(
+      "notification.guessMessage.direction.mostlyBack",
+      "Back*",
+    );
+    directionVariant = "danger";
+  } else {
+    directionLabel = t("notification.guessMessage.direction.mixed", "Mixed");
+    directionVariant = "secondary";
+  }
+
+  const confidence = guess.confidence ?? 50;
+  let confidenceLabel: string;
+  let confidenceVariant: string;
+  if (confidence > 50) {
+    confidenceLabel = t("notification.guessMessage.confidence.high", "High");
+    confidenceVariant = "success";
+  } else if (confidence < 50) {
+    confidenceLabel = t("notification.guessMessage.confidence.low", "Low");
+    confidenceVariant = "danger";
+  } else {
+    confidenceLabel = t(
+      "notification.guessMessage.confidence.medium",
+      "Medium",
+    );
+    confidenceVariant = "warning";
+  }
+
+  return (
+    <>
+      <StyledNotificationActionItem className="align-items-center">
+        <Badge
+          bg={directionVariant}
+          title={`${t("puzzle.answerOrGuess.direction", "Solve direction")}: ${formatGuessDirection(guess.direction)}`}
+        >
+          {directionLabel}
+        </Badge>
+      </StyledNotificationActionItem>
+      <StyledNotificationActionItem className="align-items-center">
+        <Badge
+          bg={confidenceVariant}
+          title={`${t("puzzle.answerOrGuess.confidence", "Confidence")}: ${formatConfidence(guess.confidence)}`}
+        >
+          {confidenceLabel}
+        </Badge>
+      </StyledNotificationActionItem>
+    </>
+  );
+};
+
+// Whether a corrected answer changes more than the spacing of the guess.
+const changesMoreThanSpacing = (correction: string, original: string) =>
+  correction.replaceAll(/\s/g, "").toUpperCase() !==
+  original.replaceAll(/\s/g, "").toUpperCase();
+
 const GuessMessage = React.memo(
   ({
     guess,
     puzzle,
     hunt,
-    guesser,
     onDismiss,
   }: {
     guess: GuessType;
     puzzle: PuzzleType;
     hunt: HuntType;
-    guesser: string;
     onDismiss: (guessId: string) => void;
   }) => {
     const [nextState, setNextState] = useState<GuessType["state"]>();
@@ -134,35 +274,84 @@ const GuessMessage = React.memo(
       useCallback((e) => {
         setAdditionalNotes(e.target.value);
       }, []);
+    const [correctedAnswer, setCorrectedAnswer] = useState("");
+    const onCorrectedAnswerChange: React.ChangeEventHandler<HTMLTextAreaElement> =
+      useCallback((e) => {
+        setCorrectedAnswer(e.target.value);
+      }, []);
+    // A correction that changes more than the spacing of the guess has to be
+    // submitted twice; this is the one waiting on its second submit.
+    const [confirmPendingFor, setConfirmPendingFor] = useState<string>();
 
     const markCorrect = useCallback(() => {
+      if (nextState === "correct") {
+        // Clicking Correct again backs out of the edit form.
+        setNextState(undefined);
+        setConfirmPendingFor(undefined);
+        return;
+      }
       setGuessState.call({ guessId: guess._id, state: "correct" });
-    }, [guess._id]);
+    }, [guess._id, nextState]);
 
     const markIncorrect = useCallback(() => {
       setGuessState.call({ guessId: guess._id, state: "incorrect" });
     }, [guess._id]);
 
+    const toggleStateCorrectWithEdit = useCallback(() => {
+      setConfirmPendingFor(undefined);
+      setNextState((state) => (state === "correct" ? undefined : "correct"));
+    }, []);
+
     const toggleStateIntermediate = useCallback(() => {
+      setConfirmPendingFor(undefined);
       setNextState((state) =>
         state === "intermediate" ? undefined : "intermediate",
       );
     }, []);
 
     const toggleStateRejected = useCallback(() => {
+      setConfirmPendingFor(undefined);
       setNextState((state) => (state === "rejected" ? undefined : "rejected"));
     }, []);
 
     const submitStageTwo = useCallback(() => {
       if (!nextState) return;
 
+      if (nextState === "correct") {
+        const correction = correctedAnswer.trim();
+        if (correction === "" || correction.toUpperCase() === guess.guess) {
+          setGuessState.call({ guessId: guess._id, state: "correct" });
+          return;
+        }
+        if (
+          changesMoreThanSpacing(correction, guess.guess) &&
+          confirmPendingFor !== correction
+        ) {
+          setConfirmPendingFor(correction);
+          return;
+        }
+        setGuessState.call({
+          guessId: guess._id,
+          state: "correct",
+          correctAnswer: correction,
+        });
+        return;
+      }
+
       setGuessState.call({
         guessId: guess._id,
         state: nextState,
         additionalNotes: additionalNotes === "" ? undefined : additionalNotes,
       });
-    }, [guess._id, nextState, additionalNotes]);
-    const onAdditionalNotesKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> =
+    }, [
+      guess._id,
+      guess.guess,
+      nextState,
+      additionalNotes,
+      correctedAnswer,
+      confirmPendingFor,
+    ]);
+    const onStageTwoKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> =
       useCallback(
         (e) => {
           if (e.key === "Enter" && !e.shiftKey) {
@@ -173,6 +362,14 @@ const GuessMessage = React.memo(
         },
         [submitStageTwo],
       );
+    // The stage-two forms have no submit button, so the browser would submit
+    // them (a full page load) on Enter in a text input
+    const onStageTwoSubmit = useCallback(
+      (e: React.SubmitEvent<HTMLFormElement>) => {
+        e.preventDefault();
+      },
+      [],
+    );
 
     const dismissGuess = useCallback(() => {
       onDismiss(guess._id);
@@ -181,6 +378,13 @@ const GuessMessage = React.memo(
     const idPrefix = useId();
 
     const { t, i18n } = useTranslation();
+
+    const [, setOperatorActionsHidden] = useOperatorActionsHiddenForHunt(
+      guess.hunt,
+    );
+    const hideGuessNotifications = useCallback(() => {
+      setOperatorActionsHidden(true);
+    }, [setOperatorActionsHidden]);
 
     const extLinkTooltip = (
       <Tooltip id={`${idPrefix}-ext-link-tooltip`}>
@@ -211,13 +415,95 @@ const GuessMessage = React.memo(
         "Include any additional information on why this guess was rejected:",
       ),
     };
+    const submittedStageTwoLabels: Partial<Record<GuessType["state"], string>> =
+      {
+        intermediate: t(
+          "notification.guessMessage.submittedIntermediate",
+          "Additional instructions passed on to the solver:",
+        ),
+        rejected: t(
+          "notification.guessMessage.submittedRejected",
+          "Additional information on why this guess was rejected:",
+        ),
+      };
 
     let stageTwoSection;
     switch (nextState) {
+      case "correct":
+        stageTwoSection = (
+          <Form onSubmit={onStageTwoSubmit}>
+            <StyledNotificationRow>
+              {t(
+                "notification.guessMessage.correctWithEditInstruction",
+                "Enter the corrected answer to this puzzle as provided by game control (or just submit to mark it correct).",
+              )}
+            </StyledNotificationRow>
+            {confirmPendingFor !== undefined && (
+              <Alert variant="warning" transition={false}>
+                <strong>
+                  {t(
+                    "notification.guessMessage.confirmEditHeading",
+                    "Are you sure?",
+                  )}
+                </strong>{" "}
+                {t(
+                  "notification.guessMessage.confirmEditBody",
+                  "You are changing more than just the spacing of this answer. Check it and submit it again to confirm.",
+                )}
+              </Alert>
+            )}
+            <StyledNotificationRow>
+              <Form.Group controlId={`${idPrefix}-original-answer`}>
+                <Form.Label>
+                  {t(
+                    "notification.guessMessage.originalAnswer",
+                    "Original answer:",
+                  )}
+                </Form.Label>
+                <Form.Control type="text" readOnly value={guess.guess} />
+              </Form.Group>
+            </StyledNotificationRow>
+            <StyledNotificationRow>
+              <Form.Group controlId={`${idPrefix}-corrected-answer`}>
+                <Form.Label>
+                  {t(
+                    "notification.guessMessage.correctedAnswer",
+                    "Your correction:",
+                  )}
+                </Form.Label>
+                <StyledNotificationRow>
+                  <ReactTextareaAutosize
+                    id={`${idPrefix}-corrected-answer`}
+                    minRows={1}
+                    className="form-control"
+                    autoFocus
+                    disabled={disableForms}
+                    value={correctedAnswer}
+                    onChange={onCorrectedAnswerChange}
+                    onKeyDown={onStageTwoKeyDown}
+                  />
+                </StyledNotificationRow>
+              </Form.Group>
+            </StyledNotificationRow>
+            <StyledNotificationActionBar>
+              <StyledNotificationActionItem>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  disabled={disableForms}
+                  onClick={submitStageTwo}
+                >
+                  {t("notification.guessMessage.save", "Save (or press Enter)")}
+                </Button>
+              </StyledNotificationActionItem>
+            </StyledNotificationActionBar>
+          </Form>
+        );
+        break;
       case "intermediate":
       case "rejected":
         stageTwoSection = (
-          <Form>
+          <Form onSubmit={onStageTwoSubmit}>
             <StyledNotificationRow>
               <Form.Group controlId={`${idPrefix}-additional-notes`}>
                 <Form.Label>{stageTwoLabels[nextState]}</Form.Label>
@@ -230,7 +516,7 @@ const GuessMessage = React.memo(
                     disabled={disableForms}
                     value={additionalNotes}
                     onChange={onAdditionalNotesChange}
-                    onKeyDown={onAdditionalNotesKeyDown}
+                    onKeyDown={onStageTwoKeyDown}
                   />
                 </StyledNotificationRow>
               </Form.Group>
@@ -258,12 +544,13 @@ const GuessMessage = React.memo(
     return (
       <Toast onClose={dismissGuess}>
         <Toast.Header>
+          <FontAwesomeIcon icon={faKey} className="me-2" />
           <StyledGuessHeader>
             <Trans
-              i18nKey="notification.guessMessage.header"
+              i18nKey="notification.guessMessage.puzzleHeader"
               t={t}
-              defaults="Guess for <puzzleLink /> from <guesser />"
-              values={{ puzzle: puzzle.title, puzzleTitle: puzzle.title }}
+              defaults="Guess for <puzzleLink />"
+              values={{ puzzle: puzzle.title }}
               components={{
                 puzzleLink: (
                   <a
@@ -272,15 +559,6 @@ const GuessMessage = React.memo(
                     rel="noopener noreferrer"
                   >
                     {puzzle.title}
-                  </a>
-                ),
-                guesser: (
-                  <a
-                    href={`/users/${guess.createdBy}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {guesser}
                   </a>
                 ),
               }}
@@ -298,11 +576,19 @@ const GuessMessage = React.memo(
               endTime={guess.updatedAt.getTime() + LINGER_PERIOD}
             />
           )}
+          <ToastSettings id={`${idPrefix}-settings`}>
+            <DropdownItem onClick={hideGuessNotifications}>
+              {t(
+                "notification.guessMessage.disableForHunt",
+                "Disable guess notifications for this hunt",
+              )}
+            </DropdownItem>
+          </ToastSettings>
         </Toast.Header>
         <Toast.Body>
-          <StyledNotificationRow>
+          <StyledGuessAnswer>
             <PuzzleAnswer answer={guess.guess} breakable />
-          </StyledNotificationRow>
+          </StyledGuessAnswer>
           <StyledNotificationActionBar>
             <StyledNotificationActionItem>
               <CopyToClipboardButton
@@ -328,28 +614,38 @@ const GuessMessage = React.memo(
                 </Button>
               </OverlayTrigger>
             </StyledNotificationActionItem>
-            <StyledGuessDetails>
-              <GuessDirection
-                id={`${idPrefix}-direction`}
-                value={guess.direction}
-              />
-              <GuessConfidence
-                id={`${idPrefix}-confidence`}
-                value={guess.confidence}
-              />
-            </StyledGuessDetails>
+            <GuessDetailBadges guess={guess} />
           </StyledNotificationActionBar>
           <StyledNotificationActionBar>
             <StyledNotificationActionItem $grow>
-              <Button
-                variant={correctButtonVariant}
-                size="sm"
-                className="flex-grow-1"
-                disabled={disableForms}
-                onClick={markCorrect}
-              >
-                {t("notification.guessMessage.correct", "Correct")}
-              </Button>
+              <Dropdown as={ButtonGroup} className="flex-grow-1">
+                <Button
+                  variant={correctButtonVariant}
+                  size="sm"
+                  className="flex-grow-1"
+                  disabled={disableForms}
+                  active={nextState === "correct"}
+                  onClick={markCorrect}
+                >
+                  {t("notification.guessMessage.correct", "Correct")}
+                </Button>
+                <DropdownToggle
+                  split
+                  variant={correctButtonVariant}
+                  size="sm"
+                  disabled={disableForms}
+                  id={`${idPrefix}-correct-options`}
+                />
+                <DropdownMenu align="end">
+                  <DropdownItem onClick={toggleStateCorrectWithEdit}>
+                    {t(
+                      "notification.guessMessage.correctWithEdit",
+                      "Correct with edit",
+                    )}
+                    …
+                  </DropdownItem>
+                </DropdownMenu>
+              </Dropdown>
             </StyledNotificationActionItem>
             <StyledNotificationActionItem $grow>
               <Button
@@ -390,98 +686,16 @@ const GuessMessage = React.memo(
           {guess.state !== "pending" && guess.additionalNotes && (
             <>
               <div>
-                {t(
-                  "notification.guessMessage.additionalNotes",
-                  "Additional notes",
-                )}
-                :
+                {submittedStageTwoLabels[guess.state] ??
+                  `${t(
+                    "notification.guessMessage.additionalNotes",
+                    "Additional notes",
+                  )}:`}
               </div>
               <Markdown text={guess.additionalNotes} />
             </>
           )}
           {guess.state === "pending" && stageTwoSection}
-        </Toast.Body>
-      </Toast>
-    );
-  },
-);
-
-enum DiscordMessageStatus {
-  IDLE = "idle",
-  LINKING = "linking",
-  ERROR = "error",
-  SUCCESS = "success",
-}
-
-type DiscordMessageState = {
-  status: DiscordMessageStatus;
-  error?: string;
-};
-
-const DiscordMessage = React.memo(
-  ({ onDismiss }: { onDismiss: () => void }) => {
-    const [state, setState] = useState<DiscordMessageState>({
-      status: DiscordMessageStatus.IDLE,
-    });
-
-    const requestComplete = useCallback((token: string) => {
-      const secret = OAuth._retrieveCredentialSecret(token);
-      if (!secret) {
-        setState({ status: DiscordMessageStatus.IDLE });
-        return;
-      }
-
-      linkUserDiscordAccount.call({ key: token, secret }, (error) => {
-        if (error) {
-          setState({
-            status: DiscordMessageStatus.ERROR,
-            error: error.message,
-          });
-        } else {
-          setState({ status: DiscordMessageStatus.IDLE });
-        }
-      });
-    }, []);
-
-    const initiateOauthFlow = useCallback(() => {
-      setState({ status: DiscordMessageStatus.LINKING });
-      requestDiscordCredential(requestComplete);
-    }, [requestComplete]);
-
-    const { t } = useTranslation();
-
-    const msg = t(
-      "notification.discord.message",
-      "It looks like you're not in our Discord server, which Jolly Roger manages access to.  Get added:",
-    );
-    const actions = [
-      <StyledNotificationActionItem key="invite">
-        <Button
-          variant="outline-secondary"
-          disabled={
-            !(
-              state.status === DiscordMessageStatus.IDLE ||
-              state.status === DiscordMessageStatus.ERROR
-            )
-          }
-          onClick={initiateOauthFlow}
-        >
-          {t("notification.discord.addMe", "Add me")}
-        </Button>
-      </StyledNotificationActionItem>,
-    ];
-
-    return (
-      <Toast onClose={onDismiss}>
-        <Toast.Header>
-          <strong className="me-auto">
-            {t("notification.discord.header", "Discord account not linked")}
-          </strong>
-        </Toast.Header>
-        <Toast.Body>
-          <StyledNotificationRow>{msg}</StyledNotificationRow>
-          <StyledNotificationActionBar>{actions}</StyledNotificationActionBar>
-          {state.status === DiscordMessageStatus.ERROR ? state.error! : null}
         </Toast.Body>
       </Toast>
     );
@@ -509,7 +723,7 @@ const AnnouncementMessage = React.memo(
     }
 
     return (
-      <AnnouncementToast
+      <CappedAnnouncementToast
         message={announcement.message}
         createdAt={announcement.createdAt}
         displayName={createdByDisplayName}
@@ -609,6 +823,9 @@ const ProfileMissingMessage = ({ onDismiss }: { onDismiss: () => void }) => {
   );
 };
 
+// How many matched dingwords the chat toast offers to mute individually.
+const MAX_MUTE_ITEMS = 3;
+
 const ChatNotificationMessage = ({
   cn,
   hunt,
@@ -630,34 +847,101 @@ const ChatNotificationMessage = ({
     [id],
   );
 
-  const senderDisplayName = displayNames.get(cn.sender) ?? "???";
-
   const { t, i18n } = useTranslation();
+
+  const suppressed = useTracker(
+    () => Meteor.user()?.suppressedDingwords?.[cn.hunt]?.[cn.puzzle] ?? [],
+    [cn.hunt, cn.puzzle],
+  );
+  const allMuted = suppressed.includes(SUPPRESS_ALL_DINGWORDS);
+  const muteableWords = (cn.dingwords ?? [])
+    .filter((word) => !suppressed.includes(word))
+    .slice(0, MAX_MUTE_ITEMS);
+
+  // The newest notification shown for this puzzle, by the server's clock:
+  // everything up to it has been seen, while a ding arriving mid-request
+  // stays. (A client clock behind the server's would otherwise leave the
+  // most recent toasts in place.)
+  const newestSeen = useCallback(() => {
+    const newest = ChatNotifications.findOne(
+      { hunt: cn.hunt, puzzle: cn.puzzle },
+      { sort: { createdAt: -1 } },
+    );
+    return newest?.createdAt ?? cn.createdAt;
+  }, [cn.hunt, cn.puzzle, cn.createdAt]);
+
+  const dismissAllForPuzzle = useCallback(() => {
+    dismissAllDingsForPuzzle.call({
+      hunt: cn.hunt,
+      puzzle: cn.puzzle,
+      dismissUntil: newestSeen(),
+    });
+  }, [cn.hunt, cn.puzzle, newestSeen]);
+
+  const muteForPuzzle = useCallback(
+    (dingword?: string) => {
+      suppressDingwordsForPuzzle.call({
+        hunt: cn.hunt,
+        puzzle: cn.puzzle,
+        // A present-but-undefined key fails the server's check()
+        ...(dingword === undefined ? {} : { dingword }),
+        dismissUntil: newestSeen(),
+      });
+    },
+    [cn.hunt, cn.puzzle, newestSeen],
+  );
+
+  const messageLink = `/hunts/${hunt._id}/puzzles/${puzzle._id}${
+    cn.message ? `#msg=${cn.message}` : ""
+  }`;
 
   return (
     <Toast onClose={dismiss}>
       <Toast.Header>
+        <FontAwesomeIcon icon={faComment} className="me-2" />
         <strong className="me-auto">
-          <Trans
-            i18nKey="notification.chatMessage"
-            t={t}
-            defaults="{{name}} on <puzzleLink>{{puzzleTitle}}</puzzleLink>"
-            values={{ name: senderDisplayName, puzzleTitle: puzzle.title }}
-            components={{
-              puzzleLink: (
-                <Link
-                  to={`/hunts/${hunt._id}/puzzles/${puzzle._id}`}
-                  onClick={dismiss}
-                />
-              ),
-            }}
-          />
+          <Link to={messageLink} onClick={dismiss}>
+            {puzzle.title}
+          </Link>
         </strong>
         <StyledNotificationTimestamp>
           {calendarTimeFormat(cn.createdAt, t, i18n.language)}
         </StyledNotificationTimestamp>
+        <ToastSettings id={`chat-settings-${id}`}>
+          <DropdownItem onClick={dismissAllForPuzzle}>
+            {t(
+              "notification.chat.dismissAllForPuzzle",
+              "Dismiss all for this puzzle",
+            )}
+          </DropdownItem>
+          <DropdownItem as={Link} to="/users/me">
+            {t("notification.chat.editDingwords", "Edit dingwords")}
+          </DropdownItem>
+          {!allMuted && (
+            <>
+              <Dropdown.Divider />
+              <DropdownItem onClick={() => muteForPuzzle()}>
+                <Trans
+                  i18nKey="notification.chat.muteAllForPuzzle"
+                  t={t}
+                  defaults="Mute <strong>all</strong> dingwords for this puzzle"
+                  components={{ strong: <strong /> }}
+                />
+              </DropdownItem>
+              {muteableWords.map((word) => (
+                <DropdownItem key={word} onClick={() => muteForPuzzle(word)}>
+                  {t(
+                    "notification.chat.muteWordForPuzzle",
+                    "Mute “{{word}}” for this puzzle",
+                    { word, interpolation: { escapeValue: false } },
+                  )}
+                </DropdownItem>
+              ))}
+            </>
+          )}
+        </ToastSettings>
       </Toast.Header>
-      <Toast.Body>
+      <CappedToastBody>
         <div>
           <ChatMessage
             message={cn.content}
@@ -666,7 +950,7 @@ const ChatNotificationMessage = ({
             roles={roles}
           />
         </div>
-      </Toast.Body>
+      </CappedToastBody>
     </Toast>
   );
 };
@@ -685,6 +969,16 @@ const BookmarkNotificationMessage = ({
     () => dismissBookmarkNotification.call({ bookmarkNotificationId: id }),
     [id],
   );
+
+  const puzzleId = puzzle._id;
+  const unbookmark = useCallback(() => {
+    bookmarkPuzzle.call({ puzzleId, bookmark: false }, (error) => {
+      // The toast is about a bookmark that no longer exists
+      if (!error) {
+        dismiss();
+      }
+    });
+  }, [puzzleId, dismiss]);
 
   const { t } = useTranslation();
 
@@ -716,8 +1010,13 @@ const BookmarkNotificationMessage = ({
           </Link>{" "}
           {describeState}
         </strong>
+        <ToastSettings id={`bookmark-settings-${id}`}>
+          <DropdownItem onClick={unbookmark}>
+            {t("notification.bookmark.unbookmark", "Unbookmark this puzzle")}
+          </DropdownItem>
+        </ToastSettings>
       </Toast.Header>
-      <Toast.Body>
+      <CappedToastBody>
         <div>
           <Trans
             i18nKey="notification.bookmark.message"
@@ -732,7 +1031,7 @@ const BookmarkNotificationMessage = ({
             }}
           />
         </div>
-      </Toast.Body>
+      </CappedToastBody>
     </Toast>
   );
 };
@@ -743,6 +1042,7 @@ const EPHEMERAL_LINGER_PERIOD = 5000;
 // Keep the body legible on the Bootstrap background variants, which are
 // light in both themes.
 const StyledPuzzleNotificationBody = styled(Toast.Body)`
+  ${cappedToastBody}
   color: black;
 `;
 
@@ -1020,19 +1320,7 @@ const NotificationCenter = () => {
     chatNotificationsLoading() ||
     puzzleNotificationsLoading();
 
-  const discordEnabledOnServer = useTracker(
-    () =>
-      !!ServiceConfiguration.configurations.findOne({ service: "discord" }) &&
-      !Flags.active("disable.discord"),
-    [],
-  );
-  const { hasOwnProfile, discordConfiguredByUser } = useTracker(() => {
-    const user = Meteor.user()!;
-    return {
-      hasOwnProfile: !!user.displayName,
-      discordConfiguredByUser: !!user.discordAccount,
-    };
-  }, []);
+  const hasOwnProfile = useTracker(() => !!Meteor.user()?.displayName, []);
 
   const selfUserId = useTracker(() => Meteor.userId()!, []);
   // Lookup tables to support guesses/pendingAnnouncements/chatNotifications/bookmarkNotifications
@@ -1133,7 +1421,6 @@ const NotificationCenter = () => {
 
   const [hideUpdateGoogleScriptMessage, setHideUpdateGoogleScriptMessage] =
     useState(false);
-  const [hideDiscordSetupMessage, setHideDiscordSetupMessage] = useState(false);
   const [hideProfileSetupMessage, setHideProfileSetupMessage] = useState(false);
   const [dismissedGuesses, setDismissedGuesses] = useState<
     Record<string, Date>
@@ -1141,10 +1428,6 @@ const NotificationCenter = () => {
 
   const onHideUpdateGoogleScriptMessage = useCallback(() => {
     setHideUpdateGoogleScriptMessage(true);
-  }, []);
-
-  const onHideDiscordSetupMessage = useCallback(() => {
-    setHideDiscordSetupMessage(true);
   }, []);
 
   const onHideProfileSetupMessage = useCallback(() => {
@@ -1194,7 +1477,12 @@ const NotificationCenter = () => {
   const messages = [] as React.JSX.Element[];
 
   if (pendingUpdate && blockReasons.length > 0) {
-    messages.push(<ReloadRequiredNotification reasons={blockReasons} />);
+    messages.push(
+      <ReloadRequiredNotification
+        key="reloadRequired"
+        reasons={blockReasons}
+      />,
+    );
   }
 
   if (showUpdateGoogleScript && !hideUpdateGoogleScriptMessage) {
@@ -1212,16 +1500,6 @@ const NotificationCenter = () => {
         key="profile"
         onDismiss={onHideProfileSetupMessage}
       />,
-    );
-  }
-
-  if (
-    discordEnabledOnServer &&
-    !discordConfiguredByUser &&
-    !hideDiscordSetupMessage
-  ) {
-    messages.push(
-      <DiscordMessage key="discord" onDismiss={onHideDiscordSetupMessage} />,
     );
   }
 
@@ -1248,7 +1526,6 @@ const NotificationCenter = () => {
         guess={g}
         puzzle={puzzle}
         hunt={hunt}
-        guesser={displayNames.get(g.createdBy) ?? "???"}
         onDismiss={dismissGuess}
       />,
     );
@@ -1319,7 +1596,9 @@ const NotificationCenter = () => {
         position="bottom-end"
         className="p-3 position-fixed"
       >
-        {messages}
+        {/* Newest first, so the toasts to act on sit furthest from the ones
+            that pop up underneath them */}
+        {messages.toReversed()}
       </StyledToastContainer>
     </>
   );

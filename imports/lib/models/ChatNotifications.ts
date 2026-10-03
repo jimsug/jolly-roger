@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { foreignKey } from "../typedModel/customTypes";
+import { foreignKey, nonEmptyString } from "../typedModel/customTypes";
 import type { ModelType } from "../typedModel/Model";
 import SoftDeletedModel from "../typedModel/SoftDeletedModel";
 import withCommon from "../typedModel/withCommon";
@@ -23,6 +23,16 @@ const ChatNotification = withCommon(
     content: ChatMessageContent,
     // The date this message was sent.  Used for ordering chats in the log.
     timestamp: z.date(),
+    // The chat message that triggered this notification, so the toast can
+    // link straight to it. Rows written before this field existed lack it.
+    message: foreignKey.optional(),
+    // The user's dingwords that matched the message, so the toast can offer
+    // to mute them. Absent when only an @-mention or role mention dinged.
+    dingwords: nonEmptyString.array().optional(),
+    // Whether an @-mention or role mention dinged the user (possibly as well
+    // as dingwords), which a dingword mute must leave alone. Rows written
+    // before this field existed lack it.
+    mentioned: z.boolean().optional(),
   }),
 );
 

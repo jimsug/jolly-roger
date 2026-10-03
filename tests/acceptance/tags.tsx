@@ -344,9 +344,12 @@ if (Meteor.isClient) {
           puzzleId: puzzleIds[0]!,
           tagName: "Group:Events",
         });
+        // Creating the puzzle also sent everyone an ephemeral "new puzzle"
+        // notification, so only count the tag dings
+        const tagDings = { ephemeral: { $ne: true } };
         const adderSub = await typedSubscribe.async(puzzleNotificationsForSelf);
         assert.equal(
-          await PuzzleNotifications.find().countAsync(),
+          await PuzzleNotifications.find(tagDings).countAsync(),
           0,
           "Whoever adds the tag isn't notified",
         );
@@ -355,7 +358,8 @@ if (Meteor.isClient) {
         await promisify(Meteor.logout)();
         await login(HUNTER_EMAIL, HUNTER_PASSWORD);
         const sub = await typedSubscribe.async(puzzleNotificationsForSelf);
-        const notifications = await PuzzleNotifications.find().fetchAsync();
+        const notifications =
+          await PuzzleNotifications.find(tagDings).fetchAsync();
         assert.lengthOf(notifications, 1, "Exactly one ding for one tagging");
         const notification = notifications[0];
         assert.isDefined(notification);
@@ -370,7 +374,7 @@ if (Meteor.isClient) {
         await dismissPuzzleNotification.callPromise({
           puzzleNotificationId: notification._id,
         });
-        assert.equal(await PuzzleNotifications.find().countAsync(), 0);
+        assert.equal(await PuzzleNotifications.find(tagDings).countAsync(), 0);
         sub.stop();
       });
     });

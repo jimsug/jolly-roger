@@ -1,3 +1,4 @@
+import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import { z } from "zod";
@@ -19,6 +20,7 @@ import Model, {
 } from "../../../../imports/lib/typedModel/Model";
 import attachSchema from "../../../../imports/server/attachSchema";
 import type AssertTypesEqual from "../../../lib/AssertTypesEqual";
+import withWriteFence from "../../../lib/withWriteFence";
 
 const testModels: Set<Model<any>> = new Set();
 
@@ -108,6 +110,73 @@ describe("Model", function () {
         assert.instanceOf(record.createdAt, Date);
         assert.instanceOf(record.updatedAt, Date);
         assert.hasAllKeys(record, ["_id", "createdAt", "updatedAt"]);
+      });
+
+      it("fills in the same fields for a bulk insert", async function () {
+        const initialDate = new Date();
+        setClock(() => initialDate);
+
+        const ids = await model.insertManyAsync([{}, {}]);
+        assert.lengthOf(ids, 2);
+        assert.notEqual(ids[0], ids[1]);
+        for (const id of ids) {
+          const record = (await model.findOneAsync(id))!;
+          assert.isOk(record);
+          assert.hasAllKeys(record, ["_id", "createdAt", "updatedAt"]);
+          assert.deepEqual(record.createdAt, initialDate);
+          assert.deepEqual(record.updatedAt, initialDate);
+        }
+
+        assert.deepEqual(await model.insertManyAsync([]), []);
+      });
+
+      it("tells the invalidation crossbar about a bulk insert", async function () {
+        // The raw driver write bypasses Meteor, so observers without an
+        // oplog only learn of the rows through this notification
+        const notifications: { collection: string }[] = [];
+        const originalRefresh = Meteor.refresh;
+        Meteor.refresh = async (notification) => {
+          notifications.push(notification);
+          await originalRefresh(notification);
+        };
+        try {
+          await model.insertManyAsync([{}, {}]);
+        } finally {
+          Meteor.refresh = originalRefresh;
+        }
+        assert.deepEqual(notifications, [{ collection: model.name }]);
+
+        notifications.length = 0;
+        Meteor.refresh = async (notification) => {
+          notifications.push(notification);
+          await originalRefresh(notification);
+        };
+        try {
+          await model.insertManyAsync([]);
+        } finally {
+          Meteor.refresh = originalRefresh;
+        }
+        assert.isEmpty(notifications, "Nothing was written");
+      });
+
+      it("lets a write fence wait for observers to see a bulk insert", async function () {
+        // The crossbar notification is what makes an observer register its
+        // catch-up with the fence, so once the fence has fired the observer
+        // has processed the rows
+        const seen: string[] = [];
+        const handle = await model
+          .find({})
+          .observeChangesAsync({ added: (id) => seen.push(id) });
+        try {
+          seen.length = 0;
+          let ids: string[] = [];
+          await withWriteFence(async () => {
+            ids = await model.insertManyAsync([{}, {}]);
+          });
+          assert.includeMembers(seen, ids);
+        } finally {
+          handle.stop();
+        }
       });
 
       it("only updates updatedAt on update", async function () {
@@ -200,22 +269,17 @@ describe("Model", function () {
   describe("indexes", function () {
     const schema = z.object({
       updatedAt: updatedTimestamp,
+      ephemeral: z.boolean().optional(),
     });
     let model: Model<typeof schema>;
     this.beforeAll(async function () {
       model = await createTestModel(schema);
     });
 
-    it("carries a TTL through to the index the reconciler creates", async function () {
-      model.addIndex({ updatedAt: 1 }, { expireAfterSeconds: 60 });
-      const [spec] = model.indexes;
-      assert.isDefined(spec);
-      assert.equal(spec.name, "updatedAt_1");
-      assert.deepEqual(spec.options, [["expireAfterSeconds", 60]]);
-
-      // Create it the way imports/server/indexes.ts does, then read it back
-      // the way the reconciler does: the two must agree, or the index would
-      // be dropped and recreated on every boot.
+    // Create the index the way imports/server/indexes.ts does, then read it
+    // back the way the reconciler does: the two must agree, or the index
+    // would be dropped and recreated on every boot.
+    const roundTrips = async (spec: (typeof model.indexes)[number]) => {
       const collection = model.collection.rawCollection();
       await collection.createIndexes([
         {
@@ -236,6 +300,31 @@ describe("Model", function () {
         ]),
         spec.stringified,
       );
+    };
+
+    it("carries a TTL through to the index the reconciler creates", async function () {
+      model.addIndex({ updatedAt: 1 }, { expireAfterSeconds: 60 });
+      const spec = model.indexes.at(-1)!;
+      assert.equal(spec.name, "updatedAt_1");
+      assert.deepEqual(spec.options, [["expireAfterSeconds", 60]]);
+      await roundTrips(spec);
+    });
+
+    it("carries a partial TTL through as well", async function () {
+      await model.collection.rawCollection().dropIndex("updatedAt_1");
+      model.addIndex(
+        { updatedAt: 1 },
+        {
+          expireAfterSeconds: 30,
+          partialFilterExpression: { ephemeral: true },
+        },
+      );
+      const spec = model.indexes.at(-1)!;
+      assert.deepEqual(spec.options, [
+        ["expireAfterSeconds", 30],
+        ["partialFilterExpression", { ephemeral: true }],
+      ]);
+      await roundTrips(spec);
     });
   });
 

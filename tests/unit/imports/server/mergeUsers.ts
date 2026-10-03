@@ -95,6 +95,71 @@ describe("user merge", function () {
     assert.isDefined(op.snapshot);
   });
 
+  it("takes the source's dingword matching mode only when the target has none", async function () {
+    await resetDatabase("merge dingwordsOpenMatch");
+
+    const sourceId = await createUser("source@example.com", "Source");
+    const targetId = await createUser("target@example.com", "Target");
+    await MeteorUsers.updateAsync(sourceId, {
+      $set: { dingwordsOpenMatch: true },
+    });
+
+    await runMergeJob(sourceId, targetId);
+    assert.isTrue(
+      (await MeteorUsers.findOneAsync(targetId))?.dingwordsOpenMatch,
+      "An unset target mode is filled from the source",
+    );
+
+    const sourceId2 = await createUser("source2@example.com", "Source 2");
+    await MeteorUsers.updateAsync(sourceId2, {
+      $set: { dingwordsOpenMatch: false },
+    });
+    await runMergeJob(sourceId2, targetId);
+    assert.isTrue(
+      (await MeteorUsers.findOneAsync(targetId))?.dingwordsOpenMatch,
+      "A target mode that is set wins",
+    );
+  });
+
+  it("unions per-puzzle dingword mutes", async function () {
+    await resetDatabase("merge suppressedDingwords");
+
+    const sourceId = await createUser("source@example.com", "Source");
+    const targetId = await createUser("target@example.com", "Target");
+    const hunt1 = Random.id();
+    const hunt2 = Random.id();
+    const puzzle1 = Random.id();
+    const puzzle2 = Random.id();
+    const puzzle3 = Random.id();
+    await MeteorUsers.updateAsync(sourceId, {
+      $set: {
+        suppressedDingwords: {
+          [hunt1]: { [puzzle1]: ["foo", "bar"], [puzzle2]: ["__ALL__"] },
+        },
+      },
+    });
+    await MeteorUsers.updateAsync(targetId, {
+      $set: {
+        suppressedDingwords: {
+          [hunt1]: { [puzzle1]: ["bar", "baz"] },
+          [hunt2]: { [puzzle3]: ["qux"] },
+        },
+      },
+    });
+
+    await runMergeJob(sourceId, targetId);
+
+    const suppressed = (await MeteorUsers.findOneAsync(targetId))
+      ?.suppressedDingwords;
+    assert.sameMembers(suppressed?.[hunt1]?.[puzzle1] ?? [], [
+      "foo",
+      "bar",
+      "baz",
+    ]);
+    assert.deepEqual(suppressed?.[hunt1]?.[puzzle2], ["__ALL__"]);
+    assert.deepEqual(suppressed?.[hunt2]?.[puzzle3], ["qux"]);
+  });
+
   it("merges emails from source to target", async function () {
     await resetDatabase("merge emails");
 

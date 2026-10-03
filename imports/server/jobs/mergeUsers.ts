@@ -655,6 +655,29 @@ defineJob(mergeUsers, {
       });
     }
 
+    // Dingword matching mode: set if not present on target.
+    if (source.dingwordsOpenMatch !== undefined) {
+      await MeteorUsers.updateAsync(
+        { _id: targetUser, dingwordsOpenMatch: { $exists: false } },
+        { $set: { dingwordsOpenMatch: source.dingwordsOpenMatch } },
+      );
+    }
+
+    // Per-puzzle dingword mutes: union per hunt and puzzle.
+    for (const [huntId, puzzles] of Object.entries(
+      source.suppressedDingwords ?? {},
+    )) {
+      for (const [puzzleId, words] of Object.entries(puzzles)) {
+        if (words.length > 0) {
+          await MeteorUsers.updateAsync(targetUser, {
+            $addToSet: {
+              [`suppressedDingwords.${huntId}.${puzzleId}`]: { $each: words },
+            },
+          });
+        }
+      }
+    }
+
     // huntTermsAcceptedAt: prefer earlier timestamps. $min sets the field to
     // the lesser of the current and specified values, and creates it if it
     // doesn't exist.

@@ -4,6 +4,7 @@ import { contentFromMessage } from "../lib/models/ChatMessages";
 import type { GuessType } from "../lib/models/Guesses";
 import Guesses from "../lib/models/Guesses";
 import Puzzles from "../lib/models/Puzzles";
+import { answerify } from "../model-helpers";
 import GlobalHooks from "./GlobalHooks";
 import { serverLanguage } from "./lang";
 import sendChatMessageInternal from "./sendChatMessageInternal";
@@ -12,13 +13,26 @@ export default async function transitionGuess(
   guess: GuessType,
   newState: GuessType["state"],
   additionalNotes?: string,
+  correctAnswer?: string,
 ) {
   if (newState === guess.state) return;
+
+  // Marking a guess correct with changes replaces its text with the answer
+  // game control accepted, so the puzzle records that rather than what was
+  // typed. The original text survives in the chat message below.
+  const correctedAnswer =
+    newState === "correct" && correctAnswer !== undefined
+      ? answerify(correctAnswer)
+      : undefined;
+  const withChanges =
+    correctedAnswer !== undefined && correctedAnswer !== guess.guess;
+  const guessText = correctedAnswer ?? guess.guess;
 
   const update: Mongo.Modifier<GuessType> = {
     $set: {
       state: newState,
       additionalNotes,
+      ...(withChanges ? { guess: guessText } : {}),
     },
   };
   if (!additionalNotes) {
@@ -38,11 +52,20 @@ export default async function transitionGuess(
       );
       break;
     case "correct":
-      stateDescription = i18n.t(
-        "puzzle.answerOrGuess.guessState.correct",
-        "as correct",
-        { lng: serverLanguage },
-      );
+      stateDescription = withChanges
+        ? i18n.t(
+            "puzzle.answerOrGuess.guessState.correctWithChanges",
+            "as correct with changes (submitted as `{{submitted}}`)",
+            {
+              lng: serverLanguage,
+              submitted: guess.guess,
+              // Escaped once by the message below, like the guess itself
+              interpolation: { escapeValue: false },
+            },
+          )
+        : i18n.t("puzzle.answerOrGuess.guessState.correct", "as correct", {
+            lng: serverLanguage,
+          });
       break;
     case "incorrect":
       stateDescription = i18n.t(
@@ -61,7 +84,7 @@ export default async function transitionGuess(
     `Guess \`{{guess}}\` was marked {{state}}{{notes}}`,
     {
       lng: serverLanguage,
-      guess: guess.guess,
+      guess: guessText,
       state: stateDescription,
       notes: additionalNotes ? `: ${additionalNotes}` : "",
     },
@@ -81,11 +104,11 @@ export default async function transitionGuess(
       },
       {
         $addToSet: {
-          answers: guess.guess,
+          answers: guessText,
         },
       },
     );
-    await GlobalHooks.runPuzzleSolvedHooks(guess.puzzle, guess.guess);
+    await GlobalHooks.runPuzzleSolvedHooks(guess.puzzle, guessText);
   } else if (guess.state === "correct") {
     // Transitioning from correct -> something else. Only pull the answer
     // from the puzzle if no other correct guess for the same answer remains

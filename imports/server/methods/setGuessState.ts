@@ -16,12 +16,26 @@ defineMethod(setGuessState, {
       guessId: String,
       state: Match.OneOf(...GuessStates.options),
       additionalNotes: Match.Optional(String),
+      correctAnswer: Match.Optional(String),
     });
     return arg;
   },
 
-  async run({ guessId, state, additionalNotes }) {
+  async run({ guessId, state, additionalNotes, correctAnswer }) {
     check(this.userId, String);
+
+    const correctedAnswer = correctAnswer?.trim();
+    if (correctedAnswer !== undefined) {
+      if (state !== "correct") {
+        throw new Meteor.Error(
+          400,
+          "A corrected answer only goes with marking a guess correct",
+        );
+      }
+      if (correctedAnswer === "") {
+        throw new Meteor.Error(400, "Corrected answer must not be blank");
+      }
+    }
 
     const guess = await Guesses.findOneAsync(guessId);
     if (!guess) {
@@ -46,7 +60,8 @@ defineMethod(setGuessState, {
       guess: guess._id,
       state,
       additionalNotes,
+      correctAnswer: correctedAnswer,
     });
-    await transitionGuess(guess, state, additionalNotes);
+    await transitionGuess(guess, state, additionalNotes, correctedAnswer);
   },
 });

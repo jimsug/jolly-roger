@@ -7,6 +7,7 @@ chai.use(chaiAsPromised);
 
 import "./unit/imports/lib/calendarTimeFormat";
 import "./unit/imports/lib/defaultHuntTags";
+import "./unit/imports/lib/dingwordLogic";
 import "./unit/imports/lib/guessTitleFromUrl";
 import "./unit/imports/lib/permission_stubs";
 import "./unit/imports/lib/puzzle-sort-and-group";
@@ -28,6 +29,8 @@ Accounts.removeDefaultRateLimit();
 
 import "./unit/imports/server/backfillHuntAdminFields";
 import "./unit/imports/server/backfillPuzzleNotifications";
+import "./unit/imports/server/dingwordsOpenMatch";
+import "./unit/imports/server/dingwordSuppression";
 import "./unit/imports/server/DiscordHooks";
 import "./unit/imports/server/documentCache";
 import "./unit/imports/server/dropPuzzleMarkedComplete";
@@ -40,6 +43,8 @@ import "./unit/imports/server/MigrationRegistry";
 import "./unit/imports/server/Model";
 import "./unit/imports/server/publishJoinedQuery";
 import "./unit/imports/server/puzzleHistory";
+import "./unit/imports/server/PuzzleHooks";
+import "./unit/imports/server/setGuessStateCorrectAnswer";
 import "./unit/imports/server/subscriberPresence";
 import "./unit/imports/server/TagHooks";
 import "./unit/imports/server/updatePuzzleNote";
