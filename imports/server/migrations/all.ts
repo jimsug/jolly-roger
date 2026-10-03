@@ -57,3 +57,4 @@ import "./55-backfill-puzzle-notifications";
 import "./56-drop-puzzle-marked-complete";
 import "./57-google-account-id-index";
 import "./58-drop-chat-message-attachments";
+import "./59-rerun-call-activity-speaking-backfill";
