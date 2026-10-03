@@ -5,6 +5,7 @@ files:
   - imports/client/components/InsertImage.tsx
   - imports/client/components/NotificationCenter.tsx
   - imports/client/GoogleScriptInfo.ts
+  - imports/lib/models/CachedDocuments.ts
   - imports/lib/models/DocumentActivities.ts
   - imports/lib/models/FolderPermissions.ts
   - imports/server/models/HuntFolders.ts
@@ -13,10 +14,13 @@ files:
   - imports/methods/unlinkUserGoogleAccount.ts
   - imports/server/accounts.ts
   - imports/server/addUserToHunt.ts
+  - imports/server/daemons/documentCache.ts
+  - imports/server/documentCache.ts
   - imports/server/gdrive.ts
   - imports/server/gdriveActivityFetcher.ts
   - imports/server/googleClientRefresher.ts
   - imports/server/googleScriptContent.ts
+  - imports/server/hooks/DocumentCacheHooks.ts
   - imports/server/methods/configureCollectGoogleAccountIds.ts
   - imports/server/methods/configureEnsureGoogleScript.ts
   - imports/server/methods/configureGoogleOAuthClient.ts
@@ -30,12 +34,13 @@ files:
   - imports/server/methods/insertDocumentImage.ts
   - imports/server/methods/linkUserGoogleAccount.ts
   - imports/server/methods/listDocumentSheets.ts
+  - imports/server/methods/purgeHuntDocumentCache.ts
   - imports/server/methods/unlinkUserGoogleAccount.ts
   - imports/server/models/DriveActivityLatests.ts
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-03T00:00:00Z
+updated: 2026-10-03T09:00:00Z
 ---
 
 # Google Drive Integration
@@ -113,6 +118,9 @@ with a template document or spreadsheet (`configureGdriveTemplates`), new
 documents are created as copies of those templates rather than from whole cloth.
 As with `ensureHuntFolder`, this is called before operations that requires the
 doc but is primarily expected to take action when a new puzzle is created.
+Files are named after their puzzle with a `↔️` prefix (`puzzleDocumentName`),
+which keeps them recognisable in Drive's recents list; the same name is applied
+when a puzzle is renamed.
 
 Since the document is a core part of the Jolly Roger experience, clients can
 also call `ensureDocument` via the `ensurePuzzleDocument` Meteor method, which
@@ -129,6 +137,58 @@ to use such formulas for safe use cases like loading images from external URLs.
 
 Both folders and documents are renamed when the hunt or puzzle (respectively) is
 renamed.
+
+### Document cache
+
+Creating a file costs a few Drive round trips (the create or copy, the Sheets
+property update and the permission grant), and that is what someone adding a
+puzzle waits on. To take it off the critical path, each hunt keeps a stock of
+placeholder files, tracked in the `CachedDocuments` model
+(`jr_cached_documents`) and managed by `imports/server/documentCache.ts`.
+Placeholders are created through the same `createDocument` as any other
+document (so they get the template, the external URL setting and the sharing
+permission) in the hunt's folder, named `[CACHED] SPREADSHEET - DO NOT DELETE`
+and so on. They are created outside any user's request, so the longest-standing
+admin is recorded as their creator.
+
+`ensureDocument` claims the oldest available placeholder of the requested type
+with an atomic status update, removes the cache row, renames the file to the
+puzzle's title and attaches it to the puzzle. The rename doubles as a check that
+the file still exists: if Drive reports it gone (someone deleted it despite the
+name), the puzzle gets a freshly created file instead, since nothing would
+repair a puzzle attached to a dead file later. Only when the cache has nothing
+of that type does it create a file on the spot. If the puzzle then fails to
+save, `deleteUnusedDocument` takes the file back out of Drive. In the same
+spirit, `createDocument` deletes a file whose follow-up calls (the Sheets
+property update or the sharing permission) fail, so a misconfigured install
+doesn't strand a shared file on every attempt.
+
+The cache aims to hold 15 spreadsheets and 1 document per hunt, and a type is
+topped up only once it has fallen more than 3 below its target (or is nearly
+empty), so a trickle of puzzle creations doesn't cost a Drive round trip each.
+Refills run when a puzzle is created or solved (`DocumentCacheHooks`), when a
+hunt is created, and from a background sweep
+(`imports/server/daemons/documentCache.ts`) at startup and every 13 minutes
+thereafter. The sweep only tops up hunts with a puzzle created or changed in
+the last 30 days: a hunt without any puzzles is either brand new (hunt creation
+pre-fills it) or has been purged, and the sweep shouldn't undo a purge, while a
+hunt that has gone quiet is over whether or not it has been archived. The
+puzzle hooks still refill any hunt as soon as a puzzle is created or solved
+there. A refill holds a per-hunt lock, renewed on a
+timer for as long as it runs, so that multiple servers don't double up even
+when Drive is slow; it pauses between creations to stay under Drive's rate
+limits, skips archived and deleted hunts, and does nothing at all when the
+Drive client isn't configured or the `disable.google` feature flag is set.
+
+Purging a hunt deletes its placeholders from Drive along with its documents.
+The purge job does this as its last step, under the same per-hunt lock, so a
+refill can't land between the files being deleted and the rows being removed;
+with `disable.google` set the rows are removed and the files left behind, as
+for the hunt's documents. Admins can also clear just the cache from the hunt
+list (`purgeHuntDocumentCache`), which deletes the unclaimed placeholder files
+and removes the rows. While the hunt has puzzles and isn't archived the cache
+refills on the next pass, so this is mostly for archived hunts. Archiving a
+hunt stops refills but leaves whatever is already cached in place.
 
 ## File permissions
 

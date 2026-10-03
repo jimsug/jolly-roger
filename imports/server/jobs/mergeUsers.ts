@@ -6,6 +6,7 @@ import APIKeys from "../../lib/models/APIKeys";
 import BlobMappings from "../../lib/models/BlobMappings";
 import BookmarkNotifications from "../../lib/models/BookmarkNotifications";
 import Bookmarks from "../../lib/models/Bookmarks";
+import CachedDocuments from "../../lib/models/CachedDocuments";
 import ChatMessages from "../../lib/models/ChatMessages";
 import ChatNotifications from "../../lib/models/ChatNotifications";
 import DiscordCache from "../../lib/models/DiscordCache";
@@ -66,6 +67,7 @@ const MODELS_WITH_COMMON: { collection: { rawCollection(): any } }[] = [
   APIKeys,
   BookmarkNotifications,
   Bookmarks,
+  CachedDocuments,
   // ChatMessages is handled entirely in ADDITIONAL_FK_UPDATES (single-pass
   // cursor walk that rewrites sender, mentions, createdBy, and updatedBy
   // together, since none of these fields are indexed).

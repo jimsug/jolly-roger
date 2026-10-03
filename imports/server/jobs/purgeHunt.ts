@@ -14,6 +14,7 @@ import APIKeys from "../../lib/models/APIKeys";
 import BlobMappings from "../../lib/models/BlobMappings";
 import BookmarkNotifications from "../../lib/models/BookmarkNotifications";
 import Bookmarks from "../../lib/models/Bookmarks";
+import CachedDocuments from "../../lib/models/CachedDocuments";
 import ChatMessages from "../../lib/models/ChatMessages";
 import ChatNotifications from "../../lib/models/ChatNotifications";
 import DiscordCache from "../../lib/models/DiscordCache";
@@ -52,6 +53,7 @@ import Settings from "../../lib/models/Settings";
 import Tags from "../../lib/models/Tags";
 import type Model from "../../lib/typedModel/Model";
 import { AllModels } from "../../lib/typedModel/Model";
+import { purgeDocumentCache } from "../documentCache";
 import { deleteDocument } from "../gdrive";
 import Blobs from "../models/Blobs";
 import CallActivities from "../models/CallActivities";
@@ -94,6 +96,11 @@ const COLLECTIONS_TO_PURGE = [
 const COLLECTIONS_EXPLICITLY_LEFT_UNTOUCHED = [
   // References hunt and should be left alone
   InvitationCodes,
+
+  // References hunt, but the job's last step removes its rows itself, as each
+  // row's Drive file has to go first. A sweep here would drop rows that a
+  // refill added after that step and leave their files behind.
+  CachedDocuments,
 
   // Doesn't reference hunt but it was easier to write this enforcement around
   APIKeys,
@@ -163,7 +170,7 @@ defineJob(purgeHunt, {
       return;
     }
 
-    const itemsTotal = 3 + COLLECTIONS_TO_PURGE.length;
+    const itemsTotal = 4 + COLLECTIONS_TO_PURGE.length;
     let itemsCompleted = 0;
     await setResult({ itemsTotal, itemsCompleted });
 
@@ -274,5 +281,29 @@ defineJob(purgeHunt, {
         itemsCompleted,
       });
     }
+
+    // Delete the hunt's cached placeholder documents from the Google Drive.
+    // This goes last so that a refill can't slip in between the files being
+    // deleted and the rows being removed; the rows go here either way.
+    if (await Flags.activeAsync("disable.google")) {
+      Logger.info(
+        "Skipping cached document deletion because Google is disabled by feature flag",
+        { huntId: args.huntId },
+      );
+      await CachedDocuments.removeAsync({ hunt: args.huntId });
+    } else {
+      await purgeDocumentCache(args.huntId, {
+        signal,
+        onProgress: (currentItemCompleted, currentItemTotal) =>
+          setResult({
+            itemsTotal,
+            itemsCompleted,
+            currentItemTotal,
+            currentItemCompleted,
+          }),
+      });
+    }
+    itemsCompleted += 1;
+    await setResult({ itemsTotal, itemsCompleted });
   },
 });

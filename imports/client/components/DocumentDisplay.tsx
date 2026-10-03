@@ -1,11 +1,14 @@
 import type { Meteor } from "meteor/meteor";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faFileAlt } from "@fortawesome/free-solid-svg-icons/faFileAlt";
 import { faTable } from "@fortawesome/free-solid-svg-icons/faTable";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import type { DocumentType } from "../../lib/models/Documents";
+import CopyToClipboardButton from "./CopyToClipboardButton";
 
 // Google Sheets steals focus during initialization. The number of times
 // depends on the browser engine: Chromium does it twice, Firefox once, and
@@ -19,7 +22,9 @@ const EXPECTED_FOCUS_STEALS = (() => {
 
 interface DocumentDisplayProps {
   document: DocumentType;
-  displayMode: "link" | "embed";
+  // "copy" is a button that copies the document's URL, for layouts that
+  // already embed the document and just need a way to share it.
+  displayMode: "link" | "embed" | "copy";
   user: Meteor.User;
 }
 
@@ -79,11 +84,14 @@ const GoogleDocumentDisplay = ({
   displayMode,
   user,
 }: DocumentDisplayProps) => {
+  const { t } = useTranslation();
   const isSpreadsheet = document.value.type === "spreadsheet";
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastFocusedRef = useRef<Element | null>(null);
+  // Only the embed has an iframe to guard; without one the poll below would
+  // never see a steal and so never stop.
   const [focusGuarded, setFocusGuarded] = useState(
-    isSpreadsheet && EXPECTED_FOCUS_STEALS > 0,
+    displayMode === "embed" && isSpreadsheet && EXPECTED_FOCUS_STEALS > 0,
   );
   const lastStolenAtRef = useRef<number | undefined>(undefined);
 
@@ -195,6 +203,22 @@ const GoogleDocumentDisplay = ({
   }
 
   switch (displayMode) {
+    case "copy":
+      return (
+        <CopyToClipboardButton
+          variant="link"
+          size="sm"
+          tooltipPlacement="right"
+          tooltipText={t(
+            "puzzle.document.copyLink",
+            "Copy link to {{type}} for sharing or advanced features",
+            { type: document.value.type },
+          )}
+          text={url}
+        >
+          <FontAwesomeIcon icon={faCopy} />
+        </CopyToClipboardButton>
+      );
     case "link":
       return (
         <StyledDeepLink href={url} target="_blank" rel="noreferrer noopener">

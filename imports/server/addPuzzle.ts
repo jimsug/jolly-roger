@@ -10,7 +10,7 @@ import MeteorUsers from "../lib/models/MeteorUsers";
 import Puzzles from "../lib/models/Puzzles";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import GlobalHooks from "./GlobalHooks";
-import { ensureDocument } from "./gdrive";
+import { deleteUnusedDocument, ensureDocument } from "./gdrive";
 import getOrCreateTagByName from "./getOrCreateTagByName";
 import GoogleClient from "./googleClientRefresher";
 import withLock from "./withLock";
@@ -62,7 +62,21 @@ async function createDocumentAndInsertPuzzle(
     await ensureDocument(fullPuzzle, docType);
   }
 
-  await Puzzles.insertAsync(fullPuzzle);
+  try {
+    await Puzzles.insertAsync(fullPuzzle);
+  } catch (error) {
+    // The document was made for a puzzle that now doesn't exist, so take it
+    // back out of Drive rather than leaving a stray file behind.
+    try {
+      await deleteUnusedDocument(fullPuzzle);
+    } catch (cleanupError) {
+      Logger.warn("Unable to delete document for puzzle that failed to save", {
+        puzzle: fullPuzzle._id,
+        error: cleanupError,
+      });
+    }
+    throw error;
+  }
   return fullPuzzle._id;
 }
 

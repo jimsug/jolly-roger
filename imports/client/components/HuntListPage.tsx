@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import { faBomb } from "@fortawesome/free-solid-svg-icons/faBomb";
+import { faBroom } from "@fortawesome/free-solid-svg-icons/faBroom";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -28,6 +29,7 @@ import {
 import huntsAll from "../../lib/publications/huntsAll";
 import createFixtureHunt from "../../methods/createFixtureHunt";
 import destroyHunt from "../../methods/destroyHunt";
+import purgeHuntDocumentCache from "../../methods/purgeHuntDocumentCache";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import HuntPurgeModal from "./HuntPurgeModal";
 import type { ModalFormHandle } from "./ModalForm";
@@ -49,10 +51,18 @@ const Hunt = React.memo(({ hunt }: { hunt: HuntType }) => {
 
   const deleteModalRef = useRef<ModalFormHandle>(null);
   const purgeModalRef = useRef<ModalFormHandle>(null);
+  const purgeDocumentCacheModalRef = useRef<ModalFormHandle>(null);
 
   const onDelete = useCallback(
     (callback: () => void) => {
       destroyHunt.call({ huntId }, callback);
+    },
+    [huntId],
+  );
+
+  const onPurgeDocumentCache = useCallback(
+    (callback: () => void) => {
+      purgeHuntDocumentCache.call({ huntId }, callback);
     },
     [huntId],
   );
@@ -69,9 +79,31 @@ const Hunt = React.memo(({ hunt }: { hunt: HuntType }) => {
     }
   }, []);
 
+  const showPurgeDocumentCacheModal = useCallback(() => {
+    if (purgeDocumentCacheModalRef.current) {
+      purgeDocumentCacheModalRef.current.show();
+    }
+  }, []);
+
   const { t } = useTranslation();
   return (
     <li>
+      <ModalForm
+        ref={purgeDocumentCacheModalRef}
+        title={t(
+          "huntList.purgeDocumentCache.confirm.title",
+          "Purge document cache",
+        )}
+        submitLabel={t("huntList.purgeDocumentCache.confirm.submit", "Purge")}
+        submitStyle="danger"
+        onSubmit={onPurgeDocumentCache}
+      >
+        {t(
+          "huntList.purgeDocumentCache.confirm.text",
+          'Delete the placeholder Google documents cached for "{{huntName}}"? Documents already attached to puzzles are not affected. The cache refills itself while puzzles are being added or solved, so this is mostly useful once a hunt is over.',
+          { huntName: hunt.name, interpolation: { escapeValue: false } },
+        )}
+      </ModalForm>
       <ModalForm
         ref={deleteModalRef}
         title={t("huntList.delete.confirm.title", "Delete Hunt")}
@@ -95,6 +127,15 @@ const Hunt = React.memo(({ hunt }: { hunt: HuntType }) => {
           >
             <FontAwesomeIcon icon={faEdit} />
           </Link>
+        ) : undefined}
+        {canPurge ? (
+          <Button
+            onClick={showPurgeDocumentCacheModal}
+            variant="outline-danger"
+            title={`${t("huntList.purgeDocumentCache.title", "Purge document cache")}...`}
+          >
+            <FontAwesomeIcon icon={faBroom} />
+          </Button>
         ) : undefined}
         {canPurge ? (
           <Button

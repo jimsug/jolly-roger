@@ -1182,10 +1182,15 @@ const PuzzlePageMetadata = ({
       <InsertImage documentId={document._id} />
     );
 
-  const documentLink =
-    document && !isDesktop ? (
-      <DocumentDisplay document={document} displayMode="link" user={selfUser} />
-    ) : null;
+  // The desktop layout embeds the document, so it only needs a way to copy
+  // its link out; narrower layouts link to it instead.
+  const documentLink = document ? (
+    <DocumentDisplay
+      document={document}
+      displayMode={isDesktop ? "copy" : "link"}
+      user={selfUser}
+    />
+  ) : null;
 
   const { t } = useTranslation();
 

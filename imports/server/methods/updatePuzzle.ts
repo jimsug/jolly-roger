@@ -9,9 +9,8 @@ import Puzzles from "../../lib/models/Puzzles";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import updatePuzzle from "../../methods/updatePuzzle";
 import GlobalHooks from "../GlobalHooks";
-import { ensureDocument, renameDocument } from "../gdrive";
+import { ensureDocument, puzzleDocumentName, renameDocument } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
-import getTeamName from "../getTeamName";
 import defineMethod from "./defineMethod";
 
 type OptionalPuzzleField =
@@ -154,8 +153,7 @@ defineMethod(updatePuzzle, {
             title,
             hunt: oldPuzzle.hunt,
           });
-          const teamName = await getTeamName();
-          await renameDocument(doc.value.id, `${title}: ${teamName}`);
+          await renameDocument(doc.value.id, puzzleDocumentName(title));
         }),
       );
     }

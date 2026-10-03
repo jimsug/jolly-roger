@@ -61,6 +61,7 @@ import "./providePuzzleFeedback";
 import "./provisionFirstUser";
 import "./provisionScreenshotData";
 import "./purgeHunt";
+import "./purgeHuntDocumentCache";
 import "./removeUserAccountEmail";
 import "./removePuzzleAnswer";
 import "./removePuzzleTag";

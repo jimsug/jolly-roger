@@ -8,6 +8,7 @@ import Settings from "../../lib/models/Settings";
 import { addUserToRole, checkAdmin } from "../../lib/permission_stubs";
 import createHunt from "../../methods/createHunt";
 import addUsersToDiscordRole from "../addUsersToDiscordRole";
+import { replenishDocumentCache } from "../documentCache";
 import { ensureHuntFolder } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
@@ -56,6 +57,9 @@ defineMethod(createHunt, {
         ).map((u) => u._id);
         await addUsersToDiscordRole(userIds, huntId);
         await ensureHuntFolder({ _id: huntId, name: hunt.name });
+        // Have placeholder documents ready before the first puzzle, rather
+        // than waiting for the periodic pass to notice the new hunt.
+        await replenishDocumentCache(huntId);
       } catch (error) {
         Logger.warn("Unable to finish setting up hunt", { huntId, error });
       }

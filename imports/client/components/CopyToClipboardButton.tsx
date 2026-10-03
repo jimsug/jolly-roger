@@ -8,11 +8,12 @@ import { useTranslation } from "react-i18next";
 
 interface CopyToClipboardProps extends ButtonProps {
   tooltipPlacement?: OverlayTriggerProps["placement"];
+  tooltipText?: string; // shown instead of the generic "Copy to clipboard"
   text: string | (() => string); // the text to copy, or a function that will generate it lazily
 }
 
 const CopyToClipboardButton = (props: CopyToClipboardProps) => {
-  const { tooltipPlacement, text, children, ...rest } = props;
+  const { tooltipPlacement, tooltipText, text, children, ...rest } = props;
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -43,7 +44,7 @@ const CopyToClipboardButton = (props: CopyToClipboardProps) => {
     <Tooltip id={tooltipId}>
       {copied
         ? t("common.copied", "Copied!")
-        : t("common.copyToClipboard", "Copy to clipboard")}
+        : (tooltipText ?? t("common.copyToClipboard", "Copy to clipboard"))}
     </Tooltip>
   );
 

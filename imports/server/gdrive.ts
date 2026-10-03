@@ -4,6 +4,7 @@ import Flags from "../Flags";
 import Logger from "../Logger";
 import type { GdriveMimeTypesType } from "../lib/GdriveMimeTypes";
 import GdriveMimeTypes from "../lib/GdriveMimeTypes";
+import CachedDocuments from "../lib/models/CachedDocuments";
 import Documents from "../lib/models/Documents";
 import FolderPermissions from "../lib/models/FolderPermissions";
 import Hunts from "../lib/models/Hunts";
@@ -44,7 +45,7 @@ async function createFolder(name: string, parentId?: string) {
   return folder.data.id!;
 }
 
-async function createDocument(
+export async function createDocument(
   name: string,
   type: GdriveMimeTypesType,
   parentId?: string,
@@ -112,7 +113,22 @@ async function createDocument(
     }),
   );
 
-  await Promise.all(operationPromises);
+  const failure = (await Promise.allSettled(operationPromises)).find(
+    (result) => result.status === "rejected",
+  );
+  if (failure) {
+    // Nothing records the file yet, so leaving it behind would strand it in
+    // Drive (possibly already shared with anyone who has the link).
+    try {
+      await GoogleClient.drive.files.delete({ fileId });
+    } catch (error) {
+      Logger.warn("Failed to delete half-configured document", {
+        fileId,
+        error,
+      });
+    }
+    throw failure.reason;
+  }
 
   return fileId;
 }
@@ -152,8 +168,10 @@ export async function huntFolderName(huntName: string) {
   return `${huntName}: ${await getTeamName()}`;
 }
 
-export async function puzzleDocumentName(puzzleTitle: string) {
-  return `${puzzleTitle}: ${await getTeamName()}`;
+// Short and recognisable in Drive's recents list, where the team name just
+// added noise. Also applied when a puzzle is renamed.
+export function puzzleDocumentName(puzzleTitle: string) {
+  return `↔️ ${puzzleTitle}`;
 }
 
 export async function renameDocument(id: string, name: string) {
@@ -361,20 +379,34 @@ export async function ensureDocument(
     await withLock(`puzzle:${puzzle._id}:documents`, async () => {
       doc = await Documents.findOneAsync({ puzzle: puzzle._id });
       if (!doc) {
-        Logger.info("Creating missing document for puzzle", {
-          puzzle: puzzle._id,
-        });
+        const name = puzzleDocumentName(puzzle.title);
 
-        const googleDocId = await createDocument(
-          await puzzleDocumentName(puzzle.title),
-          type,
-          folderId,
-        );
+        // A placeholder from the hunt's document cache saves the Drive
+        // round trips (and the wait) that creating a file costs.
+        const cached = await claimCachedDocument(puzzle.hunt, type);
+        let value: { type: GdriveMimeTypesType; id: string; folder?: string };
+        if (
+          cached &&
+          (await renameClaimedDocument(cached.value.id, name, puzzle._id))
+        ) {
+          value = {
+            type: cached.value.type,
+            id: cached.value.id,
+            folder: cached.value.folder,
+          };
+        } else {
+          Logger.info("Creating missing document for puzzle", {
+            puzzle: puzzle._id,
+          });
+          const googleDocId = await createDocument(name, type, folderId);
+          value = { type, id: googleDocId, folder: folderId };
+        }
+
         const newDoc = {
           hunt: puzzle.hunt,
           puzzle: puzzle._id,
           provider: "google" as const,
-          value: { type, id: googleDocId, folder: folderId },
+          value,
         };
         const docId = await Documents.insertAsync(newDoc);
         doc = (await Documents.findOneAsync(docId))!;
@@ -391,4 +423,78 @@ export async function ensureDocument(
   }
 
   return doc!;
+}
+
+// Takes the oldest available placeholder of the requested type out of the
+// hunt's document cache. The status flip is atomic, so two puzzles can't
+// claim the same file; the row is removed straight away since the file now
+// belongs to the puzzle.
+async function claimCachedDocument(huntId: string, type: GdriveMimeTypesType) {
+  const claimed = await CachedDocuments.collection
+    .rawCollection()
+    .findOneAndUpdate(
+      { hunt: huntId, "value.type": type, status: "available" },
+      { $set: { status: "claimed" } },
+      { sort: { createdAt: 1 }, returnDocument: "after" },
+    );
+  if (!claimed) {
+    return undefined;
+  }
+  await CachedDocuments.removeAsync(claimed._id);
+  return claimed;
+}
+
+function isNotFoundError(error: unknown) {
+  const gaxiosError = error as
+    | { status?: unknown; response?: { status?: unknown } }
+    | undefined;
+  return gaxiosError?.status === 404 || gaxiosError?.response?.status === 404;
+}
+
+// Renames a freshly claimed placeholder to its puzzle. The rename doubles as
+// a check that the file still exists: a placeholder deleted in Drive behind
+// the cache's back (despite its name) must not be attached to the puzzle,
+// since nothing would repair that later. Other failures leave the file
+// attached under its placeholder name, which the next rename puts right.
+async function renameClaimedDocument(
+  fileId: string,
+  name: string,
+  puzzleId: string,
+) {
+  Logger.info("Claiming cached document for puzzle", {
+    puzzle: puzzleId,
+    fileId,
+  });
+  try {
+    await renameDocument(fileId, name);
+    return true;
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      Logger.error("Cached document no longer exists in Drive; skipping it", {
+        puzzle: puzzleId,
+        fileId,
+        error,
+      });
+      return false;
+    }
+    Logger.warn("Failed to rename cached document", {
+      puzzle: puzzleId,
+      fileId,
+      error,
+    });
+    return true;
+  }
+}
+
+// Removes the document attached to a puzzle that never made it into the
+// database, so a failed creation doesn't leave a stray file in Drive.
+export async function deleteUnusedDocument(puzzle: { _id: string }) {
+  await withLock(`puzzle:${puzzle._id}:documents`, async () => {
+    const doc = await Documents.findOneAsync({ puzzle: puzzle._id });
+    if (!doc) {
+      return;
+    }
+    await deleteDocument(doc.value.id);
+    await Documents.removeAsync(doc._id);
+  });
 }
