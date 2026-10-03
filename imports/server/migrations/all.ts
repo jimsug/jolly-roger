@@ -54,3 +54,4 @@ import "./52-remove-discord-discriminator";
 import "./53-backfill-call-activity-speaking";
 import "./54-backfill-hunt-admin-fields";
 import "./55-backfill-puzzle-notifications";
+import "./56-drop-puzzle-marked-complete";

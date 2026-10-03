@@ -9,6 +9,7 @@ import ChatMessages, {
 } from "../../../../imports/lib/models/ChatMessages";
 import MergeOperations from "../../../../imports/lib/models/MergeOperations";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
+import PuzzleFeedbacks from "../../../../imports/lib/models/PuzzleFeedbacks";
 import enqueueJob from "../../../../imports/server/jobs/framework/enqueueJob";
 import resetDatabase from "../../../lib/resetDatabase";
 import runJob from "../../../lib/runJob";
@@ -489,5 +490,45 @@ describe("user merge", function () {
       targetId,
       "Remaining bookmark should belong to target",
     );
+  });
+
+  it("reassigns interest votes, dropping one that would duplicate the target's", async function () {
+    await resetDatabase("merge puzzle feedbacks");
+
+    const sourceId = await createUser("source@example.com", "Source");
+    const targetId = await createUser("target@example.com", "Target");
+
+    const huntId = Random.id();
+    const contestedPuzzle = Random.id();
+    const otherPuzzle = Random.id();
+    const now = new Date();
+
+    // The voter is createdBy, which is in the unique index with the puzzle
+    const feedbackFields = (userId: string, puzzle: string) => ({
+      _id: Random.id(),
+      hunt: huntId,
+      puzzle,
+      score: 1,
+      createdBy: userId,
+      updatedBy: userId,
+      createdAt: now,
+      updatedAt: now,
+      deleted: false,
+    });
+    const raw = PuzzleFeedbacks.collection.rawCollection();
+    await raw.insertOne(feedbackFields(sourceId, contestedPuzzle));
+    await raw.insertOne(feedbackFields(targetId, contestedPuzzle));
+    await raw.insertOne(feedbackFields(sourceId, otherPuzzle));
+
+    await runMergeJob(sourceId, targetId);
+
+    const contested = await raw.find({ puzzle: contestedPuzzle }).toArray();
+    assert.equal(contested.length, 1, "The duplicate vote should be dropped");
+    assert.equal(contested[0]!.createdBy, targetId);
+
+    const other = await raw.find({ puzzle: otherPuzzle }).toArray();
+    assert.equal(other.length, 1);
+    assert.equal(other[0]!.createdBy, targetId);
+    assert.equal(other[0]!.updatedBy, targetId);
   });
 });

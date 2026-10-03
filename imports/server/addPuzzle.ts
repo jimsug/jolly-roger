@@ -33,6 +33,7 @@ async function createDocumentAndInsertPuzzle(
   url: string | undefined,
   docType: GdriveMimeTypesType,
   completedWithNoAnswer: boolean | undefined,
+  lock: { locked: true; lockedSummary?: string } | undefined,
 ): Promise<string> {
   // Look up each tag by name and map them to tag IDs.
   const tagIds = await Promise.all(
@@ -50,6 +51,7 @@ async function createDocumentAndInsertPuzzle(
     answers: [],
     url,
     completedWithNoAnswer,
+    ...lock,
   };
 
   // By creating the document before we save the puzzle, we make sure nobody
@@ -73,6 +75,8 @@ export default async function addPuzzle({
   url,
   allowDuplicateUrls,
   completedWithNoAnswer,
+  locked,
+  lockedSummary,
 }: {
   huntId: string;
   title: string;
@@ -82,6 +86,8 @@ export default async function addPuzzle({
   docType: GdriveMimeTypesType;
   allowDuplicateUrls?: boolean;
   completedWithNoAnswer?: boolean;
+  locked?: boolean;
+  lockedSummary?: string;
 }) {
   const userId = Meteor.userId();
 
@@ -96,6 +102,8 @@ export default async function addPuzzle({
   );
   check(allowDuplicateUrls, Match.Optional(Boolean));
   check(completedWithNoAnswer, Match.Optional(Boolean));
+  check(locked, Match.Optional(Boolean));
+  check(lockedSummary, Match.Optional(String));
 
   const hunt = await Hunts.findOneAsync(huntId);
   if (!hunt) {
@@ -111,6 +119,17 @@ export default async function addPuzzle({
     );
   }
 
+  if (locked && !hunt.allowUnlockablePuzzles) {
+    throw new Meteor.Error(400, `Hunt ${huntId} does not allow locked puzzles`);
+  }
+  const trimmedSummary = lockedSummary?.trim();
+  const lock = locked
+    ? ({
+        locked: true,
+        ...(trimmedSummary ? { lockedSummary: trimmedSummary } : {}),
+      } as const)
+    : undefined;
+
   // Before we do any writes, try an opportunistic check for duplicates. If a
   // puzzle with this URL already exists, we can short-circuit without
   // creating tags or the Google Doc. We'll still need to repeat this check
@@ -122,6 +141,7 @@ export default async function addPuzzle({
   Logger.info("Creating a new puzzle", {
     hunt: huntId,
     title,
+    locked: lock !== undefined,
   });
 
   let puzzleId = "";
@@ -134,6 +154,7 @@ export default async function addPuzzle({
       url,
       docType,
       completedWithNoAnswer,
+      lock,
     );
   } else {
     // With a lock, look for a puzzle with the same URL. If present, we reject the insertion
@@ -150,15 +171,19 @@ export default async function addPuzzle({
         url,
         docType,
         completedWithNoAnswer,
+        lock,
       );
     });
   }
 
   // Run any puzzle-creation hooks, like creating a default document
-  // attachment or announcing the puzzle to Slack.
-  Meteor.defer(() => {
-    void GlobalHooks.runPuzzleCreatedHooks(puzzleId);
-  });
+  // attachment or announcing the puzzle to Slack. A locked puzzle isn't
+  // announced until it is unlocked (see unlockPuzzle), so they wait.
+  if (!lock) {
+    Meteor.defer(() => {
+      void GlobalHooks.runPuzzleCreatedHooks(puzzleId);
+    });
+  }
 
   return puzzleId;
 }

@@ -15,6 +15,7 @@ import {
   useEffect,
   useId,
   useRef,
+  useState,
 } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
@@ -24,10 +25,12 @@ import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
 import InputGroup from "react-bootstrap/InputGroup";
+import Overlay from "react-bootstrap/Overlay";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
-import { useTranslation } from "react-i18next";
-import { useParams, useSearchParams } from "react-router";
+import Tooltip from "react-bootstrap/Tooltip";
+import { Trans, useTranslation } from "react-i18next";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import styled, { css } from "styled-components";
 import { sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
@@ -37,16 +40,19 @@ import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
+import puzzleFeedbacksForHunt from "../../lib/publications/puzzleFeedbacksForHunt";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
 import {
   filteredPuzzleGroups,
   puzzleGroupsByRelevance,
 } from "../../lib/puzzle-sort-and-group";
+import { findPuzzleForUrl } from "../../lib/puzzleUrl";
 import { computeSolvedness } from "../../lib/solvedness";
 import createPuzzle from "../../methods/createPuzzle";
 import {
   useHuntPuzzleListCollapseGroups,
   useHuntPuzzleListDisplayMode,
+  useHuntPuzzleListLockedDisplayMode,
   useHuntPuzzleListShowSolved,
   useOperatorActionsHiddenForHunt,
 } from "../hooks/persisted-state";
@@ -64,9 +70,9 @@ import RelatedPuzzleGroup, { PuzzleGroupDiv } from "./RelatedPuzzleGroup";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import { mediaBreakpointDown } from "./styling/responsive";
 
-const ViewControls = styled.div<{ $canAdd?: boolean }>`
+const ViewControls = styled.div<{ $canAdd?: boolean; $toggles: number }>`
   display: grid;
-  grid-template-columns: auto auto auto 1fr;
+  grid-template-columns: ${(props) => "auto ".repeat(props.$toggles)}1fr;
   align-items: end;
   gap: 1em;
   margin-bottom: 1em;
@@ -91,8 +97,8 @@ const ViewControls = styled.div<{ $canAdd?: boolean }>`
   }
 `;
 
-const SearchFormGroup = styled(FormGroup)<{ $canAdd?: boolean }>`
-  grid-column: ${(props) => (props.$canAdd ? 1 : 3)} / -1;
+const SearchFormGroup = styled(FormGroup)<{ $column: number }>`
+  grid-column: ${(props) => props.$column} / -1;
   ${mediaBreakpointDown(
     "sm",
     css`
@@ -154,6 +160,14 @@ const PuzzleListToolbar = styled.div`
   margin-bottom: 0.5em;
 `;
 
+const ListHeading = styled.h5`
+  margin-top: 1em;
+
+  &:first-child {
+    margin-top: 0;
+  }
+`;
+
 const HuntNavWrapper = styled.div`
   display: none;
   ${mediaBreakpointDown(
@@ -165,6 +179,20 @@ const HuntNavWrapper = styled.div`
     `,
   )}
 `;
+
+// The title goes in as a component rather than an interpolated value, so
+// i18next neither escapes it nor parses it as markup.
+export const PressEnterHint = ({ title }: { title: string }) => {
+  const { t } = useTranslation();
+  return (
+    <Trans
+      i18nKey="puzzleList.pressEnterToOpen"
+      t={t}
+      defaults="Press <kbd>Enter</kbd> to go to <title/>"
+      components={{ kbd: <kbd />, title: <strong>{title}</strong> }}
+    />
+  );
+};
 
 const PuzzleListView = ({
   huntId,
@@ -191,6 +219,10 @@ const PuzzleListView = ({
       .map((b) => b.puzzle);
     return new Set(bookmarks);
   }, [huntId]);
+  const allowUnlockablePuzzles = useTracker(
+    () => Hunts.findOne(huntId)?.allowUnlockablePuzzles ?? false,
+    [huntId],
+  );
 
   const [operatorActionsHidden, setOperatorActionsHidden] =
     useOperatorActionsHiddenForHunt(huntId);
@@ -217,8 +249,11 @@ const PuzzleListView = ({
   // on, not to whatever the plain Add button is used for next.
   const tagsPrefilledRef = useRef(false);
   const searchBarRef = useRef<HTMLInputElement>(null);
+  const [searchFocused, setSearchFocused] = useState(false);
   const [displayMode, setDisplayMode] = useHuntPuzzleListDisplayMode(huntId);
   const [showSolved, setShowSolved] = useHuntPuzzleListShowSolved(huntId);
+  const [lockedDisplayMode, setLockedDisplayMode] =
+    useHuntPuzzleListLockedDisplayMode(huntId);
   const [huntPuzzleListCollapseGroups, setHuntPuzzleListCollapseGroups] =
     useHuntPuzzleListCollapseGroups(huntId);
   const expandAllGroups = useCallback(() => {
@@ -327,6 +362,38 @@ const PuzzleListView = ({
     [showSolved],
   );
 
+  // The locked filter only applies in hunts that allow locked puzzles
+  const lockedFilterActive =
+    allowUnlockablePuzzles && lockedDisplayMode !== "all";
+  const puzzlesMatchingLockedFilter = useCallback(
+    (puzzles: PuzzleType[]): PuzzleType[] => {
+      if (!lockedFilterActive) {
+        return puzzles;
+      }
+      const wantLocked = lockedDisplayMode === "locked";
+      return puzzles.filter(
+        (puzzle) => (puzzle.locked ?? false) === wantLocked,
+      );
+    },
+    [lockedFilterActive, lockedDisplayMode],
+  );
+
+  const matchingSearch = puzzlesMatchingSearchString(allPuzzles);
+  const matchingSearchAndFilters = puzzlesMatchingLockedFilter(
+    puzzlesMatchingSolvedFilter(matchingSearch),
+  );
+  // Normally, we'll just show matchingSearchAndFilters, but if that produces
+  // no results, and there *is* a puzzle that is not being displayed due to
+  // the solved or locked filters, then show that and a note that we're
+  // showing filtered-out puzzles because nothing else matched.
+  const filtersOverConstrain =
+    matchingSearch.length > 0 && matchingSearchAndFilters.length === 0;
+  const retainedPuzzles = filtersOverConstrain
+    ? matchingSearch
+    : matchingSearchAndFilters;
+  const retainedDeletedPuzzles =
+    deletedPuzzles && puzzlesMatchingSearchString(deletedPuzzles);
+
   const clearSearch = useCallback(() => {
     setSearchString("");
   }, [setSearchString]);
@@ -358,21 +425,92 @@ const PuzzleListView = ({
   const addPuzzleCallback =
     canAdd && !operatorActionsHidden ? showAddModalWithTags : undefined;
 
+  const navigate = useNavigate();
+
+  // The bookmarklet on the More page opens this page with the title and URL
+  // of the hunt page it was clicked on: go to the puzzle if it's already
+  // known, otherwise offer to add it.
+  const bookmarkletUrl = searchParams.get("url");
+  const bookmarkletTitle = searchParams.get("title");
+  useEffect(() => {
+    if (!bookmarkletUrl) {
+      return;
+    }
+    const existing = findPuzzleForUrl(allPuzzles, bookmarkletUrl);
+    if (existing) {
+      void navigate(`/hunts/${huntId}/puzzles/${existing._id}`, {
+        replace: true,
+      });
+      return;
+    }
+    // Only operators have the add form; for anyone else the list just loads
+    if (addModalRef.current) {
+      addModalRef.current.reset();
+      addModalRef.current.populateForm({
+        title: bookmarkletTitle ?? "",
+        url: bookmarkletUrl,
+      });
+      tagsPrefilledRef.current = false;
+      addModalRef.current.show();
+    }
+    setSearchParams(
+      (prev) => {
+        const u = new URLSearchParams(prev);
+        u.delete("url");
+        u.delete("title");
+        return u;
+      },
+      { replace: true },
+    );
+  }, [
+    allPuzzles,
+    bookmarkletTitle,
+    bookmarkletUrl,
+    huntId,
+    navigate,
+    setSearchParams,
+  ]);
+
+  // With the filter narrowed down to one puzzle, Enter opens it
+  const singleMatch =
+    retainedPuzzles.length === 1 ? retainedPuzzles[0] : undefined;
+  const onSearchKeyDown: NonNullable<FormControlProps["onKeyDown"]> =
+    useCallback(
+      (e) => {
+        if (e.key === "Enter" && singleMatch) {
+          e.preventDefault();
+          void navigate(`/hunts/${huntId}/puzzles/${singleMatch._id}`);
+        }
+      },
+      [singleMatch, navigate, huntId],
+    );
+  const onSearchFocus = useCallback(() => {
+    setSearchFocused(true);
+  }, []);
+  const onSearchBlur = useCallback(() => {
+    setSearchFocused(false);
+  }, []);
+
   const { t } = useTranslation();
 
   const renderList = useCallback(
     (
       retainedPuzzles: PuzzleType[],
       retainedDeletedPuzzles: PuzzleType[] | undefined,
-      solvedOverConstrains: boolean,
+      filtersOverConstrain: boolean,
       allPuzzlesCount: number,
     ) => {
-      const maybeMatchWarning = solvedOverConstrains && (
+      const maybeMatchWarning = filtersOverConstrain && (
         <Alert variant="info">
-          {t(
-            "puzzleList.maybeMatchWarning",
-            "No matches found in unsolved puzzles; showing matches from solved puzzles",
-          )}
+          {lockedFilterActive
+            ? t(
+                "puzzleList.maybeMatchWarningFiltered",
+                "No matches found with the current filters; showing every matching puzzle",
+              )
+            : t(
+                "puzzleList.maybeMatchWarning",
+                "No matches found in unsolved puzzles; showing matches from solved puzzles",
+              )}
         </Alert>
       );
       const retainedIds = new Set(retainedPuzzles.map((puzzle) => puzzle._id));
@@ -388,6 +526,15 @@ const PuzzleListView = ({
       const bookmarkedPuzzles = retainedPuzzles.filter((puzzle) =>
         bookmarked.has(puzzle._id),
       );
+
+      let listTitle;
+      if (searchString.trim() !== "") {
+        listTitle = t("puzzleList.searchResults", "Search results");
+      } else if (showSolved) {
+        listTitle = t("puzzleList.allPuzzles", "All puzzles");
+      } else {
+        listTitle = t("puzzleList.unsolvedPuzzles", "Unsolved puzzles");
+      }
 
       let listComponent;
       let listControls;
@@ -472,7 +619,9 @@ const PuzzleListView = ({
           </PuzzleListToolbar>
           {bookmarkedPuzzles.length > 0 && (
             <PuzzleGroupDiv>
-              <div>{t("puzzleList.bookmarked", "Bookmarked")}</div>
+              <ListHeading>
+                {t("puzzleList.bookmarked", "Bookmarked")}
+              </ListHeading>
               <RelatedPuzzleList
                 key="bookmarked"
                 relatedPuzzles={bookmarkedPuzzles}
@@ -482,6 +631,7 @@ const PuzzleListView = ({
                 canUpdate={canUpdate}
                 suppressedTagIds={[]}
               />
+              <ListHeading>{listTitle}</ListHeading>
             </PuzzleGroupDiv>
           )}
           {listComponent}
@@ -512,6 +662,8 @@ const PuzzleListView = ({
       allTags,
       canUpdate,
       searchString,
+      showSolved,
+      lockedFilterActive,
       canExpandAllGroups,
       expandAllGroups,
       bookmarked,
@@ -570,23 +722,12 @@ const PuzzleListView = ({
     </>
   );
 
-  const matchingSearch = puzzlesMatchingSearchString(allPuzzles);
-  const matchingSearchAndSolved = puzzlesMatchingSolvedFilter(matchingSearch);
-  // Normally, we'll just show matchingSearchAndSolved, but if that produces
-  // no results, and there *is* a solved puzzle that is not being displayed due
-  // to the solved filter, then show that and a note that we're showing solved
-  // puzzles because no unsolved puzzles matched.
-  const solvedOverConstrains =
-    matchingSearch.length > 0 && matchingSearchAndSolved.length === 0;
-  const retainedPuzzles = solvedOverConstrains
-    ? matchingSearch
-    : matchingSearchAndSolved;
-  const retainedDeletedPuzzles =
-    deletedPuzzles && puzzlesMatchingSearchString(deletedPuzzles);
+  // Toggle groups before the operator controls and the search box
+  const toggleCount = allowUnlockablePuzzles ? 3 : 2;
 
   return (
     <div>
-      <ViewControls $canAdd={canAdd}>
+      <ViewControls $canAdd={canAdd} $toggles={toggleCount + 1}>
         <FormGroup>
           <FormLabel>{t("puzzleList.organizeBy", "Organize by")}</FormLabel>
           <ButtonToolbar>
@@ -645,9 +786,47 @@ const PuzzleListView = ({
             </StyledToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
+        {allowUnlockablePuzzles && (
+          <FormGroup>
+            <FormLabel>
+              {t("puzzleList.lockedPuzzles", "Locked puzzles")}
+            </FormLabel>
+            <ButtonToolbar>
+              <StyledToggleButtonGroup
+                type="radio"
+                name="show-locked"
+                defaultValue="all"
+                value={lockedDisplayMode}
+                onChange={setLockedDisplayMode}
+              >
+                <ToggleButton
+                  id={`${idPrefix}-locked-hide-button`}
+                  variant="outline-info"
+                  value="unlocked"
+                >
+                  {t("puzzleList.lockedFilter.unlocked", "Unlocked")}
+                </ToggleButton>
+                <ToggleButton
+                  id={`${idPrefix}-locked-only-button`}
+                  variant="outline-info"
+                  value="locked"
+                >
+                  {t("puzzleList.lockedFilter.locked", "Locked")}
+                </ToggleButton>
+                <ToggleButton
+                  id={`${idPrefix}-locked-all-button`}
+                  variant="outline-info"
+                  value="all"
+                >
+                  {t("puzzleList.lockedFilter.all", "All")}
+                </ToggleButton>
+              </StyledToggleButtonGroup>
+            </ButtonToolbar>
+          </FormGroup>
+        )}
         {addPuzzleContent}
         <SearchFormGroup
-          $canAdd={canAdd}
+          $column={canAdd ? 1 : toggleCount + 1}
           controlId={`${idPrefix}-puzzle-search`}
         >
           <SearchFormLabel $canAdd={canAdd}>
@@ -664,17 +843,29 @@ const PuzzleListView = ({
               )}
               value={searchString}
               onChange={onSearchStringChange}
+              onKeyDown={onSearchKeyDown}
+              onFocus={onSearchFocus}
+              onBlur={onSearchBlur}
             />
             <Button variant="secondary" onClick={clearSearch}>
               <FontAwesomeIcon icon={faEraser} />
             </Button>
           </InputGroup>
+          <Overlay
+            target={searchBarRef.current}
+            show={searchFocused && singleMatch !== undefined}
+            placement="bottom-start"
+          >
+            <Tooltip id={`${idPrefix}-single-match-tooltip`}>
+              <PressEnterHint title={singleMatch?.title ?? ""} />
+            </Tooltip>
+          </Overlay>
         </SearchFormGroup>
       </ViewControls>
       {renderList(
         retainedPuzzles,
         retainedDeletedPuzzles,
-        solvedOverConstrains,
+        filtersOverConstrain,
         allPuzzles.length,
       )}
     </div>
@@ -699,8 +890,9 @@ const PuzzleListPage = () => {
   });
   const loading = puzzlesLoading();
 
-  // Don't bother including this in loading - it's ok if they trickle in
+  // Don't bother including these in loading - it's ok if they trickle in
   useTypedSubscribe(puzzleActivityForHunt, { huntId });
+  useTypedSubscribe(puzzleFeedbacksForHunt, { huntId });
 
   const { t } = useTranslation();
 

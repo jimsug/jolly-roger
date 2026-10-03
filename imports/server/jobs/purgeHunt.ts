@@ -44,6 +44,7 @@ import TransportRequests from "../../lib/models/mediasoup/TransportRequests";
 import TransportStates from "../../lib/models/mediasoup/TransportStates";
 import Transports from "../../lib/models/mediasoup/Transports";
 import PendingAnnouncements from "../../lib/models/PendingAnnouncements";
+import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import Puzzles from "../../lib/models/Puzzles";
 import Servers from "../../lib/models/Servers";
@@ -70,6 +71,7 @@ const COLLECTIONS_TO_PURGE = [
   // Other than that, try to mostly maintain referential integrity
   ChatNotifications,
   PuzzleNotifications,
+  PuzzleFeedbacks,
   ChatMessages,
   Peers,
   Rooms,

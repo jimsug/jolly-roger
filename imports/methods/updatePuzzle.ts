@@ -9,6 +9,10 @@ export default new TypedMethod<
     expectedAnswerCount: number;
     allowDuplicateUrls?: boolean;
     completedWithNoAnswer?: boolean;
+    // Omitted leaves the lock alone; false unlocks (without the unlock
+    // announcement that Puzzles.methods.unlock posts to chat).
+    locked?: boolean;
+    lockedSummary?: string;
   },
   void
 >("Puzzles.methods.update");

@@ -20,6 +20,7 @@ import "./invitedUsers";
 import "./pendingAnnouncementsForSelf";
 import "./pendingGuessesForSelf";
 import "./puzzleActivityForHunt";
+import "./puzzleFeedbacksForHunt";
 import "./puzzleForPuzzlePage";
 import "./puzzleNotificationsForSelf";
 import "./puzzlesForHunt";

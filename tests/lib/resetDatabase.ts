@@ -15,6 +15,9 @@ if (Meteor.isServer) {
     require("../../imports/server/methods/defineMethod").default;
   const Migrations: typeof import("../../imports/server/migrations/Migrations").default =
     require("../../imports/server/migrations/Migrations").default;
+  const {
+    startupComplete,
+  }: typeof import("../../imports/server/runIfLatestBuild") = require("../../imports/server/runIfLatestBuild");
 
   // We track a few bits of information here to make it easier to tell what's
   // going on in the event that the server receives concurrent `resetDatabase`
@@ -43,6 +46,11 @@ if (Meteor.isServer) {
 
     entries += 1;
     currentTest = testName;
+
+    // The first tests start while the schemas, indexes and migrations are
+    // still being set up on startup; wiping the database under that run
+    // leaves its migration control record missing and crashes the server.
+    await startupComplete;
 
     // Remove all the contents of all not-mongo-internal collections
     const db = MongoInternals.defaultRemoteCollectionDriver().mongo.db;

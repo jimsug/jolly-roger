@@ -7,6 +7,20 @@ import withCommon from "../typedModel/withCommon";
 
 const tagList = foreignKey.array().default([]).meta({ uniqueItems: true });
 
+// Notes about a puzzle, written from outside Jolly Roger (a script on the
+// puzzle's sheet posts them to /api/updatePuzzleNote) and shown on the Notes
+// page.
+export const PuzzleNoteContent = z.object({
+  flavor: nonEmptyString.optional(),
+  flavorMeanings: nonEmptyString.array().array().optional(),
+  summary: nonEmptyString.optional(),
+  theories: nonEmptyString.optional(),
+  contactPerson: nonEmptyString.optional(),
+  externalLinkText: nonEmptyString.optional(),
+  externalLinkUrl: z.string().regex(Url).optional(),
+});
+export type PuzzleNoteContentType = z.infer<typeof PuzzleNoteContent>;
+
 const Puzzle = withCommon(
   z.object({
     hunt: foreignKey,
@@ -14,9 +28,19 @@ const Puzzle = withCommon(
     title: nonEmptyString,
     url: z.string().regex(Url).optional(),
     answers: answer.array(),
-    expectedAnswerCount: z.int32().nonnegative(),
+    // -1 means nobody knows how many answers the puzzle has yet. Such a puzzle
+    // is never shown as solved until the count is corrected.
+    expectedAnswerCount: z.int32().min(-1),
     completedWithNoAnswer: z.boolean().optional(),
     replacedBy: foreignKey.optional(),
+    noteContent: PuzzleNoteContent.optional(),
+    noteUpdateTs: z.date().optional(),
+    // A locked puzzle is one the team hasn't unlocked on the hunt site yet.
+    // Members register interest in it and operators unlock it, which is when
+    // the puzzle-created hooks run (so Discord hears about it then, not when
+    // the placeholder was added).
+    locked: z.boolean().optional(),
+    lockedSummary: nonEmptyString.optional(),
   }),
 );
 

@@ -14,6 +14,12 @@ import getOrCreateTagByName from "../getOrCreateTagByName";
 import getTeamName from "../getTeamName";
 import defineMethod from "./defineMethod";
 
+type OptionalPuzzleField =
+  | "url"
+  | "completedWithNoAnswer"
+  | "locked"
+  | "lockedSummary";
+
 defineMethod(updatePuzzle, {
   validate(arg) {
     check(arg, {
@@ -26,6 +32,8 @@ defineMethod(updatePuzzle, {
       // during puzzle creation, to avoid duplicates when creating new puzzles.
       allowDuplicateUrls: Match.Optional(Boolean),
       completedWithNoAnswer: Match.Optional(Boolean),
+      locked: Match.Optional(Boolean),
+      lockedSummary: Match.Optional(String),
     });
 
     return arg;
@@ -38,6 +46,8 @@ defineMethod(updatePuzzle, {
     tags,
     expectedAnswerCount,
     completedWithNoAnswer,
+    locked,
+    lockedSummary,
   }) {
     check(this.userId, String);
 
@@ -58,6 +68,13 @@ defineMethod(updatePuzzle, {
       );
     }
 
+    if (locked && !hunt?.allowUnlockablePuzzles) {
+      throw new Meteor.Error(
+        400,
+        `Hunt ${oldPuzzle.hunt} does not allow locked puzzles`,
+      );
+    }
+
     // Look up each tag by name and map them to tag IDs.
     const tagIds = await Promise.all(
       tags.map((tagName) => {
@@ -71,6 +88,7 @@ defineMethod(updatePuzzle, {
       title,
       expectedAnswerCount,
       completedWithNoAnswer,
+      locked,
     });
 
     const update: Mongo.Modifier<PuzzleType> = {
@@ -80,15 +98,36 @@ defineMethod(updatePuzzle, {
         tags: [...new Set(tagIds)],
       },
     };
+    // Every cleared optional field lands in the one $unset, so clearing
+    // several at once works.
+    const unset = (field: OptionalPuzzleField) => {
+      update.$unset = { ...update.$unset, [field]: "" };
+    };
+
     if (url) {
       update.$set = { ...update.$set, url };
     } else {
-      update.$unset = { url: "" };
+      unset("url");
     }
     if (completedWithNoAnswer) {
       update.$set = { ...update.$set, completedWithNoAnswer };
     } else {
-      update.$unset = { completedWithNoAnswer: "" };
+      unset("completedWithNoAnswer");
+    }
+    // Omitting `locked` leaves the lock as it was, so callers that don't know
+    // about locked puzzles can't unlock one by accident.
+    if (locked !== undefined) {
+      if (locked) {
+        update.$set = { ...update.$set, locked };
+      } else {
+        unset("locked");
+      }
+      const trimmedSummary = locked ? lockedSummary?.trim() : undefined;
+      if (trimmedSummary) {
+        update.$set = { ...update.$set, lockedSummary: trimmedSummary };
+      } else {
+        unset("lockedSummary");
+      }
     }
     await Puzzles.updateAsync(puzzleId, update);
 
@@ -96,6 +135,16 @@ defineMethod(updatePuzzle, {
     Meteor.defer(() => {
       void GlobalHooks.runPuzzleUpdatedHooks(puzzleId, oldPuzzle);
     });
+
+    // Unlocking through the edit form skips the chat announcement that
+    // Puzzles.methods.unlock posts, but the puzzle still needs announcing to
+    // the world now that it exists. Operators can edit deleted puzzles too,
+    // and those stay unannounced.
+    if (oldPuzzle.locked && locked === false && !oldPuzzle.deleted) {
+      Meteor.defer(() => {
+        void GlobalHooks.runPuzzleCreatedHooks(puzzleId);
+      });
+    }
 
     if (oldPuzzle.title !== title) {
       Meteor.defer(

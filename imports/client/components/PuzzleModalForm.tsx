@@ -1,4 +1,5 @@
 import { Meteor } from "meteor/meteor";
+import { useTracker } from "meteor/react-meteor-data";
 import React, {
   Suspense,
   useCallback,
@@ -22,6 +23,8 @@ import { Trans, useTranslation } from "react-i18next";
 import type { ActionMeta } from "react-select";
 import { useTheme } from "styled-components";
 import type { GdriveMimeTypesType } from "../../lib/GdriveMimeTypes";
+import guessTitleFromUrl from "../../lib/guessTitleFromUrl";
+import Hunts from "../../lib/models/Hunts";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import LabelledRadioGroup from "./LabelledRadioGroup";
@@ -45,6 +48,8 @@ export interface PuzzleModalFormSubmitPayload {
   expectedAnswerCount: number;
   allowDuplicateUrls?: boolean;
   completedWithNoAnswer?: boolean;
+  locked?: boolean;
+  lockedSummary?: string;
 }
 
 enum PuzzleModalFormSubmitState {
@@ -56,8 +61,13 @@ enum PuzzleModalFormSubmitState {
 export type PuzzleModalFormHandle = {
   reset: () => void;
   show: () => void;
-  // Pre-fills the form, e.g. with a group's tags when adding a puzzle to it.
-  populateForm: (data: { tagIds: string[] }) => void;
+  // Pre-fills the form, e.g. with a group's tags when adding a puzzle to it,
+  // or with the page the bookmarklet was clicked on.
+  populateForm: (data: {
+    title?: string;
+    url?: string;
+    tagIds?: string[];
+  }) => void;
 };
 
 // "Functional" tags carry a prefix (group:, meta-for:, priority:, where:...)
@@ -100,6 +110,11 @@ const PuzzleModalForm = ({
     [propsTags],
   );
 
+  const allowLocked = useTracker(
+    () => Hunts.findOne(huntId)?.allowUnlockablePuzzles ?? false,
+    [huntId],
+  );
+
   const [title, setTitle] = useState(puzzle?.title ?? "");
   const [url, setUrl] = useState(puzzle?.url ?? "");
   const [tags, setTags] = useState(puzzle ? tagNamesForIds(puzzle.tags) : []);
@@ -111,6 +126,10 @@ const PuzzleModalForm = ({
   );
   const [considerCompletedWithNoAnswer, setConsiderCompletedWithNoAnswer] =
     useState(puzzle?.completedWithNoAnswer);
+  const [locked, setLocked] = useState(puzzle?.locked ?? false);
+  const [lockedSummary, setLockedSummary] = useState(
+    puzzle?.lockedSummary ?? "",
+  );
   const [confirmingDuplicateUrl, setConfirmingDuplicateUrl] = useState(false);
   const [allowDuplicateUrls, setAllowDuplicateUrls] = useState(
     puzzle ? undefined : false,
@@ -128,8 +147,26 @@ const PuzzleModalForm = ({
     considerCompletedWithNoAnswerDirty,
     setConsiderCompletedWithNoAnswerDirty,
   ] = useState(false);
+  const [lockedDirty, setLockedDirty] = useState(false);
+  const [lockedSummaryDirty, setLockedSummaryDirty] = useState(false);
+  // The title last filled in from the URL, so a later URL can replace it but
+  // a title someone typed is left alone.
+  const [guessedTitle, setGuessedTitle] = useState<string | undefined>(
+    undefined,
+  );
 
-  const formRef = useRef<ModalFormHandle>(null);
+  // show() can be asked for before ModalForm has mounted (the tag selector
+  // below is lazy-loaded), e.g. by the bookmarklet on page load, so it is
+  // replayed once the form is there.
+  const formRef = useRef<ModalFormHandle | null>(null);
+  const showPending = useRef(false);
+  const setFormRef = useCallback((handle: ModalFormHandle | null) => {
+    formRef.current = handle;
+    if (handle && showPending.current) {
+      showPending.current = false;
+      handle.show();
+    }
+  }, []);
 
   const onTitleChange: NonNullable<FormControlProps["onChange"]> = useCallback(
     (event) => {
@@ -146,6 +183,20 @@ const PuzzleModalForm = ({
     },
     [],
   );
+
+  // Fills in a title from the URL while the title is blank or still the one
+  // guessed from the previous URL.
+  useEffect(() => {
+    const guessed = guessTitleFromUrl(url);
+    if (guessed === undefined) {
+      return;
+    }
+    if (title === "" || title === guessedTitle) {
+      setTitle(guessed);
+      setTitleDirty(true);
+    }
+    setGuessedTitle(guessed);
+  }, [url, title, guessedTitle]);
 
   const onDocTypeChange = useCallback((newValue: string) => {
     setDocType(newValue as GdriveMimeTypesType);
@@ -180,7 +231,37 @@ const PuzzleModalForm = ({
     [],
   );
 
+  const onLockedChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setLocked(event.currentTarget.checked);
+      setLockedDirty(true);
+    },
+    [],
+  );
+
+  const onLockedSummaryChange: NonNullable<FormControlProps["onChange"]> =
+    useCallback((event) => {
+      setLockedSummary(event.currentTarget.value);
+      setLockedSummaryDirty(true);
+    }, []);
+
   const { t } = useTranslation();
+
+  const currentLocked = useMemo(() => {
+    if (!lockedDirty && puzzle) {
+      return puzzle.locked ?? false;
+    } else {
+      return locked;
+    }
+  }, [lockedDirty, puzzle, locked]);
+
+  const currentLockedSummary = useMemo(() => {
+    if (!lockedSummaryDirty && puzzle) {
+      return puzzle.lockedSummary ?? "";
+    } else {
+      return lockedSummary;
+    }
+  }, [lockedSummaryDirty, puzzle, lockedSummary]);
 
   const onFormSubmit = useCallback(
     (callback: () => void) => {
@@ -198,6 +279,13 @@ const PuzzleModalForm = ({
       }
       if (allowDuplicateUrls) {
         payload.allowDuplicateUrls = allowDuplicateUrls;
+      }
+      if (allowLocked) {
+        payload.locked = currentLocked;
+        const trimmedSummary = currentLockedSummary.trim();
+        if (currentLocked && trimmedSummary !== "") {
+          payload.lockedSummary = trimmedSummary;
+        }
       }
       onSubmit(payload, (error) => {
         if (error) {
@@ -228,6 +316,8 @@ const PuzzleModalForm = ({
           setTagsDirty(false);
           setExpectedAnswerCountDirty(false);
           setConsiderCompletedWithNoAnswerDirty(false);
+          setLockedDirty(false);
+          setLockedSummaryDirty(false);
           setConfirmingDuplicateUrl(false);
           setAllowDuplicateUrls(false);
           callback();
@@ -244,6 +334,9 @@ const PuzzleModalForm = ({
       docType,
       allowDuplicateUrls,
       considerCompletedWithNoAnswer,
+      allowLocked,
+      currentLocked,
+      currentLockedSummary,
       t,
     ],
   );
@@ -251,6 +344,8 @@ const PuzzleModalForm = ({
   const show = useCallback(() => {
     if (formRef.current) {
       formRef.current.show();
+    } else {
+      showPending.current = true;
     }
   }, []);
 
@@ -260,6 +355,9 @@ const PuzzleModalForm = ({
     setTags([]);
     setExpectedAnswerCount(1);
     setDocType("spreadsheet");
+    setLocked(false);
+    setLockedSummary("");
+    setGuessedTitle(undefined);
   }, []);
 
   const currentTitle = useMemo(() => {
@@ -342,9 +440,27 @@ const PuzzleModalForm = ({
   );
 
   const populateForm = useCallback(
-    ({ tagIds }: { tagIds: string[] }) => {
-      setTags(tagNamesForIds([...new Set(tagIds)]));
-      setTagsDirty(true);
+    ({
+      title: newTitle,
+      url: newUrl,
+      tagIds,
+    }: {
+      title?: string;
+      url?: string;
+      tagIds?: string[];
+    }) => {
+      if (newTitle !== undefined) {
+        setTitle(newTitle);
+        setTitleDirty(true);
+      }
+      if (newUrl !== undefined) {
+        setUrl(newUrl);
+        setUrlDirty(true);
+      }
+      if (tagIds !== undefined) {
+        setTags(tagNamesForIds([...new Set(tagIds)]));
+        setTagsDirty(true);
+      }
     },
     [tagNamesForIds],
   );
@@ -460,7 +576,7 @@ const PuzzleModalForm = ({
       }
     >
       <ModalForm
-        ref={formRef}
+        ref={setFormRef}
         title={
           puzzle
             ? t("puzzle.edit.editPuzzle", "Edit puzzle")
@@ -591,9 +707,17 @@ const PuzzleModalForm = ({
               disabled={disableForm}
               onChange={onExpectedAnswerCountChange}
               value={currentExpectedAnswerCount}
-              min={0}
+              min={-1}
               step={1}
             />
+            <FormText>
+              <Trans
+                i18nKey="puzzle.edit.answerCountHelp"
+                t={t}
+                defaults="For non-puzzle items, set to <code>0</code>. If the number of answers isn't known yet, set to <code>-1</code>: the puzzle won't show as solved until the count is corrected."
+                components={{ code: <code /> }}
+              />
+            </FormText>
           </Col>
         </FormGroup>
 
@@ -611,6 +735,55 @@ const PuzzleModalForm = ({
             className="mt-1"
           />
         ) : undefined}
+
+        {allowLocked && (
+          <>
+            <hr />
+            <FormGroup as={Row} className="mb-3">
+              <Col xs={{ span: 9, offset: 3 }}>
+                <FormCheck
+                  id={`${idPrefix}-locked`}
+                  label={t("puzzle.edit.locked", "Locked")}
+                  type="checkbox"
+                  checked={currentLocked}
+                  disabled={disableForm}
+                  onChange={onLockedChange}
+                />
+                <FormText>
+                  {t(
+                    "puzzle.edit.lockedHelp",
+                    `A locked puzzle is one the team hasn't unlocked yet.
+                    Members can register interest in it, and an operator
+                    unlocks it here once it has been.`,
+                  )}
+                </FormText>
+              </Col>
+            </FormGroup>
+            {currentLocked && (
+              <FormGroup
+                as={Row}
+                className="mb-3"
+                controlId={`${idPrefix}-locked-summary`}
+              >
+                <FormLabel column xs={3}>
+                  {t("puzzle.edit.lockedSummary", "Locked summary")}
+                </FormLabel>
+                <Col xs={9}>
+                  <FormControl
+                    type="text"
+                    disabled={disableForm}
+                    onChange={onLockedSummaryChange}
+                    value={currentLockedSummary}
+                    placeholder={t(
+                      "puzzle.edit.lockedSummaryPlaceholder",
+                      "e.g. Pictures of two quizzes somewhere on campus",
+                    )}
+                  />
+                </Col>
+              </FormGroup>
+            )}
+          </>
+        )}
 
         {submitState === PuzzleModalFormSubmitState.FAILED && (
           <Alert variant="danger">{errorMessage}</Alert>

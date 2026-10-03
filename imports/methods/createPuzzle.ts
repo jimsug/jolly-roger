@@ -11,6 +11,8 @@ export default new TypedMethod<
     docType: GdriveMimeTypesType;
     allowDuplicateUrls?: boolean;
     completedWithNoAnswer?: boolean;
+    locked?: boolean;
+    lockedSummary?: string;
   },
   string
 >("Puzzles.methods.create");

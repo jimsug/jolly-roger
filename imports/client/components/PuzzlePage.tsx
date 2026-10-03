@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg-icons/faLightbulb";
 import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons/faAngleDoubleDown";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
@@ -11,9 +12,11 @@ import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
+import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
 import { faPaperPlane } from "@fortawesome/free-solid-svg-icons/faPaperPlane";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { ComponentPropsWithRef, FC } from "react";
 import React, {
@@ -60,6 +63,7 @@ import type { GuessType } from "../../lib/models/Guesses";
 import Guesses from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
+import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
@@ -73,6 +77,7 @@ import {
   userMayWritePuzzlesForHunt,
 } from "../../lib/permission_stubs";
 import chatMessagesForPuzzle from "../../lib/publications/chatMessagesForPuzzle";
+import puzzleFeedbacksForHunt from "../../lib/publications/puzzleFeedbacksForHunt";
 import puzzleForPuzzlePage from "../../lib/publications/puzzleForPuzzlePage";
 import { computeSolvedness } from "../../lib/solvedness";
 import addPuzzleAnswer from "../../methods/addPuzzleAnswer";
@@ -115,8 +120,11 @@ import MinimizedChatInfo from "./MinimizedChatInfo";
 import type { ModalFormHandle } from "./ModalForm";
 import ModalForm from "./ModalForm";
 import PuzzleAnswer from "./PuzzleAnswer";
+import PuzzleInterestPopover from "./PuzzleInterestPopover";
 import type { PuzzleModalFormSubmitPayload } from "./PuzzleModalForm";
 import PuzzleModalForm from "./PuzzleModalForm";
+import type { PuzzleUnlockModalHandle } from "./PuzzleUnlockModal";
+import PuzzleUnlockModal from "./PuzzleUnlockModal";
 import SplitPaneMinus from "./SplitPaneMinus";
 import Breakable from "./styling/Breakable";
 import { MonospaceFontFamily } from "./styling/constants";
@@ -1039,6 +1047,44 @@ const PuzzlePageMetadata = ({
     [huntId, puzzleId],
   );
 
+  // While locked (and the hunt allows locked puzzles) the puzzle takes
+  // interest votes instead of guesses.
+  const renderAsLocked =
+    (puzzle.locked ?? false) && (hunt?.allowUnlockablePuzzles ?? false);
+  const feedbacks = useTracker(
+    () =>
+      renderAsLocked ? PuzzleFeedbacks.find({ puzzle: puzzleId }).fetch() : [],
+    [puzzleId, renderAsLocked],
+  );
+  const myFeedback = useTracker(
+    () =>
+      renderAsLocked
+        ? PuzzleFeedbacks.findOne({
+            puzzle: puzzleId,
+            createdBy: Meteor.userId()!,
+          })
+        : undefined,
+    [puzzleId, renderAsLocked],
+  );
+  const interestScore = feedbacks.reduce((acc, f) => acc + f.score, 0);
+  const [showInterestPopover, setShowInterestPopover] = useState(false);
+  const interestButtonRef = useRef<HTMLButtonElement>(null);
+  const toggleInterestPopover = useCallback(() => {
+    setShowInterestPopover((shown) => !shown);
+  }, []);
+  const hideInterestPopover = useCallback(() => {
+    setShowInterestPopover(false);
+  }, []);
+  const [renderUnlockModal, setRenderUnlockModal] = useState(false);
+  const unlockModalRef = useRef<PuzzleUnlockModalHandle>(null);
+  const showUnlockModal = useCallback(() => {
+    if (renderUnlockModal && unlockModalRef.current) {
+      unlockModalRef.current.show();
+    } else {
+      setRenderUnlockModal(true);
+    }
+  }, [renderUnlockModal]);
+
   const editModalRef = useRef<React.ComponentRef<typeof PuzzleModalForm>>(null);
   const guessModalRef =
     useRef<React.ComponentRef<typeof PuzzleGuessModal>>(null);
@@ -1156,7 +1202,56 @@ const PuzzlePageMetadata = ({
   ) : null;
 
   let guessButton = null;
-  if (puzzle.expectedAnswerCount > 0) {
+  if (renderAsLocked) {
+    guessButton = (
+      <>
+        <Button
+          ref={interestButtonRef}
+          variant="info"
+          size="sm"
+          onClick={toggleInterestPopover}
+        >
+          <FontAwesomeIcon
+            icon={myFeedback ? faLightbulbSolid : faLightbulbRegular}
+          />{" "}
+          {myFeedback
+            ? t("puzzle.interest.update", "Update interest")
+            : t("puzzle.interest.register", "I'm interested")}
+          {interestScore > 0 && (
+            <>
+              {" "}
+              <Badge bg="light" text="dark">
+                {interestScore}
+              </Badge>
+            </>
+          )}
+        </Button>
+        <PuzzleInterestPopover
+          puzzleId={puzzleId}
+          lockedSummary={puzzle.lockedSummary}
+          myFeedback={myFeedback}
+          target={interestButtonRef.current}
+          show={showInterestPopover}
+          placement="bottom"
+          onHide={hideInterestPopover}
+        />
+        {canUpdate && (
+          <Button variant="danger" size="sm" onClick={showUnlockModal}>
+            <FontAwesomeIcon icon={faUnlock} />{" "}
+            {t("puzzle.unlock.button", "Unlock")}
+          </Button>
+        )}
+        {renderUnlockModal && (
+          <PuzzleUnlockModal
+            ref={unlockModalRef}
+            puzzle={puzzle}
+            feedbacks={feedbacks}
+            showOnMount
+          />
+        )}
+      </>
+    );
+  } else if (puzzle.expectedAnswerCount > 0) {
     guessButton = hasGuessQueue ? (
       <>
         <Button variant="primary" size="sm" onClick={showGuessModal}>
@@ -1229,6 +1324,12 @@ const PuzzlePageMetadata = ({
           {minimizeMetadataButton}
         </PuzzleMetadataButtons>
       </PuzzleMetadataActionRow>
+      {renderAsLocked && puzzle.lockedSummary && (
+        <PuzzleMetadataRow>
+          <strong>{t("puzzle.locked.summaryLabel", "Locked puzzle")}:</strong>{" "}
+          {puzzle.lockedSummary}
+        </PuzzleMetadataRow>
+      )}
       <PuzzleMetadataRow>{answersElement}</PuzzleMetadataRow>
       <PuzzleMetadataRow>
         <StyledTagList
@@ -2117,6 +2218,8 @@ const PuzzlePage = React.memo(() => {
     puzzleId,
     huntId,
   });
+  // Interest in locked puzzles; fine for it to trickle in
+  useTypedSubscribe(puzzleFeedbacksForHunt, { huntId });
 
   const chatMessagesLoading = useTypedSubscribe(chatMessagesForPuzzle, {
     puzzleId,

@@ -12,6 +12,7 @@ import { darkTheme, lightTheme } from "../theme";
 import AllProfileListPage from "./AllProfileListPage";
 import AnnouncementsPage from "./AnnouncementsPage";
 import { AuthenticatedPage, UnauthenticatedPage } from "./authentication";
+import CustomLinkEmbedPage from "./CustomLinkEmbedPage";
 import EnrollForm from "./EnrollForm";
 import FirehosePage from "./FirehosePage";
 import FirstUserForm from "./FirstUserForm";
@@ -28,6 +29,7 @@ import JoinHunt from "./JoinHunt";
 import Loading from "./Loading";
 import LoginForm from "./LoginForm";
 import MoreAppPage from "./MoreAppPage";
+import NotesPage from "./NotesPage";
 import PasswordResetForm from "./PasswordResetForm";
 import ProfilePage from "./ProfilePage";
 import PuzzleListPage from "./PuzzleListPage";
@@ -72,6 +74,8 @@ export const AuthenticatedRouteList: RouteObject[] = [
           { path: "puzzles/:puzzleId", element: <PuzzlePage /> },
           { path: "puzzles", element: <PuzzleListPage /> },
           { path: "tags", element: <HuntTagManagerPage /> },
+          { path: "notes", element: <NotesPage /> },
+          { path: "custom-link", element: <CustomLinkEmbedPage /> },
           { path: "more", element: <MoreAppPage /> },
           { path: "edit", element: <HuntEditPage /> },
           { path: "", element: <Navigate to="puzzles" replace /> },

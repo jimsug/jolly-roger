@@ -1,9 +1,12 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import { faBullhorn } from "@fortawesome/free-solid-svg-icons/faBullhorn";
+import { faDisplay } from "@fortawesome/free-solid-svg-icons/faDisplay";
 import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
+import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalLinkAlt";
 import { faFaucet } from "@fortawesome/free-solid-svg-icons/faFaucet";
 import { faMap } from "@fortawesome/free-solid-svg-icons/faMap";
+import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faReceipt } from "@fortawesome/free-solid-svg-icons/faReceipt";
 import { faTags } from "@fortawesome/free-solid-svg-icons/faTags";
 import { faUsers } from "@fortawesome/free-solid-svg-icons/faUsers";
@@ -164,6 +167,35 @@ const HuntNav = () => {
         </StyledPuzzleListLinkLabel>
       </HuntLinkAnchor>
     );
+    // A hunt can add one link of its own, shown embedded in Jolly Roger or
+    // opened in a new tab.
+    let customLink = null;
+    if (hunt.customLinkName && hunt.customLinkUrl) {
+      customLink = hunt.customLinkEmbed ? (
+        <StyledPuzzleListLinkAnchor
+          to={`/hunts/${huntId}/custom-link`}
+          title={hunt.customLinkName}
+        >
+          <MenuIcon icon={faDisplay} />
+          <StyledPuzzleListLinkLabel>
+            {hunt.customLinkName}
+          </StyledPuzzleListLinkLabel>
+        </StyledPuzzleListLinkAnchor>
+      ) : (
+        <StyledPuzzleListLinkAnchor
+          to={hunt.customLinkUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={hunt.customLinkName}
+        >
+          <MenuIcon icon={faExternalLinkAlt} />
+          <StyledPuzzleListLinkLabel>
+            {hunt.customLinkName}
+          </StyledPuzzleListLinkLabel>
+        </StyledPuzzleListLinkAnchor>
+      );
+    }
+
     return (
       <JRLinkList>
         <StyledPuzzleListLinkAnchor
@@ -175,6 +207,7 @@ const HuntNav = () => {
             {t("announcements.navTitle", "Announcements")}
           </StyledPuzzleListLinkLabel>
         </StyledPuzzleListLinkAnchor>
+        {customLink}
 
         <StyledPuzzleListLinkAnchor
           to={`/hunts/${huntId}/guesses`}
@@ -212,7 +245,18 @@ const HuntNav = () => {
           </StyledPuzzleListLinkLabel>
         </StyledPuzzleListLinkAnchor>
 
-        {/* Show firehose link only to operators */}
+        {/* Show notes and firehose links only to operators */}
+        {canUpdate && (
+          <StyledPuzzleListLinkAnchor
+            to={`/hunts/${huntId}/notes`}
+            title={t("notes.navTitle", "Notes")}
+          >
+            <MenuIcon icon={faNoteSticky} />
+            <StyledPuzzleListLinkLabel>
+              {t("notes.navTitle", "Notes")}
+            </StyledPuzzleListLinkLabel>
+          </StyledPuzzleListLinkAnchor>
+        )}
         {canUpdate && (
           <StyledPuzzleListLinkAnchor
             to={`/hunts/${huntId}/firehose`}

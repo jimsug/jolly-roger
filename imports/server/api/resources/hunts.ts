@@ -82,6 +82,8 @@ hunts.post(
       ),
       allowDuplicateUrls: Match.Optional(Boolean),
       completedWithNoAnswer: Match.Optional(Boolean),
+      locked: Match.Optional(Boolean),
+      lockedSummary: Match.Optional(String),
     });
 
     try {

@@ -7,6 +7,15 @@ export const useAppThemeState = () => {
   return useLocalStorage<AppThemeState>("appTheme", "auto");
 };
 
+export type NotesPageViewMode = "list" | "table" | "fullwidth";
+export const useNotesPageViewMode = () => {
+  return useLocalStorage<NotesPageViewMode>("notesPageViewMode", "list");
+};
+
+export const useNotesPageShowSolved = () => {
+  return useLocalStorage<boolean>("notesPageShowSolved", false);
+};
+
 export type OperatorActionsHiddenState = Record<string /* huntId */, boolean>;
 
 export const useOperatorActionsHidden = () => {
@@ -39,9 +48,14 @@ export const useOperatorActionsHiddenForHunt = (huntId: string) => {
   ] as const;
 };
 
+export type LockedDisplayMode = "all" | "unlocked" | "locked";
+
 export type PuzzleListState = {
   displayMode: "group" | "unlock";
   showSolved: boolean;
+  // Only consulted in hunts that allow locked puzzles. State saved before
+  // this field existed lacks it, so readers treat undefined as "all".
+  lockedDisplayMode?: LockedDisplayMode;
   collapseGroups: Record<string /* tag ID */, boolean>;
 };
 
@@ -49,6 +63,7 @@ const defaultPuzzleListState = () => {
   return {
     displayMode: "group",
     showSolved: true,
+    lockedDisplayMode: "all",
     collapseGroups: {},
   } as PuzzleListState;
 };
@@ -112,6 +127,29 @@ export const useHuntPuzzleListShowSolved = (huntId: string) => {
             showSolved:
               typeof update === "function"
                 ? update(prevView.showSolved)
+                : update,
+          };
+          return newView;
+        });
+      },
+      [setHuntPuzzleListView],
+    ),
+  ] as const;
+};
+
+export const useHuntPuzzleListLockedDisplayMode = (huntId: string) => {
+  const [huntPuzzleListView, setHuntPuzzleListView] =
+    useHuntPuzzleListState(huntId);
+  return [
+    huntPuzzleListView.lockedDisplayMode ?? "all",
+    useCallback(
+      (update: SetStateAction<LockedDisplayMode>) => {
+        setHuntPuzzleListView((prevView) => {
+          const newView = {
+            ...prevView,
+            lockedDisplayMode:
+              typeof update === "function"
+                ? update(prevView.lockedDisplayMode ?? "all")
                 : update,
           };
           return newView;

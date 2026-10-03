@@ -37,6 +37,7 @@ import TransportRequests from "../../lib/models/mediasoup/TransportRequests";
 import TransportStates from "../../lib/models/mediasoup/TransportStates";
 import Transports from "../../lib/models/mediasoup/Transports";
 import PendingAnnouncements from "../../lib/models/PendingAnnouncements";
+import PuzzleFeedbacks from "../../lib/models/PuzzleFeedbacks";
 import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import Puzzles from "../../lib/models/Puzzles";
 import Servers from "../../lib/models/Servers";
@@ -306,6 +307,23 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
       await PuzzleNotifications.collection
         .rawCollection()
         .deleteMany({ user: source });
+    },
+  ],
+  [
+    PuzzleFeedbacks,
+    async (source, target, signal) => {
+      // createdBy is the voter here and part of a unique index, so it can't be
+      // bulk-updated like the other withCommon models.
+      await reassignUniqueFK(
+        PuzzleFeedbacks.collection,
+        "createdBy",
+        source,
+        target,
+        signal,
+      );
+      await PuzzleFeedbacks.collection
+        .rawCollection()
+        .updateMany({ updatedBy: source }, { $set: { updatedBy: target } });
     },
   ],
 ]);
