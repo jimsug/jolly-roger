@@ -7,6 +7,7 @@ import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import { userMayUpdateGuessesForHunt } from "../../lib/permission_stubs";
 import setGuessState from "../../methods/setGuessState";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import transitionGuess from "../transitionGuess";
 import defineMethod from "./defineMethod";
 
@@ -41,6 +42,7 @@ defineMethod(setGuessState, {
     if (!guess) {
       throw new Meteor.Error(404, "No such guess");
     }
+    await assertNotWhiteboardPuzzle(guess.puzzle);
 
     const puzzle = await Puzzles.findOneAsync(guess.puzzle);
     if (!puzzle) {

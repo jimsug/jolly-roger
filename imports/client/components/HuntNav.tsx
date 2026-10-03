@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import { faBullhorn } from "@fortawesome/free-solid-svg-icons/faBullhorn";
+import { faChalkboard } from "@fortawesome/free-solid-svg-icons/faChalkboard";
 import { faDisplay } from "@fortawesome/free-solid-svg-icons/faDisplay";
 import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
 import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalLinkAlt";
@@ -13,8 +14,12 @@ import Nav from "react-bootstrap/Nav";
 import { useTranslation } from "react-i18next";
 import { NavLink, useParams } from "react-router";
 import styled, { css } from "styled-components";
+import Flags from "../../Flags";
 import Hunts from "../../lib/models/Hunts";
+import Whiteboards from "../../lib/models/Whiteboards";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
+import whiteboardForHunt from "../../lib/publications/whiteboardForHunt";
+import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import { mediaBreakpointDown } from "./styling/responsive";
 
 const JRLinkList = styled(Nav)`
@@ -148,6 +153,15 @@ const HuntNav = () => {
     };
   }, [hunt]);
   const { t } = useTranslation();
+  useTypedSubscribe(whiteboardForHunt, { huntId });
+  // Members see the link once a board exists; operators also see it before
+  // then, so they can create one.
+  const showWhiteboard = useTracker(
+    () =>
+      !Flags.active("disable.whiteboard") &&
+      (canUpdate || !!Whiteboards.findOne({ hunt: huntId })),
+    [canUpdate, huntId],
+  );
 
   if (huntId && hunt) {
     // Once a hunt is archived its site often moves, so prefer the archive URL
@@ -216,6 +230,18 @@ const HuntNav = () => {
             {t("hunterList.navTitle", "Hunters")}
           </StyledPuzzleListLinkLabel>
         </StyledPuzzleListLinkAnchor>
+
+        {showWhiteboard && (
+          <StyledPuzzleListLinkAnchor
+            to={`/hunts/${huntId}/whiteboard`}
+            title={t("whiteboard.title", "Whiteboard")}
+          >
+            <MenuIcon icon={faChalkboard} />
+            <StyledPuzzleListLinkLabel>
+              {t("whiteboard.title", "Whiteboard")}
+            </StyledPuzzleListLinkLabel>
+          </StyledPuzzleListLinkAnchor>
+        )}
 
         {/* Notes and the tag manager are operator tools. The guess queue and
             firehose are linked from the More page instead of the bar. */}

@@ -1,6 +1,12 @@
+import type { Viewport } from "@xyflow/react";
 import type { SetStateAction } from "react";
-import { useCallback } from "react";
-import { useLocalStorage } from "usehooks-ts";
+import { useCallback, useEffect, useState } from "react";
+import { useEventListener, useLocalStorage } from "usehooks-ts";
+import type {
+  WhiteboardColor,
+  WhiteboardStrokeWidth,
+} from "../../lib/models/WhiteboardNodes";
+import type { LineStyle } from "../components/whiteboard/LineStyleControls";
 
 export type AppThemeState = "dark" | "light" | "auto";
 export const useAppThemeState = () => {
@@ -245,4 +251,106 @@ export const useHuntPuzzleListCollapseGroup = (
       [setHuntPuzzleListCollapseGroups, tagId],
     ),
   ] as const;
+};
+
+// None of the settings below are functions, so a function is an update.
+function isUpdate<T>(update: SetStateAction<T>): update is (previous: T) => T {
+  return typeof update === "function";
+}
+
+function readStored<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw === null ? fallback : JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+// Like useLocalStorage, but React state holds the value and saving it is best
+// effort. useLocalStorage only takes a new value once it has written it, so
+// with storage blocked or full a setting couldn't change at all; here it still
+// changes for the visit. Values saved in other tabs come through as well.
+function useBestEffortLocalStorage<T>(key: string, initialValue: T) {
+  const [setting, setSetting] = useState(() => ({
+    key,
+    value: readStored(key, initialValue),
+    changed: false,
+  }));
+  let current = setting;
+  if (setting.key !== key) {
+    // Another key (another board's, say) starts from what's saved under it.
+    current = { key, value: readStored(key, initialValue), changed: false };
+    setSetting(current);
+  }
+
+  useEffect(() => {
+    if (!setting.changed) return;
+    try {
+      window.localStorage.setItem(setting.key, JSON.stringify(setting.value));
+    } catch {
+      // Kept for this visit only.
+    }
+  }, [setting]);
+
+  useEventListener("storage", (event) => {
+    if (event.key === key) {
+      setSetting({ key, value: readStored(key, initialValue), changed: false });
+    }
+  });
+
+  const setValue = useCallback((update: SetStateAction<T>) => {
+    setSetting((previous) => ({
+      key: previous.key,
+      value: isUpdate(update) ? update(previous.value) : update,
+      changed: true,
+    }));
+  }, []);
+
+  return [current.value, setValue] as const;
+}
+
+// Each viewer's own pan and zoom for a board.
+export const useWhiteboardViewport = (boardId: string) => {
+  return useBestEffortLocalStorage<Viewport | undefined>(
+    `whiteboard:viewport:${boardId}`,
+    undefined,
+  );
+};
+
+export const useWhiteboardFeederArrows = () => {
+  return useBestEffortLocalStorage("whiteboard:feederArrows", true);
+};
+
+export const useWhiteboardPenColor = () => {
+  return useBestEffortLocalStorage<WhiteboardColor>(
+    "whiteboard:penColor",
+    "black",
+  );
+};
+
+export const useWhiteboardPenWidth = () => {
+  return useBestEffortLocalStorage<WhiteboardStrokeWidth>(
+    "whiteboard:penWidth",
+    "medium",
+  );
+};
+
+export const useWhiteboardShowResolvedComments = () => {
+  return useBestEffortLocalStorage("whiteboard:showResolvedComments", false);
+};
+
+// The line tool's style
+export const useWhiteboardLineStyle = (defaultStyle: LineStyle) => {
+  return useBestEffortLocalStorage("whiteboard:lineStyle", defaultStyle);
+};
+
+const NOTHING_SEEN: Record<string /* thread ID */, number> = {};
+
+// When this viewer last read each of a board's comment threads
+export const useWhiteboardCommentsSeen = (boardId: string) => {
+  return useBestEffortLocalStorage(
+    `whiteboard:commentsSeen:${boardId}`,
+    NOTHING_SEEN,
+  );
 };

@@ -70,5 +70,11 @@
       "activitySummary_one": "Total: {{count}} activity ({{breakdown}}) on {{day}}s at {{from}} - {{to}}",
       "activitySummary_other": "Total: {{count}} activities ({{breakdown}}) on {{day}}s at {{from}} - {{to}}"
     }
+  },
+  "whiteboard": {
+    "comments": {
+      "replies_one": "{{count}} reply",
+      "replies_other": "{{count}} replies"
+    }
   }
 }

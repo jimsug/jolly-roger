@@ -10,6 +10,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import { Url } from "../../lib/typedModel/regexes";
 import unlockPuzzle from "../../methods/unlockPuzzle";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import GlobalHooks from "../GlobalHooks";
 import { serverLanguage } from "../lang";
 import sendChatMessageInternal from "../sendChatMessageInternal";
@@ -26,6 +27,7 @@ defineMethod(unlockPuzzle, {
 
   async run({ puzzleId, url }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(puzzleId);
     if (!puzzle) {

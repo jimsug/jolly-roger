@@ -45,6 +45,9 @@ import Servers from "../../lib/models/Servers";
 import Settings from "../../lib/models/Settings";
 import Tags from "../../lib/models/Tags";
 import UserStatuses from "../../lib/models/UserStatuses";
+import WhiteboardEdges from "../../lib/models/WhiteboardEdges";
+import WhiteboardNodes from "../../lib/models/WhiteboardNodes";
+import Whiteboards from "../../lib/models/Whiteboards";
 import { AllModels } from "../../lib/typedModel/Model";
 import addUsersToDiscordRole from "../addUsersToDiscordRole";
 import { ensureHuntFolderPermission } from "../gdrive";
@@ -59,6 +62,7 @@ import LatestDeploymentTimestamps from "../models/LatestDeploymentTimestamps";
 import Locks from "../models/Locks";
 import Subscribers from "../models/Subscribers";
 import UploadTokens from "../models/UploadTokens";
+import WhiteboardPresence from "../models/WhiteboardPresence";
 import defineJob from "./framework/defineJob";
 import PermanentJobError from "./framework/PermanentJobError";
 
@@ -100,6 +104,9 @@ const MODELS_WITH_COMMON: { collection: { rawCollection(): any } }[] = [
   TransportStates,
   Transports,
   UploadTokens,
+  WhiteboardEdges,
+  WhiteboardNodes,
+  Whiteboards,
 ];
 
 // Models with no user foreign keys (or with non-user FKs we skip).
@@ -137,16 +144,18 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
   [
     ChatMessages,
     async (source, target, signal) => {
-      // Single-pass cursor walk: none of sender, createdBy, updatedBy, or
-      // content.children.userId are indexed on ChatMessages, so four separate
-      // updateMany calls would each do a full collection scan. Instead, scan
-      // once and issue targeted updateOne calls per matching document.
+      // Single-pass cursor walk: none of sender, createdBy, updatedBy,
+      // comment.resolvedBy or content.children.userId are indexed on their
+      // own on ChatMessages, so separate updateMany calls would each do a
+      // full collection scan. Instead, scan once and issue targeted updateOne
+      // calls per matching document.
       const raw = ChatMessages.collection.rawCollection();
       for await (const msg of raw.find({
         $or: [
           { sender: source },
           { createdBy: source },
           { updatedBy: source },
+          { "comment.resolvedBy": source },
           {
             "content.children": {
               $elemMatch: { type: "mention", userId: source },
@@ -160,6 +169,9 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
         if (msg.sender === source) $set.sender = target;
         if (msg.createdBy === source) $set.createdBy = target;
         if (msg.updatedBy === source) $set.updatedBy = target;
+        if (msg.comment?.resolvedBy === source) {
+          $set["comment.resolvedBy"] = target;
+        }
         if (Object.keys($set).length > 0) {
           await raw.updateOne({ _id: msg._id }, { $set });
         }
@@ -319,6 +331,41 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
       // has just ended. Carrying the rows over could show the target as
       // online from a session that no longer exists, so they go.
       await UserStatuses.collection
+        .rawCollection()
+        .deleteMany({ user: source });
+    },
+  ],
+  [
+    WhiteboardNodes,
+    async (source, target) => {
+      // Attribution follows the person, like createdBy does.
+      await WhiteboardNodes.collection
+        .rawCollection()
+        .updateMany(
+          { "contributors.user": source },
+          { $set: { "contributors.$[entry].user": target } },
+          { arrayFilters: [{ "entry.user": source }] },
+        );
+    },
+  ],
+  [
+    WhiteboardEdges,
+    async (source, target) => {
+      await WhiteboardEdges.collection
+        .rawCollection()
+        .updateMany(
+          { "contributors.user": source },
+          { $set: { "contributors.$[entry].user": target } },
+          { arrayFilters: [{ "entry.user": source }] },
+        );
+    },
+  ],
+  [
+    WhiteboardPresence,
+    async (source) => {
+      // Live cursors and drags belong to the source account's sessions,
+      // which the merge has ended, so they go like presence does.
+      await WhiteboardPresence.collection
         .rawCollection()
         .deleteMany({ user: source });
     },

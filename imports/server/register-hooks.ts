@@ -8,6 +8,7 @@ import PuzzleHooks from "./hooks/PuzzleHooks";
 import TagCleanupHooks from "./hooks/TagCleanupHooks";
 import TagHooks from "./hooks/TagHooks";
 import UserStatusHooks from "./hooks/UserStatusHooks";
+import WhiteboardHooks from "./hooks/WhiteboardHooks";
 
 // Some hook implementations may themselves need to trigger other hooks. To
 // avoid import cycles, hook registration is isolated to this file which is
@@ -23,3 +24,4 @@ GlobalHooks.addHookSet(TagHooks);
 GlobalHooks.addHookSet(DocumentCacheHooks);
 GlobalHooks.addHookSet(UserStatusHooks);
 GlobalHooks.addHookSet(PuzzleHooks);
+GlobalHooks.addHookSet(WhiteboardHooks);

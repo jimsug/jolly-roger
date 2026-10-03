@@ -6,6 +6,7 @@ import Hunts from "../../lib/models/Hunts";
 import Puzzles from "../../lib/models/Puzzles";
 import createGuess from "../../methods/createGuess";
 import { answerify } from "../../model-helpers";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import sendChatMessageInternal from "../sendChatMessageInternal";
 import defineMethod from "./defineMethod";
 
@@ -22,6 +23,7 @@ defineMethod(createGuess, {
 
   async run({ puzzleId, guess: rawGuess, direction, confidence }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     // Normalize up front so the insert, log line, and chat message all use
     // the same canonical form. (The client uppercases as you type, but

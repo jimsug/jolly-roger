@@ -33,6 +33,9 @@ const ChatNotification = withCommon(
     // as dingwords), which a dingword mute must leave alone. Rows written
     // before this field existed lack it.
     mentioned: z.boolean().optional(),
+    // The whiteboard comment thread the message belongs to (the root
+    // comment's id), including when it is the root.
+    thread: foreignKey.optional(),
   }),
 );
 
@@ -42,6 +45,10 @@ const ChatNotifications = new SoftDeletedModel(
 );
 ChatNotifications.addIndex({ deleted: 1, user: 1 });
 ChatNotifications.addIndex({ hunt: 1 });
+ChatNotifications.addIndex(
+  { thread: 1 },
+  { partialFilterExpression: { thread: { $exists: true } } },
+);
 export type ChatNotificationType = ModelType<typeof ChatNotifications>;
 
 export default ChatNotifications;

@@ -57,12 +57,21 @@ const HuntProfileListPage = () => {
     );
     return titles;
   }, [huntId]);
+  // Someone on the whiteboard's chat or call links to the board itself
+  const whiteboardPuzzle = useTracker(
+    () =>
+      Puzzles.findOne(
+        { hunt: huntId, kind: "whiteboard" },
+        { projection: { _id: 1 } },
+      )?._id,
+    [huntId],
+  );
   // One clock for every badge, so the list re-renders once a minute rather
   // than one badge at a time
   const now = useNow(60 * 1000);
   const presence = useMemo(
-    () => ({ userStatuses, puzzleTitles, now }),
-    [userStatuses, puzzleTitles, now],
+    () => ({ userStatuses, puzzleTitles, whiteboardPuzzle, now }),
+    [userStatuses, puzzleTitles, whiteboardPuzzle, now],
   );
 
   const users = useTracker(

@@ -450,6 +450,8 @@ const ProfileList = ({
   presence?: {
     userStatuses: Record<string, UserStatusSummary>;
     puzzleTitles: Map<string, string>;
+    // The hunt's whiteboard (its hidden puzzle), which links to the board
+    whiteboardPuzzle: string | undefined;
     now: Date;
   };
 }) => {
@@ -782,6 +784,7 @@ const ProfileList = ({
                     summary={presence.userStatuses[user._id]}
                     huntId={hunt._id}
                     puzzleTitles={presence.puzzleTitles}
+                    whiteboardPuzzle={presence.whiteboardPuzzle}
                     now={presence.now}
                   />
                 )}

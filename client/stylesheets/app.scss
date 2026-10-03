@@ -9,6 +9,9 @@
 @import "_theme";
 @import "../../node_modules/bootstrap/scss/bootstrap";
 
+// React Flow, for the whiteboard. It's all scoped under .react-flow.
+@import "../../node_modules/@xyflow/react/dist/style";
+
 // Give outline buttons distinct hover and active styles
 $btn-outline-hover-tint: 80%;
 @each $color, $value in $theme-colors {

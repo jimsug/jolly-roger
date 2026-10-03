@@ -8,6 +8,7 @@ import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import updatePuzzle from "../../methods/updatePuzzle";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import GlobalHooks from "../GlobalHooks";
 import { ensureDocument, puzzleDocumentName, renameDocument } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
@@ -49,6 +50,7 @@ defineMethod(updatePuzzle, {
     lockedSummary,
   }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const oldPuzzle = await Puzzles.findOneAllowingDeletedAsync(puzzleId);
     if (!oldPuzzle) {

@@ -40,7 +40,7 @@ files:
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-04T10:00:00Z
+updated: 2026-10-04T22:00:00Z
 ---
 
 # Google Drive Integration
@@ -128,6 +128,10 @@ they call on loading a puzzle page. In order to prevent thundering herds of
 creation attempts, when creating a new puzzle, the document is created *before*
 saving the puzzle to MongoDB, so that once clients discover the new puzzle, the
 document should already be present.
+
+The hidden puzzle behind a hunt's whiteboard (`kind: "whiteboard"`) never gets a
+document: it's created without one, the methods that would make one refuse it,
+and the cache sweep doesn't count it as puzzle activity.
 
 When creating spreadsheets, we also use the Google Sheets API to enable external
 URL access from formulas by default. Without this, consent needs to be granted

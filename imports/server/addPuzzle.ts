@@ -13,6 +13,7 @@ import GlobalHooks from "./GlobalHooks";
 import { deleteUnusedDocument, ensureDocument } from "./gdrive";
 import getOrCreateTagByName from "./getOrCreateTagByName";
 import GoogleClient from "./googleClientRefresher";
+import { deferSyncPuzzlesOnBoard } from "./whiteboard";
 import withLock from "./withLock";
 
 async function checkForDuplicatePuzzle(huntId: string, url: string) {
@@ -197,6 +198,10 @@ export default async function addPuzzle({
     Meteor.defer(() => {
       void GlobalHooks.runPuzzleCreatedHooks(puzzleId);
     });
+  } else {
+    // The whiteboard shows locked puzzles too, so they go on the board now
+    // rather than when they're unlocked (when placing them is a no-op).
+    deferSyncPuzzlesOnBoard(huntId, [puzzleId]);
   }
 
   return puzzleId;

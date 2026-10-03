@@ -1,4 +1,3 @@
-import { setTimeout } from "node:timers/promises";
 import { Accounts } from "meteor/accounts-base";
 import { DDP } from "meteor/ddp";
 import { assert } from "chai";
@@ -33,20 +32,6 @@ const SHEET_MIME = "application/vnd.google-apps.spreadsheet";
 const DOC_MIME = "application/vnd.google-apps.document";
 
 type CachedType = keyof typeof DOCUMENT_CACHE_TARGETS;
-
-// Like waitForAssertion, for checks that need to read the database
-async function eventually(check: () => Promise<void>, timeoutMs = 5000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      await check();
-      return;
-    } catch {
-      await setTimeout(20);
-    }
-  }
-  await check();
-}
 
 describe("document cache", function () {
   this.timeout(30000);
@@ -132,7 +117,7 @@ describe("document cache", function () {
   // Creating a puzzle refills the cache in the background; a test that does
   // so waits for that to land so it can't spill into the next test.
   const awaitRefill = () =>
-    eventually(async () => {
+    waitForAssertion(async () => {
       assert.equal(
         await availableCount("spreadsheet"),
         DOCUMENT_CACHE_TARGETS.spreadsheet,
@@ -141,7 +126,7 @@ describe("document cache", function () {
         await availableCount("document"),
         DOCUMENT_CACHE_TARGETS.document,
       );
-    });
+    }, 5000);
 
   this.beforeAll(async function () {
     await resetDatabase("document cache");
@@ -409,11 +394,23 @@ describe("document cache", function () {
     const emptyHuntId = await insertHunt("Empty hunt");
     const archivedHuntId = await insertHunt("Archived hunt", true);
     const staleHuntId = await insertHunt("Stale hunt");
+    const boardOnlyHuntId = await insertHunt("Stale hunt with a new board");
+    const longAgo = new Date(
+      Date.now() - DOCUMENT_CACHE_SWEEP_WINDOW_MS - 60 * 1000,
+    );
     await insertPuzzle(huntId);
     await insertPuzzle(archivedHuntId);
-    await insertPuzzle(
-      staleHuntId,
-      new Date(Date.now() - DOCUMENT_CACHE_SWEEP_WINDOW_MS - 60 * 1000),
+    await insertPuzzle(staleHuntId, longAgo);
+    await insertPuzzle(boardOnlyHuntId, longAgo);
+    await asAdmin(() =>
+      Puzzles.insertAsync({
+        hunt: boardOnlyHuntId,
+        title: "Whiteboard",
+        tags: [],
+        answers: [],
+        expectedAnswerCount: 0,
+        kind: "whiteboard",
+      }),
     );
 
     try {
@@ -437,9 +434,16 @@ describe("document cache", function () {
         0,
         "a hunt whose puzzles haven't changed in weeks is left alone",
       );
+      assert.equal(
+        await CachedDocuments.find({ hunt: boardOnlyHuntId }).countAsync(),
+        0,
+        "a new whiteboard isn't puzzle activity",
+      );
     } finally {
       await Hunts.removeAsync({
-        _id: { $in: [emptyHuntId, archivedHuntId, staleHuntId] },
+        _id: {
+          $in: [emptyHuntId, archivedHuntId, staleHuntId, boardOnlyHuntId],
+        },
       });
     }
   });

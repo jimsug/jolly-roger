@@ -8,6 +8,7 @@ import type { EditableHuntType } from "../../imports/lib/models/Hunts";
 import huntForHuntApp from "../../imports/lib/publications/huntForHuntApp";
 import addHuntUser from "../../imports/methods/addHuntUser";
 import createHunt from "../../imports/methods/createHunt";
+import createWhiteboard from "../../imports/methods/createWhiteboard";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
 import resetDatabase from "../lib/resetDatabase";
 import createTestUser from "./createTestUser";
@@ -98,6 +99,7 @@ if (Meteor.isClient) {
       assert.deepEqual(linkTitles(), [
         "Announcements",
         "Hunters",
+        "Whiteboard",
         "Notes",
         "Tags",
         "Open the hunt homepage",
@@ -117,6 +119,27 @@ if (Meteor.isClient) {
       assert.deepEqual(linkTitles(), [
         "Announcements",
         "Hunters",
+        "Open the hunt homepage",
+        "More",
+      ]);
+    });
+
+    it("gives members the whiteboard once there is one", async function () {
+      this.timeout(10000);
+      await promisify(Meteor.logout)();
+      await login(USER_EMAIL, USER_PASSWORD);
+      await createWhiteboard.callPromise({ huntId });
+      await promisify(Meteor.logout)();
+      await login(MEMBER_EMAIL, MEMBER_PASSWORD);
+      huntSub = await typedSubscribe.async(huntForHuntApp, { huntId });
+      await stabilize();
+
+      renderNav(huntId);
+      await screen.findByTitle("Whiteboard");
+      assert.deepEqual(linkTitles(), [
+        "Announcements",
+        "Hunters",
+        "Whiteboard",
         "Open the hunt homepage",
         "More",
       ]);

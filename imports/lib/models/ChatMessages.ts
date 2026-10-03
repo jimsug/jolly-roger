@@ -58,6 +58,18 @@ export function contentFromMessage(msg: string): ChatMessageContentType {
   };
 }
 
+// Where a whiteboard comment is pinned. With node, x and y are an offset from
+// the node's top-left corner in board units; without, they're board
+// coordinates.
+const CommentAnchor = z.object({
+  node: foreignKey.optional(),
+  x: z.number(),
+  y: z.number(),
+  resolvedAt: z.date().optional(),
+  resolvedBy: foreignKey.optional(),
+});
+export type ChatMessageCommentAnchorType = z.infer<typeof CommentAnchor>;
+
 const ChatMessage = withCommon(
   z.object({
     hunt: foreignKey,
@@ -74,6 +86,12 @@ const ChatMessage = withCommon(
     // The message this one replies to (or, for a reaction, the message it
     // reacts to). Always another message on the same puzzle.
     parentId: foreignKey.nullable().optional(),
+    // Set on the message that starts a whiteboard comment thread. Replies are
+    // ordinary chat replies to it.
+    comment: CommentAnchor.optional(),
+    // The comment a reply (at any depth) belongs to. Written only by the
+    // server.
+    thread: foreignKey.optional(),
   }),
 );
 const ChatMessages = new SoftDeletedModel("jr_chatmessages", ChatMessage);
@@ -83,6 +101,14 @@ ChatMessages.addIndex({ hunt: 1, createdAt: 1 });
 // mentioned in across their hunts
 ChatMessages.addIndex({ hunt: 1, sender: 1 });
 ChatMessages.addIndex({ hunt: 1, "content.children.userId": 1 });
+ChatMessages.addIndex(
+  { thread: 1 },
+  { partialFilterExpression: { thread: { $exists: true } } },
+);
+ChatMessages.addIndex(
+  { puzzle: 1, "comment.node": 1 },
+  { partialFilterExpression: { comment: { $exists: true } } },
+);
 export type ChatMessageType = ModelType<typeof ChatMessages>;
 
 export default ChatMessages;

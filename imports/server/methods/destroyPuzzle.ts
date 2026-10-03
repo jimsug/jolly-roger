@@ -6,7 +6,9 @@ import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
+import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import destroyPuzzle from "../../methods/destroyPuzzle";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import { copySheets, makeReadOnly } from "../gdrive";
 import defineMethod from "./defineMethod";
 
@@ -22,6 +24,7 @@ defineMethod(destroyPuzzle, {
 
   async run({ puzzleId, replacedBy, copySheetsToReplacement }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(puzzleId);
     if (!puzzle) {
@@ -43,7 +46,11 @@ defineMethod(destroyPuzzle, {
 
     if (replacedBy) {
       const replacedByPuzzle = await Puzzles.findOneAsync(replacedBy);
-      if (!replacedByPuzzle || replacedByPuzzle.hunt !== puzzle.hunt) {
+      if (
+        !replacedByPuzzle ||
+        replacedByPuzzle.hunt !== puzzle.hunt ||
+        isWhiteboardPuzzle(replacedByPuzzle)
+      ) {
         throw new Meteor.Error(400, "Invalid replacement puzzle");
       }
 

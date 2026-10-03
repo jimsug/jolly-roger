@@ -444,7 +444,11 @@ const PuzzleHistoryRow = ({
         </td>
         <td>
           <Link
-            to={`/hunts/${historyItem.huntId}/puzzles/${historyItem.puzzleId}`}
+            to={
+              historyItem.whiteboard
+                ? `/hunts/${historyItem.huntId}/whiteboard`
+                : `/hunts/${historyItem.huntId}/puzzles/${historyItem.puzzleId}`
+            }
           >
             {historyItem.name}
           </Link>

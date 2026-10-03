@@ -30,6 +30,7 @@ import nodeIsMention from "../../lib/nodeIsMention";
 import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import chatMessagesForFirehose from "../../lib/publications/chatMessagesForFirehose";
+import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
@@ -102,7 +103,11 @@ const Message = React.memo(
             <>
               <span>{puzzle.deleted ? "deleted: " : ""}</span>
               <a
-                href={`/hunts/${msg.hunt}/puzzles/${msg.puzzle}`}
+                href={
+                  isWhiteboardPuzzle(puzzle)
+                    ? `/hunts/${msg.hunt}/whiteboard`
+                    : `/hunts/${msg.hunt}/puzzles/${msg.puzzle}`
+                }
                 target="_blank"
                 rel="noopener noreferrer"
               >

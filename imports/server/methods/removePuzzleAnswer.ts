@@ -4,6 +4,7 @@ import Guesses from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";
 import Puzzles from "../../lib/models/Puzzles";
 import removePuzzleAnswer from "../../methods/removePuzzleAnswer";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import transitionGuess from "../transitionGuess";
 import defineMethod from "./defineMethod";
 
@@ -18,6 +19,7 @@ defineMethod(removePuzzleAnswer, {
 
   async run({ puzzleId, guessId }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(
       {

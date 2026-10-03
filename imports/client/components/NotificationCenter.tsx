@@ -56,6 +56,7 @@ import pendingAnnouncementsForSelf from "../../lib/publications/pendingAnnouncem
 import pendingGuessesForSelf from "../../lib/publications/pendingGuessesForSelf";
 import puzzleNotificationsForSelf from "../../lib/publications/puzzleNotificationsForSelf";
 import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
+import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import bookmarkPuzzle from "../../methods/bookmarkPuzzle";
 import configureEnsureGoogleScript from "../../methods/configureEnsureGoogleScript";
 import dismissAllDingsForPuzzle from "../../methods/dismissAllDingsForPuzzle";
@@ -837,9 +838,16 @@ const ChatNotificationMessage = ({
     [cn.hunt, cn.puzzle, newestSeen],
   );
 
-  const messageLink = `/hunts/${hunt._id}/puzzles/${puzzle._id}${
+  // A message on the whiteboard opens the board, at its comment if it's
+  // part of one.
+  let messageLink = `/hunts/${hunt._id}/puzzles/${puzzle._id}${
     cn.message ? `#msg=${cn.message}` : ""
   }`;
+  if (isWhiteboardPuzzle(puzzle)) {
+    messageLink = `/hunts/${hunt._id}/whiteboard${
+      cn.thread ? `?comment=${cn.thread}` : ""
+    }`;
+  }
 
   return (
     <Toast onClose={dismiss}>

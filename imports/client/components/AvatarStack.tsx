@@ -26,11 +26,16 @@ const StackContainer = styled.div`
 const AvatarItem = styled.div<{
   $overlap: number;
   $isPassive: boolean;
+  $plain: boolean;
 }>`
   margin-right: -${({ $overlap }) => $overlap}px;
   border: 2px solid
-    ${({ theme, $isPassive }) =>
-      $isPassive ? theme.colors.warning : theme.colors.success};
+    ${({ theme, $isPassive, $plain }) =>
+      $plain
+        ? theme.colors.background
+        : $isPassive
+          ? theme.colors.warning
+          : theme.colors.success};
   border-radius: 50%;
   transition: all 0.2s ease-in-out;
   position: relative;
@@ -69,19 +74,22 @@ const OverflowCount = styled.div<{ $size: number }>`
 
 // A row of overlapping avatars, capped at `max` with a "+N" bubble for the
 // rest. The stack's own tooltip lists everyone; turn it off when it sits
-// inside something with its own.
+// inside something with its own. Plain drops the presence colours from the
+// borders, for stacks that aren't about who's here right now.
 const AvatarStack = ({
   users,
   size = 24,
   max = 3,
   className,
   withTooltip = true,
+  plain = false,
 }: {
   users: AvatarStackUser[];
   size?: number;
   max?: number;
   className?: string;
   withTooltip?: boolean;
+  plain?: boolean;
 }) => {
   const id = useId();
   const { t } = useTranslation();
@@ -101,6 +109,7 @@ const AvatarStack = ({
           key={user._id}
           $overlap={remaining > 0 || i < visibleUsers.length - 1 ? overlap : 0}
           $isPassive={user.isPassive ?? false}
+          $plain={plain}
         >
           <Avatar
             size={size}

@@ -5,6 +5,7 @@ import ChatMessages from "../lib/models/ChatMessages";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import Puzzles from "../lib/models/Puzzles";
 import nodeIsPuzzle from "../lib/nodeIsPuzzle";
+import type { CommentAnchorInput } from "../methods/sendChatMessage";
 import GlobalHooks from "./GlobalHooks";
 
 export async function assertHuntMember(userId: string, huntId: string) {
@@ -25,12 +26,16 @@ export default async function sendChatMessageInternal({
   sender,
   pinTs,
   parentId,
+  comment,
 }: {
   puzzleId: string;
   content: ChatMessageContentType;
   sender: string | undefined;
   pinTs?: Date;
   parentId?: string;
+  // Starts a whiteboard comment thread. The caller checks the anchor (see
+  // assertValidCommentAnchor) and that this isn't a reply.
+  comment?: CommentAnchorInput;
 }) {
   const puzzle = await Puzzles.findOneAsync(puzzleId);
   if (!puzzle) {
@@ -42,9 +47,12 @@ export default async function sendChatMessageInternal({
     await assertHuntMember(sender, puzzle.hunt);
   }
 
+  // A reply at any depth in a whiteboard comment thread belongs to that
+  // thread.
+  let thread: string | undefined;
   if (parentId !== undefined) {
     const parent = await ChatMessages.findOneAsync(parentId, {
-      projection: { puzzle: 1 },
+      projection: { puzzle: 1, comment: 1, thread: 1 },
     });
     if (parent?.puzzle !== puzzleId) {
       throw new Meteor.Error(
@@ -52,6 +60,7 @@ export default async function sendChatMessageInternal({
         `Message ${parentId} is not on puzzle ${puzzleId}`,
       );
     }
+    thread = parent.comment ? parent._id : parent.thread;
 
     // One reaction per emoji per user on a message: a double click or a
     // second tab reacting again lands on the existing one. The puzzle is in
@@ -98,7 +107,17 @@ export default async function sendChatMessageInternal({
     timestamp: new Date(),
     ...(pinTs ? { pinTs } : {}),
     ...(parentId ? { parentId } : {}),
+    ...(comment ? { comment } : {}),
+    ...(thread ? { thread } : {}),
   });
+
+  // Replying to a resolved thread reopens it. Reacting to it doesn't.
+  if (thread && !isReaction({ content, parentId })) {
+    await ChatMessages.updateAsync(
+      { _id: thread, "comment.resolvedAt": { $exists: true } },
+      { $unset: { "comment.resolvedAt": 1, "comment.resolvedBy": 1 } },
+    );
+  }
 
   await GlobalHooks.runChatMessageCreatedHooks(msgId);
 

@@ -8,6 +8,7 @@ import Hunts from "../../lib/models/Hunts";
 import Puzzles from "../../lib/models/Puzzles";
 import addPuzzleAnswer from "../../methods/addPuzzleAnswer";
 import { answerify } from "../../model-helpers";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import GlobalHooks from "../GlobalHooks";
 import { serverLanguage } from "../lang";
 import sendChatMessageInternal from "../sendChatMessageInternal";
@@ -24,6 +25,7 @@ defineMethod(addPuzzleAnswer, {
 
   async run({ puzzleId, answer: rawAnswer }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     // Normalize up front so the $ne filter, $addToSet, chat message, and
     // hooks all use the same canonical form.

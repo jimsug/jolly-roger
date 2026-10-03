@@ -10,6 +10,7 @@ import {
   tagNameMatcher,
 } from "../../lib/tagNames";
 import renameTag from "../../methods/renameTag";
+import { deferSyncPuzzlesOnBoard } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(renameTag, {
@@ -52,6 +53,13 @@ defineMethod(renameTag, {
       );
     }
 
+    // A rename or merge can change which round a puzzle is in, or which meta
+    // it feeds, so the whiteboard catches up with these afterwards.
+    const affectedPuzzles = await Puzzles.find(
+      { hunt: tag.hunt, tags: tagId },
+      { projection: { _id: 1 } },
+    ).mapAsync((p) => p._id);
+
     const matcher = tagNameMatcher(newName);
     const target = await Tags.findOneAsync({
       hunt: tag.hunt,
@@ -87,6 +95,7 @@ defineMethod(renameTag, {
       }
 
       await Tags.removeAsync(tagId);
+      deferSyncPuzzlesOnBoard(tag.hunt, affectedPuzzles);
       return;
     }
 
@@ -98,5 +107,6 @@ defineMethod(renameTag, {
       aliases.push(tag.name);
     }
     await Tags.updateAsync(tagId, { $set: { name: newName, aliases } });
+    deferSyncPuzzlesOnBoard(tag.hunt, affectedPuzzles);
   },
 });

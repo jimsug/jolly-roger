@@ -23,6 +23,9 @@ export type PuzzleHistoryItem = {
   solvedness: Solvedness;
   answers: string[];
   tags: string[];
+  // Set on the row for a hunt's whiteboard (its hidden puzzle), which isn't a
+  // puzzle and lives at the hunt's whiteboard page
+  whiteboard?: boolean;
 };
 
 export const ACTIVITY_HISTORY_SUMMARIES = "activityHistorySummaries";

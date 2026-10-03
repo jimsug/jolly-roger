@@ -39,11 +39,13 @@ const UserStatusBadge = ({
   summary,
   huntId,
   puzzleTitles,
+  whiteboardPuzzle,
   now,
 }: {
   summary: UserStatusSummary | undefined;
   huntId: string;
   puzzleTitles: Map<string, string>;
+  whiteboardPuzzle: string | undefined;
   now: Date;
 }) => {
   const { t, i18n } = useTranslation();
@@ -110,7 +112,11 @@ const UserStatusBadge = ({
     puzzleButton = (
       <Link
         className="btn btn-dark"
-        to={`/hunts/${huntId}/puzzles/${puzzleId}`}
+        to={
+          puzzleId === whiteboardPuzzle
+            ? `/hunts/${huntId}/whiteboard`
+            : `/hunts/${huntId}/puzzles/${puzzleId}`
+        }
       >
         <strong>
           <FontAwesomeIcon icon={faPuzzlePiece} /> {shortTitle}

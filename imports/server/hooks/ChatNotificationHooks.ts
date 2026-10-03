@@ -107,6 +107,34 @@ const ChatNotificationHooks: Hookset = {
       }),
     );
 
+    // A reply in a whiteboard comment thread goes to whoever left the comment
+    // and everyone who has replied so far, as long as they're still in the
+    // hunt. Those rows are neither mentions nor dingwords, so muting
+    // dingwords on the board clears them too.
+    if (chatMessage.thread) {
+      const root = await ChatMessages.findOneAsync(chatMessage.thread, {
+        projection: { sender: 1 },
+      });
+      const earlierReplies = await ChatMessages.find(
+        {
+          thread: chatMessage.thread,
+          timestamp: { $lte: chatMessage.timestamp },
+        },
+        { projection: { sender: 1, content: 1, parentId: 1 } },
+      ).fetchAsync();
+      const participants = new Set<string>();
+      [root, ...earlierReplies.filter((m) => !isReaction(m))].forEach((m) => {
+        if (m?.sender && m.sender !== sender) participants.add(m.sender);
+      });
+      if (participants.size > 0) {
+        const stillInHunt = await MeteorUsers.find(
+          { _id: { $in: [...participants] }, hunts: chatMessage.hunt },
+          { projection: { _id: 1 } },
+        ).mapAsync((u) => u._id);
+        stillInHunt.forEach((userId) => reasonFor(userId));
+      }
+    }
+
     // Respect feature flag.
     if (!(await Flags.activeAsync("disable.dingwords"))) {
       const normalizedText = normalizedForDingwordSearch(chatMessage);
@@ -148,6 +176,8 @@ const ChatNotificationHooks: Hookset = {
     }
 
     // Create notifications for each user who should be dinged by this message.
+    const thread =
+      chatMessage.thread ?? (chatMessage.comment ? chatMessage._id : undefined);
     await Promise.all(
       [...usersToNotify].map(async ([userId, { mentioned, dingwords }]) => {
         await ChatNotifications.insertAsync({
@@ -162,6 +192,8 @@ const ChatNotificationHooks: Hookset = {
           // and so a mute knows which rows it may clear
           ...(dingwords.size > 0 ? { dingwords: [...dingwords] } : {}),
           mentioned,
+          // The comment thread the message is in, or starts
+          ...(thread ? { thread } : {}),
         });
       }),
     );

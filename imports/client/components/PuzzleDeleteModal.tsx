@@ -78,6 +78,7 @@ const PuzzleDeleteModal = ({
         : Puzzles.find({
             hunt: puzzle.hunt,
             _id: { $ne: puzzle._id },
+            kind: { $ne: "whiteboard" },
           }).fetch(),
     [loading, puzzle.hunt, puzzle._id],
   );

@@ -195,7 +195,8 @@ export const DOCUMENT_CACHE_SWEEP_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 // been purged, and the sweep shouldn't undo a purge; a hunt whose puzzles
 // haven't changed in weeks is over, archived or not, and placeholders would
 // only clutter its Drive folder. The puzzle hooks refill a hunt as soon as it
-// is in use again.
+// is in use again. The whiteboard's backing puzzle never gets a document, so
+// making a board doesn't count as activity.
 export async function replenishAllDocumentCaches() {
   if (!(await isGoogleAvailable())) {
     return;
@@ -210,6 +211,7 @@ export async function replenishAllDocumentCaches() {
     const active = await Puzzles.findOneAsync(
       {
         hunt: hunt._id,
+        kind: { $ne: "whiteboard" },
         $or: [{ createdAt: { $gte: since } }, { updatedAt: { $gte: since } }],
       },
       { projection: { _id: 1 } },

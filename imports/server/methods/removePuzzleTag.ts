@@ -4,6 +4,8 @@ import Logger from "../../Logger";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import removePuzzleTag from "../../methods/removePuzzleTag";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
+import { deferSyncPuzzlesOnBoard } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(removePuzzleTag, {
@@ -18,6 +20,7 @@ defineMethod(removePuzzleTag, {
 
   async run({ puzzleId, tagId }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     const puzzle = await Puzzles.findOneAsync(
       {
@@ -42,9 +45,10 @@ defineMethod(removePuzzleTag, {
     }
 
     Logger.info("Untagging puzzle", { puzzle: puzzleId, tag: tagId });
-    await Puzzles.updateAsync(
+    const updated = await Puzzles.updateAsync(
       {
         _id: puzzleId,
+        tags: tagId,
       },
       {
         $pull: {
@@ -52,5 +56,10 @@ defineMethod(removePuzzleTag, {
         },
       },
     );
+
+    // The board only needs to catch up if the tag was there to remove.
+    if (updated > 0) {
+      deferSyncPuzzlesOnBoard(puzzle.hunt, [puzzleId]);
+    }
   },
 });

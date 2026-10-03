@@ -32,3 +32,6 @@ import "./settingsAll";
 import "./settingsByName";
 import "./statusesForHuntUsers";
 import "./userSuppressedDingwords";
+import "./whiteboardContents";
+import "./whiteboardForHunt";
+import "./whiteboardPresence";

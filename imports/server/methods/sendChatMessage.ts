@@ -7,6 +7,7 @@ import sendChatMessage from "../../methods/sendChatMessage";
 import sendChatMessageInternal, {
   assertHuntMember,
 } from "../sendChatMessageInternal";
+import { assertValidCommentAnchor } from "../whiteboardEdits";
 import defineMethod from "./defineMethod";
 
 // "/pin <message>" pins the message as it is sent; a bare "/pin" or "/unpin"
@@ -20,12 +21,17 @@ defineMethod(sendChatMessage, {
       puzzleId: String,
       content: String,
       parentId: Match.Optional(String),
+      comment: Match.Optional({
+        node: Match.Optional(String),
+        x: Number,
+        y: Number,
+      }),
     });
 
     return arg;
   },
 
-  async run({ puzzleId, content, parentId }) {
+  async run({ puzzleId, content, parentId, comment }) {
     check(this.userId, String);
     const contentObj = JSON.parse(content);
     check(contentObj, {
@@ -55,9 +61,17 @@ defineMethod(sendChatMessage, {
       ],
     });
 
+    if (comment) {
+      if (parentId !== undefined) {
+        throw new Meteor.Error(400, "A reply can't start a comment thread");
+      }
+      await assertValidCommentAnchor(this.userId, puzzleId, comment);
+    }
+
     let pinTs: Date | undefined;
     const firstChild = contentObj.children[0];
-    if (firstChild && "text" in firstChild) {
+    // Comments skip /pin and /unpin, so their text goes up as written.
+    if (!comment && firstChild && "text" in firstChild) {
       if (
         contentObj.children.length === 1 &&
         CLEAR_PINS_COMMAND.test(firstChild.text)
@@ -101,6 +115,7 @@ defineMethod(sendChatMessage, {
       sender: this.userId,
       pinTs,
       parentId,
+      comment,
     });
   },
 });

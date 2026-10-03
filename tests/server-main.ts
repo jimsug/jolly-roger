@@ -17,12 +17,19 @@ import "./unit/imports/lib/puzzle-sort-and-group";
 import "./unit/imports/lib/puzzleSolvers";
 import "./unit/imports/lib/puzzleUrl";
 import "./unit/imports/lib/relativeTimeFormat";
+import "./unit/imports/lib/safeHref";
 import "./unit/imports/lib/scrubTelemetry";
 import "./unit/imports/lib/solvedness";
 import "./unit/imports/lib/sortUsersByDisplayName";
 import "./unit/imports/lib/tagNames";
 import "./unit/imports/lib/userStatusesToLastSeen";
 import "./unit/imports/lib/ValidateShape";
+import "./unit/imports/lib/whiteboard-arrange";
+import "./unit/imports/lib/whiteboard-comments";
+import "./unit/imports/lib/whiteboard-connectors";
+import "./unit/imports/lib/whiteboard-contributors";
+import "./unit/imports/lib/whiteboard-ink";
+import "./unit/imports/lib/whiteboard-layout";
 
 // Disable rate limiting
 if (!Meteor.isAppTest) {
@@ -60,6 +67,8 @@ import "./unit/imports/server/TagHooks";
 import "./unit/imports/server/updatePuzzleNote";
 import "./unit/imports/server/userStatuses";
 import "./unit/imports/server/validateSchema";
+import "./unit/imports/server/whiteboard";
+import "./unit/imports/server/whiteboardGuards";
 import "./unit/imports/server/mergeUsers";
 
 import "./acceptance/authentication";
@@ -72,3 +81,4 @@ import "./acceptance/puzzleLookupApi";
 import "./acceptance/puzzles";
 import "./acceptance/smoke";
 import "./acceptance/tags";
+import "./acceptance/whiteboard";

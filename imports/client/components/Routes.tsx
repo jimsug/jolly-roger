@@ -48,6 +48,7 @@ const HuntEditPage = React.lazy(() => import("./HuntEditPage"));
 const SetupPage = React.lazy(() => import("./SetupPage"));
 const RTCDebugPage = React.lazy(() => import("./RTCDebugPage"));
 const UserPuzzleHistory = React.lazy(() => import("./UserPuzzleHistory"));
+const WhiteboardPage = React.lazy(() => import("./WhiteboardPage"));
 
 // /profile is a stable link to the current user's own profile page
 const ProfileRedirect = () => {
@@ -81,6 +82,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
           { path: "puzzles", element: <PuzzleListPage /> },
           { path: "tags", element: <HuntTagManagerPage /> },
           { path: "notes", element: <NotesPage /> },
+          { path: "whiteboard", element: <WhiteboardPage /> },
           { path: "custom-link", element: <CustomLinkEmbedPage /> },
           { path: "more", element: <MoreAppPage /> },
           { path: "edit", element: <HuntEditPage /> },

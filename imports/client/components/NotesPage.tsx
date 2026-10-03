@@ -510,7 +510,7 @@ const NotesPage = () => {
       loading
         ? []
         : Puzzles.find(
-            { hunt: huntId },
+            { hunt: huntId, kind: { $ne: "whiteboard" } },
             { sort: { noteUpdateTs: 1, createdAt: 1 } },
           ).fetch(),
     [huntId, loading],

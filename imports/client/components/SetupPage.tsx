@@ -2522,6 +2522,7 @@ const CircuitBreakerControl = ({
 };
 
 const CircuitBreakerSection = () => {
+  const { t } = useTranslation();
   return (
     <Section id="circuit-breakers">
       <SectionHeader>Circuit breakers</SectionHeader>
@@ -2626,6 +2627,43 @@ const CircuitBreakerSection = () => {
           Disabling this feature means that Jolly Roger will no longer do
           expensive work on each chat message sent, and no new dingword
           notifications will be generated or displayed.
+        </p>
+      </CircuitBreakerControl>
+      <CircuitBreakerControl
+        title={t("serverSetup.circuitBreakers.whiteboard.title", "Whiteboard")}
+        flagName="disable.whiteboard"
+      >
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.whiteboard.description",
+            "Each hunt can have a shared whiteboard, with its puzzles laid out by round alongside notes, lines, drawings and comments, and a chat and call of its own. Keeping a board up to date takes some extra work whenever a puzzle is added or its tags change.",
+          )}
+        </p>
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.whiteboard.disabled",
+            "Disabling this feature hides the whiteboard and its link, and the server stops publishing boards, accepting edits and placing new puzzles on them. Boards are kept and come back when the feature is enabled again; puzzles added in the meantime can be put on the board from its list of puzzles not on the board.",
+          )}
+        </p>
+      </CircuitBreakerControl>
+      <CircuitBreakerControl
+        title={t(
+          "serverSetup.circuitBreakers.whiteboardLive.title",
+          "Live whiteboard updates",
+        )}
+        flagName="disable.whiteboard_live"
+      >
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.whiteboardLive.description",
+            "Everyone looking at a whiteboard sees the others' pointers, and whatever they're dragging or drawing, as it happens. That's several updates a second from each person dragging or drawing, and a few a second from anyone just moving their pointer.",
+          )}
+        </p>
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.whiteboardLive.disabled",
+            "Disabling this feature stops those updates. The board still works and every edit is still saved and shown to everyone, but pointers disappear and moves and drawings only show up once they're finished.",
+          )}
         </p>
       </CircuitBreakerControl>
     </Section>

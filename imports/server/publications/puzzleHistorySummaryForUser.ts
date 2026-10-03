@@ -5,6 +5,7 @@ import ChatMessages from "../../lib/models/ChatMessages";
 import DocumentActivities from "../../lib/models/DocumentActivities";
 import Guesses from "../../lib/models/Guesses";
 import Hunts from "../../lib/models/Hunts";
+import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
 import puzzleHistorySummaryForUser from "../../lib/publications/puzzleHistorySummaryForUser";
@@ -13,6 +14,7 @@ import {
   type PuzzleHistoryItem,
 } from "../../lib/puzzleHistory";
 import { computeSolvedness } from "../../lib/solvedness";
+import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import CallActivities from "../models/CallActivities";
 import huntsForPuzzleHistory from "../puzzleHistoryHunts";
 import definePublication from "./definePublication";
@@ -33,6 +35,7 @@ type ObservedPuzzle = {
   tags: string[];
   expectedAnswerCount: number;
   completedWithNoAnswer?: boolean | undefined;
+  kind?: PuzzleType["kind"];
 };
 
 type ObservedActivity = Partial<{
@@ -208,6 +211,7 @@ class UserPuzzleHistoryAggregator {
             tags: 1,
             expectedAnswerCount: 1,
             completedWithNoAnswer: 1,
+            kind: 1,
           },
         },
       ).observeChangesAsync({
@@ -375,6 +379,7 @@ class UserPuzzleHistoryAggregator {
       } as Parameters<typeof computeSolvedness>[0]),
       answers: puzzle.answers,
       tags: puzzle.tags.map((tag) => this.tagNames.get(tag) ?? ""),
+      ...(isWhiteboardPuzzle(puzzle) ? { whiteboard: true } : {}),
     };
 
     for (const key of keys) {

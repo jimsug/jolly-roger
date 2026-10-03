@@ -52,6 +52,9 @@ import Servers from "../../lib/models/Servers";
 import Settings from "../../lib/models/Settings";
 import Tags from "../../lib/models/Tags";
 import UserStatuses from "../../lib/models/UserStatuses";
+import WhiteboardEdges from "../../lib/models/WhiteboardEdges";
+import WhiteboardNodes from "../../lib/models/WhiteboardNodes";
+import Whiteboards from "../../lib/models/Whiteboards";
 import type Model from "../../lib/typedModel/Model";
 import { AllModels } from "../../lib/typedModel/Model";
 import { purgeDocumentCache } from "../documentCache";
@@ -64,6 +67,7 @@ import LatestDeploymentTimestamps from "../models/LatestDeploymentTimestamps";
 import Locks from "../models/Locks";
 import Subscribers from "../models/Subscribers";
 import UploadTokens from "../models/UploadTokens";
+import WhiteboardPresence from "../models/WhiteboardPresence";
 import defineJob from "./framework/defineJob";
 
 const COLLECTIONS_TO_PURGE = [
@@ -90,6 +94,10 @@ const COLLECTIONS_TO_PURGE = [
   Bookmarks,
   Tags,
   UserStatuses,
+  WhiteboardPresence,
+  WhiteboardEdges,
+  WhiteboardNodes,
+  Whiteboards,
 ];
 
 // In the fullness of time, it would be nice if we only had to list models

@@ -8,6 +8,7 @@ export interface Theme {
   colors: {
     background: string;
     text: string;
+    textSecondary: string;
     border: string;
     primary: string;
     secondary: string;
@@ -98,6 +99,7 @@ export const lightTheme: Theme = {
   colors: {
     background: "var(--bs-body-bg)",
     text: "var(--bs-body-color)",
+    textSecondary: "#6c757d",
     border: "var(--bs-border-color)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",
@@ -215,6 +217,7 @@ export const darkTheme: Theme = {
   colors: {
     background: "var(--bs-dark-bg-subtle)",
     text: "var(--bs-body-color)",
+    textSecondary: "#aaa",
     border: "var(--bs-border-color)",
     primary: "var(--bs-primary)",
     secondary: "var(--bs-secondary)",

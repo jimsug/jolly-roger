@@ -4,6 +4,7 @@ import Logger from "../../Logger";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import addPuzzleTag from "../../methods/addPuzzleTag";
+import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import GlobalHooks from "../GlobalHooks";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
@@ -20,6 +21,7 @@ defineMethod(addPuzzleTag, {
 
   async run({ puzzleId, tagName }) {
     check(this.userId, String);
+    await assertNotWhiteboardPuzzle(puzzleId);
 
     // Look up which hunt the specified puzzle is from.
     const puzzle = await Puzzles.findOneAsync(

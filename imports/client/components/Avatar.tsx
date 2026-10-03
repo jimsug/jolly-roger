@@ -43,6 +43,41 @@ const AvatarInitial = styled.div`
   background-color: ${({ theme }) => theme.colors.avatarInitialBackground};
 `;
 
+// Based on Sasha Trubetskoy's List of 20 Simple, Distinct Colors
+// https://sashamaps.net/docs/resources/20-colors/
+const palette: [string, string][] = [
+  ["#e6194B", "#ffffff"],
+  ["#3cb44b", "#ffffff"],
+  ["#ffe119", "#000000"],
+  ["#4363d8", "#ffffff"],
+  ["#f58231", "#ffffff"],
+  ["#911eb4", "#ffffff"],
+  ["#42d4f4", "#000000"],
+  ["#f032e6", "#ffffff"],
+  ["#bfef45", "#000000"],
+  ["#fabed4", "#000000"],
+  ["#469990", "#ffffff"],
+  ["#dcbeff", "#000000"],
+  ["#9A6324", "#ffffff"],
+  ["#000000", "#ffffff"],
+  ["#800000", "#ffffff"],
+  ["#aaffc3", "#000000"],
+  ["#808000", "#ffffff"],
+  ["#ffd8b1", "#000000"],
+  ["#000075", "#ffffff"],
+  ["#a9a9a9", "#ffffff"],
+];
+
+// A user's consistent background and text colours, for their fallback avatar
+// and anywhere else they need a colour of their own (their whiteboard cursor).
+export function userColors(_id: string | undefined): [string, string] {
+  const idSum = Array.from(_id ?? "").reduce(
+    (t, c) => t + c.codePointAt(0)!,
+    0,
+  );
+  return palette[Math.abs(idSum) % palette.length]!;
+}
+
 const DefaultAvatarInner = ({
   _id,
   displayName,
@@ -50,39 +85,10 @@ const DefaultAvatarInner = ({
   _id?: string;
   displayName?: string;
 }) => {
-  // Based on Sasha Trubetskoy's List of 20 Simple, Distinct Colors
-  // https://sashamaps.net/docs/resources/20-colors/
-  const palette = [
-    ["#e6194B", "#ffffff"],
-    ["#3cb44b", "#ffffff"],
-    ["#ffe119", "#000000"],
-    ["#4363d8", "#ffffff"],
-    ["#f58231", "#ffffff"],
-    ["#911eb4", "#ffffff"],
-    ["#42d4f4", "#000000"],
-    ["#f032e6", "#ffffff"],
-    ["#bfef45", "#000000"],
-    ["#fabed4", "#000000"],
-    ["#469990", "#ffffff"],
-    ["#dcbeff", "#000000"],
-    ["#9A6324", "#ffffff"],
-    ["#000000", "#ffffff"],
-    ["#800000", "#ffffff"],
-    ["#aaffc3", "#000000"],
-    ["#808000", "#ffffff"],
-    ["#ffd8b1", "#000000"],
-    ["#000075", "#ffffff"],
-    ["#a9a9a9", "#ffffff"],
-  ];
   const initial = displayName
     ? displayName.trim().slice(0, 1).toUpperCase()
     : "?";
-  const idSum = Array.from(_id ?? "").reduce(
-    (t, c) => t + c.codePointAt(0)!,
-    0,
-  );
-  const [circleColor, initialColor] =
-    palette[Math.abs(idSum) % palette.length]!;
+  const [circleColor, initialColor] = userColors(_id);
   const style = { backgroundColor: circleColor, color: initialColor };
   return <AvatarInitial style={style}>{initial}</AvatarInitial>;
 };
