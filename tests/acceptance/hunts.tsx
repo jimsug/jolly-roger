@@ -1,6 +1,4 @@
 import { promisify } from "node:util";
-import { Accounts } from "meteor/accounts-base";
-import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import { assert } from "chai";
 import type { EditableHuntType } from "../../imports/lib/models/Hunts";
@@ -10,40 +8,12 @@ import { pendingEnrollment } from "../../imports/lib/models/User";
 import invitedUsers from "../../imports/lib/publications/invitedUsers";
 import puzzlesForPuzzleList from "../../imports/lib/publications/puzzlesForPuzzleList";
 import addHuntUser from "../../imports/methods/addHuntUser";
+import configureDefaultHuntTags from "../../imports/methods/configureDefaultHuntTags";
 import createHunt from "../../imports/methods/createHunt";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
-import TypedMethod from "../../imports/methods/TypedMethod";
 import resetDatabase from "../lib/resetDatabase";
+import createUser from "./createTestUser";
 import { USER_EMAIL, USER_PASSWORD } from "./lib";
-
-// Test-only helper to create a (non-admin) user without going through the
-// invitation flow.
-const createUser = new TypedMethod<
-  { email: string; password: string; displayName: string },
-  string
->("test.methods.hunts.createUser");
-
-if (Meteor.isServer) {
-  const defineMethod: typeof import("../../imports/server/methods/defineMethod").default =
-    require("../../imports/server/methods/defineMethod").default;
-
-  defineMethod(createUser, {
-    validate(arg: unknown) {
-      check(arg, { email: String, password: String, displayName: String });
-      return arg;
-    },
-
-    async run({ email, password, displayName }) {
-      if (!Meteor.isAppTest) {
-        throw new Meteor.Error(500, "This code must not run in production");
-      }
-
-      const userId = await Accounts.createUserAsync({ email, password });
-      await MeteorUsers.updateAsync(userId, { $set: { displayName } });
-      return userId;
-    },
-  });
-}
 
 if (Meteor.isClient) {
   const typedSubscribe = require("../../imports/client/typedSubscribe")
@@ -110,6 +80,43 @@ if (Meteor.isClient) {
         );
         assert.includeMembers(tagNames, ["is:meta", "priority:high"]);
         sub.stop();
+      });
+
+      it("creates the configured default tags when none are specified", async function () {
+        await resetDatabase("hunt administration createHunt configured tags");
+        await loginAsFirstUser();
+        await configureDefaultHuntTags.callPromise({
+          defaultHuntTags: " needs:love,, is:meta ",
+        });
+
+        const huntId = await createHunt.callPromise(huntFields);
+        await addHuntUser.callPromise({ huntId, email: USER_EMAIL });
+
+        const sub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        const tagNames = await Tags.find({ hunt: huntId }).mapAsync(
+          (tag) => tag.name,
+        );
+        assert.sameMembers(tagNames, ["needs:love", "is:meta"]);
+        sub.stop();
+
+        // Clearing the setting goes back to the built-in list
+        await configureDefaultHuntTags.callPromise({ defaultHuntTags: " , " });
+        const secondHuntId = await createHunt.callPromise(huntFields);
+        await addHuntUser.callPromise({
+          huntId: secondHuntId,
+          email: USER_EMAIL,
+        });
+        const secondSub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId: secondHuntId,
+        });
+        const secondTagNames = await Tags.find({
+          hunt: secondHuntId,
+        }).mapAsync((tag) => tag.name);
+        assert.includeMembers(secondTagNames, ["is:meta", "priority:high"]);
+        assert.notInclude(secondTagNames, "needs:love");
+        secondSub.stop();
       });
 
       it("creates no tags when the field is blank", async function () {

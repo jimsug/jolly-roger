@@ -31,6 +31,7 @@ const RelatedPuzzleList = React.memo(
       relatedPuzzles,
       sharedTag,
       tagIndex,
+      false,
     );
     return (
       <PuzzleList

@@ -9,6 +9,7 @@ import "./unit/imports/lib/permission_stubs";
 import "./unit/imports/lib/puzzle-sort-and-group";
 import "./unit/imports/lib/relativeTimeFormat";
 import "./unit/imports/lib/sortUsersByDisplayName";
+import "./unit/imports/lib/tagNames";
 import "./unit/imports/lib/ValidateShape";
 
 import "./acceptance/authentication";
@@ -17,3 +18,4 @@ import "./acceptance/emails";
 import "./acceptance/hunts";
 import "./acceptance/profiles";
 import "./acceptance/smoke";
+import "./acceptance/tags";

@@ -222,6 +222,17 @@ const HuntEditPage = () => {
     return setting?.value.guild.id;
   }, []);
 
+  // New hunts start with the admin-configured default tags, falling back to
+  // the built-in list. Until the field is edited we send nothing and let the
+  // server apply the same default, so the two can't disagree.
+  useTypedSubscribe(huntId ? undefined : settingsByName, {
+    name: "server.settings",
+  });
+  const defaultInitialTags = useTracker(() => {
+    const setting = Settings.findOne({ name: "server.settings" });
+    return setting?.value.defaultHuntTags ?? DEFAULT_HUNT_TAGS.join(", ");
+  }, []);
+
   const navigate = useNavigate();
 
   const footer = useRef<HTMLDivElement>(null);
@@ -230,7 +241,7 @@ const HuntEditPage = () => {
   const [errorMessage, setErrorMessage] = useState("");
 
   const [name, setName] = useState(hunt?.name ?? "");
-  const [initialTags, setInitialTags] = useState(DEFAULT_HUNT_TAGS.join(", "));
+  const [initialTags, setInitialTags] = useState<string | undefined>(undefined);
   const [mailingLists, setMailingLists] = useState(
     hunt?.mailingLists.join(", ") ?? "",
   );
@@ -583,7 +594,7 @@ const HuntEditPage = () => {
             <Col xs={9}>
               <FormControl
                 type="text"
-                value={initialTags}
+                value={initialTags ?? defaultInitialTags}
                 onChange={onInitialTagsChanged}
                 disabled={disableForm}
               />

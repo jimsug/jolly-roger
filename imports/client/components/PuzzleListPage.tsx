@@ -1,13 +1,18 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
+import { faClock } from "@fortawesome/free-regular-svg-icons/faClock";
+import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
+import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   type ComponentPropsWithRef,
   type FC,
   useCallback,
+  useEffect,
   useId,
   useRef,
 } from "react";
@@ -207,6 +212,10 @@ const PuzzleListView = ({
   const [searchParams, setSearchParams] = useSearchParams();
   const searchString = searchParams.get("q") ?? "";
   const addModalRef = useRef<PuzzleModalFormHandle>(null);
+  // A cancelled draft survives reopening the modal, except for tags that
+  // came from "add puzzle here": those belong to the group the button was
+  // on, not to whatever the plain Add button is used for next.
+  const tagsPrefilledRef = useRef(false);
   const searchBarRef = useRef<HTMLInputElement>(null);
   const [displayMode, setDisplayMode] = useHuntPuzzleListDisplayMode(huntId);
   const [showSolved, setShowSolved] = useHuntPuzzleListShowSolved(huntId);
@@ -220,6 +229,21 @@ const PuzzleListView = ({
     Object.values(huntPuzzleListCollapseGroups).some(Boolean);
 
   useFocusRefOnFindHotkey(searchBarRef);
+
+  // Clicking a tag chip changes the search string, so put the cursor in the
+  // filter box ready to refine it. Skipped on mount so loading the page
+  // doesn't steal focus.
+  const lastSearchString = useRef(searchString);
+  useEffect(() => {
+    if (searchString === lastSearchString.current) {
+      return;
+    }
+    lastSearchString.current = searchString;
+    const input = searchBarRef.current;
+    if (input && document.activeElement !== input) {
+      input.focus();
+    }
+  }, [searchString]);
 
   const onAdd = useCallback(
     (
@@ -235,6 +259,7 @@ const PuzzleListView = ({
       function onAddComplete(error?: Error) {
         if (!error && addModalRef.current) {
           addModalRef.current.reset();
+          tagsPrefilledRef.current = false;
         }
         callback(error);
       }
@@ -315,9 +340,23 @@ const PuzzleListView = ({
 
   const showAddModal = useCallback(() => {
     if (addModalRef.current) {
+      if (tagsPrefilledRef.current) {
+        addModalRef.current.populateForm({ tagIds: [] });
+        tagsPrefilledRef.current = false;
+      }
       addModalRef.current.show();
     }
   }, []);
+
+  const showAddModalWithTags = useCallback((tagIds: string[]) => {
+    if (addModalRef.current) {
+      addModalRef.current.populateForm({ tagIds });
+      tagsPrefilledRef.current = true;
+      addModalRef.current.show();
+    }
+  }, []);
+  const addPuzzleCallback =
+    canAdd && !operatorActionsHidden ? showAddModalWithTags : undefined;
 
   const { t } = useTranslation();
 
@@ -379,6 +418,7 @@ const PuzzleListView = ({
                 canUpdate={canUpdate}
                 suppressedTagIds={suppressedTagIds}
                 trackPersistentExpand={searchString === ""}
+                addPuzzleCallback={addPuzzleCallback}
               />
             );
           });
@@ -421,6 +461,14 @@ const PuzzleListView = ({
           <PuzzleListToolbar>
             <div>{listControls}</div>
             <div>{filterMessage}</div>
+            <div>
+              <FontAwesomeIcon icon={faFolderOpen} /> ={" "}
+              {t("puzzleList.legend.group", "group")};{" "}
+              <FontAwesomeIcon icon={faStar} /> ={" "}
+              {t("puzzleList.legend.metaFor", "meta for")};{" "}
+              <FontAwesomeIcon icon={faMapPin} /> ={" "}
+              {t("puzzleList.legend.where", "where")}
+            </div>
           </PuzzleListToolbar>
           {bookmarkedPuzzles.length > 0 && (
             <PuzzleGroupDiv>
@@ -467,6 +515,7 @@ const PuzzleListView = ({
       canExpandAllGroups,
       expandAllGroups,
       bookmarked,
+      addPuzzleCallback,
       t,
     ],
   );
@@ -553,6 +602,7 @@ const PuzzleListView = ({
                 variant="outline-info"
                 value="group"
               >
+                <FontAwesomeIcon icon={faFolderOpen} />{" "}
                 {t("puzzleList.byGroup", "Group")}
               </ToggleButton>
               <ToggleButton
@@ -560,7 +610,8 @@ const PuzzleListView = ({
                 variant="outline-info"
                 value="unlock"
               >
-                {t("puzzleList.byUnlock", "Unlock")}
+                <FontAwesomeIcon icon={faClock} />{" "}
+                {t("puzzleList.byUnlock", "When added")}
               </ToggleButton>
             </StyledToggleButtonGroup>
           </ButtonToolbar>

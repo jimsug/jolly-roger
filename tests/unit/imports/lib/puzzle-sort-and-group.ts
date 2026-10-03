@@ -5,6 +5,7 @@ import {
   filteredPuzzleGroups,
   puzzleGroupsByRelevance,
   puzzleInterestingness,
+  sortPuzzlesByRelevanceWithinPuzzleGroup,
 } from "../../../../imports/lib/puzzle-sort-and-group";
 
 const hunt = "hunt_id";
@@ -78,7 +79,7 @@ function makePuzzle(
 describe("puzzleInterestingness", function () {
   const topLevelAdminPuz = makePuzzle("Administrivia", ["administrivia"]);
   assert.equal(
-    puzzleInterestingness(topLevelAdminPuz, allTagsById, undefined),
+    puzzleInterestingness(topLevelAdminPuz, allTagsById, undefined, false),
     -5,
   );
 
@@ -87,7 +88,7 @@ describe("puzzleInterestingness", function () {
     "group:test-group",
   ]);
   assert.equal(
-    puzzleInterestingness(adminInGroupPuz, allTagsById, undefined),
+    puzzleInterestingness(adminInGroupPuz, allTagsById, undefined, false),
     -4,
   );
 
@@ -95,17 +96,111 @@ describe("puzzleInterestingness", function () {
     "meta-for:test-group",
     "group:test-group",
   ]);
-  assert.equal(puzzleInterestingness(metaPuz, allTagsById, "test-group"), -3);
-  assert.equal(puzzleInterestingness(metaPuz, allTagsById, "other-group"), -1);
+  assert.equal(
+    puzzleInterestingness(metaPuz, allTagsById, "test-group", false),
+    -3,
+  );
+  assert.equal(
+    puzzleInterestingness(metaPuz, allTagsById, "other-group", false),
+    -1,
+  );
 
   const metametaPuz = makePuzzle("Metameta", ["is:metameta"]);
   assert.equal(
-    puzzleInterestingness(metametaPuz, allTagsById, "test-group"),
+    puzzleInterestingness(metametaPuz, allTagsById, "test-group", false),
     -2,
   );
 
   const regularPuz = makePuzzle("Regular", []);
-  assert.equal(puzzleInterestingness(regularPuz, allTagsById, "test-group"), 0);
+  assert.equal(
+    puzzleInterestingness(regularPuz, allTagsById, "test-group", false),
+    0,
+  );
+
+  describe("demotions", function () {
+    it("sinks priority:low puzzles for everyone", function () {
+      const lowPuz = makePuzzle("Low", ["priority:low"]);
+      assert.equal(
+        puzzleInterestingness(lowPuz, allTagsById, undefined, false),
+        1,
+      );
+      assert.equal(
+        puzzleInterestingness(lowPuz, allTagsById, undefined, true),
+        1,
+      );
+    });
+
+    it("sinks on-site-only puzzles below priority:low for offsite solvers only", function () {
+      const campusPuz = makePuzzle("Campus", ["where:campus"]);
+      const mitPuz = makePuzzle("MIT", ["where:mit", "priority:low"]);
+      const elsewherePuz = makePuzzle("Elsewhere", ["where:sydney"]);
+      assert.equal(
+        puzzleInterestingness(campusPuz, allTagsById, undefined, false),
+        0,
+      );
+      assert.equal(
+        puzzleInterestingness(campusPuz, allTagsById, undefined, true),
+        2,
+      );
+      assert.equal(
+        puzzleInterestingness(mitPuz, allTagsById, undefined, false),
+        1,
+      );
+      assert.equal(
+        puzzleInterestingness(mitPuz, allTagsById, undefined, true),
+        2,
+      );
+      assert.equal(
+        puzzleInterestingness(elsewherePuz, allTagsById, undefined, true),
+        0,
+      );
+    });
+
+    it("never demotes metas or administrivia", function () {
+      const lowMeta = makePuzzle("Low meta", ["is:meta", "priority:low"]);
+      const campusAdmin = makePuzzle("Campus admin", [
+        "administrivia",
+        "where:campus",
+      ]);
+      assert.equal(
+        puzzleInterestingness(lowMeta, allTagsById, undefined, true),
+        -1,
+      );
+      assert.equal(
+        puzzleInterestingness(campusAdmin, allTagsById, undefined, true),
+        -5,
+      );
+    });
+  });
+});
+
+describe("sortPuzzlesByRelevanceWithinPuzzleGroup", function () {
+  it("orders by interestingness, then by creation time", function () {
+    const low = makePuzzle("Low", ["group:sorted", "priority:low"]);
+    const campus = makePuzzle("Campus", ["group:sorted", "where:campus"]);
+    const regular = makePuzzle("Regular", ["group:sorted"]);
+    const meta = makePuzzle("Meta", ["group:sorted", "meta-for:sorted"]);
+    const sharedTag = allTagsByName.get("group:sorted");
+
+    assert.deepEqual(
+      sortPuzzlesByRelevanceWithinPuzzleGroup(
+        [low, campus, regular, meta],
+        sharedTag,
+        allTagsById,
+        false,
+      ),
+      [meta, campus, regular, low],
+    );
+    assert.deepEqual(
+      sortPuzzlesByRelevanceWithinPuzzleGroup(
+        [low, campus, regular, meta],
+        sharedTag,
+        allTagsById,
+        true,
+      ),
+      [meta, regular, low, campus],
+    );
+  });
 });
 
 describe("puzzleGroupsByRelevance", function () {

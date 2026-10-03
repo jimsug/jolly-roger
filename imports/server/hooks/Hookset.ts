@@ -40,6 +40,15 @@ interface Hookset {
   // Triggered when a new message is added to a puzzle's chat (either from a
   // user or e.g. in response to a guess transitioning state).
   onChatMessageCreated?: (chatMessageId: string) => void | Promise<void>;
+
+  // Triggered when a tag is added to a puzzle through addPuzzleTag (the
+  // inline tag editor and the tag manager). Tags set through the puzzle
+  // edit form or at creation do not fire this.
+  onAddPuzzleTag?: (
+    puzzleId: string,
+    tagId: string,
+    addingUserId: string,
+  ) => void | Promise<void>;
 }
 
 export default Hookset;

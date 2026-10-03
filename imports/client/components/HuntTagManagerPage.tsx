@@ -21,6 +21,7 @@ import FormCheck from "react-bootstrap/FormCheck";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
+import FormText from "react-bootstrap/FormText";
 import InputGroup from "react-bootstrap/InputGroup";
 import Row from "react-bootstrap/Row";
 import Table from "react-bootstrap/Table";
@@ -91,6 +92,7 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
 
   const [selectedTagId, setSelectedTagId] = useState("");
   const [newTagName, setNewTagName] = useState("");
+  const [alias, setAlias] = useState(false);
 
   const allTags = useTracker(
     () => Tags.find({ hunt: huntId }).fetch(),
@@ -140,12 +142,19 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
     [],
   );
 
+  const onAliasChanged = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setAlias(e.currentTarget.checked);
+    },
+    [],
+  );
+
   const onFormSubmit = useCallback<NonNullable<FormProps["onSubmit"]>>(
     (e) => {
       e.preventDefault();
       setSubmitState(SubmitState.SUBMITTING);
       renameTag.call(
-        { tagId: selectedTagId, name: newTagName },
+        { tagId: selectedTagId, name: newTagName, alias },
         (error?: Error) => {
           if (error) {
             setSubmitState(SubmitState.FAILED);
@@ -153,11 +162,15 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
           } else {
             setSubmitState(SubmitState.SUCCESS);
             setErrorMessage("");
+            // The renamed tag may no longer exist (merged away), so start over.
+            setSelectedTagId("");
+            setNewTagName("");
+            setAlias(false);
           }
         },
       );
     },
-    [selectedTagId, newTagName],
+    [selectedTagId, newTagName, alias],
   );
 
   const isNameDirtied = tagToRename?.name.trim() !== newTagName.trim();
@@ -223,6 +236,23 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
             </FormGroup>
           </Col>
         </Row>
+        <FormGroup className="mb-3" controlId={`${idPrefix}-rename-alias`}>
+          <FormCheck
+            type="checkbox"
+            label={t(
+              "tags.renameTagSection.aliasLabel",
+              "Keep the old name as an alias of the new one",
+            )}
+            checked={alias}
+            onChange={onAliasChanged}
+          />
+          <FormText>
+            {t(
+              "tags.renameTagSection.mergeHelp",
+              "If a tag with the new name already exists, the two are merged into it. Aliases resolve to the tag whenever someone adds a tag by that name.",
+            )}
+          </FormText>
+        </FormGroup>
       </Form>
     </section>
   );

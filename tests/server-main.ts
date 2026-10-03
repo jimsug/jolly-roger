@@ -11,6 +11,7 @@ import "./unit/imports/lib/permission_stubs";
 import "./unit/imports/lib/puzzle-sort-and-group";
 import "./unit/imports/lib/relativeTimeFormat";
 import "./unit/imports/lib/sortUsersByDisplayName";
+import "./unit/imports/lib/tagNames";
 import "./unit/imports/lib/ValidateShape";
 
 // Disable rate limiting
@@ -21,10 +22,14 @@ if (!Meteor.isAppTest) {
 Accounts.removeDefaultRateLimit();
 
 import "./unit/imports/server/backfillHuntAdminFields";
+import "./unit/imports/server/backfillPuzzleNotifications";
+import "./unit/imports/server/DiscordHooks";
 import "./unit/imports/server/Flags";
+import "./unit/imports/server/getOrCreateTagByName";
 import "./unit/imports/server/MigrationRegistry";
 import "./unit/imports/server/Model";
 import "./unit/imports/server/publishJoinedQuery";
+import "./unit/imports/server/TagHooks";
 import "./unit/imports/server/validateSchema";
 import "./unit/imports/server/mergeUsers";
 
@@ -34,3 +39,4 @@ import "./acceptance/emails";
 import "./acceptance/hunts";
 import "./acceptance/profiles";
 import "./acceptance/smoke";
+import "./acceptance/tags";

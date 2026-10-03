@@ -1,5 +1,9 @@
+import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
+import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faAlignJustify } from "@fortawesome/free-solid-svg-icons/faAlignJustify";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Modifier, ModifierArguments, Padding } from "@popperjs/core";
@@ -74,6 +78,7 @@ const TagDiv = styled.div<{
   $isMetaFor: boolean;
   $isNeeds: boolean;
   $isPriority: boolean;
+  $isLocation: boolean;
 }>`
   display: inline-flex;
   align-items: center;
@@ -122,17 +127,22 @@ const TagDiv = styled.div<{
   ${({ $isMetaFor }) =>
     $isMetaFor &&
     css`
-      background-color: #ffb0b0;
+      background-color: #ff0;
     `}
   ${({ $isNeeds }) =>
     $isNeeds &&
     css`
-      background-color: #ff4040;
+      background-color: #ffc0cb;
     `}
   ${({ $isPriority }) =>
     $isPriority &&
     css`
       background-color: #aaf;
+    `}
+  ${({ $isLocation }) =>
+    $isLocation &&
+    css`
+      background-color: #aaffc3;
     `}
 `;
 
@@ -283,6 +293,7 @@ const Tag = (props: TagProps) => {
       getRelatedPuzzles(),
       sharedTag,
       tagIndex,
+      false,
     );
     const clipboardData = relatedPuzzles
       .map((puzzle) => {
@@ -317,17 +328,42 @@ const Tag = (props: TagProps) => {
   const name = props.tag.name;
   const isAdministrivia = name === "administrivia";
   const isMeta = name === "is:meta" || name === "is:metameta";
-  const isGroup = name.lastIndexOf("group:", 0) === 0;
-  const isMetaFor = name.lastIndexOf("meta-for:", 0) === 0;
-  const isNeeds = name.lastIndexOf("needs:", 0) === 0;
-  const isPriority = name.lastIndexOf("priority:", 0) === 0;
+  const isGroup = name.startsWith("group:");
+  const isMetaFor = name.startsWith("meta-for:");
+  const isNeeds = name.startsWith("needs:");
+  const isPriority = name.startsWith("priority:");
+  const isLocation =
+    name.startsWith("location:") ||
+    name.startsWith("loc:") ||
+    name.startsWith("where:");
+
+  // Group, meta-for and location prefixes are drawn as an icon instead of the
+  // prefix text (see the legend on the puzzle list).
+  let prefixIcon: IconDefinition | undefined;
+  if (isGroup) {
+    prefixIcon = faFolderOpen;
+  } else if (isMetaFor) {
+    prefixIcon = faStar;
+  } else if (isLocation) {
+    prefixIcon = faMapPin;
+  }
 
   // Browsers won't word-break on hyphens, so suggest
   // Use wbr instead of zero-width space to make copy-paste reasonable
   const nameWithBreaks: (string | React.JSX.Element)[] = [];
   name.split(":").forEach((part, i, arr) => {
     const withColon = i < arr.length - 1;
-    nameWithBreaks.push(`${part}${withColon ? ":" : ""}`);
+    if (prefixIcon && i === 0) {
+      nameWithBreaks.push(
+        <FontAwesomeIcon
+          icon={prefixIcon}
+          className="me-1"
+          key="prefix-icon"
+        />,
+      );
+    } else {
+      nameWithBreaks.push(`${part}${withColon ? ":" : ""}`);
+    }
     if (withColon) {
       nameWithBreaks.push(<wbr key={`wbr-${i}-${part}`} />);
     }
@@ -359,6 +395,7 @@ const Tag = (props: TagProps) => {
       $isMetaFor={isMetaFor}
       $isNeeds={isNeeds}
       $isPriority={isPriority}
+      $isLocation={isLocation}
     >
       {title}
       {props.onRemove && (

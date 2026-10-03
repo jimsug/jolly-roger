@@ -25,6 +25,7 @@ const RelatedPuzzleTable = React.memo(
       relatedPuzzles,
       sharedTag,
       tagIndex,
+      false,
     );
     return (
       <PuzzleTable puzzles={sortedPuzzles} segmentAnswers={segmentAnswers} />

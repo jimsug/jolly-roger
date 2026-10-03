@@ -33,6 +33,8 @@ import Guesses from "../../lib/models/Guesses";
 import type { HuntType } from "../../lib/models/Hunts";
 import Hunts from "../../lib/models/Hunts";
 import PendingAnnouncements from "../../lib/models/PendingAnnouncements";
+import type { PuzzleNotificationType } from "../../lib/models/PuzzleNotifications";
+import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import {
@@ -42,10 +44,12 @@ import {
 import bookmarkNotificationsForSelf from "../../lib/publications/bookmarkNotificationsForSelf";
 import pendingAnnouncementsForSelf from "../../lib/publications/pendingAnnouncementsForSelf";
 import pendingGuessesForSelf from "../../lib/publications/pendingGuessesForSelf";
+import puzzleNotificationsForSelf from "../../lib/publications/puzzleNotificationsForSelf";
 import configureEnsureGoogleScript from "../../methods/configureEnsureGoogleScript";
 import dismissBookmarkNotification from "../../methods/dismissBookmarkNotification";
 import dismissChatNotification from "../../methods/dismissChatNotification";
 import dismissPendingAnnouncement from "../../methods/dismissPendingAnnouncement";
+import dismissPuzzleNotification from "../../methods/dismissPuzzleNotification";
 import linkUserDiscordAccount from "../../methods/linkUserDiscordAccount";
 import setGuessState from "../../methods/setGuessState";
 import { guessURL } from "../../model-helpers";
@@ -733,6 +737,70 @@ const BookmarkNotificationMessage = ({
   );
 };
 
+// How long an ephemeral puzzle notification stays up before dismissing itself.
+const EPHEMERAL_LINGER_PERIOD = 5000;
+
+// Keep the body legible on the Bootstrap background variants, which are
+// light in both themes.
+const StyledPuzzleNotificationBody = styled(Toast.Body)`
+  color: black;
+`;
+
+const PuzzleNotificationMessage = ({
+  pn,
+  hunt,
+  puzzle,
+}: {
+  pn: PuzzleNotificationType;
+  hunt: HuntType;
+  puzzle: PuzzleType;
+}) => {
+  const id = pn._id;
+  const dismiss = useCallback(
+    () => dismissPuzzleNotification.call({ puzzleNotificationId: id }),
+    [id],
+  );
+
+  const { t, i18n } = useTranslation();
+
+  const ephemeral = pn.ephemeral ?? false;
+  const [shownAt] = useState(() => Date.now());
+
+  return (
+    <Toast
+      onClose={dismiss}
+      bg={pn.background}
+      delay={EPHEMERAL_LINGER_PERIOD}
+      autohide={ephemeral}
+    >
+      <Toast.Header>
+        <FontAwesomeIcon icon={faPuzzlePiece} className="me-2" />
+        <strong className="me-auto">
+          <Link
+            to={`/hunts/${hunt._id}/puzzles/${puzzle._id}`}
+            onClick={dismiss}
+          >
+            {puzzle.title}
+          </Link>
+        </strong>
+        <StyledNotificationTimestamp>
+          {calendarTimeFormat(pn.createdAt, t, i18n.language)}
+        </StyledNotificationTimestamp>
+        {ephemeral && (
+          <SpinnerTimer
+            className="ms-3"
+            width={16}
+            height={16}
+            startTime={shownAt}
+            endTime={shownAt + EPHEMERAL_LINGER_PERIOD}
+          />
+        )}
+      </Toast.Header>
+      <StyledPuzzleNotificationBody>{pn.content}</StyledPuzzleNotificationBody>
+    </Toast>
+  );
+};
+
 const ReloadRequiredNotification = ({ reasons }: { reasons: string[] }) => {
   const reload = useCallback(() => window.location.reload(), []);
 
@@ -941,12 +1009,16 @@ const NotificationCenter = () => {
   const chatNotificationsLoading = useSubscribe(
     disableDingwords ? undefined : "chatNotifications",
   );
+  const puzzleNotificationsLoading = useTypedSubscribe(
+    disableDingwords ? undefined : puzzleNotificationsForSelf,
+  );
 
   const loading =
     pendingGuessesLoading() ||
     pendingAnnouncementsLoading() ||
     bookmarkNotificationsLoading() ||
-    chatNotificationsLoading();
+    chatNotificationsLoading() ||
+    puzzleNotificationsLoading();
 
   const discordEnabledOnServer = useTracker(
     () =>
@@ -1041,6 +1113,13 @@ const NotificationCenter = () => {
     loading
       ? []
       : BookmarkNotifications.find({}, { sort: { createdAt: 1 } }).fetch(),
+  );
+  const puzzleNotifications = useTracker(
+    () =>
+      loading || disableDingwords
+        ? []
+        : PuzzleNotifications.find({}, { sort: { createdAt: 1 } }).fetch(),
+    [loading, disableDingwords],
   );
   const rolesForChat = useTracker(() => {
     const hunts = new Set(chatNotifications.map((cn) => cn.hunt));
@@ -1213,6 +1292,20 @@ const NotificationCenter = () => {
       <BookmarkNotificationMessage
         key={bn._id}
         bn={bn}
+        hunt={hunt}
+        puzzle={puzzle}
+      />,
+    );
+  });
+
+  puzzleNotifications.forEach((pn) => {
+    const hunt = hunts.get(pn.hunt);
+    const puzzle = puzzles.get(pn.puzzle);
+    if (!hunt || !puzzle) return;
+    messages.push(
+      <PuzzleNotificationMessage
+        key={pn._id}
+        pn={pn}
         hunt={hunt}
         puzzle={puzzle}
       />,

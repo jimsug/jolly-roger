@@ -109,6 +109,26 @@ class HooksRegistry {
       }
     }
   }
+
+  async runTagAddedHooks(
+    puzzleId: string,
+    tagId: string,
+    addingUserId: string,
+  ) {
+    for (const hook of this.registeredHooks) {
+      if (hook.onAddPuzzleTag) {
+        try {
+          await hook.onAddPuzzleTag(puzzleId, tagId, addingUserId);
+        } catch (error) {
+          Logger.error("Error while running hook", {
+            hook: "onAddPuzzleTag",
+            hookSet: hook.name,
+            error,
+          });
+        }
+      }
+    }
+  }
 }
 
 export default HooksRegistry;

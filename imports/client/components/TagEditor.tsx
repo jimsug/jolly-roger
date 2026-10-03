@@ -42,7 +42,10 @@ const TagEditor = ({
     .filter(Boolean)
     .map((t) => {
       return { value: t, label: t };
-    });
+    })
+    .toSorted((a, b) =>
+      a.label.toLowerCase().localeCompare(b.label.toLowerCase()),
+    );
 
   const theme = useTheme();
 

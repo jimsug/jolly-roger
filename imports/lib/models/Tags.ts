@@ -8,6 +8,9 @@ const Tag = withCommon(
   z.object({
     name: nonEmptyString,
     hunt: foreignKey,
+    // Former names of this tag, kept when a tag is renamed or merged with the
+    // alias option. getOrCreateTagByName resolves them to this tag.
+    aliases: nonEmptyString.array().optional(),
   }),
 );
 

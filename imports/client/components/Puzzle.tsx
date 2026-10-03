@@ -1,21 +1,28 @@
+import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
+import { faAngleDown } from "@fortawesome/free-solid-svg-icons/faAngleDown";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
+import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, {
   type ComponentPropsWithRef,
   type FC,
   useCallback,
+  useId,
   useMemo,
   useRef,
   useState,
 } from "react";
+import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
+import OverlayTrigger from "react-bootstrap/OverlayTrigger";
+import Tooltip from "react-bootstrap/Tooltip";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import styled, { css, useTheme } from "styled-components";
-import { difference, indexedById } from "../../lib/listUtils";
+import { indexedById } from "../../lib/listUtils";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import type { Solvedness } from "../../lib/solvedness";
@@ -128,6 +135,35 @@ const TagListColumn = styled(TagList)`
   )}
 `;
 
+// Priority and stuck status, shown as icons instead of tag chips.
+const PuzzleStatusColumn = styled(PuzzleColumn)`
+  flex: 1;
+  ${mediaBreakpointDown(
+    "xs",
+    css`
+      flex: 0 0 100%;
+    `,
+  )}
+`;
+
+// Meta/metameta status, shown as a badge instead of tag chips.
+const PuzzleMetaColumn = styled(PuzzleColumn)`
+  flex: 1.5;
+  font-size: 1.1rem;
+  ${mediaBreakpointDown(
+    "xs",
+    css`
+      flex: 0 0 100%;
+    `,
+  )}
+`;
+
+const MetaBadge = styled(Badge)`
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+`;
+
 const Puzzle = React.memo(
   ({
     puzzle,
@@ -227,12 +263,65 @@ const Puzzle = React.memo(
     // id, title, answer, tags
     const linkTarget = `/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`;
     const tagIndex = indexedById(allTags);
-    const shownTags = difference(puzzle.tags, suppressTags ?? []);
-    const ownTags = shownTags
-      .map((tagId) => {
-        return tagIndex.get(tagId);
-      })
-      .filter<TagType>((t): t is TagType => t !== undefined);
+    const tagNames = new Set(
+      puzzle.tags.map((tagId) => tagIndex.get(tagId)?.name),
+    );
+
+    // Some tags are shown as icons in their own columns rather than as chips.
+    const isMetameta = tagNames.has("is:metameta");
+    const isMeta =
+      !isMetameta &&
+      (tagNames.has("is:meta") ||
+        [...tagNames].some((name) => name?.startsWith("meta-for:")));
+    const isHighPriority = tagNames.has("priority:high");
+    const isLowPriority = !isHighPriority && tagNames.has("priority:low");
+    const isStuck = tagNames.has("stuck") || tagNames.has("is:stuck");
+
+    const emojifiedTagNames = new Set<string>();
+    if (isMetameta) {
+      emojifiedTagNames.add("is:metameta");
+    } else if (isMeta) {
+      emojifiedTagNames.add("is:meta");
+    }
+    if (isHighPriority) {
+      emojifiedTagNames.add("priority:high");
+    } else if (isLowPriority) {
+      emojifiedTagNames.add("priority:low");
+    }
+    if (isStuck) {
+      emojifiedTagNames.add("stuck");
+      emojifiedTagNames.add("is:stuck");
+    }
+
+    // Inside a group:X section the meta-for:X chip only repeats the heading.
+    const suppressedTagIds = new Set(suppressTags);
+    const suppressedMetaForNames = new Set(
+      [...suppressedTagIds]
+        .map((tagId) => tagIndex.get(tagId)?.name)
+        .filter((name): name is string => name?.startsWith("group:") ?? false)
+        .map((name) => `meta-for:${name.slice("group:".length)}`),
+    );
+
+    const ownTags = puzzle.tags
+      .map((tagId) => tagIndex.get(tagId))
+      .filter<TagType>((t): t is TagType => t !== undefined)
+      .filter(
+        (tag) =>
+          !suppressedTagIds.has(tag._id) &&
+          !emojifiedTagNames.has(tag.name) &&
+          !suppressedMetaForNames.has(tag.name),
+      );
+
+    const tooltipId = useId();
+    let statusIcon;
+    let statusText;
+    if (isHighPriority) {
+      statusIcon = <FontAwesomeIcon icon={faAngleDoubleUp} color="red" />;
+      statusText = t("puzzleList.highPriority", "High priority");
+    } else if (isLowPriority) {
+      statusIcon = <FontAwesomeIcon icon={faAngleDown} />;
+      statusText = t("puzzleList.lowPriority", "Low priority");
+    }
 
     const solvedness = computeSolvedness(puzzle);
     const answers = puzzle.answers.map((answer, i) => {
@@ -277,6 +366,40 @@ const Puzzle = React.memo(
         <PuzzleTitleColumn>
           <Link to={linkTarget}>{puzzle.title}</Link>
         </PuzzleTitleColumn>
+        <PuzzleStatusColumn>
+          {statusIcon && (
+            <OverlayTrigger
+              placement="top"
+              overlay={
+                <Tooltip id={`${tooltipId}-priority`}>{statusText}</Tooltip>
+              }
+            >
+              <span>{statusIcon}</span>
+            </OverlayTrigger>
+          )}
+          {isStuck && (
+            <OverlayTrigger
+              placement="top"
+              overlay={
+                <Tooltip id={`${tooltipId}-stuck`}>
+                  {t("puzzleList.stuck", "Stuck")}
+                </Tooltip>
+              }
+            >
+              <span>🤷</span>
+            </OverlayTrigger>
+          )}
+        </PuzzleStatusColumn>
+        <PuzzleMetaColumn>
+          {(isMetameta || isMeta) && (
+            <MetaBadge pill bg="warning" text="dark">
+              <FontAwesomeIcon icon={faStar} />
+              {isMetameta
+                ? t("puzzleList.metameta", "Metameta")
+                : t("puzzleList.meta", "Meta")}
+            </MetaBadge>
+          )}
+        </PuzzleMetaColumn>
         <PuzzleActivityColumn>
           {solvedness === "unsolved" && (
             <PuzzleActivity

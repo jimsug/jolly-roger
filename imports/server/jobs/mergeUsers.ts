@@ -37,6 +37,7 @@ import TransportRequests from "../../lib/models/mediasoup/TransportRequests";
 import TransportStates from "../../lib/models/mediasoup/TransportStates";
 import Transports from "../../lib/models/mediasoup/Transports";
 import PendingAnnouncements from "../../lib/models/PendingAnnouncements";
+import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import Puzzles from "../../lib/models/Puzzles";
 import Servers from "../../lib/models/Servers";
 import Settings from "../../lib/models/Settings";
@@ -85,6 +86,7 @@ const MODELS_WITH_COMMON: { collection: { rawCollection(): any } }[] = [
   PendingAnnouncements,
   ProducerClients,
   ProducerServers,
+  PuzzleNotifications,
   Puzzles,
   Rooms,
   Routers,
@@ -294,6 +296,14 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
     BookmarkNotifications,
     async (source) => {
       await BookmarkNotifications.collection
+        .rawCollection()
+        .deleteMany({ user: source });
+    },
+  ],
+  [
+    PuzzleNotifications,
+    async (source) => {
+      await PuzzleNotifications.collection
         .rawCollection()
         .deleteMany({ user: source });
     },

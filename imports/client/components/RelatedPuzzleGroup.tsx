@@ -1,10 +1,16 @@
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faCaretRight } from "@fortawesome/free-solid-svg-icons/faCaretRight";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import Badge from "react-bootstrap/Badge";
+import Button from "react-bootstrap/Button";
+import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import type { TagType } from "../../lib/models/Tags";
 import type { PuzzleGroup } from "../../lib/puzzle-sort-and-group";
+import { computeSolvedness } from "../../lib/solvedness";
 import { useHuntPuzzleListCollapseGroup } from "../hooks/persisted-state";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import Tag from "./Tag";
@@ -40,6 +46,23 @@ const NoSharedTagLabel = styled.div`
   color: #808080;
 `;
 
+const UnsolvedCountBadge = styled(Badge)`
+  display: inline-flex;
+  align-items: center;
+  line-height: 24px;
+  margin: 2px 4px 2px 0;
+  padding: 0 6px;
+  border-radius: 4px;
+  vertical-align: top;
+`;
+
+const AddPuzzleButton = styled(Button)`
+  margin: 2px 4px 2px 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  vertical-align: top;
+`;
+
 const RelatedPuzzleGroup = ({
   huntId,
   group,
@@ -50,6 +73,7 @@ const RelatedPuzzleGroup = ({
   canUpdate,
   suppressedTagIds,
   trackPersistentExpand,
+  addPuzzleCallback,
 }: {
   huntId: string;
   group: PuzzleGroup;
@@ -61,6 +85,9 @@ const RelatedPuzzleGroup = ({
   canUpdate: boolean;
   suppressedTagIds: string[];
   trackPersistentExpand: boolean;
+  // If present, the group header offers to add a puzzle pre-tagged with the
+  // group's tags (and those of any enclosing groups).
+  addPuzzleCallback?: (tagIds: string[]) => void;
 }) => {
   const [persistentCollapsed, setPersistentCollapsed] =
     useHuntPuzzleListCollapseGroup(
@@ -88,12 +115,30 @@ const RelatedPuzzleGroup = ({
 
   const { puzzles: relatedPuzzles, sharedTag } = group;
 
-  const puzzlePlural = relatedPuzzles.length === 1 ? "puzzle" : "puzzles";
-  const countString = `(${relatedPuzzles.length} other ${puzzlePlural})`;
   const allSuppressedTagIds = [...suppressedTagIds];
   if (sharedTag) {
     allSuppressedTagIds.push(sharedTag._id);
   }
+
+  const onAddPuzzle = (event: React.MouseEvent<HTMLButtonElement>) => {
+    // Don't also toggle the group.
+    event.stopPropagation();
+    addPuzzleCallback?.([...new Set(allSuppressedTagIds)]);
+  };
+
+  const { t } = useTranslation();
+
+  const puzzlePlural = relatedPuzzles.length === 1 ? "puzzle" : "puzzles";
+  const countString = `(${relatedPuzzles.length} other ${puzzlePlural})`;
+
+  // Puzzles that can't be solved (administrivia) don't count either way.
+  const unsolvedCount = relatedPuzzles.filter(
+    (p) => computeSolvedness(p) === "unsolved",
+  ).length;
+  const solvedCount = relatedPuzzles.filter(
+    (p) => computeSolvedness(p) === "solved",
+  ).length;
+
   return (
     <PuzzleGroupDiv>
       <PuzzleGroupHeader
@@ -102,7 +147,32 @@ const RelatedPuzzleGroup = ({
       >
         <FontAwesomeIcon icon={collapsed ? faCaretRight : faCaretDown} />
         {sharedTag ? (
-          <Tag tag={sharedTag} linkToSearch={false} popoverRelated={false} />
+          <>
+            <Tag tag={sharedTag} linkToSearch={false} popoverRelated={false} />
+            {/* Only worth flagging while the group is mostly unsolved. */}
+            {unsolvedCount > 0 && unsolvedCount > solvedCount && (
+              <UnsolvedCountBadge bg="secondary">
+                {t(
+                  "puzzleList.unsolvedInGroup",
+                  "{{unsolved}} of {{count}} puzzles unsolved",
+                  {
+                    unsolved: unsolvedCount,
+                    count: unsolvedCount + solvedCount,
+                  },
+                )}
+              </UnsolvedCountBadge>
+            )}
+            {addPuzzleCallback && (
+              <AddPuzzleButton
+                size="sm"
+                variant="outline-secondary"
+                onClick={onAddPuzzle}
+              >
+                <FontAwesomeIcon icon={faPlus} />{" "}
+                {t("puzzleList.addPuzzleHere", "add puzzle here")}
+              </AddPuzzleButton>
+            )}
+          </>
         ) : (
           <NoSharedTagLabel>{noSharedTagLabel}</NoSharedTagLabel>
         )}
@@ -135,6 +205,7 @@ const RelatedPuzzleGroup = ({
                 canUpdate={canUpdate}
                 suppressedTagIds={subgroupSuppressedTagIds}
                 trackPersistentExpand={trackPersistentExpand}
+                addPuzzleCallback={addPuzzleCallback}
               />
             );
           })}

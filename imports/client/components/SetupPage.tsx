@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import Creatable from "react-select/creatable";
 import styled, { useTheme } from "styled-components";
 import Flags from "../../Flags";
+import { DEFAULT_HUNT_TAGS } from "../../lib/defaultHuntTags";
 import isAdmin from "../../lib/isAdmin";
 import DiscordCache from "../../lib/models/DiscordCache";
 import type { FlagNames } from "../../lib/models/FeatureFlags";
@@ -27,6 +28,7 @@ import Settings from "../../lib/models/Settings";
 import discordGuildsAll from "../../lib/publications/discordGuildsAll";
 import settingsAll from "../../lib/publications/settingsAll";
 import configureClearGdriveCreds from "../../methods/configureClearGdriveCreds";
+import configureDefaultHuntTags from "../../methods/configureDefaultHuntTags";
 import configureDiscordBot from "../../methods/configureDiscordBot";
 import configureDiscordBotGuild from "../../methods/configureDiscordBotGuild";
 import configureDiscordOAuthClient from "../../methods/configureDiscordOAuthClient";
@@ -2630,6 +2632,95 @@ const CircuitBreakerSection = () => {
   );
 };
 
+const HuntDefaultsSection = () => {
+  const { t } = useTranslation();
+
+  const initialDefaultTags = useTracker(() => {
+    const setting = Settings.findOne({ name: "server.settings" });
+    return setting?.value.defaultHuntTags ?? "";
+  }, []);
+  const [defaultTags, setDefaultTags] = useState(initialDefaultTags);
+  const [submitState, setSubmitState] = useState(SubmitState.IDLE);
+  const [submitError, setSubmitError] = useState("");
+  const dismissAlert = useCallback(() => {
+    setSubmitState(SubmitState.IDLE);
+  }, []);
+
+  const onDefaultTagsChange: NonNullable<FormControlProps["onChange"]> =
+    useCallback((e) => {
+      setDefaultTags(e.currentTarget.value);
+    }, []);
+
+  const shouldDisableForm = submitState === SubmitState.SUBMITTING;
+
+  const onSubmit = useCallback(
+    (e: React.SubmitEvent<HTMLFormElement>) => {
+      e.preventDefault();
+
+      setSubmitState(SubmitState.SUBMITTING);
+      configureDefaultHuntTags.call(
+        { defaultHuntTags: defaultTags !== "" ? defaultTags : undefined },
+        (err) => {
+          if (err) {
+            setSubmitError(err.message);
+            setSubmitState(SubmitState.ERROR);
+          } else {
+            setSubmitState(SubmitState.SUCCESS);
+          }
+        },
+      );
+    },
+    [defaultTags],
+  );
+
+  const idPrefix = useId();
+
+  return (
+    <Section id="hunt-defaults">
+      <SectionHeader>
+        <SectionHeaderLabel>
+          {t("serverSetup.huntDefaults.title", "Hunt defaults")}
+        </SectionHeaderLabel>
+      </SectionHeader>
+      {submitState === SubmitState.SUCCESS ? (
+        <Alert variant="success" dismissible onClose={dismissAlert}>
+          {t("common.saveSuccess", "Saved changes.")}
+        </Alert>
+      ) : null}
+      {submitState === SubmitState.ERROR ? (
+        <Alert variant="danger" dismissible onClose={dismissAlert}>
+          {`${t("common.saveFailed", "Saving failed")}: ${submitError}`}
+        </Alert>
+      ) : null}
+      <form onSubmit={onSubmit}>
+        <FormGroup className="mb-3" controlId={`${idPrefix}-default-tags`}>
+          <FormLabel>
+            {t("serverSetup.huntDefaults.tags", "Default tags for new hunts")}
+          </FormLabel>
+          <FormControl
+            type="text"
+            placeholder={DEFAULT_HUNT_TAGS.join(", ")}
+            value={defaultTags}
+            disabled={shouldDisableForm}
+            onChange={onDefaultTagsChange}
+          />
+          <FormText>
+            {t(
+              "serverSetup.huntDefaults.tagsHelp",
+              "Comma-separated. These pre-fill the initial tags when creating a hunt. Leave blank to use the built-in list.",
+            )}
+          </FormText>
+        </FormGroup>
+        <ActionButtonRow>
+          <Button variant="primary" type="submit" disabled={shouldDisableForm}>
+            {t("common.save", "Save")}
+          </Button>
+        </ActionButtonRow>
+      </form>
+    </Section>
+  );
+};
+
 const SetupPage = () => {
   const { t } = useTranslation();
   useBreadcrumb({
@@ -2667,6 +2758,7 @@ const SetupPage = () => {
       <DiscordIntegrationSection />
       <BrandingSection />
       <LanguageSection />
+      <HuntDefaultsSection />
       <CircuitBreakerSection />
     </PageContainer>
   );

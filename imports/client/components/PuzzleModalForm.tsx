@@ -16,8 +16,9 @@ import type { FormControlProps } from "react-bootstrap/FormControl";
 import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
+import FormText from "react-bootstrap/FormText";
 import Row from "react-bootstrap/Row";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import type { ActionMeta } from "react-select";
 import { useTheme } from "styled-components";
 import type { GdriveMimeTypesType } from "../../lib/GdriveMimeTypes";
@@ -55,7 +56,19 @@ enum PuzzleModalFormSubmitState {
 export type PuzzleModalFormHandle = {
   reset: () => void;
   show: () => void;
+  // Pre-fills the form, e.g. with a group's tags when adding a puzzle to it.
+  populateForm: (data: { tagIds: string[] }) => void;
 };
+
+// "Functional" tags carry a prefix (group:, meta-for:, priority:, where:...)
+// and drive how the puzzle list is organised; everything else describes the
+// puzzle's content. The form takes them in separate inputs.
+const isFunctionalTag = (name: string) => name.includes(":");
+
+const sortTagNames = (names: Iterable<string>) =>
+  [...new Set(names)]
+    .filter(Boolean)
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
 const PuzzleModalForm = ({
   huntId,
@@ -130,31 +143,6 @@ const PuzzleModalForm = ({
     (event) => {
       setUrl(event.currentTarget.value);
       setUrlDirty(true);
-    },
-    [],
-  );
-
-  const onTagsChange = useCallback(
-    (
-      value: readonly TagSelectOption[],
-      action: ActionMeta<TagSelectOption>,
-    ) => {
-      let newTags = [];
-      switch (action.action) {
-        case "clear":
-        case "create-option":
-        case "deselect-option":
-        case "pop-value":
-        case "remove-value":
-        case "select-option":
-          newTags = value.map((v) => v.value);
-          break;
-        default:
-          return;
-      }
-
-      setTags(newTags);
-      setTagsDirty(true);
     },
     [],
   );
@@ -300,6 +288,66 @@ const PuzzleModalForm = ({
       return tags;
     }
   }, [tagsDirty, puzzle, tagNamesForIds, tags]);
+  const currentFunctionalTags = useMemo(
+    () => currentTags.filter(isFunctionalTag),
+    [currentTags],
+  );
+  const currentContentTags = useMemo(
+    () => currentTags.filter((name) => !isFunctionalTag(name)),
+    [currentTags],
+  );
+
+  // Each tag input replaces its own half of the tag list and keeps the other.
+  const onTagHalfChange = useCallback(
+    (
+      value: readonly TagSelectOption[],
+      action: ActionMeta<TagSelectOption>,
+      otherHalf: string[],
+    ) => {
+      switch (action.action) {
+        case "clear":
+        case "create-option":
+        case "deselect-option":
+        case "pop-value":
+        case "remove-value":
+        case "select-option":
+          setTags([...otherHalf, ...value.map((v) => v.value)]);
+          setTagsDirty(true);
+          break;
+        default:
+          break;
+      }
+    },
+    [],
+  );
+
+  const onFunctionalTagsChange = useCallback(
+    (
+      value: readonly TagSelectOption[],
+      action: ActionMeta<TagSelectOption>,
+    ) => {
+      onTagHalfChange(value, action, currentContentTags);
+    },
+    [onTagHalfChange, currentContentTags],
+  );
+
+  const onContentTagsChange = useCallback(
+    (
+      value: readonly TagSelectOption[],
+      action: ActionMeta<TagSelectOption>,
+    ) => {
+      onTagHalfChange(value, action, currentFunctionalTags);
+    },
+    [onTagHalfChange, currentFunctionalTags],
+  );
+
+  const populateForm = useCallback(
+    ({ tagIds }: { tagIds: string[] }) => {
+      setTags(tagNamesForIds([...new Set(tagIds)]));
+      setTagsDirty(true);
+    },
+    [tagNamesForIds],
+  );
 
   const currentExpectedAnswerCount = useMemo(() => {
     if (!expectedAnswerCountDirty && puzzle) {
@@ -324,6 +372,7 @@ const PuzzleModalForm = ({
   useImperativeHandle(ref, () => ({
     show,
     reset,
+    populateForm,
   }));
 
   useEffect(() => {
@@ -334,14 +383,22 @@ const PuzzleModalForm = ({
 
   const disableForm = submitState === PuzzleModalFormSubmitState.SUBMITTING;
 
-  const selectOptions: TagSelectOption[] = [
+  const selectOptions: TagSelectOption[] = sortTagNames([
     ...propsTags.map((t) => t.name),
-    ...tags,
-  ]
-    .filter(Boolean)
-    .map((t) => {
-      return { value: t, label: t };
-    });
+    ...currentTags,
+  ]).map((t) => {
+    return { value: t, label: t };
+  });
+  const functionalSelectOptions = selectOptions.filter((o) =>
+    isFunctionalTag(o.value),
+  );
+  const contentSelectOptions = selectOptions.filter(
+    (o) => !isFunctionalTag(o.value),
+  );
+  const tagsPlaceholder = t(
+    "puzzle.edit.tagsPlaceholder",
+    "Type to search or create",
+  );
 
   const idPrefix = useId();
 
@@ -450,28 +507,73 @@ const PuzzleModalForm = ({
           </Col>
         </FormGroup>
 
+        <hr />
+
         <FormGroup
           as={Row}
           className="mb-3"
-          controlId={`${idPrefix}-new-puzzle-tags`}
+          controlId={`${idPrefix}-new-puzzle-functional-tags`}
         >
           <FormLabel column xs={3}>
-            {t("puzzle.edit.tags", "Tags")}
+            {t("puzzle.edit.functionalTags", "Functional tags")}
           </FormLabel>
           <Col xs={9}>
             <Creatable
-              id={`${idPrefix}-new-puzzle-tags`}
+              id={`${idPrefix}-new-puzzle-functional-tags`}
               theme={theme.reactSelectTheme}
-              options={selectOptions}
+              options={functionalSelectOptions}
               isMulti
+              placeholder={tagsPlaceholder}
               isDisabled={disableForm}
-              onChange={onTagsChange}
-              value={currentTags.map((t) => {
+              onChange={onFunctionalTagsChange}
+              value={currentFunctionalTags.map((t) => {
                 return { label: t, value: t };
               })}
             />
+            <FormText>
+              <Trans
+                i18nKey="puzzle.edit.functionalTagsHelp"
+                t={t}
+                defaults="Tags with a prefix, like <code>group:</code>, <code>meta-for:</code>, <code>priority:</code>, or <code>where:</code> (e.g. <code>priority:high</code>; <code>where:Sydney</code>)"
+                components={{ code: <code /> }}
+              />
+            </FormText>
           </Col>
         </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
+          controlId={`${idPrefix}-new-puzzle-content-tags`}
+        >
+          <FormLabel column xs={3}>
+            {t("puzzle.edit.contentTags", "Content tags")}
+          </FormLabel>
+          <Col xs={9}>
+            <Creatable
+              id={`${idPrefix}-new-puzzle-content-tags`}
+              theme={theme.reactSelectTheme}
+              options={contentSelectOptions}
+              isMulti
+              placeholder={tagsPlaceholder}
+              isDisabled={disableForm}
+              onChange={onContentTagsChange}
+              value={currentContentTags.map((t) => {
+                return { label: t, value: t };
+              })}
+            />
+            <FormText>
+              <Trans
+                i18nKey="puzzle.edit.contentTagsHelp"
+                t={t}
+                defaults="Tags that describe the mechanics, content, or skills involved (e.g. <code>cryptic</code>; <code>Pokémon</code>; <code>writing stuff</code>)"
+                components={{ code: <code /> }}
+              />
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <hr />
 
         {docTypeSelector}
 

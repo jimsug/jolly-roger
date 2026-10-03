@@ -1,5 +1,5 @@
 import { Meteor } from "meteor/meteor";
-import i18n, { t } from "i18next";
+import i18n from "i18next";
 import Flags from "../../Flags";
 import Announcements from "../../lib/models/Announcements";
 import type { ChatMessageContentType } from "../../lib/models/ChatMessages";
@@ -35,6 +35,44 @@ async function makeDiscordBotFromSettings(): Promise<DiscordBot | undefined> {
   }
 
   return new DiscordBot(token);
+}
+
+// Embed field values render markdown, so anything a tag name could smuggle in
+// (a masked link, a spoiler, emphasis) is escaped. Discord hides the
+// backslashes when it renders, so ordinary names look unchanged.
+function escapeDiscordMarkdown(text: string): string {
+  return text.replaceAll(/[\\`*_~|[\]()<>#-]/g, "\\$&");
+}
+
+// Prefixed tags show an icon in place of the prefix so a long tag list stays
+// readable in an embed.
+export function formatTagForDiscord(tagName: string): string {
+  if (tagName.startsWith("group:")) {
+    return `📂 ${escapeDiscordMarkdown(tagName.slice("group:".length))}`;
+  }
+  if (tagName.startsWith("meta-for:")) {
+    return `⭐️ ${escapeDiscordMarkdown(tagName.slice("meta-for:".length))}`;
+  }
+  if (tagName.startsWith("where:")) {
+    return `📍 ${escapeDiscordMarkdown(tagName.slice("where:".length))}`;
+  }
+  return escapeDiscordMarkdown(tagName);
+}
+
+async function tagsFieldForPuzzle(puzzle: PuzzleType) {
+  const tagNameList = await Tags.find({
+    _id: { $in: puzzle.tags },
+  }).mapAsync((t) => t.name);
+  if (tagNameList.length === 0) {
+    return undefined;
+  }
+  return [
+    {
+      name: i18n.t("tags.tags", "Tags", { lng: serverLanguage }),
+      value: tagNameList.map(formatTagForDiscord).join(" • "),
+      inline: true,
+    },
+  ];
 }
 
 type DescriptionContent = { description: string };
@@ -113,25 +151,11 @@ const DiscordHooks: Hookset = {
       const url = Meteor.absoluteUrl(
         `hunts/${puzzle.hunt}/puzzles/${puzzle._id}`,
       );
-      const tagNameList = await Tags.find({
-        _id: { $in: puzzle.tags },
-      }).mapAsync((t) => t.name);
-      const tags = tagNameList.map((tagName) => `\`${tagName}\``).join(", ");
-      const fields =
-        tags.length > 0
-          ? [
-              {
-                name: i18n.t("tags.tags", "Tags", { lng: serverLanguage }),
-                value: tags,
-                inline: true,
-              },
-            ]
-          : undefined;
       const messageObj = {
         embed: {
           title,
           url,
-          fields,
+          fields: await tagsFieldForPuzzle(puzzle),
         },
       };
       await bot.postMessageToChannel(channel.id, messageObj);
@@ -167,25 +191,11 @@ const DiscordHooks: Hookset = {
       const url = Meteor.absoluteUrl(
         `hunts/${puzzle.hunt}/puzzles/${puzzle._id}`,
       );
-      const tagNameList = await Tags.find({
-        _id: { $in: puzzle.tags },
-      }).mapAsync((t) => t.name);
-      const tags = tagNameList.map((tagName) => `\`${tagName}\``).join(", ");
-      const fields =
-        tags.length > 0
-          ? [
-              {
-                name: t("tags.tags", "Tags", { lng: serverLanguage }),
-                value: tags,
-                inline: true,
-              },
-            ]
-          : undefined;
       const messageObj = {
         embed: {
           title,
           url,
-          fields,
+          fields: await tagsFieldForPuzzle(puzzle),
         },
       };
       await bot.postMessageToChannel(channel.id, messageObj);

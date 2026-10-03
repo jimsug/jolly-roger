@@ -27,6 +27,7 @@ import TransportRequests from "./mediasoup/TransportRequests";
 import TransportStates from "./mediasoup/TransportStates";
 import Transports from "./mediasoup/Transports";
 import PendingAnnouncements from "./PendingAnnouncements";
+import PuzzleNotifications from "./PuzzleNotifications";
 import Puzzles from "./Puzzles";
 import Servers from "./Servers";
 import Settings from "./Settings";
@@ -64,6 +65,7 @@ const Models = {
     TransportStates,
   },
   PendingAnnouncements,
+  PuzzleNotifications,
   Puzzles,
   Servers,
   Settings,

@@ -4,12 +4,23 @@ import Logger from "../../Logger";
 import { DEFAULT_HUNT_TAGS, parseInitialTags } from "../../lib/defaultHuntTags";
 import Hunts, { HuntPattern } from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
+import Settings from "../../lib/models/Settings";
 import { addUserToRole, checkAdmin } from "../../lib/permission_stubs";
 import createHunt from "../../methods/createHunt";
 import addUsersToDiscordRole from "../addUsersToDiscordRole";
 import { ensureHuntFolder } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
+
+// The tags a hunt starts with when the creator leaves the choice to the
+// server: the admin-configured list if there is one, else the built-in list.
+async function defaultTagNames(): Promise<string[]> {
+  const setting = await Settings.findOneAsync({ name: "server.settings" });
+  const configured = setting?.value.defaultHuntTags;
+  return configured === undefined
+    ? DEFAULT_HUNT_TAGS
+    : parseInitialTags(configured);
+}
 
 defineMethod(createHunt, {
   validate(arg) {
@@ -28,7 +39,7 @@ defineMethod(createHunt, {
 
     const tags =
       initialTags === undefined
-        ? DEFAULT_HUNT_TAGS
+        ? await defaultTagNames()
         : parseInitialTags(initialTags);
     for (const tag of tags) {
       await getOrCreateTagByName(huntId, tag);

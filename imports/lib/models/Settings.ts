@@ -69,6 +69,14 @@ const SettingDiscriminatedUnion = z.discriminatedUnion("name", [
       bucketRegion: nonEmptyString,
     }),
   }),
+  z.object({
+    name: z.literal("server.settings"),
+    value: z.object({
+      // Comma-separated tag names that new hunts start with, overriding the
+      // built-in list in imports/lib/defaultHuntTags.ts.
+      defaultHuntTags: nonEmptyString.optional(),
+    }),
+  }),
 ]);
 
 const Setting = withCommon(SettingDiscriminatedUnion);

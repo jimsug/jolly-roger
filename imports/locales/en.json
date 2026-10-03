@@ -33,6 +33,10 @@
       "message": "A puzzle you have bookmarked {{describeState}}. The new answer is: <puzzleAnswer />"
     }
   },
+  "puzzleList": {
+    "unsolvedInGroup_one": "{{unsolved}} of {{count}} puzzle unsolved",
+    "unsolvedInGroup_other": "{{unsolved}} of {{count}} puzzles unsolved"
+  },
   "puzzle": {
     "delete": {
       "currentlyViewedBy_one": "This puzzle is currently being viewed by {{count}} person",
