@@ -11,9 +11,14 @@ import useDocumentTitle from "../hooks/useDocumentTitle";
 import { darkTheme, lightTheme } from "../theme";
 import AllProfileListPage from "./AllProfileListPage";
 import AnnouncementsPage from "./AnnouncementsPage";
-import { AuthenticatedPage, UnauthenticatedPage } from "./authentication";
+import {
+  AuthenticatedPage,
+  NoAuthenticationPage,
+  UnauthenticatedPage,
+} from "./authentication";
 import CustomLinkEmbedPage from "./CustomLinkEmbedPage";
 import EnrollForm from "./EnrollForm";
+import ExtensionPrivacyPolicy from "./ExtensionPrivacyPolicy";
 import FirehosePage from "./FirehosePage";
 import FirstUserForm from "./FirstUserForm";
 import ForgotPasswordForm from "./ForgotPasswordForm";
@@ -118,12 +123,22 @@ export const UnauthenticatedRouteList: RouteObject[] = [
   });
 });
 
+/* Public routes - rendered the same whether or not the user is logged in */
+export const NoAuthenticationRouteList: RouteObject[] = [
+  { path: "/extension-privacy-policy", element: <ExtensionPrivacyPolicy /> },
+].map((r) => {
+  return Object.assign(r, {
+    element: <NoAuthenticationPage>{r.element}</NoAuthenticationPage>,
+  });
+});
+
 export const RouteList: RouteObject[] = [
   /* Index redirect */
   {
     path: "/",
     element: <RootRedirector />,
   },
+  ...NoAuthenticationRouteList,
   ...AuthenticatedRouteList,
   ...UnauthenticatedRouteList,
   // JoinHunt handles both authenticated and unauthenticated users.

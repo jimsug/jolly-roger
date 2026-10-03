@@ -411,8 +411,11 @@ const useTransport = (
   // Extract turnConfig sub-fields as strings so they can be listed
   // individually in the useEffect dep array. Using the turnConfig object
   // directly would cause spurious re-fires because Minimongo returns fresh
-  // clones on every reactive recomputation.
-  const turnConfigUrls = transportParams?.turnConfig?.urls;
+  // clones on every reactive recomputation. urls can be a list, which is
+  // cloned the same way, so it's keyed by its JSON encoding.
+  const turnConfigUrlsJson = transportParams?.turnConfig
+    ? JSON.stringify(transportParams.turnConfig.urls)
+    : undefined;
   const turnConfigUsername = transportParams?.turnConfig?.username;
   const turnConfigCredential = transportParams?.turnConfig?.credential;
   useEffect(() => {
@@ -422,9 +425,9 @@ const useTransport = (
       const iceParameters = transportParams.iceParameters;
       const iceCandidates = transportParams.iceCandidates;
       const serverDtlsParameters = transportParams.dtlsParameters;
-      const turnConfig = turnConfigUrls
+      const turnConfig = turnConfigUrlsJson
         ? {
-            urls: turnConfigUrls,
+            urls: JSON.parse(turnConfigUrlsJson) as string | string[],
             username: turnConfigUsername!,
             credential: turnConfigCredential!,
           }
@@ -499,7 +502,7 @@ const useTransport = (
     transportParams?.iceParameters,
     transportParams?.iceCandidates,
     transportParams?.dtlsParameters,
-    turnConfigUrls,
+    turnConfigUrlsJson,
     turnConfigUsername,
     turnConfigCredential,
   ]);

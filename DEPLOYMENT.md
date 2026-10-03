@@ -65,11 +65,26 @@ of environment variables.
   core](https://docs.meteor.com/environment-variables#ROOT_URL)) - the base URL
   used to access your server. Not needed for dev servers.
 
+- `$SENTRY_DSN` - a [Sentry](https://sentry.io/) DSN to report server and
+  browser errors to (any Sentry-compatible service, like Better Stack, works
+  too). Every request and page load is also traced, which counts against the
+  service's quota. Unset, nothing is reported. Before anything is sent, tokens
+  in account and invitation links, Google document ids, the page URL the
+  browser extension and bookmarklet pass in `url=`, and client IP addresses are
+  filtered out.
+
 - `$TURN_SERVER` - the URL of a [TURN
   server](https://webrtc.org/getting-started/turn-server) for robust audio chat
-  connectivity.
+  connectivity. To list several URLs, separate them with commas (e.g.
+  `turn:turn.example.com:80,turn:turn.example.com:443?transport=tcp`).
 
 - `$TURN_SECRET` - the secret needed to authenticate with `$TURN_SERVER`.
+
+- `$TURN_USERNAME` - if your `$TURN_SERVER` doesn't use a shared secret (as
+  hosted TURN services often don't), the static username to use instead.
+
+- `$TURN_CREDENTIAL` - with `$TURN_USERNAME`, the static credential (password)
+  to use. When both are set, `$TURN_SECRET` is ignored.
 
 Also see the other environment variables defined by [Meteor
 core](https://docs.meteor.com/environment-variables) and other packages.

@@ -3,3 +3,4 @@ Dockerfile
 node_modules
 cloudformation
 .github/workflows
+extension

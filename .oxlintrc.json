@@ -11,7 +11,7 @@
     "typescript",
     "oxc"
   ],
-  "ignorePatterns": ["eslint/**", "private/**"],
+  "ignorePatterns": ["eslint/**", "private/**", "extension/**"],
   "categories": {
     "correctness": "error",
     "suspicious": "error"

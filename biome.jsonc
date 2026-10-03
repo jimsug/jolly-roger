@@ -12,7 +12,9 @@
       "!**/.git",
       "!**/.meteor",
       "!eslint",
-      "!eslint.config.mts"
+      "!eslint.config.mts",
+      // The browser extension has its own package and toolchain
+      "!extension"
     ]
   },
   "formatter": {

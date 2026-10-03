@@ -9,3 +9,7 @@ _build
 */build-assets
 */build-chunks
 .rsdoctor
+
+# Browser extension build output
+extension/dist
+extension/tmp

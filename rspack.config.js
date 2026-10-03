@@ -56,6 +56,9 @@ module.exports = defineConfig((Meteor) => {
       express: "commonjs express",
       mediasoup: "commonjs mediasoup",
       slate: "commonjs slate",
+      // Sentry's OpenTelemetry instrumentation hooks Node's module loader and
+      // loads its own hook files at runtime, so leave it to Node to load
+      "@sentry/node": "commonjs @sentry/node",
     },
     // ws and discord.js dynamic-import these optional native deps and
     // rely on a missing module throwing. resolve.fallback: false produces

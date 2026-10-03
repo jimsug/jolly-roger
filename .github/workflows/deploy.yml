@@ -1,0 +1,112 @@
+name: Build
+
+on:
+  push:
+    paths-ignore:
+      - "extension/**"
+    tags:
+      - "v*.*.*"
+    branches:
+      - main
+
+# Every run deploys to the same paths on the VPS, so runs for different refs (a
+# main push and a tag) must not overlap, and none may be cancelled halfway
+# through a deploy. GitHub keeps the running deploy plus only the newest pending
+# one, so the VPS still ends up on the latest push.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # The Node version bundled with the Meteor release in .meteor/release. The
+  # VPS must have the same version installed through nvm (see Deploy).
+  NODE_VERSION: "22.22.1"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Runs queue behind each other, so don't let a hung one hold up the rest for
+    # GitHub's six-hour default
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Set up environment
+        run: |
+          mkdir ~/${{ github.sha }}
+
+      - name: Install Meteor
+        run: |
+          METEOR_RELEASE="$(sed -e 's/.*@//g' .meteor/release)"
+          curl "https://install.meteor.com/?release=$METEOR_RELEASE" | sh
+          meteor --version
+
+      - name: Check Node version
+        run: |
+          METEOR_NODE_VERSION="$(meteor node --version | tail -n 1)"
+          if [[ "$METEOR_NODE_VERSION" != "v$NODE_VERSION" ]]; then
+            echo "::error::Meteor bundles Node $METEOR_NODE_VERSION but NODE_VERSION is $NODE_VERSION; update it here and on the VPS"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: meteor npm ci
+
+      - name: Build app
+        env:
+          METEOR_GIT_COMMIT_HASH: ${{ github.sha }}
+        run: |
+          # The rspack build runs under `#!/usr/bin/env node`, so put the dev
+          # bundle's node first on PATH (as the Dockerfile does). meteor prints
+          # junk to stdout, so capture the path over stderr.
+          NODE_PATH=$(meteor node -e 'console.error(process.execPath);' 2>&1 1>/dev/null)
+          export PATH="$(dirname "$NODE_PATH"):$PATH"
+          meteor build --directory ~/${{ github.sha }} --architecture os.linux.x86_64
+
+      - name: Setup SSH
+        uses: godaddy-wordpress/setup-secure-shell@v1
+        env:
+          PRIVATE_KEY: ${{ secrets.JR_VPS_KEY }}
+        with:
+          ssh-private-key: $PRIVATE_KEY
+          add-gh-known-hosts: no
+
+      - name: Upload
+        run: |
+          cd ~/${{ github.sha }}
+          tar -czf ./jolly-roger.tar.gz ./*
+          scp -o StrictHostKeyChecking=no ~/${{ github.sha }}/jolly-roger.tar.gz ${{ secrets.JR_VPS_USERNAME }}@${{ secrets.JR_VPS_HOST }}:/home/jollyrogeruser/app
+
+      - name: Deploy
+        uses: JimCronqvist/action-ssh@master
+        with:
+          hosts: "${{ secrets.JR_VPS_USERNAME }}@${{ secrets.JR_VPS_HOST }}"
+          privateKey: ${{ secrets.JR_VPS_KEY }}
+          # The action feeds this to a login shell and reports only the last
+          # command's status, so stop at the first failure, and leave the live
+          # bundle alone when the VPS lacks the Node this build needs
+          command: |
+            set -eu
+            NODE_BIN=/home/jollyrogeruser/.nvm/versions/node/v${{ env.NODE_VERSION }}/bin
+            if [ ! -x "$NODE_BIN/node" ]; then
+              echo "Node v${{ env.NODE_VERSION }} isn't installed for jollyrogeruser" >&2
+              exit 1
+            fi
+            export PATH="$NODE_BIN:$PATH"
+            cd /home/jollyrogeruser/app
+            tar -xzf jolly-roger.tar.gz
+            rm jolly-roger.tar.gz
+            cd bundle/programs/server
+            npm install
+            sudo systemctl restart jolly-roger

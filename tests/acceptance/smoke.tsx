@@ -1,6 +1,7 @@
 import { promisify } from "node:util";
 import { Meteor } from "meteor/meteor";
 import { act, render } from "@testing-library/react";
+import { assert } from "chai";
 import type React from "react";
 import type { Location, NavigateFunction, RouteObject } from "react-router";
 import {
@@ -38,6 +39,7 @@ if (Meteor.isClient) {
     require("../../imports/client/components/Routes").default;
   const {
     AuthenticatedRouteList,
+    NoAuthenticationRouteList,
     UnauthenticatedRouteList,
   }: typeof import("../../imports/client/components/Routes") = require("../../imports/client/components/Routes");
 
@@ -166,6 +168,56 @@ if (Meteor.isClient) {
             await stabilize();
           });
         });
+      });
+    });
+
+    describe("which need no authentication", function () {
+      const rendersWithoutRedirect = (p: string) => {
+        it(`works for path ${p}`, async function () {
+          const url = substituteUrl(p);
+          if (!url) {
+            this.skip();
+          }
+
+          // Start on the page itself: navigating there from / (as the tests
+          // above do) can lose a race with the root redirect to /login
+          const { container } = render(
+            <MemoryRouter initialEntries={[url]}>
+              <Routes />
+              <ReactRouterRoutes>
+                <Route path="*" element={<LocationCapture />} />
+              </ReactRouterRoutes>
+            </MemoryRouter>,
+          );
+          await act(async () => {
+            await stabilize();
+          });
+          assert.equal(location.current?.pathname, url);
+          assert.isNotNull(
+            container.querySelector("h1"),
+            "The page should render its content",
+          );
+        });
+      };
+
+      describe("when logged out", function () {
+        before(async function () {
+          await promisify(Meteor.logout)();
+        });
+
+        enumeratePaths(NoAuthenticationRouteList).forEach(
+          rendersWithoutRedirect,
+        );
+      });
+
+      describe("when logged in", function () {
+        before(async function () {
+          await promisify(Meteor.loginWithPassword)(USER_EMAIL, USER_PASSWORD);
+        });
+
+        enumeratePaths(NoAuthenticationRouteList).forEach(
+          rendersWithoutRedirect,
+        );
       });
     });
   });

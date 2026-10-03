@@ -28,6 +28,9 @@ updates:
       bugsnag:
         patterns:
           - "@bugsnag/*"
+      sentry:
+        patterns:
+          - "@sentry/*"
       google:
         patterns:
           - "@googleapis/*"

@@ -116,10 +116,32 @@ type RouterAppData = {
   createdBy: string;
 };
 
-function generateTurnConfig() {
-  const turnServer = process.env.TURN_SERVER;
-  const turnSecret = process.env.TURN_SECRET;
-  if (!turnServer || !turnSecret) {
+export function generateTurnConfig(env: NodeJS.ProcessEnv = process.env) {
+  // $TURN_SERVER may list several servers, separated by commas
+  const servers = (env.TURN_SERVER ?? "")
+    .split(",")
+    .map((server) => server.trim())
+    .filter((server) => server !== "");
+  const [firstServer] = servers;
+  if (!firstServer) {
+    return undefined;
+  }
+  const urls = servers.length > 1 ? servers : firstServer;
+
+  // Hosted TURN services tend to hand out a fixed username and credential
+  // rather than sharing a secret
+  const turnUsername = env.TURN_USERNAME;
+  const turnCredential = env.TURN_CREDENTIAL;
+  if (turnUsername && turnCredential) {
+    return {
+      urls,
+      username: turnUsername,
+      credential: turnCredential,
+    };
+  }
+
+  const turnSecret = env.TURN_SECRET;
+  if (!turnSecret) {
     return undefined;
   }
 
@@ -138,7 +160,7 @@ function generateTurnConfig() {
   const credential = hmac.digest("base64");
 
   return {
-    urls: turnServer,
+    urls,
     username,
     credential,
   };
