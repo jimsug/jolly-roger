@@ -23,7 +23,13 @@
     "viewersContext": "{{count}} viewer",
     "viewersContext_other": "{{count}} viewers",
     "viewer_one": "viewer",
-    "viewer_other": "viewers"
+    "viewer_other": "viewers",
+    "newMessages_one": "{{shown}} new message",
+    "newMessages_other": "{{shown}} new messages",
+    "ticker": {
+      "moreMessages_one": "+{{count}} more message",
+      "moreMessages_other": "+{{count}} more messages"
+    }
   },
   "notification": {
     "bookmark": {

@@ -51,6 +51,22 @@ const SquareIconButton = styled(Button)`
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+`;
+
+const NotificationBadge = styled.span`
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background-color: ${({ theme }) => theme.colors.danger};
+  color: white;
+  border-radius: 4px;
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 14px;
+  min-width: 14px;
+  text-align: center;
+  font-weight: bold;
 `;
 
 const MinimizedChatInfo = ({
@@ -60,6 +76,7 @@ const MinimizedChatInfo = ({
   callDispatch,
   joinCall,
   onRestore,
+  missedMessages = 0,
 }: {
   huntId: string;
   puzzleId: string;
@@ -67,6 +84,8 @@ const MinimizedChatInfo = ({
   callDispatch: React.Dispatch<Action>;
   joinCall: () => void;
   onRestore: () => void;
+  // Messages that arrived while the chat was minimised
+  missedMessages?: number;
 }) => {
   const subscriberTopic = `puzzle:${puzzleId}`;
   const rtcDisabled = useTracker(() => Flags.active("disable.webrtc"), []);
@@ -194,6 +213,11 @@ const MinimizedChatInfo = ({
       >
         <SquareIconButton onClick={onRestore} style={{ marginBottom: "4px" }}>
           <FontAwesomeIcon icon={faChevronRight} />
+          {missedMessages > 0 && (
+            <NotificationBadge>
+              {missedMessages > 9 ? "9+" : missedMessages}
+            </NotificationBadge>
+          )}
         </SquareIconButton>
       </OverlayTrigger>
       <OverlayTrigger

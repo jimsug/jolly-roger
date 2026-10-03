@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import i18n from "i18next";
 import Flags from "../../Flags";
+import isReaction from "../../lib/isReaction";
 import Announcements from "../../lib/models/Announcements";
 import type { ChatMessageContentType } from "../../lib/models/ChatMessages";
 import ChatMessages from "../../lib/models/ChatMessages";
@@ -11,6 +12,7 @@ import Puzzles from "../../lib/models/Puzzles";
 import Settings from "../../lib/models/Settings";
 import Tags from "../../lib/models/Tags";
 import nodeIsImage from "../../lib/nodeIsImage";
+import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import nodeIsText from "../../lib/nodeIsText";
 import { computeSolvedness } from "../../lib/solvedness";
@@ -95,6 +97,16 @@ async function renderChatMessageContent(
       }
       if (nodeIsRoleMention(child)) {
         return ` @${child.roleId} `;
+      }
+      if (nodeIsPuzzle(child)) {
+        const mentioned = await Puzzles.findOneAsync(child.puzzleId);
+        if (!mentioned) {
+          return " ??? ";
+        }
+        const url = Meteor.absoluteUrl(
+          `hunts/${mentioned.hunt}/puzzles/${mentioned._id}`,
+        );
+        return ` [${escapeDiscordMarkdown(mentioned.title)}](${url}) `;
       }
       const user = await MeteorUsers.findOneAsync(child.userId);
       return ` @${user?.displayName ?? child.userId} `;
@@ -260,6 +272,10 @@ const DiscordHooks: Hookset = {
     }
 
     const chatMessage = (await ChatMessages.findOneAsync(chatMessageId))!;
+    // Reactions are shown on the message they belong to, not mirrored.
+    if (isReaction(chatMessage)) {
+      return;
+    }
     const puzzle = (await Puzzles.findOneAsync(chatMessage.puzzle))!;
     const hunt = (await Hunts.findOneAsync(chatMessage.hunt))!;
     if (hunt.firehoseDiscordChannel) {

@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router";
 import styled from "styled-components";
 import { shortCalendarTimeFormat } from "../../lib/calendarTimeFormat";
+import isReaction from "../../lib/isReaction";
 import { indexedById } from "../../lib/listUtils";
 import type { ChatMessageType } from "../../lib/models/ChatMessages";
 import ChatMessages from "../../lib/models/ChatMessages";
@@ -26,6 +27,7 @@ import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import nodeIsImage from "../../lib/nodeIsImage";
 import nodeIsMention from "../../lib/nodeIsMention";
+import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import chatMessagesForFirehose from "../../lib/publications/chatMessagesForFirehose";
 import { useBreadcrumb } from "../hooks/breadcrumb";
@@ -52,6 +54,7 @@ interface MessageProps {
   msg: ChatMessageType;
   displayNames: Map<string, string>;
   puzzle: PuzzleType | undefined;
+  puzzles: Map<string, PuzzleType>;
 }
 
 const PreWrapSpan = styled.span`
@@ -63,6 +66,7 @@ const PreWrapSpan = styled.span`
 function asFlatString(
   chatMessage: ChatMessageType,
   displayNames: Map<string, string>,
+  puzzles: Map<string, PuzzleType>,
 ): string {
   return chatMessage.content.children
     .map((child) => {
@@ -70,6 +74,8 @@ function asFlatString(
         return ` @${displayNames.get(child.userId) ?? "???"} `;
       } else if (nodeIsRoleMention(child)) {
         return ` @${child.roleId} `;
+      } else if (nodeIsPuzzle(child)) {
+        return `[puzzle: ${puzzles.get(child.puzzleId)?.title ?? "???"}]`;
       } else if (nodeIsImage(child)) {
         return `[image]`;
       } else {
@@ -79,44 +85,46 @@ function asFlatString(
     .join(" ");
 }
 
-const Message = React.memo(({ msg, displayNames, puzzle }: MessageProps) => {
-  const { t, i18n } = useTranslation();
-  const ts = shortCalendarTimeFormat(msg.timestamp, t, i18n.language);
-  const displayName = msg.sender
-    ? (displayNames.get(msg.sender) ?? "???")
-    : "jolly-roger";
-  const messageText = asFlatString(msg, displayNames);
-  const hasNewline = messageText.includes("\n");
-  return (
-    <div>
-      <span>
-        [{ts}] [
-        {puzzle !== undefined ? (
-          <>
-            <span>{puzzle.deleted ? "deleted: " : ""}</span>
-            <a
-              href={`/hunts/${msg.hunt}/puzzles/${msg.puzzle}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {puzzle.title}
-            </a>
-          </>
+const Message = React.memo(
+  ({ msg, displayNames, puzzle, puzzles }: MessageProps) => {
+    const { t, i18n } = useTranslation();
+    const ts = shortCalendarTimeFormat(msg.timestamp, t, i18n.language);
+    const displayName = msg.sender
+      ? (displayNames.get(msg.sender) ?? "???")
+      : "jolly-roger";
+    const messageText = asFlatString(msg, displayNames, puzzles);
+    const hasNewline = messageText.includes("\n");
+    return (
+      <div>
+        <span>
+          [{ts}] [
+          {puzzle !== undefined ? (
+            <>
+              <span>{puzzle.deleted ? "deleted: " : ""}</span>
+              <a
+                href={`/hunts/${msg.hunt}/puzzles/${msg.puzzle}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {puzzle.title}
+              </a>
+            </>
+          ) : (
+            <span>deleted: no data</span>
+          )}
+          {"] "}
+          {displayName}
+          {": "}
+        </span>
+        {hasNewline ? (
+          <PreWrapSpan>{messageText}</PreWrapSpan>
         ) : (
-          <span>deleted: no data</span>
+          <span>{messageText}</span>
         )}
-        {"] "}
-        {displayName}
-        {": "}
-      </span>
-      {hasNewline ? (
-        <PreWrapSpan>{messageText}</PreWrapSpan>
-      ) : (
-        <span>{messageText}</span>
-      )}
-    </div>
-  );
-});
+      </div>
+    );
+  },
+);
 
 const MessagesPane = styled.div`
   overflow-y: scroll;
@@ -143,6 +151,7 @@ function compileChatMessageMatcher(
     const haystackString = asFlatString(
       chatMessage,
       displayNames,
+      puzzles,
     ).toLowerCase();
     const senderDisplayName = (
       chatMessage.sender
@@ -201,10 +210,10 @@ const FirehosePage = () => {
     () =>
       loading
         ? undefined
-        : ChatMessages.find(
-            { hunt: huntId },
-            { sort: { timestamp: 1 } },
-          ).fetch(),
+        : ChatMessages.find({ hunt: huntId }, { sort: { timestamp: 1 } })
+            .fetch()
+            // Reactions are an emoji on another message, not chatter
+            .filter((message) => !isReaction(message)),
     [loading, huntId],
   );
 
@@ -377,6 +386,7 @@ const FirehosePage = () => {
                 key={msg._id}
                 msg={msg}
                 puzzle={puzzles.get(msg.puzzle)}
+                puzzles={puzzles}
                 displayNames={displayNames}
               />
             );

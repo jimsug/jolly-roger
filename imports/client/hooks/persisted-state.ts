@@ -7,6 +7,11 @@ export const useAppThemeState = () => {
   return useLocalStorage<AppThemeState>("appTheme", "auto");
 };
 
+// The dragged width of the puzzle page's chat pane, shared across puzzles
+export const usePersistedSidebarWidth = (defaultWidth: number) => {
+  return useLocalStorage<number>("persistentSidebarWidth", defaultWidth);
+};
+
 export type NotesPageViewMode = "list" | "table" | "fullwidth";
 export const useNotesPageViewMode = () => {
   return useLocalStorage<NotesPageViewMode>("notesPageViewMode", "list");

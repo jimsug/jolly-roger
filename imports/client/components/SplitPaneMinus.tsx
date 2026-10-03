@@ -174,6 +174,7 @@ type SplitPaneMinusProps = {
   primary: "first" | "second";
   size: number; // Size, in pixels of the primary pane.
   onChanged?: (newSize: number) => void; // callback called any time the sidebar size changes (including while dragging)
+  onCommitted?: (newSize: number) => void; // callback called once a drag ends, with the size it settled on
   allowResize?: boolean; // defaults to true
 };
 
@@ -203,6 +204,7 @@ const SplitPaneMinus = ({
   primary,
   size,
   onChanged,
+  onCommitted,
   allowResize = true,
 }: SplitPaneMinusProps) => {
   const [dragState, setDragState] = useState<SplitPaneDragState>({
@@ -210,6 +212,8 @@ const SplitPaneMinus = ({
     position: undefined,
     resized: false,
   });
+  // The size the drag in progress last reported, for the release to commit
+  const dragSize = useRef<number | undefined>(undefined);
   const ref = useRef<HTMLDivElement | null>(null);
   const pane1ref = useRef<HTMLDivElement | null>(null);
   const pane2ref = useRef<HTMLDivElement | null>(null);
@@ -222,6 +226,7 @@ const SplitPaneMinus = ({
       e.currentTarget.setPointerCapture(e.pointerId);
       unfocus(window);
       const position = split === "vertical" ? e.clientX : e.clientY;
+      dragSize.current = undefined;
       setDragState({
         active: true,
         position,
@@ -313,6 +318,7 @@ const SplitPaneMinus = ({
           }
 
           if (onChanged) onChanged(clampedSize);
+          dragSize.current = clampedSize;
         }
       }
     },
@@ -338,9 +344,13 @@ const SplitPaneMinus = ({
             active: false,
           };
         });
+        if (dragSize.current !== undefined) {
+          if (onCommitted) onCommitted(dragSize.current);
+          dragSize.current = undefined;
+        }
       }
     },
-    [dragState.active],
+    [dragState.active, onCommitted],
   );
 
   const onPointerCancel: PointerEventHandler<HTMLSpanElement> = useCallback(

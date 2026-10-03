@@ -1,5 +1,6 @@
 import type { Meteor } from "meteor/meteor";
 import { faFileCircleExclamation } from "@fortawesome/free-solid-svg-icons/faFileCircleExclamation";
+import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Token, Tokens } from "marked";
@@ -40,17 +41,26 @@ import {
 import styled, { css } from "styled-components";
 import { formatDiscordName } from "../../lib/discord";
 import { indexedById, sortedBy } from "../../lib/listUtils";
+import type { PuzzleType } from "../../lib/models/Puzzles";
+import type { Solvedness } from "../../lib/solvedness";
+import { computeSolvedness } from "../../lib/solvedness";
 import Avatar from "./Avatar";
 
 // This implements a markdown-inspired input editor with live formatting preview
-// and autocompleting @-mentions.
+// and autocompleting @-mentions and !-puzzle links.
 
 export const DEBUG_EDITOR = false;
 
 export type CustomText = { text: string };
 export type MessageElement = {
   type: "message";
-  children: (MentionElement | RoleMentionElement | ImageElement | CustomText)[];
+  children: (
+    | MentionElement
+    | RoleMentionElement
+    | ImageElement
+    | PuzzleElement
+    | CustomText
+  )[];
 };
 export type MentionElement = {
   type: "mention";
@@ -72,11 +82,17 @@ export type ImageElement = {
   status: ImageStatus;
   children: CustomText[];
 };
+export type PuzzleElement = {
+  type: "puzzle";
+  puzzleId: string; // puzzle._id of the linked puzzle
+  children: CustomText[];
+};
 export type CustomElement =
   | MessageElement
   | RoleMentionElement
   | MentionElement
-  | ImageElement;
+  | ImageElement
+  | PuzzleElement;
 declare module "slate" {
   interface CustomTypes {
     Editor: BaseEditor & ReactEditor & HistoryEditor;
@@ -118,6 +134,10 @@ interface MentionRendererProps
   users: Map<string, Meteor.User>;
 }
 
+interface PuzzleRendererProps extends ElementRendererProps<PuzzleElement> {
+  puzzles: Map<string, PuzzleType>;
+}
+
 export const MentionSpan = styled.span<{
   $isSelf: boolean;
 }>`
@@ -139,6 +159,26 @@ export const MentionSpan = styled.span<{
 `;
 
 const SelectedMentionSpan = styled(MentionSpan)`
+  box-shadow: 0 0 0 2px ${({ theme }) => theme.colors.selectedMentionSpanShadow};
+`;
+
+// A puzzle link, coloured like the puzzle list by how solved it is.
+export const PuzzleSpan = styled.span<{
+  $solvedness: Solvedness;
+}>`
+  padding: 2px 3px 3px;
+  margin: 0 1px;
+  vertical-align: baseline;
+  display: inline-block;
+  overflow-wrap: break-word;
+  border-radius: 4px;
+  color: ${({ theme }) => theme.colors.mentionSpanText};
+  background-color: ${({ $solvedness, theme }) =>
+    theme.colors.solvedness[$solvedness]};
+  font-size: 0.8rem;
+`;
+
+const SelectedPuzzleSpan = styled(PuzzleSpan)`
   box-shadow: 0 0 0 2px ${({ theme }) => theme.colors.selectedMentionSpanShadow};
 `;
 
@@ -176,6 +216,30 @@ const EditableMentionRenderer = ({
   return (
     <Elem {...attributes} contentEditable={false}>
       {children}@{name}
+    </Elem>
+  );
+};
+
+const EditablePuzzleRenderer = ({
+  attributes,
+  children,
+  element,
+  puzzles,
+}: PuzzleRendererProps) => {
+  const selected = useSelected();
+  const focused = useFocused();
+  const puzzle = puzzles.get(element.puzzleId);
+  const Elem = selected && focused ? SelectedPuzzleSpan : PuzzleSpan;
+
+  return (
+    <Elem
+      {...attributes}
+      contentEditable={false}
+      $solvedness={puzzle ? computeSolvedness(puzzle) : "unsolved"}
+    >
+      {children}
+      <FontAwesomeIcon icon={faPuzzlePiece} />{" "}
+      {puzzle?.title ?? element.puzzleId}
     </Elem>
   );
 };
@@ -232,6 +296,7 @@ const withMentionsAndImages = (
       case "mention":
       case "role-mention":
       case "image":
+      case "puzzle":
         return true;
       default:
         return isInline(element);
@@ -242,6 +307,7 @@ const withMentionsAndImages = (
       case "mention":
       case "role-mention":
       case "image":
+      case "puzzle":
         return true;
       default:
         return isVoid(element);
@@ -251,6 +317,7 @@ const withMentionsAndImages = (
     switch (element.type) {
       case "mention":
       case "role-mention":
+      case "puzzle":
         return true;
       case "image":
         return false;
@@ -305,6 +372,16 @@ const insertRoleMention = (editor: Editor, roleId: AllRolesType) => {
     children: [{ text: "" }],
   };
   Transforms.insertNodes(editor, roleMention);
+  Transforms.move(editor);
+};
+
+const insertPuzzle = (editor: Editor, puzzleId: string) => {
+  const puzzle: PuzzleElement = {
+    type: "puzzle",
+    puzzleId,
+    children: [{ text: "" }],
+  };
+  Transforms.insertNodes(editor, puzzle);
   Transforms.move(editor);
 };
 
@@ -373,6 +450,19 @@ const MatchCandidate = ({
           <strong>@{mention.roleId}</strong>
         </MatchCandidateRow>
       );
+    case "puzzle":
+      return (
+        <MatchCandidateRow
+          key={mention.puzzle._id}
+          $selected={selected}
+          onClick={onClick}
+        >
+          <FontAwesomeIcon icon={faPuzzlePiece} />
+          <MatchCandidateDisplayName>
+            {mention.puzzle.title}
+          </MatchCandidateDisplayName>
+        </MatchCandidateRow>
+      );
     default:
       mention satisfies never;
       return null;
@@ -387,7 +477,25 @@ type MentionMatch =
   | {
       type: "role-mention";
       roleId: AllRolesType;
+    }
+  | {
+      type: "puzzle";
+      puzzle: PuzzleType;
     };
+
+const matchKey = (mention: MentionMatch) => {
+  switch (mention.type) {
+    case "mention":
+      return mention.user._id;
+    case "role-mention":
+      return mention.roleId;
+    case "puzzle":
+      return mention.puzzle._id;
+    default:
+      mention satisfies never;
+      return "";
+  }
+};
 
 type AugmentedUser = Meteor.User & {
   foundDisplayName: boolean;
@@ -480,6 +588,25 @@ function matchMentions(
   }));
 
   return [...userMentions, ...roleMentions];
+}
+
+// Hunts have hundreds of puzzles, so the list is kept short: a title that
+// starts with the search comes before one that merely contains it.
+const MAX_PUZZLE_MATCHES = 10;
+
+function matchPuzzles(
+  puzzles: PuzzleType[],
+  searchString: string,
+): MentionMatch[] {
+  if (!searchString) return [];
+
+  const needle = searchString.toLowerCase();
+  const matches = puzzles.filter((p) => p.title.toLowerCase().includes(needle));
+  return sortedBy(matches, (p) =>
+    p.title.toLowerCase().startsWith(needle) ? 0 : 1,
+  )
+    .slice(0, MAX_PUZZLE_MATCHES)
+    .map((puzzle) => ({ type: "puzzle" as const, puzzle }));
 }
 
 const StyledMessage = styled.p`
@@ -687,6 +814,7 @@ const FancyEditor = ({
   initialContent,
   placeholder,
   users,
+  puzzles,
   onContentChange,
   onSubmit,
   uploadImageFile,
@@ -697,6 +825,8 @@ const FancyEditor = ({
   initialContent: Descendant[];
   placeholder?: string;
   users: Meteor.User[];
+  // Puzzles offered by the !-completion, and used to title puzzle links
+  puzzles: PuzzleType[];
   onContentChange: (content: Descendant[]) => void;
   uploadImageFile: (file: File) => void;
   onSubmit: () => boolean;
@@ -720,8 +850,13 @@ const FancyEditor = ({
   const [completionCursorIndex, setCompletionCursorIndex] = useState(0);
   // The current needle to search for in user display names, emails, etc.
   const [completionSearchString, setCompletionSearchString] = useState("");
+  // Whether the completion was started with @ (users and roles) or ! (puzzles)
+  const [completionType, setCompletionType] = useState<"user" | "puzzle">(
+    "user",
+  );
 
   const usersById = useMemo(() => indexedById(users), [users]);
+  const puzzlesById = useMemo(() => indexedById(puzzles), [puzzles]);
 
   const insertImage = useCallback(
     (url: string, tempId: string, status: ImageStatus) => {
@@ -830,6 +965,13 @@ const FancyEditor = ({
               {...(props as ElementRendererProps<ImageElement>)}
             />
           );
+        case "puzzle":
+          return (
+            <EditablePuzzleRenderer
+              puzzles={puzzlesById}
+              {...(props as ElementRendererProps<PuzzleElement>)}
+            />
+          );
         case "message":
           return (
             <StyledMessage {...props.attributes}>
@@ -845,20 +987,21 @@ const FancyEditor = ({
           );
       }
     },
-    [usersById],
+    [usersById, puzzlesById],
   );
 
   const onChange = useCallback(
     (value: Descendant[]) => {
       const { selection } = editor;
       if (selection && Range.isCollapsed(selection)) {
-        // Look backwards.  Does the word the cursor is in start with an `@`?
+        // Look backwards.  Does the word the cursor is in start with an `@`
+        // (a user or role) or a `!` (a puzzle)?
         const [start] = Range.edges(selection);
         const wordBefore = Editor.before(editor, start, { unit: "word" });
         const before = wordBefore && Editor.before(editor, wordBefore);
         const beforeRange = before && Editor.range(editor, before, start);
         const beforeText = beforeRange && Editor.string(editor, beforeRange);
-        const beforeMatch = beforeText?.match(/^@(\w+)$/);
+        const beforeMatch = beforeText?.match(/^([@!])(\w+)$/);
         // Look forwards from the cursor to the end of the word.
         // Is the cursor at the end of the word?
         const after = Editor.after(editor, start);
@@ -867,12 +1010,13 @@ const FancyEditor = ({
         const afterMatch = afterText.match(/^(\s|$)/);
 
         if (beforeMatch && afterMatch) {
-          // Do @-completion. Anchor the popup to the start of the @.
+          // Do completion. Anchor the popup to the start of the trigger.
           // The user's search string to attempt to match on is the string that
-          // follows between the @ and the cursor.
+          // follows between the trigger and the cursor.
           // Start by highlighting the top entry in the autocomplete list.
+          setCompletionType(beforeMatch[1] === "@" ? "user" : "puzzle");
           setCompletionAnchorRange(beforeRange);
-          setCompletionSearchString(beforeMatch[1]!);
+          setCompletionSearchString(beforeMatch[2]!);
           setCompletionCursorIndex(0);
         } else {
           setCompletionAnchorRange(undefined);
@@ -890,8 +1034,11 @@ const FancyEditor = ({
   );
 
   const matchingMentions: MentionMatch[] = useMemo(
-    () => matchMentions(users, completionSearchString),
-    [users, completionSearchString],
+    () =>
+      completionType === "puzzle"
+        ? matchPuzzles(puzzles, completionSearchString)
+        : matchMentions(users, completionSearchString),
+    [completionType, users, puzzles, completionSearchString],
   );
 
   const onKeyDown: React.KeyboardEventHandler<HTMLDivElement> = useCallback(
@@ -928,6 +1075,10 @@ const FancyEditor = ({
               }
               case "role-mention": {
                 insertRoleMention(editor, mention.roleId);
+                break;
+              }
+              case "puzzle": {
+                insertPuzzle(editor, mention.puzzle._id);
                 break;
               }
               default:
@@ -1019,6 +1170,9 @@ const FancyEditor = ({
         case "role-mention":
           insertRoleMention(editor, m.roleId);
           break;
+        case "puzzle":
+          insertPuzzle(editor, m.puzzle._id);
+          break;
         default:
           m satisfies never;
       }
@@ -1056,11 +1210,7 @@ const FancyEditor = ({
             {matchingMentions.map((mention, i) => {
               return (
                 <MatchCandidate
-                  key={
-                    mention.type === "mention"
-                      ? mention.user._id
-                      : mention.roleId
-                  }
+                  key={matchKey(mention)}
                   mention={mention}
                   selected={i === completionCursorIndex}
                   onSelected={onMentionSelected}

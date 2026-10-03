@@ -8,7 +8,7 @@ import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import React, { useCallback, useEffect, useId, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
@@ -47,6 +47,7 @@ import type { PuzzleNotificationType } from "../../lib/models/PuzzleNotification
 import PuzzleNotifications from "../../lib/models/PuzzleNotifications";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
+import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import {
   huntsUserIsOperatorFor,
   listAllRolesForHunt,
@@ -55,6 +56,7 @@ import bookmarkNotificationsForSelf from "../../lib/publications/bookmarkNotific
 import pendingAnnouncementsForSelf from "../../lib/publications/pendingAnnouncementsForSelf";
 import pendingGuessesForSelf from "../../lib/publications/pendingGuessesForSelf";
 import puzzleNotificationsForSelf from "../../lib/publications/puzzleNotificationsForSelf";
+import puzzlesForHunt from "../../lib/publications/puzzlesForHunt";
 import bookmarkPuzzle from "../../methods/bookmarkPuzzle";
 import configureEnsureGoogleScript from "../../methods/configureEnsureGoogleScript";
 import dismissAllDingsForPuzzle from "../../methods/dismissAllDingsForPuzzle";
@@ -826,6 +828,11 @@ const ProfileMissingMessage = ({ onDismiss }: { onDismiss: () => void }) => {
 // How many matched dingwords the chat toast offers to mute individually.
 const MAX_MUTE_ITEMS = 3;
 
+const HuntPuzzlesSubscription = ({ huntId }: { huntId: string }) => {
+  useTypedSubscribe(puzzlesForHunt, { huntId });
+  return null;
+};
+
 const ChatNotificationMessage = ({
   cn,
   hunt,
@@ -1409,6 +1416,18 @@ const NotificationCenter = () => {
         : PuzzleNotifications.find({}, { sort: { createdAt: 1 } }).fetch(),
     [loading, disableDingwords],
   );
+  // A ding that mentions a puzzle needs that hunt's puzzles to render it; the
+  // notification publication only carries the puzzle the ding is about.
+  const huntsWithPuzzleMentions = useMemo(
+    () => [
+      ...new Set(
+        chatNotifications
+          .filter((cn) => cn.content.children.some(nodeIsPuzzle))
+          .map((cn) => cn.hunt),
+      ),
+    ],
+    [chatNotifications],
+  );
   const rolesForChat = useTracker(() => {
     const hunts = new Set(chatNotifications.map((cn) => cn.hunt));
     const roles = new Map(
@@ -1592,6 +1611,9 @@ const NotificationCenter = () => {
   return (
     <>
       {cookieCheckFrames}
+      {huntsWithPuzzleMentions.map((huntId) => (
+        <HuntPuzzlesSubscription key={huntId} huntId={huntId} />
+      ))}
       <StyledToastContainer
         position="bottom-end"
         className="p-3 position-fixed"

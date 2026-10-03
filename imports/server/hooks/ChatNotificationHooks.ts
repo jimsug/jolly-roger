@@ -4,6 +4,7 @@ import {
   normalizedMessageDingsUserByDingword,
   SUPPRESS_ALL_DINGWORDS,
 } from "../../lib/dingwordLogic";
+import isReaction from "../../lib/isReaction";
 import ChatMessages from "../../lib/models/ChatMessages";
 import ChatNotifications from "../../lib/models/ChatNotifications";
 import MeteorUsers from "../../lib/models/MeteorUsers";
@@ -25,6 +26,10 @@ const ChatNotificationHooks: Hookset = {
     // but @-mentions cannot (they're cheap, doing big-O(message components) work).
 
     const chatMessage = (await ChatMessages.findOneAsync(chatMessageId))!;
+    // A reaction is an emoji on someone else's message, not something said.
+    if (isReaction(chatMessage)) {
+      return;
+    }
     const { sender } = chatMessage;
 
     // Collect users to notify, recording why (a mention, the dingwords that

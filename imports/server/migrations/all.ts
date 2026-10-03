@@ -56,3 +56,4 @@ import "./54-backfill-hunt-admin-fields";
 import "./55-backfill-puzzle-notifications";
 import "./56-drop-puzzle-marked-complete";
 import "./57-google-account-id-index";
+import "./58-drop-chat-message-attachments";

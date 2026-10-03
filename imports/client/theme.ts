@@ -13,6 +13,7 @@ export interface Theme {
     secondary: string;
     success: string;
     warning: string;
+    danger: string;
     callStateIcon: string;
     mutedIconBorder: string;
     deafenedIconBorder: string;
@@ -44,6 +45,10 @@ export interface Theme {
     hoverChatMessageBackground: string;
     systemChatMessageBackground: string;
     pinnedChatMessageBackground: string;
+    replyChatMessageBackground: string;
+    replyingToBackground: string;
+    replyButtonText: string;
+    hoverReplyButtonText: string;
     fancyEditorBackground: string;
     navBarBottomBorder: string;
     navBarBackground: string;
@@ -98,6 +103,7 @@ export const lightTheme: Theme = {
     secondary: "var(--bs-secondary)",
     success: "var(--bs-success)",
     warning: "var(--bs-warning)",
+    danger: "var(--bs-danger)",
     callStateIcon: "#dc3545",
     mutedIconBorder: "#0d6efd",
     deafenedIconBorder: "#0d6efd",
@@ -129,6 +135,10 @@ export const lightTheme: Theme = {
     hoverChatMessageBackground: "#f0f0f0",
     systemChatMessageBackground: "#e0e0e0",
     pinnedChatMessageBackground: "#ffff70",
+    replyChatMessageBackground: "#e0f0ff",
+    replyingToBackground: "#eee",
+    replyButtonText: "#666",
+    hoverReplyButtonText: "#000",
     fancyEditorBackground: "#eee",
     navBarBottomBorder: "#6c757d",
     navBarBackground: "#f0f0f0",
@@ -210,6 +220,7 @@ export const darkTheme: Theme = {
     secondary: "var(--bs-secondary)",
     success: "var(--bs-success)",
     warning: "var(--bs-warning)",
+    danger: "var(--bs-danger)",
     callStateIcon: "#f8d7da",
     mutedIconBorder: "#6fa8dc",
     deafenedIconBorder: "#6fa8dc",
@@ -241,6 +252,10 @@ export const darkTheme: Theme = {
     hoverChatMessageBackground: "#222",
     systemChatMessageBackground: "rgb(31, 31, 31)",
     pinnedChatMessageBackground: "rgb(92, 56, 17)",
+    replyChatMessageBackground: "rgb(0, 56, 109)",
+    replyingToBackground: "#383838",
+    replyButtonText: "#aaa",
+    hoverReplyButtonText: "#fff",
     fancyEditorBackground: "#383838",
     navBarBottomBorder: "#6c757d",
     navBarBackground: "#333333",

@@ -23,6 +23,14 @@ const ImageBlock = z.object({
 });
 export type ChatMessageImageNodeType = z.infer<typeof ImageBlock>;
 
+// A link to another puzzle in the same hunt, rendered with its current title
+// and solvedness.
+const PuzzleBlock = z.object({
+  type: z.literal("puzzle"),
+  puzzleId: foreignKey,
+});
+export type ChatMessagePuzzleNodeType = z.infer<typeof PuzzleBlock>;
+
 const TextBlock = z.object({
   text: allowedEmptyString,
 });
@@ -32,6 +40,7 @@ const ContentNode = z.union([
   UserMentionBlock,
   RoleMentionBlock,
   ImageBlock,
+  PuzzleBlock,
   TextBlock,
 ]);
 export type ChatMessageContentNodeType = z.infer<typeof ContentNode>;
@@ -60,6 +69,11 @@ const ChatMessage = withCommon(
     sender: foreignKey.optional(),
     // The date this message was sent.  Used for ordering chats in the log.
     timestamp: z.date(),
+    // When set, the message is pinned to the top of the puzzle's chat.
+    pinTs: z.date().nullable().optional(),
+    // The message this one replies to (or, for a reaction, the message it
+    // reacts to). Always another message on the same puzzle.
+    parentId: foreignKey.nullable().optional(),
   }),
 );
 const ChatMessages = new SoftDeletedModel("jr_chatmessages", ChatMessage);

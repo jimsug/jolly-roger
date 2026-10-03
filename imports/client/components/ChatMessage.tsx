@@ -1,14 +1,22 @@
+import { useTracker } from "meteor/react-meteor-data";
+import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { decodeHTML } from "entities";
 import type { Token, Tokens } from "marked";
 import { marked } from "marked";
 import { useCallback, useEffect, useRef, useState } from "react";
 import BSImage from "react-bootstrap/Image";
+import { useTranslation } from "react-i18next";
+import { Link } from "react-router";
 import styled from "styled-components";
 import type { ChatMessageContentType } from "../../lib/models/ChatMessages";
+import Puzzles from "../../lib/models/Puzzles";
 import nodeIsImage from "../../lib/nodeIsImage";
 import nodeIsMention from "../../lib/nodeIsMention";
+import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
-import { MentionSpan } from "./FancyEditor";
+import { computeSolvedness } from "../../lib/solvedness";
+import { MentionSpan, PuzzleSpan } from "./FancyEditor";
 
 // This file implements standalone rendering for the MessageElement format
 // defined by FancyEditor, for use in the chat pane.
@@ -197,6 +205,34 @@ const MarkdownToken = ({
   }
 };
 
+// A link to another puzzle in the hunt, looked up here so a change to any
+// puzzle only re-renders the mentions of it rather than the whole chat. A
+// puzzle the viewer can't see renders as a placeholder.
+const PuzzleMention = ({ puzzleId }: { puzzleId: string }) => {
+  const { t } = useTranslation();
+  const puzzle = useTracker(() => Puzzles.findOne(puzzleId), [puzzleId]);
+  if (!puzzle) {
+    return (
+      <MentionSpan $isSelf={false}>
+        <FontAwesomeIcon icon={faPuzzlePiece} />{" "}
+        {t("chat.unknownPuzzle", "unknown puzzle")}
+      </MentionSpan>
+    );
+  }
+  return (
+    <PuzzleSpan $solvedness={computeSolvedness(puzzle)}>
+      <FontAwesomeIcon icon={faPuzzlePiece} />{" "}
+      <Link
+        to={`/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {puzzle.title}
+      </Link>
+    </PuzzleSpan>
+  );
+};
+
 const ChatMessage = ({
   message,
   displayNames,
@@ -225,6 +261,8 @@ const ChatMessage = ({
           @{child.roleId}
         </MentionSpan>
       );
+    } else if (nodeIsPuzzle(child)) {
+      return <PuzzleMention key={i} puzzleId={child.puzzleId} />;
     } else if (nodeIsImage(child)) {
       return <ResponsiveImage key={i} src={child.url} onLoadCB={imageOnLoad} />;
     } else {

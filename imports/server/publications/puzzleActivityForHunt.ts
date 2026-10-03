@@ -7,6 +7,7 @@ import {
   ACTIVITY_GRANULARITY,
   ACTIVITY_SEGMENTS,
 } from "../../lib/config/activityTracking";
+import isReaction from "../../lib/isReaction";
 import ChatMessages from "../../lib/models/ChatMessages";
 import DocumentActivities from "../../lib/models/DocumentActivities";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
@@ -106,8 +107,10 @@ class HuntActivityAggregator {
       createdAt: { $gte: cutoff },
     }).observeChangesAsync({
       added: (_, fields) => {
-        const { puzzle, createdAt, sender } = fields;
-        if (!puzzle || !createdAt || !sender) return;
+        const { puzzle, createdAt, sender, content, parentId } = fields;
+        if (!puzzle || !createdAt || !sender || !content) return;
+        // A reaction is an emoji on someone else's message, not chatter
+        if (isReaction({ content, parentId })) return;
 
         const ts = roundedTime(ACTIVITY_GRANULARITY, createdAt);
 

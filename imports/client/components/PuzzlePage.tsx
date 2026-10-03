@@ -4,20 +4,31 @@ import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faLightbulb as faLightbulbRegular } from "@fortawesome/free-regular-svg-icons/faLightbulb";
 import { faAngleDoubleDown } from "@fortawesome/free-solid-svg-icons/faAngleDoubleDown";
 import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
+import { faArrowDown } from "@fortawesome/free-solid-svg-icons/faArrowDown";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
 import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faChevronLeft } from "@fortawesome/free-solid-svg-icons/faChevronLeft";
+import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
+import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
 import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
 import { faPaperPlane } from "@fortawesome/free-solid-svg-icons/faPaperPlane";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
+import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
+import { faReplyAll } from "@fortawesome/free-solid-svg-icons/faReplyAll";
+import { faThumbtack } from "@fortawesome/free-solid-svg-icons/faThumbtack";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { EmojiClickData } from "emoji-picker-react";
+import EmojiPicker, {
+  Theme as EmojiPickerTheme,
+  EmojiStyle,
+} from "emoji-picker-react";
 import type { ComponentPropsWithRef, FC } from "react";
 import React, {
   useCallback,
@@ -40,19 +51,26 @@ import FormLabel from "react-bootstrap/FormLabel";
 import FormText from "react-bootstrap/FormText";
 import InputGroup from "react-bootstrap/InputGroup";
 import Modal from "react-bootstrap/Modal";
+import Offcanvas from "react-bootstrap/Offcanvas";
+import Overlay from "react-bootstrap/Overlay";
 import OverlayTrigger from "react-bootstrap/OverlayTrigger";
+import Popover from "react-bootstrap/Popover";
 import Row from "react-bootstrap/Row";
+import Tab from "react-bootstrap/Tab";
+import Tabs from "react-bootstrap/Tabs";
 import Tooltip from "react-bootstrap/Tooltip";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Link, useParams } from "react-router";
+import { Link, useLocation, useParams } from "react-router";
 import type { Descendant } from "slate";
-import styled, { css } from "styled-components";
+import styled, { css, keyframes, useTheme } from "styled-components";
 import {
   calendarTimeFormat,
   shortCalendarTimeFormat,
 } from "../../lib/calendarTimeFormat";
+import chatMessagePlainText from "../../lib/chatMessagePlainText";
 import { messageDingsUser } from "../../lib/dingwordLogic";
+import isReaction, { reactionEmoji } from "../../lib/isReaction";
 import { indexedById, sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import type { ChatMessageType } from "../../lib/models/ChatMessages";
@@ -70,6 +88,7 @@ import type { TagType } from "../../lib/models/Tags";
 import Tags from "../../lib/models/Tags";
 import nodeIsImage from "../../lib/nodeIsImage";
 import nodeIsMention from "../../lib/nodeIsMention";
+import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import nodeIsText from "../../lib/nodeIsText";
 import {
@@ -85,13 +104,16 @@ import addPuzzleTag from "../../methods/addPuzzleTag";
 import createChatImageUpload from "../../methods/createChatImageUpload";
 import createGuess from "../../methods/createGuess";
 import ensurePuzzleDocument from "../../methods/ensurePuzzleDocument";
+import removeChatMessage from "../../methods/removeChatMessage";
 import removePuzzleAnswer from "../../methods/removePuzzleAnswer";
 import removePuzzleTag from "../../methods/removePuzzleTag";
 import sendChatMessage from "../../methods/sendChatMessage";
+import setChatMessagePin from "../../methods/setChatMessagePin";
 import undestroyPuzzle from "../../methods/undestroyPuzzle";
 import updatePuzzle from "../../methods/updatePuzzle";
 import EnabledChatImage from "../EnabledChatImage";
 import { useBreadcrumb } from "../hooks/breadcrumb";
+import { usePersistedSidebarWidth } from "../hooks/persisted-state";
 import useBlockUpdate from "../hooks/useBlockUpdate";
 import type { Action, CallState } from "../hooks/useCallState";
 import useCallState from "../hooks/useCallState";
@@ -144,15 +166,35 @@ type FilteredChatFields =
   | "puzzle"
   | "content"
   | "sender"
-  | "timestamp";
+  | "timestamp"
+  | "pinTs"
+  | "parentId";
 type FilteredChatMessageType = Pick<ChatMessageType, FilteredChatFields>;
+// Shared by every message without reactions, so their memoised props hold
+const NO_REACTIONS: FilteredChatMessageType[] = [];
 
 // It doesn't need to be, but this is consistent with the 576px transition used in other pages' css
 const MinimumSidebarWidth = 176;
 const MinimumDocumentWidth = 400;
-const DefaultSidebarWidth = 300;
+const DefaultSidebarWidth = 200;
 
 export const MinimumDesktopWidth = MinimumSidebarWidth + MinimumDocumentWidth;
+
+// How long a message stays highlighted after being scrolled to
+const PULSE_MS = 1000;
+// How far from the bottom (in px) still counts as reading the latest messages
+const NEAR_BOTTOM_PX = 60;
+// How many ancestors the reply popover shows before offering "More"
+const MAX_REPLY_ANCESTORS = 3;
+// Ticker toasts stay between these bounds, scaled by the message length
+const TICKER_MIN_MS = 3000;
+const TICKER_MAX_MS = 8000;
+const TICKER_MS_PER_CHAR = 50;
+// How many ticker toasts show at once; the rest are counted in a pill
+const MAX_VISIBLE_TICKERS = 3;
+// After the chat pane is restored, give its layout a moment to settle before
+// the final scroll
+const RESTORE_SETTLE_MS = 100;
 
 // PuzzlePage has some pretty unique properties:
 //
@@ -197,6 +239,14 @@ export const MinimumDesktopWidth = MinimumSidebarWidth + MinimumDocumentWidth;
 //   |           |
 //   |___________|
 
+const ChatHistoryWrapper = styled.div`
+  flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+`;
+
 const ChatHistoryDiv = styled.div`
   flex: 1 1 auto;
   overflow-y: auto;
@@ -207,15 +257,59 @@ const ChatHistoryDiv = styled.div`
   overflow-x: hidden;
 `;
 
+const UnreadPill = styled.button`
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: ${({ theme }) => theme.colors.primary};
+  color: white;
+  border: none;
+  padding: 6px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  z-index: 100;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 30%);
+  font-size: 0.9rem;
+  font-weight: 600;
+  opacity: 0.9;
+
+  &:hover {
+    opacity: 1;
+  }
+`;
+
+const PinnedMessageDiv = styled.div`
+  flex: none;
+  max-height: 12em;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-bottom: 4px double ${({ theme }) => theme.colors.border};
+`;
+
 const PUZZLE_PAGE_PADDING = 8;
+
+const pulse = keyframes`
+  0% {
+    background-color: rgb(255 193 7 / 70%);
+  }
+
+  100% {
+    background-color: transparent;
+  }
+`;
 
 const ChatMessageDiv = styled.div<{
   $isSystemMessage: boolean;
   $isHighlighted: boolean;
+  $isPinned?: boolean;
+  $isReplyTarget?: boolean;
+  $isPulsing?: boolean;
 }>`
   padding: 0 ${PUZZLE_PAGE_PADDING}px 2px;
   overflow-wrap: break-word;
-  font-size: 14px;
+  font-size: 0.8rem;
+  position: relative;
   ${({ $isSystemMessage, $isHighlighted }) =>
     $isHighlighted &&
     !$isSystemMessage &&
@@ -230,6 +324,134 @@ const ChatMessageDiv = styled.div<{
       background-color: ${({ theme }) =>
         theme.colors.systemChatMessageBackground};
     `}
+
+  ${({ $isPinned }) =>
+    $isPinned &&
+    css`
+      background-color: ${({ theme }) =>
+        theme.colors.pinnedChatMessageBackground};
+    `}
+
+  ${({ $isReplyTarget }) =>
+    $isReplyTarget &&
+    css`
+      background-color: ${({ theme }) =>
+        theme.colors.replyChatMessageBackground};
+    `}
+
+  &:hover {
+    background-color: ${({ theme }) => theme.colors.hoverChatMessageBackground};
+  }
+
+  ${({ $isPulsing }) =>
+    $isPulsing &&
+    css`
+      animation: ${pulse} ${PULSE_MS}ms ease-out;
+    `}
+`;
+
+// The react/reply/pin pill, shown while the message is hovered
+const ChatMessageActions = styled.div`
+  position: absolute;
+  top: 0;
+  right: ${PUZZLE_PAGE_PADDING}px;
+  display: flex;
+  opacity: 0;
+  z-index: 10;
+  transition: opacity 0.2s ease-in-out;
+
+  ${ChatMessageDiv}:hover &,
+  ${ChatMessageDiv}:focus-within & {
+    opacity: 1;
+  }
+`;
+
+const SplitPill = styled.div`
+  display: inline-flex;
+  align-items: stretch;
+  background-color: ${({ theme }) => theme.colors.fancyEditorBackground};
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 2px 0;
+`;
+
+const PillSection = styled.button`
+  padding: 2px 7px;
+  display: flex;
+  align-items: center;
+  border: none;
+  background: none;
+  color: ${({ theme }) => theme.colors.replyButtonText};
+  cursor: pointer;
+
+  &:not(:last-child) {
+    border-right: 1px solid ${({ theme }) => theme.colors.border};
+  }
+
+  &:hover {
+    color: ${({ theme }) => theme.colors.hoverReplyButtonText};
+    background-color: ${({ theme }) =>
+      theme.colors.matchCandidateSelectedBackground};
+  }
+`;
+
+const ChatMessageSender = styled.span`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+`;
+
+const ReplyIconButton = styled.button`
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: ${({ theme }) => theme.colors.replyButtonText};
+
+  &:hover {
+    color: ${({ theme }) => theme.colors.hoverReplyButtonText};
+  }
+`;
+
+const ReplyPopover = styled(Popover)`
+  max-width: min(400px, 90vw);
+`;
+
+const ReplyPopoverContent = styled.div`
+  max-height: 200px;
+  overflow-y: auto;
+`;
+
+const ReplyPopoverMessage = styled.div`
+  border-bottom: 1px solid ${({ theme }) => theme.colors.border};
+
+  &:last-child {
+    border-bottom: none;
+  }
+`;
+
+const ReactionContainer = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+`;
+
+const ReactionPill = styled.button<{ $mine: boolean }>`
+  background-color: ${({ $mine, theme }) =>
+    $mine
+      ? theme.colors.selfMentionSpanBackground
+      : theme.colors.fancyEditorBackground};
+  color: ${({ theme }) => theme.colors.text};
+  padding: 2px 8px;
+  margin: 2px 4px 2px 0;
+  border-radius: 16px;
+  cursor: pointer;
+  border: 1px solid
+    ${({ $mine, theme }) => ($mine ? theme.colors.primary : "transparent")};
+`;
+
+const EmojiPickerContainer = styled.div`
+  z-index: 1000;
 `;
 
 const ChatInputRow = styled.div`
@@ -238,6 +460,51 @@ const ChatInputRow = styled.div`
     env(safe-area-inset-bottom, 0px),
     ${PUZZLE_PAGE_PADDING}px
   );
+`;
+
+const ReplyingTo = styled.div`
+  background-color: ${({ theme }) => theme.colors.replyingToBackground};
+  padding: 4px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  font-size: 0.8rem;
+`;
+
+const ReplyingToTarget = styled.button`
+  flex: 1;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+`;
+
+const ReplyingToCancel = styled.button`
+  border: none;
+  background: none;
+  padding: 0 4px;
+  color: inherit;
+  cursor: pointer;
+`;
+
+const HighlightsRow = styled.div`
+  flex: none;
+  padding: 0 ${PUZZLE_PAGE_PADDING}px ${PUZZLE_PAGE_PADDING}px;
+`;
+
+// A message in the highlights panel; the whole thing is the link to it
+const HighlightRow = styled.button`
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
 `;
 
 const ChatMessageTimestamp = styled.span`
@@ -330,10 +597,32 @@ const PuzzleMetadataActionRow = styled(PuzzleMetadataRow)`
 
 const PuzzleMetadataButtons = styled.div`
   margin-left: auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
 
   button {
     margin: 2px 0 2px 8px;
   }
+`;
+
+// Holds the tag list either inline on the action row (one line, clipped
+// while the layout is being measured) or on a row of its own (wrapping).
+const PuzzleMetadataTags = styled.div<{ $inline: boolean }>`
+  display: flex;
+  align-items: center;
+  ${({ $inline }) =>
+    $inline
+      ? css`
+          flex: 0 1 auto;
+          flex-wrap: nowrap;
+          min-width: 0;
+          overflow: hidden;
+        `
+      : css`
+          width: 100%;
+          flex-wrap: wrap;
+        `}
 `;
 
 const PuzzleMetadataAnswers = styled.span`
@@ -365,37 +654,308 @@ const AnswerFormControl = styled(FormControl)`
 const ChatHistoryMessage = React.memo(
   ({
     message,
+    reactions,
     displayNames,
     isSystemMessage,
     isHighlighted,
+    isPinned,
+    isReplyTarget,
+    isPulsing,
     suppressSender,
     selfUserId,
     roles,
+    registerMessageRef,
+    scrollToMessage,
+    onReply,
     imageOnLoad,
   }: {
     message: FilteredChatMessageType;
+    // The reactions to this message
+    reactions: FilteredChatMessageType[];
     displayNames: Map<string, string>;
     isSystemMessage: boolean;
     isHighlighted: boolean;
+    isPinned: boolean;
+    // A reply to this message is being written
+    isReplyTarget: boolean;
+    isPulsing: boolean;
     suppressSender: boolean;
     selfUserId: string;
     roles: string[];
+    // Absent for copies shown outside the history (the pinned pane), which
+    // scrolling must not land on
+    registerMessageRef?: (messageId: string, el: HTMLDivElement | null) => void;
+    scrollToMessage: (messageId: string) => void;
+    onReply: (messageId: string) => void;
     imageOnLoad: () => void;
   }) => {
     const { t, i18n } = useTranslation();
+    const theme = useTheme();
+    const idPrefix = useId();
     const ts = shortCalendarTimeFormat(message.timestamp, t, i18n.language);
 
     const senderDisplayName =
       message.sender !== undefined
         ? (displayNames.get(message.sender) ?? "???")
         : "jolly-roger";
+
+    const messageId = message._id;
+    const setMessageRef = useCallback(
+      (el: HTMLDivElement | null) => {
+        registerMessageRef?.(messageId, el);
+      },
+      [registerMessageRef, messageId],
+    );
+
+    // The chain of messages this one replies to, nearest last, plus the id
+    // of the next one up when the chain goes on past what the popover shows
+    const parentId = message.parentId ?? undefined;
+    const thread = useTracker(() => {
+      const ancestors: FilteredChatMessageType[] = [];
+      let next = parentId;
+      while (next && ancestors.length < MAX_REPLY_ANCESTORS) {
+        const ancestor = ChatMessages.findOne(next);
+        if (!ancestor) {
+          // The chain goes on into messages we can't see, so there is
+          // nothing to scroll to
+          next = undefined;
+          break;
+        }
+        ancestors.push(ancestor);
+        next = ancestor.parentId ?? undefined;
+      }
+      ancestors.reverse();
+      return { ancestors, more: next };
+    }, [parentId]);
+
+    const [showThread, setShowThread] = useState(false);
+    const threadHideTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+    const replyIconRef = useRef<HTMLButtonElement>(null);
+    const openThread = useCallback(() => {
+      clearTimeout(threadHideTimeout.current);
+      setShowThread(true);
+    }, []);
+    // Leave the popover up long enough to move the mouse into it
+    const closeThreadSoon = useCallback(() => {
+      clearTimeout(threadHideTimeout.current);
+      threadHideTimeout.current = setTimeout(() => setShowThread(false), 300);
+    }, []);
+    useEffect(() => () => clearTimeout(threadHideTimeout.current), []);
+
+    // emoji -> reacting user -> that user's reactions (one, apart from
+    // duplicates written before the server kept them out)
+    const reactionsByEmoji = useMemo(() => {
+      const byEmoji = new Map<string, Map<string, string[]>>();
+      reactions.forEach((reaction) => {
+        if (!reaction.sender) {
+          return;
+        }
+        const emoji = reactionEmoji(reaction);
+        let users = byEmoji.get(emoji);
+        if (!users) {
+          users = new Map();
+          byEmoji.set(emoji, users);
+        }
+        let theirs = users.get(reaction.sender);
+        if (!theirs) {
+          theirs = [];
+          users.set(reaction.sender, theirs);
+        }
+        theirs.push(reaction._id);
+      });
+      return byEmoji;
+    }, [reactions]);
+
+    const toggleReaction = useCallback(
+      (emoji: string) => {
+        const mine = reactionsByEmoji.get(emoji)?.get(selfUserId);
+        if (mine) {
+          mine.forEach((id) => removeChatMessage.call({ messageId: id }));
+        } else {
+          sendChatMessage.call({
+            puzzleId: message.puzzle,
+            content: JSON.stringify({
+              type: "message",
+              children: [{ text: emoji }],
+            }),
+            parentId: messageId,
+          });
+        }
+      },
+      [reactionsByEmoji, selfUserId, message.puzzle, messageId],
+    );
+
+    const [showPicker, setShowPicker] = useState(false);
+    const pickerTargetRef = useRef<HTMLButtonElement>(null);
+    const togglePicker = useCallback(() => setShowPicker((s) => !s), []);
+    const hidePicker = useCallback(() => setShowPicker(false), []);
+    const onEmojiClick = useCallback(
+      (data: EmojiClickData) => {
+        toggleReaction(data.emoji);
+        setShowPicker(false);
+      },
+      [toggleReaction],
+    );
+
+    const togglePin = useCallback(() => {
+      setChatMessagePin.call({ messageId, pinned: !message.pinTs });
+    }, [messageId, message.pinTs]);
+
+    const reply = useCallback(() => onReply(messageId), [onReply, messageId]);
+    const scrollToParent = useCallback(() => {
+      if (parentId) {
+        scrollToMessage(parentId);
+      }
+    }, [scrollToMessage, parentId]);
+
     return (
       <ChatMessageDiv
+        ref={setMessageRef}
         $isSystemMessage={isSystemMessage}
-        $isHighlighted={isHighlighted && !isSystemMessage}
+        $isHighlighted={isHighlighted && !isSystemMessage && !isPinned}
+        $isPinned={isPinned}
+        $isReplyTarget={isReplyTarget}
+        $isPulsing={isPulsing}
       >
+        <ChatMessageActions>
+          <SplitPill>
+            <PillSection
+              type="button"
+              ref={pickerTargetRef}
+              title={t("chat.react", "React")}
+              onClick={togglePicker}
+            >
+              <FontAwesomeIcon icon={faFaceSmile} />
+            </PillSection>
+            <PillSection
+              type="button"
+              title={t("chat.reply", "Reply")}
+              onClick={reply}
+            >
+              <FontAwesomeIcon icon={faReplyAll} />
+            </PillSection>
+            <PillSection
+              type="button"
+              title={
+                message.pinTs
+                  ? t("chat.unpin", "Remove pin")
+                  : t("chat.pin", "Pin")
+              }
+              onClick={togglePin}
+            >
+              <FontAwesomeIcon icon={faThumbtack} />
+            </PillSection>
+          </SplitPill>
+        </ChatMessageActions>
+        <Overlay
+          target={pickerTargetRef}
+          show={showPicker}
+          placement="top-start"
+          rootClose
+          onHide={hidePicker}
+        >
+          {({
+            placement: _placement,
+            arrowProps: _arrowProps,
+            show: _show,
+            popper: _popper,
+            hasDoneInitialMeasure: _hasDoneInitialMeasure,
+            ...overlayProps
+          }) => (
+            <EmojiPickerContainer {...overlayProps}>
+              <EmojiPicker
+                onEmojiClick={onEmojiClick}
+                autoFocusSearch={false}
+                emojiStyle={EmojiStyle.NATIVE}
+                skinTonesDisabled
+                lazyLoadEmojis
+                reactionsDefaultOpen
+                reactions={["2705", "274e", "2757", "2753", "2194-fe0f"]}
+                previewConfig={{ showPreview: false }}
+                theme={
+                  theme.basicMode === "dark"
+                    ? EmojiPickerTheme.DARK
+                    : EmojiPickerTheme.LIGHT
+                }
+                width={300}
+                height={350}
+              />
+            </EmojiPickerContainer>
+          )}
+        </Overlay>
         {!suppressSender && <ChatMessageTimestamp>{ts}</ChatMessageTimestamp>}
-        {!suppressSender && <strong>{senderDisplayName}</strong>}
+        {(!suppressSender || parentId) && (
+          <ChatMessageSender>
+            {parentId && (
+              <>
+                <ReplyIconButton
+                  type="button"
+                  ref={replyIconRef}
+                  title={t(
+                    "chat.showReplyTarget",
+                    "Show the message this replies to",
+                  )}
+                  onClick={scrollToParent}
+                  onMouseEnter={openThread}
+                  onMouseLeave={closeThreadSoon}
+                  onFocus={openThread}
+                  onBlur={closeThreadSoon}
+                >
+                  <FontAwesomeIcon icon={faReply} />
+                </ReplyIconButton>
+                <Overlay
+                  target={replyIconRef}
+                  show={showThread}
+                  placement="top"
+                >
+                  <ReplyPopover
+                    id={`${idPrefix}-thread`}
+                    onMouseEnter={openThread}
+                    onMouseLeave={closeThreadSoon}
+                  >
+                    <Popover.Header as="h3">
+                      {t("chat.replyingToHeader", "Replying to:")}
+                    </Popover.Header>
+                    <Popover.Body>
+                      <ReplyPopoverContent>
+                        {thread.more && (
+                          <Button
+                            variant="link"
+                            size="sm"
+                            onClick={() => scrollToMessage(thread.more!)}
+                          >
+                            {t("chat.moreReplies", "More…")}
+                          </Button>
+                        )}
+                        {thread.ancestors.map((ancestor) => (
+                          <ReplyPopoverMessage key={ancestor._id}>
+                            <strong>
+                              {ancestor.sender
+                                ? (displayNames.get(ancestor.sender) ?? "???")
+                                : "jolly-roger"}
+                            </strong>
+                            <ChatMessage
+                              message={ancestor.content}
+                              displayNames={displayNames}
+                              selfUserId={selfUserId}
+                              roles={roles}
+                            />
+                          </ReplyPopoverMessage>
+                        ))}
+                      </ReplyPopoverContent>
+                    </Popover.Body>
+                  </ReplyPopover>
+                </Overlay>
+              </>
+            )}
+            {isPinned && (
+              <span title={t("chat.pinned", "Pinned")}>
+                <FontAwesomeIcon icon={faThumbtack} />
+              </span>
+            )}
+            <strong>{senderDisplayName}</strong>
+          </ChatMessageSender>
+        )}
         <ChatMessage
           message={message.content}
           displayNames={displayNames}
@@ -403,6 +963,27 @@ const ChatHistoryMessage = React.memo(
           roles={roles}
           imageOnLoad={imageOnLoad}
         />
+        {reactionsByEmoji.size > 0 && (
+          <ReactionContainer>
+            {[...reactionsByEmoji].map(([emoji, users]) => {
+              const names = [...users.keys()]
+                .map((userId) => displayNames.get(userId) ?? "???")
+                .toSorted();
+              return (
+                <ReactionPill
+                  key={emoji}
+                  type="button"
+                  $mine={users.has(selfUserId)}
+                  title={names.join("\n")}
+                  onClick={() => toggleReaction(emoji)}
+                >
+                  {emoji}
+                  {users.size > 1 ? ` ${users.size}` : ""}
+                </ReactionPill>
+              );
+            })}
+          </ReactionContainer>
+        )}
       </ChatMessageDiv>
     );
   },
@@ -412,33 +993,41 @@ type ChatHistoryHandle = {
   saveScrollBottomTarget: () => void;
   snapToBottom: () => void;
   scrollToTarget: () => void;
+  scrollToMessage: (messageId: string) => void;
 };
 
 const ChatHistory = React.memo(
   ({
-    huntId,
-    puzzleId,
+    chatMessages,
+    reactionsByParent,
     displayNames,
     selfUser,
+    roles,
+    replyingTo,
+    onReply,
     ref,
   }: {
-    huntId: string;
-    puzzleId: string;
+    chatMessages: FilteredChatMessageType[];
+    reactionsByParent: Map<string, FilteredChatMessageType[]>;
     displayNames: Map<string, string>;
     selfUser: Meteor.User;
+    roles: string[];
+    replyingTo: string | undefined;
+    onReply: (messageId: string) => void;
     ref: React.Ref<ChatHistoryHandle>;
   }) => {
-    // TODO: consider using useFind once fixed upstream
-    const chatMessages: FilteredChatMessageType[] = useTracker(() => {
-      return ChatMessages.find(
-        { puzzle: puzzleId },
-        { sort: { timestamp: 1 } },
-      ).fetch();
-    }, [puzzleId]);
+    // Reactions are shown on the message they belong to, not as messages
+    const visibleMessages = useMemo(
+      () => chatMessages.filter((message) => !isReaction(message)),
+      [chatMessages],
+    );
 
     const historyRef = useRef<HTMLDivElement>(null);
     const scrollBottomTarget = useRef(0);
     const shouldIgnoreNextScrollEvent = useRef(false);
+    // Messages that arrived while scrolled up into the backlog
+    const [unreadCount, setUnreadCount] = useState(0);
+    const seenMessageCount = useRef(visibleMessages.length);
 
     const saveScrollBottomTarget = useCallback(() => {
       if (historyRef.current) {
@@ -455,6 +1044,9 @@ const ChatHistory = React.memo(
           hiddenHeight,
         });
         scrollBottomTarget.current = distanceFromBottom;
+        if (distanceFromBottom < NEAR_BOTTOM_PX) {
+          setUnreadCount(0);
+        }
       }
     }, []);
 
@@ -508,12 +1100,49 @@ const ChatHistory = React.memo(
       trace("ChatHistory snapToBottom");
       scrollBottomTarget.current = 0;
       scrollToTarget();
+      setUnreadCount(0);
     }, [scrollToTarget]);
+
+    // The rendered element of each message, so replies, pins and links can
+    // scroll to it
+    const messageRefs = useRef(new Map<string, HTMLDivElement>());
+    const registerMessageRef = useCallback(
+      (messageId: string, el: HTMLDivElement | null) => {
+        if (el) {
+          messageRefs.current.set(messageId, el);
+        } else {
+          messageRefs.current.delete(messageId);
+        }
+      },
+      [],
+    );
+
+    const [pulsingMessageId, setPulsingMessageId] = useState<string>();
+    const scrollToMessage = useCallback((messageId: string) => {
+      const el = messageRefs.current.get(messageId);
+      if (!el) {
+        trace("ChatHistory scrollToMessage: no such message", { messageId });
+        return;
+      }
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setPulsingMessageId(messageId);
+    }, []);
+    useEffect(() => {
+      if (!pulsingMessageId) {
+        return undefined;
+      }
+      const timeout = setTimeout(
+        () => setPulsingMessageId(undefined),
+        PULSE_MS,
+      );
+      return () => clearTimeout(timeout);
+    }, [pulsingMessageId]);
 
     useImperativeHandle(ref, () => ({
       saveScrollBottomTarget,
       snapToBottom,
       scrollToTarget,
+      scrollToMessage,
     }));
 
     useLayoutEffect(() => {
@@ -531,74 +1160,159 @@ const ChatHistory = React.memo(
       };
     }, [scrollToTarget]);
 
+    useEffect(() => {
+      // The box also changes size without the window doing so: the pinned
+      // pane and the people list come and go, the input grows. Keep the same
+      // distance from the bottom through all of it.
+      const history = historyRef.current;
+      if (!history) {
+        return undefined;
+      }
+      const observer = new ResizeObserver(() => scrollToTarget());
+      observer.observe(history);
+      return () => observer.disconnect();
+    }, [scrollToTarget]);
+
     const scrollChat = useCallback(() => {
       // Whenever we rerender due to new messages arriving, make our
       // distance-from-bottom match the previous one, if it's larger than some
       // small fudge factor.  But if the user has actually scrolled into the backlog,
       // don't move the backlog while they're reading it -- instead, assume they want
       // to see the same messages in the same position, and adapt the target bottom
-      // distance instead.
+      // distance instead (and count what they haven't seen).
+      const newMessages = visibleMessages.length - seenMessageCount.current;
+      seenMessageCount.current = visibleMessages.length;
       trace("ChatHistory useLayoutEffect", {
         scrollBottomTarget: scrollBottomTarget.current,
-        action: scrollBottomTarget.current > 10 ? "save" : "snap",
-        messageCount: chatMessages.length,
+        action: scrollBottomTarget.current > NEAR_BOTTOM_PX ? "save" : "snap",
+        messageCount: visibleMessages.length,
       });
-      if (scrollBottomTarget.current > 10) {
+      if (scrollBottomTarget.current > NEAR_BOTTOM_PX) {
         saveScrollBottomTarget();
+        if (newMessages > 0) {
+          setUnreadCount((count) => count + newMessages);
+        }
       } else {
         snapToBottom();
       }
-    }, [chatMessages.length, saveScrollBottomTarget, snapToBottom]);
+    }, [visibleMessages.length, saveScrollBottomTarget, snapToBottom]);
 
     useLayoutEffect(() => {
       scrollChat();
-    }, [scrollChat]);
-
-    const roles = useMemo(
-      () => listAllRolesForHunt(selfUser, { _id: huntId }),
-      [selfUser, huntId],
-    );
+      // Keyed on every message, reactions included: a reaction on the last
+      // message adds a row of pills below the fold without adding a visible
+      // message
+    }, [scrollChat, chatMessages.length]);
 
     const { t } = useTranslation();
 
-    trace("ChatHistory render", { messageCount: chatMessages.length });
+    trace("ChatHistory render", { messageCount: visibleMessages.length });
     return (
-      <ChatHistoryDiv ref={historyRef} onScroll={onScrollObserved}>
-        {chatMessages.length === 0 ? (
-          <ChatMessageDiv
-            key="no-message"
-            $isSystemMessage={false}
-            $isHighlighted={false}
-          >
-            <span>{t("chat.noChatter", "No chatter yet. Say something?")}</span>
-          </ChatMessageDiv>
-        ) : undefined}
-        {chatMessages.map((msg, index, messages) => {
-          // Only suppress sender and timestamp if:
-          // * this is not the first message
-          // * this message was sent by the same person as the previous message
-          // * this message was sent within 60 seconds (60000 milliseconds) of the previous message
-          const lastMessage = index > 0 ? messages[index - 1] : undefined;
-          const suppressSender =
-            !!lastMessage &&
-            lastMessage.sender === msg.sender &&
-            lastMessage.timestamp.getTime() + 60000 > msg.timestamp.getTime();
-          const isHighlighted = messageDingsUser(msg, selfUser);
-          return (
-            <ChatHistoryMessage
-              key={msg._id}
-              message={msg}
-              displayNames={displayNames}
-              isSystemMessage={msg.sender === undefined}
-              isHighlighted={isHighlighted}
-              suppressSender={suppressSender}
-              selfUserId={selfUser._id}
-              roles={roles}
-              imageOnLoad={scrollChat}
-            />
-          );
-        })}
-      </ChatHistoryDiv>
+      <ChatHistoryWrapper>
+        {unreadCount > 0 && (
+          <UnreadPill type="button" onClick={snapToBottom}>
+            <FontAwesomeIcon icon={faArrowDown} />{" "}
+            {t("chat.newMessages", {
+              count: unreadCount,
+              shown: unreadCount > 99 ? "99+" : unreadCount,
+            })}
+          </UnreadPill>
+        )}
+        <ChatHistoryDiv ref={historyRef} onScroll={onScrollObserved}>
+          {visibleMessages.length === 0 ? (
+            <ChatMessageDiv
+              key="no-message"
+              $isSystemMessage={false}
+              $isHighlighted={false}
+            >
+              <span>
+                {t("chat.noChatter", "No chatter yet. Say something?")}
+              </span>
+            </ChatMessageDiv>
+          ) : undefined}
+          {visibleMessages.map((msg, index, messages) => {
+            // Only suppress sender and timestamp if:
+            // * this is not the first message
+            // * this message was sent by the same person as the previous message
+            // * this message was sent within 60 seconds (60000 milliseconds) of the previous message
+            // * this message is not pinned
+            const lastMessage = index > 0 ? messages[index - 1] : undefined;
+            const isPinned = !!msg.pinTs;
+            const suppressSender =
+              !!lastMessage &&
+              lastMessage.sender === msg.sender &&
+              lastMessage.timestamp.getTime() + 60000 >
+                msg.timestamp.getTime() &&
+              !isPinned;
+            const isHighlighted = messageDingsUser(msg, selfUser);
+            return (
+              <ChatHistoryMessage
+                key={msg._id}
+                message={msg}
+                reactions={reactionsByParent.get(msg._id) ?? NO_REACTIONS}
+                displayNames={displayNames}
+                isSystemMessage={msg.sender === undefined}
+                isHighlighted={isHighlighted}
+                isPinned={isPinned}
+                isReplyTarget={replyingTo === msg._id}
+                isPulsing={pulsingMessageId === msg._id}
+                suppressSender={suppressSender}
+                selfUserId={selfUser._id}
+                roles={roles}
+                registerMessageRef={registerMessageRef}
+                scrollToMessage={scrollToMessage}
+                onReply={onReply}
+                imageOnLoad={scrollChat}
+              />
+            );
+          })}
+        </ChatHistoryDiv>
+      </ChatHistoryWrapper>
+    );
+  },
+);
+
+// The most recently pinned message, kept in view above the history
+const PinnedMessagePane = React.memo(
+  ({
+    message,
+    reactions,
+    displayNames,
+    selfUserId,
+    roles,
+    scrollToMessage,
+    onReply,
+  }: {
+    message: FilteredChatMessageType;
+    reactions: FilteredChatMessageType[];
+    displayNames: Map<string, string>;
+    selfUserId: string;
+    roles: string[];
+    scrollToMessage: (messageId: string) => void;
+    onReply: (messageId: string) => void;
+  }) => {
+    const noop = useCallback(() => {
+      /* images in the pane don't move the history */
+    }, []);
+    return (
+      <PinnedMessageDiv>
+        <ChatHistoryMessage
+          message={message}
+          reactions={reactions}
+          displayNames={displayNames}
+          isSystemMessage={message.sender === undefined}
+          isHighlighted={false}
+          isPinned
+          isReplyTarget={false}
+          isPulsing={false}
+          suppressSender={false}
+          selfUserId={selfUserId}
+          roles={roles}
+          scrollToMessage={scrollToMessage}
+          onReply={onReply}
+          imageOnLoad={noop}
+        />
+      </PinnedMessageDiv>
     );
   },
 );
@@ -627,19 +1341,35 @@ const initialValue: Descendant[] = [
   },
 ];
 
+type ChatInputHandle = {
+  focus: () => void;
+};
+
 const ChatInput = React.memo(
   ({
     onHeightChange,
     onMessageSent,
     huntId,
     puzzleId,
+    puzzles,
+    displayNames,
     disabled,
+    replyingTo,
+    onCancelReply,
+    scrollToMessage,
+    ref,
   }: {
     onHeightChange: () => void;
     onMessageSent: () => void;
     huntId: string;
     puzzleId: string;
+    puzzles: PuzzleType[];
+    displayNames: Map<string, string>;
     disabled: boolean;
+    replyingTo: string | undefined;
+    onCancelReply: () => void;
+    scrollToMessage: (messageId: string) => void;
+    ref: React.Ref<ChatInputHandle>;
   }) => {
     // We want to have hunt profile data around so we can autocomplete from multiple fields.
     const profilesLoadingFunc = useSubscribe("huntProfiles", huntId);
@@ -685,6 +1415,7 @@ const ChatInput = React.memo(
             nodeIsImage(child) ||
             nodeIsMention(child) ||
             nodeIsRoleMention(child) ||
+            nodeIsPuzzle(child) ||
             (nodeIsText(child) && child.text.trim().length > 0)
           );
         })
@@ -700,6 +1431,22 @@ const ChatInput = React.memo(
       );
     }, [content]);
 
+    const replyTargetName = useTracker(() => {
+      if (!replyingTo) {
+        return undefined;
+      }
+      const parent = ChatMessages.findOne(replyingTo);
+      if (!parent) {
+        return undefined;
+      }
+      return parent.sender
+        ? (displayNames.get(parent.sender) ?? "???")
+        : "jolly-roger";
+    }, [replyingTo, displayNames]);
+    // A reply is only sent as one while its target is here to be shown; a
+    // parent that has gone would be rejected and the message lost
+    const parentId = replyTargetName === undefined ? undefined : replyingTo;
+
     const sendContentMessage = useCallback(() => {
       if (hasNonTrivialContent && !hasLoadingImage) {
         // Prepare to send message to server.
@@ -714,7 +1461,11 @@ const ChatInput = React.memo(
           type,
           children: children
             .filter((child) => {
-              if (nodeIsMention(child) || nodeIsRoleMention(child)) {
+              if (
+                nodeIsMention(child) ||
+                nodeIsRoleMention(child) ||
+                nodeIsPuzzle(child)
+              ) {
                 return true;
               }
               if (nodeIsImage(child) && child.status !== "success") {
@@ -741,6 +1492,11 @@ const ChatInput = React.memo(
                   type: child.type,
                   url: child.url,
                 };
+              } else if (nodeIsPuzzle(child)) {
+                return {
+                  type: child.type,
+                  puzzleId: child.puzzleId,
+                };
               } else {
                 return child;
               }
@@ -751,6 +1507,7 @@ const ChatInput = React.memo(
         sendChatMessage.call({
           puzzleId,
           content: JSON.stringify(cleanedMessage),
+          ...(parentId ? { parentId } : {}),
         });
         setContent(initialValue);
         fancyEditorRef.current?.clearInput();
@@ -766,6 +1523,7 @@ const ChatInput = React.memo(
       hasLoadingImage,
       content,
       puzzleId,
+      parentId,
       onMessageSent,
     ]);
 
@@ -774,6 +1532,10 @@ const ChatInput = React.memo(
         ? "You're in the middle of typing a message."
         : undefined,
     );
+
+    useImperativeHandle(ref, () => ({
+      focus: () => fancyEditorRef.current?.focus(),
+    }));
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -859,9 +1621,33 @@ const ChatInput = React.memo(
 
     const { t } = useTranslation();
 
+    const scrollToReplyTarget = useCallback(() => {
+      if (replyingTo) {
+        scrollToMessage(replyingTo);
+      }
+    }, [scrollToMessage, replyingTo]);
+
     return (
       <ChatInputRow>
         {uploadImageError && createPortal(errorModal, document.body)}
+        {parentId && replyTargetName !== undefined && (
+          <ReplyingTo>
+            <ReplyingToTarget type="button" onClick={scrollToReplyTarget}>
+              <FontAwesomeIcon icon={faReply} />{" "}
+              {t("chat.replyingTo", "Replying to {{name}}", {
+                name: replyTargetName,
+                interpolation: { escapeValue: false },
+              })}
+            </ReplyingToTarget>
+            <ReplyingToCancel
+              type="button"
+              title={t("chat.cancelReply", "Cancel reply")}
+              onClick={onCancelReply}
+            >
+              <FontAwesomeIcon icon={faTimes} />
+            </ReplyingToCancel>
+          </ReplyingTo>
+        )}
         <InputGroup>
           <StyledFancyEditor
             ref={fancyEditorRef}
@@ -869,6 +1655,7 @@ const ChatInput = React.memo(
             initialContent={content}
             placeholder={t("chat.chatPrompt", "Chat")}
             users={users}
+            puzzles={puzzles}
             onContentChange={onContentChange}
             onSubmit={sendContentMessage}
             uploadImageFile={uploadImageFile}
@@ -901,8 +1688,160 @@ const ChatInput = React.memo(
   },
 );
 
+// A button under the chat input that opens a panel of the messages worth a
+// second look: replies to the user, mentions of them, pins and system
+// messages. Picking one scrolls the history to it.
+const HighlightsPanel = React.memo(
+  ({
+    chatMessages,
+    displayNames,
+    selfUserId,
+    roles,
+    scrollToMessage,
+  }: {
+    chatMessages: FilteredChatMessageType[];
+    displayNames: Map<string, string>;
+    selfUserId: string;
+    roles: string[];
+    scrollToMessage: (messageId: string) => void;
+  }) => {
+    const { t, i18n } = useTranslation();
+    const [show, setShow] = useState(false);
+    const open = useCallback(() => setShow(true), []);
+    const close = useCallback(() => setShow(false), []);
+    const [activeKey, setActiveKey] = useState<string>();
+    const onSelectTab = useCallback(
+      (key: string | null) => setActiveKey(key ?? undefined),
+      [],
+    );
+
+    const tabs = useMemo(() => {
+      const messages = chatMessages.filter((m) => !isReaction(m));
+      const messagesById = indexedById(messages);
+      const all = [
+        {
+          key: "replies",
+          title: t("chat.highlights.replies", "Replies"),
+          messages: messages.filter(
+            (m) =>
+              m.parentId && messagesById.get(m.parentId)?.sender === selfUserId,
+          ),
+        },
+        {
+          key: "mentions",
+          title: t("chat.highlights.mentions", "Mentions"),
+          messages: messages.filter((m) =>
+            m.content.children.some(
+              (node) => nodeIsMention(node) && node.userId === selfUserId,
+            ),
+          ),
+        },
+        {
+          key: "pins",
+          title: t("chat.highlights.pins", "Pins"),
+          messages: messages.filter((m) => m.pinTs),
+        },
+        {
+          key: "system",
+          title: t("chat.highlights.system", "System"),
+          messages: messages.filter((m) => !m.sender),
+        },
+      ];
+      return all.filter((tab) => tab.messages.length > 0);
+    }, [chatMessages, selfUserId, t]);
+    const total = tabs.reduce((sum, tab) => sum + tab.messages.length, 0);
+
+    const pick = useCallback(
+      (messageId: string) => {
+        setShow(false);
+        scrollToMessage(messageId);
+      },
+      [scrollToMessage],
+    );
+
+    const idPrefix = useId();
+
+    if (total === 0) {
+      return null;
+    }
+
+    const activeTab = tabs.some((tab) => tab.key === activeKey)
+      ? activeKey
+      : tabs[0]!.key;
+
+    return (
+      <HighlightsRow>
+        <Button size="sm" variant="secondary" onClick={open}>
+          {t("chat.highlights.button", "Highlights ({{shown}})", {
+            shown: total > 99 ? "99+" : total,
+          })}
+        </Button>
+        <Offcanvas show={show} onHide={close}>
+          <Offcanvas.Header closeButton>
+            <Offcanvas.Title>
+              {t("chat.highlights.title", "Highlights")}
+            </Offcanvas.Title>
+          </Offcanvas.Header>
+          <Offcanvas.Body>
+            <Tabs
+              id={`${idPrefix}-highlights`}
+              activeKey={activeTab}
+              onSelect={onSelectTab}
+              justify
+              className="mb-3"
+            >
+              {tabs.map(({ key, title, messages }) => (
+                <Tab
+                  key={key}
+                  eventKey={key}
+                  title={`${title} (${messages.length})`}
+                >
+                  {messages.map((message) => (
+                    <HighlightRow
+                      key={message._id}
+                      type="button"
+                      onClick={() => pick(message._id)}
+                    >
+                      <ChatMessageDiv
+                        $isSystemMessage={!message.sender}
+                        $isHighlighted={false}
+                        $isPinned={!!message.pinTs}
+                      >
+                        <ChatMessageTimestamp>
+                          {shortCalendarTimeFormat(
+                            message.timestamp,
+                            t,
+                            i18n.language,
+                          )}
+                        </ChatMessageTimestamp>
+                        <strong>
+                          {message.sender
+                            ? (displayNames.get(message.sender) ?? "???")
+                            : "jolly-roger"}
+                        </strong>
+                        <ChatMessage
+                          message={message.content}
+                          displayNames={displayNames}
+                          selfUserId={selfUserId}
+                          roles={roles}
+                        />
+                      </ChatMessageDiv>
+                    </HighlightRow>
+                  ))}
+                </Tab>
+              ))}
+            </Tabs>
+          </Offcanvas.Body>
+        </Offcanvas>
+      </HighlightsRow>
+    );
+  },
+);
+
 interface ChatSectionHandle {
   scrollHistoryToTarget: () => void;
+  scrollToMessage: (messageId: string) => void;
+  snapToBottom: () => void;
 }
 
 const ChatSection = React.memo(
@@ -910,6 +1849,8 @@ const ChatSection = React.memo(
     chatDataLoading,
     disabled,
     displayNames,
+    chatMessages,
+    puzzles,
     puzzleId,
     huntId,
     callState,
@@ -921,6 +1862,8 @@ const ChatSection = React.memo(
     chatDataLoading: boolean;
     disabled: boolean;
     displayNames: Map<string, string>;
+    chatMessages: FilteredChatMessageType[];
+    puzzles: PuzzleType[];
     puzzleId: string;
     huntId: string;
     callState: CallState;
@@ -930,6 +1873,7 @@ const ChatSection = React.memo(
     ref: React.Ref<ChatSectionHandle>;
   }) => {
     const historyRef = useRef<React.ComponentRef<typeof ChatHistory>>(null);
+    const inputRef = useRef<ChatInputHandle>(null);
     const scrollToTargetRequestRef = useRef(false);
 
     const scrollHistoryToTarget = useCallback(() => {
@@ -949,15 +1893,39 @@ const ChatSection = React.memo(
       }
     }, []);
 
+    // The message a reply is being written to
+    const [replyingTo, setReplyingTo] = useState<string>();
+    // The page is reused when the route changes puzzle in place; a reply
+    // doesn't follow it there
+    useEffect(() => {
+      setReplyingTo(undefined);
+    }, [puzzleId]);
+    const onReply = useCallback((messageId: string) => {
+      setReplyingTo(messageId);
+      inputRef.current?.focus();
+    }, []);
+    const cancelReply = useCallback(() => setReplyingTo(undefined), []);
+
     const onMessageSent = useCallback(() => {
       trace("ChatSection onMessageSent", { hasRef: !!historyRef.current });
+      setReplyingTo(undefined);
       if (historyRef.current) {
         historyRef.current.snapToBottom();
       }
     }, []);
 
+    const scrollToMessage = useCallback((messageId: string) => {
+      historyRef.current?.scrollToMessage(messageId);
+    }, []);
+
+    const snapToBottom = useCallback(() => {
+      historyRef.current?.snapToBottom();
+    }, []);
+
     useImperativeHandle(ref, () => ({
       scrollHistoryToTarget,
+      scrollToMessage,
+      snapToBottom,
     }));
 
     useLayoutEffect(() => {
@@ -970,6 +1938,44 @@ const ChatSection = React.memo(
         historyRef.current.scrollToTarget();
       }
     });
+
+    const roles = useMemo(
+      () => listAllRolesForHunt(selfUser, { _id: huntId }),
+      [selfUser, huntId],
+    );
+
+    // Reactions grouped by the message they belong to, built once here
+    // rather than queried by every message
+    const reactionsByParent = useMemo(() => {
+      const byParent = new Map<string, FilteredChatMessageType[]>();
+      chatMessages.forEach((message) => {
+        const parentId = message.parentId;
+        if (!parentId || !isReaction(message)) {
+          return;
+        }
+        let reactions = byParent.get(parentId);
+        if (!reactions) {
+          reactions = [];
+          byParent.set(parentId, reactions);
+        }
+        reactions.push(message);
+      });
+      return byParent;
+    }, [chatMessages]);
+
+    const pinnedMessage = useMemo(() => {
+      let newest: FilteredChatMessageType | undefined;
+      chatMessages.forEach((message) => {
+        if (
+          message.pinTs &&
+          !isReaction(message) &&
+          (!newest?.pinTs || message.pinTs > newest.pinTs)
+        ) {
+          newest = message;
+        }
+      });
+      return newest;
+    }, [chatMessages]);
 
     trace("ChatSection render", { chatDataLoading });
 
@@ -988,19 +1994,46 @@ const ChatSection = React.memo(
           callDispatch={callDispatch}
           joinCall={joinCall}
         />
+        {pinnedMessage && (
+          <PinnedMessagePane
+            message={pinnedMessage}
+            reactions={reactionsByParent.get(pinnedMessage._id) ?? NO_REACTIONS}
+            displayNames={displayNames}
+            selfUserId={selfUser._id}
+            roles={roles}
+            scrollToMessage={scrollToMessage}
+            onReply={onReply}
+          />
+        )}
         <ChatHistory
           ref={historyRef}
-          puzzleId={puzzleId}
+          chatMessages={chatMessages}
+          reactionsByParent={reactionsByParent}
           displayNames={displayNames}
           selfUser={selfUser}
-          huntId={huntId}
+          roles={roles}
+          replyingTo={replyingTo}
+          onReply={onReply}
         />
         <ChatInput
+          ref={inputRef}
           huntId={huntId}
           puzzleId={puzzleId}
+          puzzles={puzzles}
+          displayNames={displayNames}
           disabled={disabled}
           onHeightChange={scrollHistoryToTarget}
           onMessageSent={onMessageSent}
+          replyingTo={replyingTo}
+          onCancelReply={cancelReply}
+          scrollToMessage={scrollToMessage}
+        />
+        <HighlightsPanel
+          chatMessages={chatMessages}
+          displayNames={displayNames}
+          selfUserId={selfUser._id}
+          roles={roles}
+          scrollToMessage={scrollToMessage}
         />
       </ChatSectionDiv>
     );
@@ -1147,6 +2180,56 @@ const PuzzlePageMetadata = ({
   );
   const correctGuesses = guesses.filter((guess) => guess.state === "correct");
   const numGuesses = guesses.length;
+
+  // The tags sit on the action row while they fit beside everything else on
+  // one line; otherwise they get a row of their own. Measured from the
+  // elements' own widths (tags are laid out at their natural width in both
+  // places), so moving them doesn't change the answer.
+  const actionRowRef = useRef<HTMLDivElement>(null);
+  const tagsRef = useRef<HTMLDivElement>(null);
+  const [tagsOnOwnRow, setTagsOnOwnRow] = useState(false);
+  const measureTagLayout = useCallback(() => {
+    const row = actionRowRef.current;
+    const tagsEl = tagsRef.current;
+    if (!row || !tagsEl) {
+      return;
+    }
+    const outerWidth = (el: Element) => {
+      const style = window.getComputedStyle(el);
+      return (
+        el.getBoundingClientRect().width +
+        Number.parseFloat(style.marginLeft) +
+        Number.parseFloat(style.marginRight)
+      );
+    };
+    // The tag list renders with display: contents, so the tags themselves
+    // are the holder's grandchildren
+    const tagsWidth = [...tagsEl.querySelectorAll(":scope > * > *")].reduce(
+      (sum, el) => sum + outerWidth(el),
+      0,
+    );
+    const othersWidth = [...row.children]
+      .filter((el) => el !== tagsEl)
+      .reduce((sum, el) => sum + outerWidth(el), 0);
+    setTagsOnOwnRow(tagsWidth + othersWidth > row.clientWidth);
+  }, []);
+  useLayoutEffect(() => {
+    measureTagLayout();
+  }, [measureTagLayout, tags]);
+  useEffect(() => {
+    const row = actionRowRef.current;
+    if (!row) {
+      return undefined;
+    }
+    // The row doesn't wrap and the inline tag holder clips, so a sibling
+    // growing (the buttons operator mode adds, the document link once the
+    // sheet exists) leaves the row the same size: watch the children too,
+    // again once the tags have moved rows and the children have changed.
+    const observer = new ResizeObserver(() => measureTagLayout());
+    observer.observe(row);
+    [...row.children].forEach((child) => observer.observe(child));
+    return () => observer.disconnect();
+  }, [measureTagLayout, tagsOnOwnRow]);
 
   const answersElement =
     correctGuesses.length > 0 ? (
@@ -1304,6 +2387,23 @@ const PuzzlePageMetadata = ({
     </OverlayTrigger>
   );
 
+  const tagList = (
+    <PuzzleMetadataTags ref={tagsRef} $inline={!tagsOnOwnRow}>
+      <StyledTagList
+        puzzle={puzzle}
+        tags={tags}
+        onCreateTag={onCreateTag}
+        onRemoveTag={onRemoveTag}
+        linkToSearch={false}
+        showControls={isDesktop}
+        popoverRelated
+        allPuzzles={allPuzzles}
+        allTags={allTags}
+        emptyMessage={t("tags.puzzleNoTagsYet", "No tags yet")}
+      />
+    </PuzzleMetadataTags>
+  );
+
   return (
     <PuzzleMetadata>
       <PuzzleModalForm
@@ -1314,7 +2414,7 @@ const PuzzlePageMetadata = ({
         tags={allTags}
         onSubmit={onEdit}
       />
-      <PuzzleMetadataActionRow>
+      <PuzzleMetadataActionRow ref={actionRowRef}>
         <BookmarkButton
           puzzleId={puzzleId}
           bookmarked={bookmarked}
@@ -1323,6 +2423,7 @@ const PuzzlePageMetadata = ({
         />
         {puzzleLink}
         {documentLink}
+        {!tagsOnOwnRow && tagList}
         <PuzzleMetadataButtons>
           {editButton}
           {imageInsert}
@@ -1337,20 +2438,7 @@ const PuzzlePageMetadata = ({
         </PuzzleMetadataRow>
       )}
       <PuzzleMetadataRow>{answersElement}</PuzzleMetadataRow>
-      <PuzzleMetadataRow>
-        <StyledTagList
-          puzzle={puzzle}
-          tags={tags}
-          onCreateTag={onCreateTag}
-          onRemoveTag={onRemoveTag}
-          linkToSearch={false}
-          showControls={isDesktop}
-          popoverRelated
-          allPuzzles={allPuzzles}
-          allTags={allTags}
-          emptyMessage={t("tags.puzzleNoTagsYet", "No tags yet")}
-        />
-      </PuzzleMetadataRow>
+      {tagsOnOwnRow && <PuzzleMetadataRow>{tagList}</PuzzleMetadataRow>}
     </PuzzleMetadata>
   );
 };
@@ -1515,6 +2603,201 @@ const MinimizeChatButton = styled.button`
   cursor: pointer;
   height: 40px;
 `;
+
+// While the chat pane is minimised, new messages roll past as toasts in the
+// bottom-left corner.
+
+const slideIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const TickerContainer = styled.div`
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 1050;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 350px;
+  max-width: calc(100vw - 40px);
+`;
+
+const TickerQueuePill = styled.div`
+  background-color: ${({ theme }) => theme.colors.secondary};
+  color: white;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 2px 10px;
+  border-radius: 12px;
+  box-shadow: 0 2px 4px rgb(0 0 0 / 20%);
+  animation: ${slideIn} 0.3s ease;
+`;
+
+const TickerToast = styled.div`
+  width: 100%;
+  background-color: ${({ theme }) => theme.colors.background};
+  color: ${({ theme }) => theme.colors.text};
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-left: 4px solid ${({ theme }) => theme.colors.secondary};
+  box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  font-size: 0.9rem;
+  animation: ${slideIn} 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+`;
+
+const TickerToastBody = styled.div`
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  position: relative;
+  z-index: 1;
+`;
+
+// Clicking the message dismisses the toast
+const TickerToastContent = styled.button`
+  flex: 1;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+`;
+
+// The width is set inline: it moves every frame, and each distinct value
+// in a styled prop would become another class in the stylesheet
+const TickerProgress = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background-color: ${({ theme }) => theme.colors.secondary};
+  opacity: 0.15;
+  z-index: 0;
+`;
+
+type TickerToastType = {
+  id: string;
+  text: string;
+  sender: string;
+  duration: number;
+};
+
+// Other tabs on the same puzzle hear about dismissals, so a toast cleared in
+// one tab clears everywhere
+type TickerSyncMessage =
+  | { type: "DISMISS_TICKER"; id: string }
+  | { type: "DISMISS_TICKER_AUTO"; id: string }
+  | { type: "CLEAR_QUEUE" };
+
+// Anything on the same origin can post to the channel, so check the shape
+const isTickerSyncMessage = (data: unknown): data is TickerSyncMessage => {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+  const { type, id } = data as { type?: unknown; id?: unknown };
+  switch (type) {
+    case "DISMISS_TICKER":
+    case "DISMISS_TICKER_AUTO":
+      return typeof id === "string";
+    case "CLEAR_QUEUE":
+      return true;
+    default:
+      return false;
+  }
+};
+
+const tickerDuration = (text: string) =>
+  Math.min(
+    TICKER_MAX_MS,
+    Math.max(TICKER_MIN_MS, text.length * TICKER_MS_PER_CHAR),
+  );
+
+const ManagedTickerToast = ({
+  msg,
+  isPaused,
+  dismiss,
+  onRestore,
+}: {
+  msg: TickerToastType;
+  isPaused: boolean;
+  dismiss: (id: string, auto: boolean) => void;
+  onRestore: (id: string) => void;
+}) => {
+  const { t } = useTranslation();
+  const [remaining, setRemaining] = useState(msg.duration);
+  const lastTick = useRef(Date.now());
+
+  useEffect(() => {
+    lastTick.current = Date.now();
+    let frame = 0;
+    const tick = () => {
+      const now = Date.now();
+      const delta = now - lastTick.current;
+      lastTick.current = now;
+      // Hidden tabs don't count the time down either
+      if (!isPaused && document.visibilityState === "visible") {
+        setRemaining((prev) => Math.max(0, prev - delta));
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [isPaused]);
+
+  useEffect(() => {
+    if (remaining <= 0) {
+      dismiss(msg.id, true);
+    }
+  }, [remaining, dismiss, msg.id]);
+
+  const onDismiss = useCallback(
+    () => dismiss(msg.id, false),
+    [dismiss, msg.id],
+  );
+  const restore = useCallback(() => onRestore(msg.id), [onRestore, msg.id]);
+
+  return (
+    <TickerToast>
+      <TickerProgress
+        style={{ width: `${(remaining / msg.duration) * 100}%` }}
+      />
+      <TickerToastBody>
+        <TickerToastContent
+          type="button"
+          title={t("chat.ticker.dismiss", "Dismiss")}
+          onClick={onDismiss}
+        >
+          <strong>{msg.sender}:</strong> {msg.text}
+        </TickerToastContent>
+        <Button
+          variant="outline-primary"
+          size="sm"
+          onClick={restore}
+          title={t("chat.ticker.openChat", "Open Chat")}
+        >
+          <FontAwesomeIcon icon={faComments} />
+        </Button>
+      </TickerToastBody>
+    </TickerToast>
+  );
+};
 
 enum PuzzleGuessSubmitState {
   IDLE = "idle",
@@ -2192,7 +3475,10 @@ const PuzzleDeletedModal = ({
 const PuzzlePage = React.memo(() => {
   const puzzlePageDivRef = useRef<HTMLDivElement | null>(null);
   const chatSectionRef = useRef<ChatSectionHandle | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(DefaultSidebarWidth);
+  // One chat width is kept across puzzles
+  const [persistedSidebarWidth, setPersistedSidebarWidth] =
+    usePersistedSidebarWidth(DefaultSidebarWidth);
+  const [sidebarWidth, setSidebarWidth] = useState(persistedSidebarWidth);
   const [isChatMinimized, setIsChatMinimized] = useState(false);
   const [isMetadataMinimized, setIsMetadataMinimized] = useState(false);
   const [isDesktop, setIsDesktop] = useState(
@@ -2202,6 +3488,9 @@ const PuzzlePage = React.memo(() => {
   const huntId = useParams<"huntId">().huntId!;
   const puzzleId = useParams<"puzzleId">().puzzleId!;
   const idPrefix = useId();
+  const location = useLocation();
+  // Chat notifications link straight to the message that dinged
+  const messageIdFromHash = /^#msg=(.+)$/.exec(location.hash)?.[1];
 
   // Add the current user to the collection of people viewing this puzzle,
   // noting whether the tab is actually visible (re-subscribing when that
@@ -2274,6 +3563,17 @@ const PuzzlePage = React.memo(() => {
         ).fetch();
   }, [puzzleId, chatDataLoading]);
 
+  // The hunt's puzzles (from the puzzle page publication), for the editor's
+  // !-completion and for rendering puzzle links in messages
+  const puzzles = useTracker(
+    () => (puzzleDataLoading ? [] : Puzzles.find({ hunt: huntId }).fetch()),
+    [puzzleDataLoading, huntId],
+  );
+  const puzzleTitles = useMemo(
+    () => new Map(puzzles.map((p) => [p._id, p.title])),
+    [puzzles],
+  );
+
   // Sort by created at so that the "first" document always has consistent meaning
   const document = useTracker(
     () =>
@@ -2322,23 +3622,174 @@ const PuzzlePage = React.memo(() => {
     }
   }, []);
 
+  // Messages that arrive while the chat is minimised show as ticker toasts
+  // and count on the restore button until it is restored or they are
+  // dismissed
+  const [tickerQueue, setTickerQueue] = useState<TickerToastType[]>([]);
+  const [messagesWhileMinimized, setMessagesWhileMinimized] = useState<
+    string[]
+  >([]);
+  const [isTickerHovered, setIsTickerHovered] = useState(false);
+  const tickerHoverTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const tickerChannel = useRef<BroadcastChannel>(undefined);
+  const lastSeenMessageTs = useRef(0);
+  // The puzzle that timestamp belongs to: the page is reused when the route
+  // changes puzzle in place
+  const lastSeenPuzzleId = useRef(puzzleId);
+  // A message to scroll to once the chat pane is back
+  const pendingScrollTo = useRef<string>(undefined);
+
+  useEffect(() => {
+    if (!("BroadcastChannel" in window)) {
+      return undefined;
+    }
+    const channel = new BroadcastChannel(`puzzle_ticker_${puzzleId}`);
+    channel.addEventListener("message", (event: MessageEvent) => {
+      const message: unknown = event.data;
+      if (!isTickerSyncMessage(message)) {
+        return;
+      }
+      switch (message.type) {
+        case "DISMISS_TICKER":
+          setTickerQueue((prev) => prev.filter((m) => m.id !== message.id));
+          setMessagesWhileMinimized((prev) =>
+            prev.filter((id) => id !== message.id),
+          );
+          break;
+        case "DISMISS_TICKER_AUTO":
+          setTickerQueue((prev) => prev.filter((m) => m.id !== message.id));
+          break;
+        case "CLEAR_QUEUE":
+          setTickerQueue([]);
+          setMessagesWhileMinimized([]);
+          break;
+        default:
+          message satisfies never;
+      }
+    });
+    tickerChannel.current = channel;
+    return () => {
+      channel.close();
+      tickerChannel.current = undefined;
+    };
+  }, [puzzleId]);
+
+  const broadcastTicker = useCallback((message: TickerSyncMessage) => {
+    tickerChannel.current?.postMessage(message);
+  }, []);
+
+  const clearTicker = useCallback(() => {
+    setTickerQueue([]);
+    setMessagesWhileMinimized([]);
+    setIsTickerHovered(false);
+    broadcastTicker({ type: "CLEAR_QUEUE" });
+  }, [broadcastTicker]);
+
   const minimizeChat = useCallback(() => {
     setIsChatMinimized(true);
   }, []);
 
   const restoreChat = useCallback(() => {
     setIsChatMinimized(false);
-  }, []);
+    clearTicker();
+  }, [clearTicker]);
 
-  useEffect(
-    () => {
-      // Any time a new chat message comes in, show the chat again.
-      setIsChatMinimized(false);
+  const restoreChatToMessage = useCallback(
+    (messageId: string) => {
+      pendingScrollTo.current = messageId;
+      restoreChat();
     },
-    // Trigger whenever chatMessages.length changes, even if we don't actually use
-    // it in the effect, since we want to restore the chat pane whenever a new message comes in.
-    [chatMessages.length],
+    [restoreChat],
   );
+
+  useEffect(() => {
+    if (chatDataLoading) {
+      // chatMessages is empty until then, which is not the same as nothing
+      // having been seen
+      return;
+    }
+    const newest = chatMessages.at(-1)?.timestamp.getTime() ?? 0;
+    if (lastSeenPuzzleId.current !== puzzleId) {
+      // Another puzzle's history is not news, and the last puzzle's toasts
+      // are not this one's
+      lastSeenPuzzleId.current = puzzleId;
+      lastSeenMessageTs.current = newest;
+      setTickerQueue([]);
+      setMessagesWhileMinimized([]);
+      setIsTickerHovered(false);
+      pendingScrollTo.current = undefined;
+      return;
+    }
+    if (!isChatMinimized) {
+      lastSeenMessageTs.current = newest;
+      return;
+    }
+    const arrived = chatMessages.filter(
+      (message) =>
+        message.timestamp.getTime() > lastSeenMessageTs.current &&
+        message.sender !== undefined &&
+        !isReaction(message),
+    );
+    lastSeenMessageTs.current = newest;
+    if (arrived.length === 0) {
+      return;
+    }
+    setTickerQueue((prev) => [
+      ...prev,
+      ...arrived.map((message) => {
+        const text = chatMessagePlainText(
+          message.content,
+          displayNames,
+          puzzleTitles,
+        );
+        return {
+          id: message._id,
+          text,
+          sender: displayNames.get(message.sender!) ?? "???",
+          duration: tickerDuration(text),
+        };
+      }),
+    ]);
+    setMessagesWhileMinimized((prev) => [
+      ...prev,
+      ...arrived.map((message) => message._id),
+    ]);
+  }, [
+    chatMessages,
+    chatDataLoading,
+    puzzleId,
+    isChatMinimized,
+    displayNames,
+    puzzleTitles,
+  ]);
+
+  const dismissTickerMessage = useCallback(
+    (id: string, auto: boolean) => {
+      setTickerQueue((prev) => prev.filter((m) => m.id !== id));
+      if (auto) {
+        broadcastTicker({ type: "DISMISS_TICKER_AUTO", id });
+      } else {
+        // Dismissed by hand counts as read
+        setMessagesWhileMinimized((prev) => prev.filter((mid) => mid !== id));
+        broadcastTicker({ type: "DISMISS_TICKER", id });
+      }
+    },
+    [broadcastTicker],
+  );
+
+  const onTickerMouseEnter = useCallback(() => {
+    clearTimeout(tickerHoverTimeout.current);
+    setIsTickerHovered(true);
+  }, []);
+  const onTickerMouseLeave = useCallback(() => {
+    // A short grace period before the countdown resumes
+    clearTimeout(tickerHoverTimeout.current);
+    tickerHoverTimeout.current = setTimeout(
+      () => setIsTickerHovered(false),
+      500,
+    );
+  }, []);
+  useEffect(() => () => clearTimeout(tickerHoverTimeout.current), []);
 
   useEffect(() => {
     // There's no point hiding the chat scrollback at mobile widths; we don't
@@ -2347,6 +3798,56 @@ const PuzzlePage = React.memo(() => {
       setIsChatMinimized(false);
     }
   }, [isDesktop]);
+
+  // Once the chat pane is back, land on the requested message or the bottom,
+  // again after the layout has had a moment to settle
+  const wasChatMinimized = useRef(isChatMinimized);
+  useEffect(() => {
+    const justRestored = wasChatMinimized.current && !isChatMinimized;
+    wasChatMinimized.current = isChatMinimized;
+    if (!justRestored) {
+      return undefined;
+    }
+    const settle = () => {
+      const section = chatSectionRef.current;
+      if (!section) {
+        return;
+      }
+      section.scrollHistoryToTarget();
+      if (pendingScrollTo.current) {
+        section.scrollToMessage(pendingScrollTo.current);
+      } else {
+        section.snapToBottom();
+      }
+    };
+    const frame = requestAnimationFrame(settle);
+    const timer = setTimeout(() => {
+      settle();
+      pendingScrollTo.current = undefined;
+    }, RESTORE_SETTLE_MS);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
+  }, [isChatMinimized]);
+
+  useEffect(() => {
+    if (!messageIdFromHash || chatDataLoading) {
+      return undefined;
+    }
+    if (chatSectionRef.current) {
+      const frame = requestAnimationFrame(() => {
+        chatSectionRef.current?.scrollToMessage(messageIdFromHash);
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+    // The chat is minimised; the restore settles on the message
+    pendingScrollTo.current = messageIdFromHash;
+    restoreChat();
+    return undefined;
+    // location.key is a dependency so following the same link again scrolls
+    // again
+  }, [messageIdFromHash, chatDataLoading, location.key, restoreChat]);
 
   const onChangeSideBarSize = useCallback(
     (newSize: number) => {
@@ -2366,6 +3867,17 @@ const PuzzlePage = React.memo(() => {
       }
     },
     [isChatMinimized],
+  );
+
+  // Remembered only once a drag ends: the window-resize clamp reports sizes
+  // too, and a briefly narrow window shouldn't shrink the chat for good
+  const onCommitSideBarSize = useCallback(
+    (newSize: number) => {
+      if (!isChatMinimized) {
+        setPersistedSidebarWidth(newSize);
+      }
+    },
+    [isChatMinimized, setPersistedSidebarWidth],
   );
 
   const toggleMetadata = useCallback(() => {
@@ -2461,6 +3973,8 @@ const PuzzlePage = React.memo(() => {
       chatDataLoading={chatDataLoading}
       disabled={activePuzzle.deleted ?? true /* disable while still loading */}
       displayNames={displayNames}
+      chatMessages={chatMessages}
+      puzzles={puzzles}
       huntId={huntId}
       puzzleId={puzzleId}
       callState={callState}
@@ -2534,10 +4048,42 @@ const PuzzlePage = React.memo(() => {
       </PuzzleMetadataFloatingButton>
     </OverlayTrigger>
   ) : null;
+
+  const visibleTickers = tickerQueue.slice(0, MAX_VISIBLE_TICKERS);
+  const overflowCount = tickerQueue.length - visibleTickers.length;
+  const tickerPortal =
+    isChatMinimized && tickerQueue.length > 0
+      ? createPortal(
+          <TickerContainer
+            onMouseEnter={onTickerMouseEnter}
+            onMouseLeave={onTickerMouseLeave}
+          >
+            {overflowCount > 0 && (
+              <TickerQueuePill>
+                {t("chat.ticker.moreMessages", { count: overflowCount })}
+              </TickerQueuePill>
+            )}
+            {visibleTickers.map((msg, index) => (
+              <ManagedTickerToast
+                key={msg.id}
+                msg={msg}
+                // Only the oldest toast counts down, and not while the stack
+                // is hovered
+                isPaused={isTickerHovered || index !== 0}
+                dismiss={dismissTickerMessage}
+                onRestore={restoreChatToMessage}
+              />
+            ))}
+          </TickerContainer>,
+          window.document.body,
+        )
+      : null;
+
   if (isDesktop) {
     return (
       <>
         {deletedModal}
+        {tickerPortal}
         <FixedLayout ref={puzzlePageDivRef}>
           {isChatMinimized ? (
             <MinimizedChatInfo
@@ -2547,6 +4093,7 @@ const PuzzlePage = React.memo(() => {
               callDispatch={dispatch}
               joinCall={joinCall}
               onRestore={restoreChat}
+              missedMessages={messagesWhileMinimized.length}
             />
           ) : (
             <OverlayTrigger
@@ -2572,6 +4119,7 @@ const PuzzlePage = React.memo(() => {
             primary="first"
             size={effectiveSidebarWidth}
             onChanged={onChangeSideBarSize}
+            onCommitted={onCommitSideBarSize}
             allowResize={!isChatMinimized}
           >
             {chat}
