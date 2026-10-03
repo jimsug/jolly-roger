@@ -26,10 +26,62 @@ export interface PendingChange {
   at: number;
 }
 
+// The same for a line: its ends and look.
+export type PendingEdgeChange = Partial<
+  Pick<
+    WhiteboardEdgeDoc,
+    "source" | "target" | "pathStyle" | "arrowHead" | "colour" | "dashed"
+  >
+> & { label?: string | null; at: number };
+
 const PENDING_TIMEOUT = 10_000;
+
+// Someone else's live drag, in the coordinates of the frame the node was in
+// when they sent it.
+export interface RemoteDrag {
+  x: number;
+  y: number;
+  parent?: string;
+}
+
+// How long a move made by someone else (or by the server) takes to glide into
+// place. Positions glide, not just the node on screen, so lines go with them.
+const GLIDE_MS = 120;
+
+interface GlideBox extends XYPosition {
+  width?: number;
+  height?: number;
+}
+
+interface Glide {
+  from: GlideBox;
+  to: GlideBox;
+  // When it started moving on screen: its first animation frame, since on a
+  // busy board that can come well after the change arrived.
+  start?: number;
+  // The frame the positions are measured in.
+  parentId: string | undefined;
+}
+
+const samePosition = (a: XYPosition, b: XYPosition) =>
+  Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01;
 
 const near = (a: number | undefined, b: number | undefined) =>
   a !== undefined && b !== undefined && Math.abs(a - b) < 0.01;
+
+// Unset, false and empty all mean "not set" for a line's fields.
+const plain = (value: unknown) =>
+  value === undefined || value === null || value === false || value === ""
+    ? null
+    : value;
+
+function edgeSatisfied(doc: WhiteboardEdgeDoc, p: PendingEdgeChange) {
+  return (Object.keys(p) as (keyof PendingEdgeChange)[]).every(
+    (key) =>
+      key === "at" ||
+      plain(doc[key as keyof WhiteboardEdgeDoc]) === plain(p[key]),
+  );
+}
 
 function pendingSatisfied(doc: WhiteboardNodeType, p: PendingChange) {
   if (
@@ -44,6 +96,49 @@ function pendingSatisfied(doc: WhiteboardNodeType, p: PendingChange) {
   if (p.width !== undefined && !near(doc.width, p.width)) return false;
   if (p.height !== undefined && !near(doc.height, p.height)) return false;
   return true;
+}
+
+// A saved line with a pending change applied.
+function withPendingEdge(
+  saved: WhiteboardEdgeDoc,
+  change: PendingEdgeChange,
+): WhiteboardEdgeDoc {
+  const { at: _at, label, ...rest } = change;
+  return {
+    ...saved,
+    ...rest,
+    ...(label !== undefined ? { label: label ?? undefined } : {}),
+  };
+}
+
+// A saved line as React Flow draws it.
+function flowEdge(
+  e: WhiteboardEdgeDoc,
+  selected: boolean,
+  colours: { text: string; muted: string },
+  readOnly: boolean,
+): WhiteboardEdgeType {
+  const colour = e.auto
+    ? colours.muted
+    : ((e.colour && STROKE_COLOURS[e.colour]) ?? colours.text);
+  const marker = {
+    type: MarkerType.ArrowClosed,
+    width: e.auto ? 14 : 18,
+    height: e.auto ? 14 : 18,
+    color: colour,
+  };
+  const arrowHead = e.arrowHead ?? "end";
+  return {
+    id: e._id,
+    source: e.source,
+    target: e.target,
+    type: "whiteboard",
+    data: { doc: e },
+    markerEnd: arrowHead === "none" ? undefined : marker,
+    markerStart: arrowHead === "both" ? marker : undefined,
+    selected,
+    deletable: !readOnly,
+  };
 }
 
 // React Flow needs parents before their children.
@@ -133,7 +228,7 @@ export function useWhiteboardSync({
   livePuzzleIds: Set<string>;
   readOnly: boolean;
   showFeederArrows: boolean;
-  remoteDrags: Map<string, XYPosition>;
+  remoteDrags: Map<string, RemoteDrag>;
   erasingStrokes: Set<string>;
   // Theme colours for lines with no colour of their own, and feeder arrows.
   lineColours: { text: string; muted: string };
@@ -150,9 +245,14 @@ export function useWhiteboardSync({
   const [nodes, setNodes] = useState<WhiteboardFlowNode[]>([]);
   const [edges, setEdges] = useState<WhiteboardEdgeType[]>([]);
   const pending = useRef(new Map<string, PendingChange>());
+  const pendingEdges = useRef(new Map<string, PendingEdgeChange>());
   // Bumped to force a rebuild from the server state, e.g. after a failed
   // write.
   const [generation, setGeneration] = useState(0);
+  const glides = useRef(new Map<string, Glide>());
+  const glideFrame = useRef<number | undefined>(undefined);
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: generation forces a rebuild from server state after a failed write
   useEffect(() => {
@@ -179,10 +279,35 @@ export function useWhiteboardSync({
             : [],
         ),
       );
-      const visible = candidates.filter(
-        (d) => d.type !== "point" || pointsInUse.has(d._id),
+      // Whatever was changed most recently draws on top of others at the
+      // same level, the same for everyone.
+      const stamps = new Map(
+        candidates.map((d) => [d._id, +(d.updatedAt ?? d.createdAt ?? 0)]),
       );
+      const visible = candidates
+        .filter((d) => d.type !== "point" || pointsInUse.has(d._id))
+        .sort(
+          (a, b) =>
+            stamps.get(a._id)! - stamps.get(b._id)! ||
+            (a._id < b._id ? -1 : a._id > b._id ? 1 : 0),
+        );
       const visibleIds = new Set(visible.map((d) => d._id));
+
+      // Where a node was on the board (rather than in its frame).
+      const boardPosition = (id: string | undefined) => {
+        let x = 0;
+        let y = 0;
+        let node = id ? prevById.get(id) : undefined;
+        for (let depth = 0; node && depth < 64; depth++) {
+          x += node.position.x;
+          y += node.position.y;
+          node = node.parentId ? prevById.get(node.parentId) : undefined;
+        }
+        return { x, y };
+      };
+      const resizing = new Set(
+        previous.filter((n) => n.resizing).map((n) => n.id),
+      );
 
       const built = visible.map((doc): WhiteboardFlowNode => {
         let change = pending.current.get(doc._id);
@@ -200,10 +325,84 @@ export function useWhiteboardSync({
             : doc.parent;
         const parentId =
           rawParent && visibleIds.has(rawParent) ? rawParent : undefined;
-        const remote = change ? undefined : remoteDrags.get(doc._id);
+        // A live drag only counts while the node is still in the frame the
+        // drag was measured in; once it has been dropped somewhere else the
+        // saved position takes over.
+        const live = change ? undefined : remoteDrags.get(doc._id);
+        const remote =
+          live && (live.parent ?? undefined) === (rawParent ?? undefined)
+            ? { x: live.x, y: live.y }
+            : undefined;
 
         let position = change?.position ?? remote ?? doc.position;
-        if (prev?.dragging) position = prev.position;
+        let width = change?.width ?? doc.width;
+        let height = change?.height ?? doc.height;
+        const sameParent = prev?.parentId === parentId;
+        if (prev?.dragging) {
+          position = prev.position;
+        } else if (prev?.resizing) {
+          // Mid-resize, the box on screen is ours until it's saved.
+          position = prev.position;
+          width = prev.width;
+          height = prev.height;
+        } else if (
+          prev?.parentId &&
+          sameParent &&
+          resizing.has(prev.parentId)
+        ) {
+          // React Flow keeps a resizing frame's children still on screen by
+          // moving them; those positions are ours until the resize is saved.
+          position = prev.position;
+        } else if (
+          !change &&
+          prev &&
+          (sameParent || !parentId || prevById.has(parentId))
+        ) {
+          // A change from elsewhere glides from where the node is now, in
+          // its new frame's coordinates if it has changed frame.
+          const from = sameParent
+            ? prev.position
+            : (() => {
+                const old = boardPosition(prev.parentId);
+                const here = boardPosition(parentId);
+                return {
+                  x: old.x + prev.position.x - here.x,
+                  y: old.y + prev.position.y - here.y,
+                };
+              })();
+          const resized =
+            (prev.width !== undefined &&
+              width !== undefined &&
+              !near(prev.width, width)) ||
+            (prev.height !== undefined &&
+              height !== undefined &&
+              !near(prev.height, height));
+          if (samePosition(from, position) && !resized) {
+            glides.current.delete(doc._id);
+          } else {
+            const glide = glides.current.get(doc._id);
+            if (
+              !glide ||
+              glide.parentId !== parentId ||
+              !samePosition(glide.to, position) ||
+              glide.to.width !== width ||
+              glide.to.height !== height
+            ) {
+              glides.current.set(doc._id, {
+                from: { ...from, width: prev.width, height: prev.height },
+                to: { ...position, width, height },
+                parentId,
+              });
+            }
+            position = from;
+            if (resized) {
+              width = prev.width;
+              height = prev.height;
+            }
+          }
+        } else {
+          glides.current.delete(doc._id);
+        }
 
         return {
           id: doc._id,
@@ -214,10 +413,11 @@ export function useWhiteboardSync({
             doc,
             erasing: !!doc.stroke && erasingStrokes.has(doc.stroke),
           },
-          width: change?.width ?? doc.width,
-          height: change?.height ?? doc.height,
+          width,
+          height,
           selected: prev?.selected ?? false,
           dragging: prev?.dragging,
+          resizing: prev?.resizing,
           measured: prev?.measured,
           // Dragging, selecting and connecting are left to the canvas, which
           // turns them off for read-only boards and while a drawing tool is
@@ -226,9 +426,6 @@ export function useWhiteboardSync({
           ...(doc.type === "ink" || doc.type === "point"
             ? { connectable: false }
             : {}),
-          // Moves that come from someone else glide rather than jump. The
-          // canvas turns this off while we're dragging or resizing ourselves.
-          className: "jr-glide",
         };
       });
       return withStacking(sortParentsFirst(built));
@@ -243,7 +440,92 @@ export function useWhiteboardSync({
     generation,
   ]);
 
+  // Steps any glides along, a frame at a time, until they've all arrived. A
+  // node someone picks up, or changes locally, stops gliding.
+  const stepGlides = useCallback(() => {
+    glideFrame.current = undefined;
+    const now = performance.now();
+    const current = new Map(nodesRef.current.map((n) => [n.id, n]));
+    const steps = new Map<string, GlideBox & { glide: Glide }>();
+    glides.current.forEach((glide, id) => {
+      const node = current.get(id);
+      if (
+        !node ||
+        node.dragging ||
+        node.resizing ||
+        node.parentId !== glide.parentId ||
+        pending.current.has(id)
+      ) {
+        glides.current.delete(id);
+        return;
+      }
+      // Starting a frame back means the first frame already moves.
+      glide.start ??= now - 1000 / 60;
+      const t = Math.min(1, (now - glide.start) / GLIDE_MS);
+      const between = (a: number | undefined, b: number | undefined) =>
+        a !== undefined && b !== undefined ? a + (b - a) * t : b;
+      steps.set(id, {
+        x: between(glide.from.x, glide.to.x)!,
+        y: between(glide.from.y, glide.to.y)!,
+        width: between(glide.from.width, glide.to.width),
+        height: between(glide.from.height, glide.to.height),
+        glide,
+      });
+      if (t >= 1) glides.current.delete(id);
+    });
+    if (steps.size > 0) {
+      setNodes((nds) =>
+        nds.map((n) => {
+          const step = steps.get(n.id);
+          // By the time this applies the node may have been rebuilt, into
+          // another frame (where these coordinates mean nothing) or with a
+          // newer glide starting from where it was; either way, leave it.
+          const latest = glides.current.get(n.id);
+          if (
+            !step ||
+            n.dragging ||
+            n.resizing ||
+            n.parentId !== step.glide.parentId ||
+            (latest && latest !== step.glide)
+          ) {
+            return n;
+          }
+          return {
+            ...n,
+            position: { x: step.x, y: step.y },
+            ...(step.width !== undefined ? { width: step.width } : {}),
+            ...(step.height !== undefined ? { height: step.height } : {}),
+          };
+        }),
+      );
+    }
+    if (glides.current.size > 0) {
+      glideFrame.current = requestAnimationFrame(() => stepGlidesRef.current());
+    }
+  }, []);
+  const stepGlidesRef = useRef(stepGlides);
+  stepGlidesRef.current = stepGlides;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies(nodes): new glides are registered while building nodes
   useEffect(() => {
+    if (glides.current.size > 0 && glideFrame.current === undefined) {
+      glideFrame.current = requestAnimationFrame(() => stepGlidesRef.current());
+    }
+  }, [nodes]);
+
+  useEffect(
+    () => () => {
+      if (glideFrame.current !== undefined) {
+        cancelAnimationFrame(glideFrame.current);
+        glideFrame.current = undefined;
+      }
+    },
+    [],
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: generation forces a rebuild from server state after a failed write
+  useEffect(() => {
+    const now = Date.now();
     setEdges((previous) => {
       const selected = new Set(
         previous.filter((e) => e.selected).map((e) => e.id),
@@ -259,6 +541,18 @@ export function useWhiteboardSync({
           .map((d) => d._id),
       );
       return edgeDocs
+        .map((saved): WhiteboardEdgeDoc => {
+          const change = pendingEdges.current.get(saved._id);
+          if (!change) return saved;
+          if (
+            edgeSatisfied(saved, change) ||
+            now - change.at > PENDING_TIMEOUT
+          ) {
+            pendingEdges.current.delete(saved._id);
+            return saved;
+          }
+          return withPendingEdge(saved, change);
+        })
         .filter(
           (e: WhiteboardEdgeDoc) =>
             !e.hidden &&
@@ -266,29 +560,7 @@ export function useWhiteboardSync({
             nodeIds.has(e.target) &&
             (showFeederArrows || !e.auto),
         )
-        .map((e): WhiteboardEdgeType => {
-          const colour = e.auto
-            ? lineColours.muted
-            : ((e.colour && STROKE_COLOURS[e.colour]) ?? lineColours.text);
-          const marker = {
-            type: MarkerType.ArrowClosed,
-            width: e.auto ? 14 : 18,
-            height: e.auto ? 14 : 18,
-            color: colour,
-          };
-          const arrowHead = e.arrowHead ?? "end";
-          return {
-            id: e._id,
-            source: e.source,
-            target: e.target,
-            type: "whiteboard",
-            data: { doc: e },
-            markerEnd: arrowHead === "none" ? undefined : marker,
-            markerStart: arrowHead === "both" ? marker : undefined,
-            selected: selected.has(e._id),
-            deletable: !readOnly,
-          };
-        });
+        .map((e) => flowEdge(e, selected.has(e._id), lineColours, readOnly));
     });
   }, [
     edgeDocs,
@@ -297,6 +569,7 @@ export function useWhiteboardSync({
     showFeederArrows,
     readOnly,
     lineColours,
+    generation,
   ]);
 
   const markPending = useCallback(
@@ -312,6 +585,39 @@ export function useWhiteboardSync({
     setGeneration((g) => g + 1);
   }, []);
 
+  // A line change shows straight away (in the same render as whatever made
+  // it), until the server echoes it or says no.
+  const drawing = useRef({ lineColours, readOnly });
+  drawing.current = { lineColours, readOnly };
+  const markEdgePending = useCallback(
+    (id: string, change: Omit<PendingEdgeChange, "at">) => {
+      const merged = {
+        ...pendingEdges.current.get(id),
+        ...change,
+        at: Date.now(),
+      };
+      pendingEdges.current.set(id, merged);
+      setEdges((eds) =>
+        eds.map((e) =>
+          e.id === id && e.data
+            ? flowEdge(
+                withPendingEdge(e.data.doc, merged),
+                !!e.selected,
+                drawing.current.lineColours,
+                drawing.current.readOnly,
+              )
+            : e,
+        ),
+      );
+    },
+    [],
+  );
+
+  const clearEdgePending = useCallback((ids: string[]) => {
+    ids.forEach((id) => pendingEdges.current.delete(id));
+    setGeneration((g) => g + 1);
+  }, []);
+
   return {
     nodes,
     setNodes,
@@ -320,5 +626,7 @@ export function useWhiteboardSync({
     nodeDocs,
     markPending,
     clearPending,
+    markEdgePending,
+    clearEdgePending,
   };
 }

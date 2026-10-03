@@ -3,7 +3,6 @@ import {
   attachHit,
   compareAttachHits,
   contains,
-  nearBorder,
   snapAngle,
 } from "../../../../imports/lib/whiteboard/connectors";
 
@@ -31,24 +30,14 @@ describe("whiteboard snapAngle", function () {
   });
 });
 
-describe("whiteboard nearBorder", function () {
-  const box = { x: 0, y: 0, width: 100, height: 50 };
+describe("whiteboard contains", function () {
+  const box = { x: 0, y: 0, width: 10, height: 10 };
 
-  it("is true near any edge", function () {
-    assert.isTrue(nearBorder(box, { x: 2, y: 25 }, 5));
-    assert.isTrue(nearBorder(box, { x: 98, y: 25 }, 5));
-    assert.isTrue(nearBorder(box, { x: 50, y: 1 }, 5));
-    assert.isTrue(nearBorder(box, { x: 50, y: 49 }, 5));
-  });
-
-  it("is false in the middle and outside", function () {
-    assert.isFalse(nearBorder(box, { x: 50, y: 25 }, 5));
-    assert.isFalse(nearBorder(box, { x: -2, y: 25 }, 5));
-  });
-
-  it("treats the edge as inside", function () {
-    assert.isTrue(contains(box, { x: 100, y: 50 }));
-    assert.isFalse(contains(box, { x: 100.1, y: 50 }));
+  it("includes the edges and excludes anything outside", function () {
+    assert.isTrue(contains(box, { x: 5, y: 5 }));
+    assert.isTrue(contains(box, { x: 0, y: 10 }));
+    assert.isFalse(contains(box, { x: -1, y: 5 }));
+    assert.isFalse(contains(box, { x: 5, y: 11 }));
   });
 });
 
@@ -83,13 +72,34 @@ describe("whiteboard attachHit", function () {
   it("only takes a frame by its border, from either side", function () {
     assert.isUndefined(attachHit(box, { x: 200, y: 150 }, 8, true));
     assert.deepEqual(attachHit(box, { x: 105, y: 150 }, 8, true), {
-      inside: true,
-      distance: 0,
+      inside: false,
+      distance: 5,
     });
     assert.deepEqual(attachHit(box, { x: 95, y: 150 }, 8, true), {
       inside: false,
       distance: 5,
     });
+    assert.deepEqual(attachHit(box, { x: 200, y: 200 }, 8, true), {
+      inside: false,
+      distance: 0,
+    });
+  });
+
+  it("lets a near miss on something in a frame beat the frame's border", function () {
+    const frameHit = attachHit(box, { x: 106, y: 150 }, 8, true)!;
+    const cardHit = attachHit(
+      { x: 109, y: 120, width: 50, height: 50 },
+      { x: 106, y: 150 },
+      8,
+      false,
+    )!;
+    assert.isBelow(
+      compareAttachHits(
+        { ...cardHit, z: 1, order: 1 },
+        { ...frameHit, z: 0, order: 0 },
+      ),
+      0,
+    );
   });
 });
 

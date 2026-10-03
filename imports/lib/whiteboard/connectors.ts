@@ -32,29 +32,19 @@ export function contains(box: Box, point: XY): boolean {
   );
 }
 
-// Whether a point inside a box is within `tolerance` of its edge. Lines only
-// attach to frames by their border, so drawing inside a frame stays free.
-export function nearBorder(box: Box, point: XY, tolerance: number): boolean {
-  if (!contains(box, point)) return false;
-  return (
-    point.x - box.x <= tolerance ||
-    point.y - box.y <= tolerance ||
-    box.x + box.width - point.x <= tolerance ||
-    box.y + box.height - point.y <= tolerance
-  );
-}
-
 export interface AttachHit {
-  // On the box itself (for a frame, on its border) rather than just outside.
+  // On the thing itself rather than near it. A frame is never "on": lines
+  // attach to its border, which counts as near.
   inside: boolean;
-  // How far outside the box the point is; 0 when inside.
+  // How far the point is from the thing (for a frame, from its border); 0
+  // when inside.
   distance: number;
 }
 
 // Whether a line end at `point` would attach to `box`: anywhere on it, or
 // within `margin` of its edge, so aiming at an edge still catches it. Frames
 // only take lines by their border (within `margin` either side), so a line
-// drawn inside one stays free.
+// drawn well inside one stays free.
 export function attachHit(
   box: Box,
   point: XY,
@@ -63,15 +53,28 @@ export function attachHit(
 ): AttachHit | undefined {
   const dx = Math.max(box.x - point.x, 0, point.x - (box.x + box.width));
   const dy = Math.max(box.y - point.y, 0, point.y - (box.y + box.height));
-  const distance = Math.hypot(dx, dy);
-  if (distance > margin) return undefined;
-  if (distance > 0) return { inside: false, distance };
-  if (frame && !nearBorder(box, point, margin)) return undefined;
-  return { inside: true, distance: 0 };
+  const outside = Math.hypot(dx, dy);
+  if (outside > margin) return undefined;
+  if (!frame) {
+    return outside > 0
+      ? { inside: false, distance: outside }
+      : { inside: true, distance: 0 };
+  }
+  const toBorder =
+    outside > 0
+      ? outside
+      : Math.min(
+          point.x - box.x,
+          point.y - box.y,
+          box.x + box.width - point.x,
+          box.y + box.height - point.y,
+        );
+  return toBorder <= margin ? { inside: false, distance: toBorder } : undefined;
 }
 
-// Orders candidate attachments, best first: something the point is actually
-// on beats a near miss; then the topmost, or for near misses the closest.
+// Orders candidate attachments, best first: something the point is on beats
+// anything it's only near; then the topmost of those it's on, or the closest
+// of those it's near (frame borders included), then the topmost.
 export function compareAttachHits(
   a: AttachHit & { z: number; order: number },
   b: AttachHit & { z: number; order: number },

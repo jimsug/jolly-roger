@@ -16,6 +16,7 @@ import type {
   Connection,
   NodeChange,
   OnBeforeDelete,
+  OnConnectEnd,
   OnMoveEnd,
   OnNodeDrag,
   Viewport,
@@ -31,6 +32,7 @@ import {
   Panel,
   ReactFlow,
   ReactFlowProvider,
+  useInternalNode,
   useReactFlow,
   ViewportPortal,
 } from "@xyflow/react";
@@ -120,7 +122,7 @@ import PuzzleCardNode from "./PuzzleCardNode";
 import StickyNode from "./StickyNode";
 import TextNode from "./TextNode";
 import useComments, { useSeenComments } from "./useComments";
-import type { WhiteboardFlowNode } from "./useWhiteboardSync";
+import type { RemoteDrag, WhiteboardFlowNode } from "./useWhiteboardSync";
 import {
   selectionUnits,
   sortParentsFirst,
@@ -157,6 +159,8 @@ interface Connecting {
   // Set when moving an existing line's end rather than drawing a new line.
   edgeId?: string;
   end?: "source" | "target";
+  // Where the press was, on screen, so a grip that's only clicked stays put.
+  pressedAt?: { x: number; y: number };
 }
 
 const isPlaceTool = (tool: Tool): tool is PlaceTool =>
@@ -175,6 +179,10 @@ const MIN_SIZES: Record<PlaceTool, { width: number; height: number }> = {
 };
 // A press that moves less than this (in screen pixels) is a click.
 const CLICK_SLOP = 4;
+// The parts of the canvas that sit over the board, where presses are the
+// controls' own rather than a tool's.
+const OVERLAYS =
+  ".react-flow__panel, .react-flow__controls, .react-flow__minimap, .react-flow__node-toolbar, .jr-comment-pin";
 // How close (in screen pixels) a line end has to be to something to attach to
 // it: just outside its edge, or either side of a frame's border.
 const ATTACH_MARGIN = 8;
@@ -198,14 +206,6 @@ const CanvasWrapper = styled.div<{ $tool: Tool }>`
         cursor: crosshair;
       }
     `}
-
-  .react-flow__node.jr-glide {
-    transition: transform 120ms linear;
-  }
-
-  &.jr-interacting .react-flow__node {
-    transition: none;
-  }
 
   /* Line labels, grips and attribution sit above everything, so a grip on
      the edge of the thing a line is attached to can still be grabbed. */
@@ -314,6 +314,30 @@ function chunks<T>(items: T[], size: number): T[][] {
 // server has.
 const ignoreResult = () => {};
 
+// The dashed outline around something a line end will attach to. It follows
+// the node through React Flow's store, so it keeps up as the node moves.
+const AttachOutline = React.memo(({ id }: { id: string }) => {
+  const theme = useTheme();
+  const node = useInternalNode(id);
+  if (!node) return null;
+  const { x, y } = node.internals.positionAbsolute;
+  const width = node.width ?? node.measured.width ?? 0;
+  const height = node.height ?? node.measured.height ?? 0;
+  return (
+    <rect
+      x={x - 4}
+      y={y - 4}
+      width={width + 8}
+      height={height + 8}
+      rx={8}
+      fill="none"
+      stroke={theme.colors.primary}
+      strokeWidth={2}
+      strokeDasharray="6 4"
+    />
+  );
+});
+
 interface Drawing {
   stroke: string;
   colour: WhiteboardColour;
@@ -375,13 +399,18 @@ const CanvasInner = ({
   // Cursor moves change presence constantly; only rebuild nodes when what
   // people are dragging actually changes.
   const dragsKey = JSON.stringify(
-    presence.flatMap((p) => p.drag ?? []).map((d) => [d.node, d.x, d.y]),
+    presence
+      .flatMap((p) => p.drag ?? [])
+      .map((d) => [d.node, d.x, d.y, d.parent ?? null]),
   );
   const remoteDrags = useMemo(
     () =>
       new Map(
-        (JSON.parse(dragsKey) as [string, number, number][]).map(
-          ([node, x, y]) => [node, { x, y }],
+        (JSON.parse(dragsKey) as [string, number, number, string | null][]).map(
+          ([node, x, y, parent]): [string, RemoteDrag] => [
+            node,
+            { x, y, parent: parent ?? undefined },
+          ],
         ),
       ),
     [dragsKey],
@@ -470,7 +499,6 @@ const CanvasInner = ({
     () => ({ text: theme.colors.text, muted: theme.colors.textSecondary }),
     [theme],
   );
-  const [interacting, setInteracting] = useState(false);
   const [editOnAppear, setEditOnAppear] = useState<string | undefined>();
   const [erasingStrokes, setErasingStrokes] = useState<Set<string>>(new Set());
   const [drawingPoints, setDrawingPoints] = useState<InkPoint[]>([]);
@@ -486,6 +514,8 @@ const CanvasInner = ({
     nodeDocs,
     markPending,
     clearPending,
+    markEdgePending,
+    clearEdgePending,
   } = useWhiteboardSync({
     boardId,
     livePuzzleIds,
@@ -497,11 +527,18 @@ const CanvasInner = ({
   });
 
   const updateNodes = useCallback(
-    (inputs: WhiteboardNodeInput[]) => {
-      if (inputs.length === 0) return;
-      chunks(inputs, MAX_BATCH).forEach((batch) => {
+    (inputs: WhiteboardNodeInput[], onDone?: () => void) => {
+      if (inputs.length === 0) {
+        onDone?.();
+        return;
+      }
+      const batches = chunks(inputs, MAX_BATCH);
+      let outstanding = batches.length;
+      batches.forEach((batch) => {
         upsertWhiteboardNodes.call({ boardId, nodes: batch }, (error) => {
           if (error) clearPending(batch.map((n) => n._id));
+          outstanding -= 1;
+          if (outstanding === 0) onDone?.();
         });
       });
     },
@@ -519,9 +556,17 @@ const CanvasInner = ({
 
   const updateEdge = useCallback(
     (input: WhiteboardEdgeInput) => {
-      upsertWhiteboardEdges.call({ boardId, edges: [input] }, ignoreResult);
+      // Changes to a line show at once; a new line waits for the server.
+      const existing = !!flow.getEdge(input._id);
+      if (existing) {
+        const { _id, ...change } = input;
+        markEdgePending(_id, change);
+      }
+      upsertWhiteboardEdges.call({ boardId, edges: [input] }, (error) => {
+        if (error && existing) clearEdgePending([input._id]);
+      });
     },
-    [boardId],
+    [boardId, flow, markEdgePending, clearEdgePending],
   );
 
   // After a resize, save the node's new box and any of its children whose
@@ -529,7 +574,6 @@ const CanvasInner = ({
   // React Flow compensates the children to keep them still).
   const persistResize = useCallback(
     (id: string) => {
-      setInteracting(false);
       const all = flow.getNodes();
       const node = all.find((n) => n.id === id);
       if (!node) return;
@@ -567,7 +611,6 @@ const CanvasInner = ({
       deleteNodes,
       updateEdge,
       persistResize,
-      beginInteraction: () => setInteracting(true),
       beginEndpointDrag: (edgeId, end, event) =>
         beginEndpointDragRef.current(edgeId, end, event),
       editOnAppear,
@@ -620,6 +663,20 @@ const CanvasInner = ({
       const resizing = changes.some(
         (c) => c.type === "dimensions" && c.resizing,
       );
+      // Resizes and arrow-key moves only reach the server later (when the
+      // resize ends, or once the presses stop), so they're held as pending
+      // from the start: a refresh from someone else's edit mustn't undo them.
+      changes.forEach((c) => {
+        if (c.type === "dimensions" && c.resizing && c.dimensions) {
+          markPending(c.id, {
+            width: c.dimensions.width,
+            height: c.dimensions.height,
+          });
+        }
+      });
+      if (resizing) {
+        moves.forEach((c, id) => markPending(id, { position: c.position! }));
+      }
       if (moves.size > 0 && !resizing) {
         const following = companionsOf(
           current.map((n) => ({
@@ -638,7 +695,9 @@ const CanvasInner = ({
           if (!leader || !node || !change.position) return;
           const dx = change.position.x - leader.position.x;
           const dy = change.position.y - leader.position.y;
-          if (dx === 0 && dy === 0) return;
+          // The last change of a drag doesn't move anything, but it's what
+          // tells React Flow the carried nodes aren't being dragged any more.
+          if (dx === 0 && dy === 0 && change.dragging !== false) return;
           extra.push({
             type: "position",
             id,
@@ -653,8 +712,19 @@ const CanvasInner = ({
         // Arrow keys move selected nodes outside of any drag; save those once
         // the presses stop.
         if (!dragActive.current) {
-          moves.forEach((_change, id) => nudged.current.add(id));
-          following.forEach((_leader, id) => nudged.current.add(id));
+          moves.forEach((change, id) => {
+            nudged.current.add(id);
+            markPending(id, { position: change.position! });
+          });
+          following.forEach((_leader, id) => {
+            nudged.current.add(id);
+            const carried = extra.find(
+              (c) => c.type === "position" && c.id === id,
+            );
+            if (carried?.type === "position" && carried.position) {
+              markPending(id, { position: carried.position });
+            }
+          });
           window.clearTimeout(nudgeTimer.current);
           nudgeTimer.current = window.setTimeout(
             () => saveNudgesRef.current(),
@@ -664,20 +734,57 @@ const CanvasInner = ({
       }
       setNodes((nds) => applyNodeChanges([...changes, ...extra], nds));
     },
-    [flow, setNodes],
+    [flow, setNodes, markPending],
   );
 
   const saveNudgesRef = useRef(() => {});
   saveNudgesRef.current = () => {
     const inputs: WhiteboardNodeInput[] = [];
-    nudged.current.forEach((id) => {
+    const nudgedIds = new Set(nudged.current);
+    const frames = frameRects();
+    const moves = new Map<string, { position: XYPosition; parent?: string }>();
+    nudgedIds.forEach((id) => {
       const node = flow.getNode(id);
       if (!node) return;
+      // Like a drop, something nudged into or out of a frame joins or leaves
+      // it. Things carried along (free line ends, the rest of a stroke) and
+      // things inside a frame that moved too keep their frame.
+      let insideMoved = false;
+      for (
+        let parent = node.parentId, depth = 0;
+        parent && depth < 64 && !insideMoved;
+        parent = flow.getInternalNode(parent)?.parentId, depth++
+      ) {
+        insideMoved = nudgedIds.has(parent);
+      }
+      const carried = companions.current.has(id) || insideMoved;
+      const rect = carried ? undefined : absoluteRect(id);
+      if (rect) {
+        const { parent, position } = placementFor(id, rect, nudgedIds, frames);
+        if (parent !== node.parentId) {
+          inputs.push({ _id: id, position, parent: parent ?? null });
+          markPending(id, { position, parent: parent ?? null });
+          moves.set(id, { position, parent });
+          return;
+        }
+      }
       inputs.push({ _id: id, position: node.position });
       markPending(id, { position: node.position });
     });
     nudged.current.clear();
     companions.current.clear();
+    if (moves.size > 0) {
+      setNodes((nds) =>
+        sortParentsFirst(
+          nds.map((n) => {
+            const move = moves.get(n.id);
+            return move
+              ? { ...n, position: move.position, parentId: move.parent }
+              : n;
+          }),
+        ),
+      );
+    }
     updateNodes(inputs);
   };
 
@@ -731,28 +838,56 @@ const CanvasInner = ({
     [flow],
   );
 
+  // A node's box on the board from its own position, which during a drag is
+  // ahead of what React Flow last rendered.
+  const liveRect = useCallback(
+    (node: WhiteboardFlowNode) => {
+      const parent = node.parentId ? absoluteRect(node.parentId) : undefined;
+      return {
+        x: (parent?.x ?? 0) + node.position.x,
+        y: (parent?.y ?? 0) + node.position.y,
+        width: node.measured?.width ?? node.width ?? 0,
+        height: node.measured?.height ?? node.height ?? 0,
+      };
+    },
+    [absoluteRect],
+  );
+
   const isWithin = useCallback(
     (id: string, ancestorId: string) => {
-      const byId = new Map(flow.getNodes().map((n) => [n.id, n]));
-      let current = byId.get(id);
+      let current: string | undefined = id;
       for (let i = 0; current && i < 64; i++) {
-        if (current.id === ancestorId) return true;
-        current = current.parentId ? byId.get(current.parentId) : undefined;
+        if (current === ancestorId) return true;
+        current = flow.getInternalNode(current)?.parentId;
       }
       return false;
     },
     [flow],
   );
 
+  // Every frame's box on the board. Worked out once when placing many nodes
+  // at a time, rather than once per node.
+  const frameRects = useCallback(
+    () =>
+      flow.getNodes().flatMap((n) => {
+        if (n.type !== "frame") return [];
+        const rect = absoluteRect(n.id);
+        return rect ? [{ id: n.id, rect }] : [];
+      }),
+    [flow, absoluteRect],
+  );
+
   // The frame (if any) under a point, preferring the innermost.
   const frameAt = useCallback(
-    (point: XYPosition, exclude: (id: string) => boolean) => {
+    (
+      point: XYPosition,
+      exclude: (id: string) => boolean,
+      frames: ReturnType<typeof frameRects> = frameRects(),
+    ) => {
       let best: { id: string; area: number } | undefined;
-      flow.getNodes().forEach((n) => {
-        if (n.type !== "frame" || exclude(n.id)) return;
-        const rect = absoluteRect(n.id);
+      frames.forEach(({ id, rect }) => {
         if (
-          !rect ||
+          exclude(id) ||
           point.x < rect.x ||
           point.y < rect.y ||
           point.x > rect.x + rect.width ||
@@ -761,16 +896,46 @@ const CanvasInner = ({
           return;
         }
         const area = rect.width * rect.height;
-        if (!best || area < best.area) best = { id: n.id, area };
+        if (!best || area < best.area) best = { id, area };
       });
       return best?.id;
     },
-    [flow, absoluteRect],
+    [frameRects],
+  );
+
+  // Where a node whose box is now `rect` belongs: in the innermost frame
+  // under its centre (never itself, anything inside it, or anything in
+  // `moving`), positioned relative to that frame.
+  const placementFor = useCallback(
+    (
+      id: string,
+      rect: { x: number; y: number; width: number; height: number },
+      moving: Set<string>,
+      frames?: ReturnType<typeof frameRects>,
+    ) => {
+      const centre = {
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+      };
+      const parent = frameAt(
+        centre,
+        (frame) => moving.has(frame) || isWithin(frame, id),
+        frames,
+      );
+      const parentRect = parent ? absoluteRect(parent) : undefined;
+      return {
+        parent,
+        position: {
+          x: rect.x - (parentRect?.x ?? 0),
+          y: rect.y - (parentRect?.y ?? 0),
+        },
+      };
+    },
+    [frameAt, isWithin, absoluteRect],
   );
 
   const onNodeDragStart = useCallback(() => {
     dragActive.current = true;
-    setInteracting(true);
   }, []);
 
   const onNodeDrag: OnNodeDrag<WhiteboardFlowNode> = useCallback(
@@ -788,6 +953,7 @@ const CanvasInner = ({
           node: n.id,
           x: n.position.x,
           y: n.position.y,
+          parent: n.parentId ?? null,
         })),
       );
     },
@@ -798,10 +964,9 @@ const CanvasInner = ({
   // takes it out. Positions are stored relative to the parent.
   const onNodeDragStop: OnNodeDrag<WhiteboardFlowNode> = useCallback(
     (_event, _node, dragged) => {
-      setInteracting(false);
       setAttachPreview(undefined);
-      live.setDrag(null);
       const draggedIds = new Set(dragged.map((n) => n.id));
+      const frames = frameRects();
       const inputs: WhiteboardNodeInput[] = [];
       const moves = new Map<
         string,
@@ -818,26 +983,17 @@ const CanvasInner = ({
         ) {
           return;
         }
-        const rect = absoluteRect(node.id);
-        if (!rect) return;
-        const centre = {
-          x: rect.x + rect.width / 2,
-          y: rect.y + rect.height / 2,
-        };
-        const target = frameAt(
-          centre,
-          (id) => draggedIds.has(id) || isWithin(id, node.id),
+        const { parent: target, position } = placementFor(
+          node.id,
+          liveRect(node),
+          draggedIds,
+          frames,
         );
         if (target === node.parentId) {
           inputs.push({ _id: node.id, position: node.position });
           markPending(node.id, { position: node.position });
           return;
         }
-        const parentRect = target ? absoluteRect(target) : undefined;
-        const position = {
-          x: rect.x - (parentRect?.x ?? 0),
-          y: rect.y - (parentRect?.y ?? 0),
-        };
         inputs.push({ _id: node.id, position, parent: target ?? null });
         markPending(node.id, { position, parent: target ?? null });
         moves.set(node.id, { position, parent: target });
@@ -864,14 +1020,19 @@ const CanvasInner = ({
           ),
         );
       }
-      updateNodes(inputs);
+      // Others drop their copy of the drag only once the saved positions
+      // are on their way, so they never see the node jump back.
+      updateNodes(inputs, () => {
+        if (!dragActive.current) live.setDrag(null);
+      });
     },
     [
       flow,
       live,
       isWithin,
-      absoluteRect,
-      frameAt,
+      liveRect,
+      placementFor,
+      frameRects,
       markPending,
       setNodes,
       updateNodes,
@@ -971,13 +1132,12 @@ const CanvasInner = ({
             );
           }
         });
-      if (points.length === 0) {
-        addEdge();
-        return;
+      // The server runs one client's calls in order, so the line can follow
+      // its free ends without waiting for them.
+      if (points.length > 0) {
+        upsertWhiteboardNodes.call({ boardId, nodes: points }, ignoreResult);
       }
-      upsertWhiteboardNodes.call({ boardId, nodes: points }, (error) => {
-        if (!error) addEdge();
-      });
+      addEdge();
     },
     [boardId, lineStyle, pointPlacement],
   );
@@ -1013,25 +1173,25 @@ const CanvasInner = ({
         updateNodes([{ _id: currentId, ...placement }]);
         return;
       }
+      // The server runs one client's calls in order, so the line can follow
+      // its new free end without waiting for it.
       const _id = Random.id();
       upsertWhiteboardNodes.call(
         {
           boardId,
           nodes: [{ _id, type: "point", ...pointPlacement(endpoint) }],
         },
-        (error) => {
-          if (error) return;
-          upsertWhiteboardEdges.call(
-            { boardId, edges: [{ _id: edgeId, [end]: _id }] },
-            (edgeError) => {
-              if (edgeError) {
-                deleteWhiteboardNodes.call(
-                  { boardId, nodeIds: [_id] },
-                  ignoreResult,
-                );
-              }
-            },
-          );
+        ignoreResult,
+      );
+      upsertWhiteboardEdges.call(
+        { boardId, edges: [{ _id: edgeId, [end]: _id }] },
+        (edgeError) => {
+          if (edgeError) {
+            deleteWhiteboardNodes.call(
+              { boardId, nodeIds: [_id] },
+              ignoreResult,
+            );
+          }
         },
       );
     },
@@ -1051,8 +1211,9 @@ const CanvasInner = ({
     const line = flow
       .getEdges()
       .find((e) => e.source === node.id || e.target === node.id);
-    const centre = nodeCentre(node.id);
-    if (!line || !centre) return undefined;
+    if (!line) return undefined;
+    const rect = liveRect(node);
+    const centre = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     const end = line.source === node.id ? "source" : "target";
     const other = end === "source" ? line.target : line.source;
     const endpoint = resolveEndpoint(centre, new Set([node.id, other]));
@@ -1063,6 +1224,12 @@ const CanvasInner = ({
   attachDroppedEndRef.current = (node) => {
     const dropped = droppedEnd(node);
     if (!dropped) return false;
+    // The free end stays where it was dropped (under the thing it's now
+    // attached to) until the server removes it.
+    markPending(node.id, {
+      position: node.position,
+      parent: node.parentId ?? null,
+    });
     updateEdge({ _id: dropped.line, [dropped.end]: dropped.onto });
     return true;
   };
@@ -1071,6 +1238,8 @@ const CanvasInner = ({
     (_event, viewport) => writeLocal(viewportKey, viewport),
     [viewportKey],
   );
+  const refreshAttachPreviewRef = useRef<() => void>(() => {});
+  const onMove = useCallback(() => refreshAttachPreviewRef.current(), []);
 
   const paneCentre = useCallback(() => {
     const rect = wrapperRef.current?.getBoundingClientRect();
@@ -1157,18 +1326,19 @@ const CanvasInner = ({
   const restyleLines = useCallback(
     (patch: Partial<LineStyle>) => {
       if (selectedLines.length === 0) return;
+      const lines = selectedLines.slice(0, MAX_BATCH);
+      lines.forEach((e) => markEdgePending(e.id, patch));
       upsertWhiteboardEdges.call(
         {
           boardId,
-          edges: selectedLines.slice(0, MAX_BATCH).map((e) => ({
-            _id: e.id,
-            ...patch,
-          })),
+          edges: lines.map((e) => ({ _id: e.id, ...patch })),
         },
-        ignoreResult,
+        (error) => {
+          if (error) clearEdgePending(lines.map((e) => e.id));
+        },
       );
     },
-    [boardId, selectedLines],
+    [boardId, selectedLines, markEdgePending, clearEdgePending],
   );
   const updateLineStyle = useCallback((patch: Partial<LineStyle>) => {
     setLineStyle((current) => {
@@ -1187,6 +1357,7 @@ const CanvasInner = ({
         | { kind: "distribute"; axis: DistributeAxis },
     ) => {
       const units = selectionUnits(flow.getNodes(), flow.getEdges());
+      const frames = frameRects();
       const items: ArrangeItem[] = [];
       // A free line end counts as the point it marks, not its grab box.
       const rectFor = (m: WhiteboardFlowNode) => {
@@ -1246,7 +1417,11 @@ const CanvasInner = ({
             y: rect.y + rect.height / 2 + shift.dy,
           };
           const parent = centre
-            ? frameAt(centre, (id) => movingIds.has(id) || isWithin(id, m.id))
+            ? frameAt(
+                centre,
+                (id) => movingIds.has(id) || isWithin(id, m.id),
+                frames,
+              )
             : m.parentId;
           if (rect && parent !== m.parentId) {
             const parentRect = parent ? absoluteRect(parent) : undefined;
@@ -1281,7 +1456,16 @@ const CanvasInner = ({
       );
       updateNodes(inputs);
     },
-    [flow, absoluteRect, frameAt, isWithin, markPending, setNodes, updateNodes],
+    [
+      flow,
+      absoluteRect,
+      frameAt,
+      frameRects,
+      isWithin,
+      markPending,
+      setNodes,
+      updateNodes,
+    ],
   );
 
   const hiddenCards = useMemo(() => {
@@ -1648,11 +1832,7 @@ const CanvasInner = ({
         return;
       }
       const target = event.target as HTMLElement;
-      if (
-        target.closest(
-          ".react-flow__panel, .react-flow__controls, .react-flow__minimap, .react-flow__node-toolbar, .react-flow__resize-control, .jr-comment-pin",
-        )
-      ) {
+      if (target.closest(`${OVERLAYS}, .react-flow__resize-control`)) {
         return;
       }
       event.preventDefault();
@@ -1713,31 +1893,65 @@ const CanvasInner = ({
     ],
   );
 
+  // Where the end being drawn or moved would go if let go at `point`.
+  const targetFor = useCallback(
+    (current: Connecting, point: XYPosition, shiftKey: boolean): Endpoint => {
+      const exclude = new Set<string>();
+      // Moving an end can't attach it to the line's other end. A new line
+      // can end on the node it started from; releasing there cancels it.
+      if (current.edgeId && "node" in current.fixed) {
+        exclude.add(current.fixed.node);
+      }
+      if (current.edgeId && current.end) {
+        const moving = flow.getEdge(current.edgeId)?.[current.end];
+        // A free end being moved mustn't find itself; an attached end can be
+        // dropped back where it was.
+        if (moving && flow.getNode(moving)?.type === "point") {
+          exclude.add(moving);
+        }
+      }
+      const target = resolveEndpoint(point, exclude);
+      const origin = endpointPosition(current.fixed);
+      if (!("node" in target) && shiftKey && origin) {
+        return { ...target, point: snapAngle(origin, point) };
+      }
+      return target;
+    },
+    [flow, resolveEndpoint, endpointPosition],
+  );
+
+  // With the line tool, what a line started here would attach to, from the
+  // pointer's last position on screen; kept up to date as the view or the
+  // board changes under a still pointer.
+  const lastPointer = useRef<{ x: number; y: number } | undefined>(undefined);
+  const refreshAttachPreview = useCallback(() => {
+    if (tool !== "connector") return;
+    const at = lastPointer.current;
+    let id: string | undefined;
+    if (!readOnly && !connecting && at) {
+      const under = resolveEndpoint(flow.screenToFlowPosition(at), new Set());
+      id = "node" in under ? under.node : undefined;
+    }
+    setAttachPreview((current) => (current === id ? current : id));
+  }, [readOnly, tool, connecting, flow, resolveEndpoint]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies(nodes): objects moving under a still pointer change what's under it
+  useEffect(() => {
+    refreshAttachPreview();
+  }, [nodes, refreshAttachPreview]);
+
+  refreshAttachPreviewRef.current = refreshAttachPreview;
+
   const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
       const point = flowPoint(event);
       if (event.pointerType !== "touch") live.setCursor(point);
+      // Over the toolbars, panels and pins a press doesn't start anything.
+      lastPointer.current = (event.target as HTMLElement).closest(OVERLAYS)
+        ? undefined
+        : { x: event.clientX, y: event.clientY };
 
       if (connecting) {
-        const exclude = new Set<string>();
-        // Moving an end can't attach it to the line's other end. A new line
-        // can end on the node it started from; releasing there cancels it.
-        if (connecting.edgeId && "node" in connecting.fixed) {
-          exclude.add(connecting.fixed.node);
-        }
-        if (connecting.edgeId && connecting.end) {
-          const moving = flow.getEdge(connecting.edgeId)?.[connecting.end];
-          // A free end being moved mustn't find itself; an attached end can
-          // be dropped back where it was.
-          if (moving && flow.getNode(moving)?.type === "point") {
-            exclude.add(moving);
-          }
-        }
-        let target = resolveEndpoint(point, exclude);
-        const origin = endpointPosition(connecting.fixed);
-        if (!("node" in target) && event.shiftKey && origin) {
-          target = { ...target, point: snapAngle(origin, point) };
-        }
+        const target = targetFor(connecting, point, event.shiftKey);
         setConnecting({
           ...connecting,
           current: "node" in target ? point : target.point,
@@ -1747,9 +1961,7 @@ const CanvasInner = ({
       }
 
       if (tool === "connector") {
-        const under = resolveEndpoint(point, new Set());
-        const id = "node" in under ? under.node : undefined;
-        setAttachPreview((current) => (current === id ? current : id));
+        refreshAttachPreview();
         return;
       }
       if (tool === "eraser" && event.buttons === 1 && !spaceHeld.current) {
@@ -1796,9 +2008,8 @@ const CanvasInner = ({
       tool,
       placing,
       connecting,
-      flow,
-      resolveEndpoint,
-      endpointPosition,
+      targetFor,
+      refreshAttachPreview,
       eraseAt,
       commitSegment,
     ],
@@ -1810,17 +2021,27 @@ const CanvasInner = ({
         wrapperRef.current.releasePointerCapture(event.pointerId);
       }
       if (connecting) {
-        const { fixed, target, edgeId, end } = connecting;
+        const { fixed, edgeId, end } = connecting;
+        // Worked out from where the pointer was let go, which can be a move
+        // ahead of the last rendered preview.
+        const target = targetFor(connecting, flowPoint(event), event.shiftKey);
         setConnecting(null);
-        setInteracting(false);
-        if (!target) return;
         if (edgeId && end) {
-          moveLineEnd(edgeId, end, target);
+          const { pressedAt } = connecting;
+          const clicked =
+            pressedAt &&
+            Math.hypot(
+              event.clientX - pressedAt.x,
+              event.clientY - pressedAt.y,
+            ) < CLICK_SLOP;
+          if (!clicked) moveLineEnd(edgeId, end, target);
           return;
         }
-        if ("node" in target && "node" in fixed && target.node === fixed.node) {
+        if ("node" in target && "node" in fixed) {
+          if (target.node !== fixed.node) createLine(fixed, target);
           return;
         }
+        // A free end needs the line to have some length, or it was a click.
         const from = endpointPosition(fixed);
         const to = endpointPosition(target);
         if (
@@ -1833,6 +2054,7 @@ const CanvasInner = ({
         createLine(fixed, target);
         return;
       }
+      if (tool === "select") setAttachPreview(undefined);
       if (tool === "eraser") {
         finishErasing();
         return;
@@ -1874,6 +2096,7 @@ const CanvasInner = ({
       moveLineEnd,
       createLine,
       endpointPosition,
+      targetFor,
       finishErasing,
       placeNode,
       placementRect,
@@ -1883,25 +2106,75 @@ const CanvasInner = ({
     ],
   );
 
+  // A cancelled pointer (a touch taken over by a gesture, say) drops a line
+  // being drawn rather than finishing it; anything else ends as usual.
+  const onPointerCancel = useCallback(
+    (event: React.PointerEvent) => {
+      if (!connecting) {
+        onPointerUp(event);
+        return;
+      }
+      if (wrapperRef.current?.hasPointerCapture(event.pointerId)) {
+        wrapperRef.current.releasePointerCapture(event.pointerId);
+      }
+      setConnecting(null);
+    },
+    [connecting, onPointerUp],
+  );
+
   const onPointerLeave = useCallback(() => {
     live.setCursor(null);
     setHover(null);
+    lastPointer.current = undefined;
     setAttachPreview(undefined);
   }, [live]);
+
+  // A handle dragged onto the body of something, rather than onto one of its
+  // handles, still joins the two.
+  const onConnectEnd: OnConnectEnd = useCallback(
+    (event, state) => {
+      if (state.isValid || !state.fromNode) return;
+      const pointer =
+        "changedTouches" in event ? event.changedTouches[0] : event;
+      if (!pointer) return;
+      const from = state.fromNode.id;
+      const point = flow.screenToFlowPosition({
+        x: pointer.clientX,
+        y: pointer.clientY,
+      });
+      // Let go on (or right by) the node it started from, rather than on
+      // something lying on it or next to it: a slip, not a line.
+      const target = resolveEndpoint(point, new Set());
+      if (!("node" in target) || target.node === from) return;
+      updateEdge({
+        _id: Random.id(),
+        source: from,
+        target: target.node,
+        ...lineStyle,
+      });
+    },
+    [flow, resolveEndpoint, updateEdge, lineStyle],
+  );
 
   beginEndpointDragRef.current = (edgeId, end, event) => {
     if (readOnly) return;
     const line = flow.getEdge(edgeId);
     if (!line) return;
     wrapperRef.current?.setPointerCapture(event.pointerId);
-    setInteracting(true);
     setConnecting({
       fixed: { node: end === "source" ? line.target : line.source },
       current: flowPoint(event),
       edgeId,
       end,
+      pressedAt: { x: event.clientX, y: event.clientY },
     });
   };
+
+  // A board that becomes read-only (say, the hunt is archived) puts any
+  // drawing tool down.
+  useEffect(() => {
+    if (readOnly) setTool("select");
+  }, [readOnly]);
 
   // Switching tools drops anything half-finished, and a drawing tool clears
   // the selection, whose resize handles and toolbars would otherwise get in
@@ -1926,7 +2199,6 @@ const CanvasInner = ({
     commentPress.current = undefined;
     setConnecting(null);
     setErasingStrokes(new Set());
-    setInteracting(false);
   }, [tool]);
 
   useEffect(() => {
@@ -1940,7 +2212,6 @@ const CanvasInner = ({
         setDraft(null);
         setConnecting(null);
         setErasingStrokes(new Set());
-        setInteracting(false);
         setTool("select");
         return;
       }
@@ -1991,24 +2262,7 @@ const CanvasInner = ({
   const drawingTool = tool !== "select";
 
   // The dashed outline around something a line end will attach to.
-  const attachOutline = (id: string) => {
-    const rect = absoluteRect(id);
-    if (!rect) return null;
-    return (
-      <rect
-        key={id}
-        x={rect.x - 4}
-        y={rect.y - 4}
-        width={rect.width + 8}
-        height={rect.height + 8}
-        rx={8}
-        fill="none"
-        stroke={theme.colors.primary}
-        strokeWidth={2}
-        strokeDasharray="6 4"
-      />
-    );
-  };
+  const attachOutline = (id: string) => <AttachOutline key={id} id={id} />;
 
   return (
     <WhiteboardContext.Provider value={actions}>
@@ -2016,11 +2270,10 @@ const CanvasInner = ({
         <CanvasWrapper
           ref={wrapperRef}
           $tool={readOnly ? "select" : tool}
-          className={interacting ? "jr-interacting" : undefined}
           onPointerDownCapture={onPointerDownCapture}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
+          onPointerCancel={onPointerCancel}
           onPointerLeave={onPointerLeave}
         >
           <ReactFlow<WhiteboardFlowNode>
@@ -2032,9 +2285,11 @@ const CanvasInner = ({
             onEdgesChange={onEdgesChange}
             onBeforeDelete={onBeforeDelete}
             onConnect={onConnect}
+            onConnectEnd={onConnectEnd}
             onNodeDragStart={onNodeDragStart}
             onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
+            onMove={onMove}
             onMoveEnd={onMoveEnd}
             connectionMode={ConnectionMode.Loose}
             colorMode={theme.basicMode === "dark" ? "dark" : "light"}

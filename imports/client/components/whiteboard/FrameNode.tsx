@@ -60,7 +60,6 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
     readOnly,
     updateNodes,
     persistResize,
-    beginInteraction,
     editOnAppear,
     clearEditOnAppear,
   } = useWhiteboard();
@@ -98,7 +97,6 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
           isVisible={!!selected}
           minWidth={CARD_HEIGHT}
           minHeight={CARD_HEIGHT}
-          onResizeStart={beginInteraction}
           onResizeEnd={onResizeEnd}
         />
       )}

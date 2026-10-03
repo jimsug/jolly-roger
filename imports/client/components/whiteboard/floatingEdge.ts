@@ -8,11 +8,13 @@ interface Box {
   height: number;
 }
 
+// The size a node is drawn at; its measured size can lag a render behind a
+// change from elsewhere.
 function boxOf(node: InternalNode): Box {
   return {
     ...node.internals.positionAbsolute,
-    width: node.measured.width ?? 0,
-    height: node.measured.height ?? 0,
+    width: node.width ?? node.measured.width ?? 0,
+    height: node.height ?? node.measured.height ?? 0,
   };
 }
 
@@ -90,12 +92,17 @@ export default function floatingEdgeParams(
   const sourceFree = source.type === "point";
   const targetFree = target.type === "point";
 
+  // When each box covers the other's centre, the bigger one is the outer.
+  const area = (box: Box) => box.width * box.height;
+  const sourceOuter = !sourceFree && strictlyInside(sourceBox, targetCentre);
+  const targetOuter = !targetFree && strictlyInside(targetBox, sourceCentre);
+
   let sourcePoint: XYPosition;
   let targetPoint: XYPosition;
-  if (!sourceFree && strictlyInside(sourceBox, targetCentre)) {
+  if (sourceOuter && (!targetOuter || area(sourceBox) >= area(targetBox))) {
     sourcePoint = nearestBorderPoint(sourceBox, targetCentre);
     targetPoint = targetFree ? targetCentre : exitPoint(targetBox, sourcePoint);
-  } else if (!targetFree && strictlyInside(targetBox, sourceCentre)) {
+  } else if (targetOuter) {
     targetPoint = nearestBorderPoint(targetBox, sourceCentre);
     sourcePoint = sourceFree ? sourceCentre : exitPoint(sourceBox, targetPoint);
   } else {

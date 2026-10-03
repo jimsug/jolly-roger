@@ -14,7 +14,14 @@ defineMethod(setWhiteboardLive, {
     check(arg, {
       boardId: String,
       cursor: Match.OneOf(null, { x: Number, y: Number }),
-      drag: Match.OneOf(null, [{ node: String, x: Number, y: Number }]),
+      drag: Match.OneOf(null, [
+        {
+          node: String,
+          x: Number,
+          y: Number,
+          parent: Match.Optional(Match.OneOf(null, String)),
+        },
+      ]),
       stroke: Match.OneOf(null, {
         id: String,
         colour: Match.OneOf(...WhiteboardColours),

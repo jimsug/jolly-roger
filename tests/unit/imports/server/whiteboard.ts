@@ -739,6 +739,32 @@ describe("whiteboard", function () {
         }),
       );
     });
+
+    it("keeps the frame a drag is measured in", async function () {
+      const { connection } = fakeConnection();
+      const card = (
+        await WhiteboardNodes.find({
+          board: boardId,
+          type: "puzzle",
+        }).fetchAsync()
+      ).find((n) => n.parent)!;
+      await setLive(member, connection, boardId, {
+        ...state,
+        drag: [{ node: card._id, x: 5, y: 6, parent: card.parent }],
+      });
+      const doc = await WhiteboardPresence.findOneAsync({
+        connection: connection.id,
+      });
+      assert.deepEqual(doc?.drag, [
+        { node: card._id, x: 5, y: 6, parent: card.parent },
+      ]);
+      await assert.isRejected(
+        setLive(member, connection, boardId, {
+          ...state,
+          drag: [{ node: card._id, x: 5, y: 6, parent: "not an id!" }],
+        }),
+      );
+    });
   });
 
   describe("comments", function () {

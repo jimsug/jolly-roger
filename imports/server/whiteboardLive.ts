@@ -69,6 +69,7 @@ function validateLive({ cursor, drag, stroke }: WhiteboardLiveState) {
     if (drag.length > MAX_LIVE_DRAG_NODES) throw bad();
     drag.forEach((d) => {
       if (!Id.test(d.node) || !inRange(d.x) || !inRange(d.y)) throw bad();
+      if (d.parent && !Id.test(d.parent)) throw bad();
     });
   }
   if (stroke) {

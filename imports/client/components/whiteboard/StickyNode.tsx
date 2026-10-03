@@ -53,7 +53,6 @@ const StickyNode = ({ id, data, selected }: NodeProps<StickyNodeType>) => {
     readOnly,
     updateNodes,
     persistResize,
-    beginInteraction,
     editOnAppear,
     clearEditOnAppear,
   } = useWhiteboard();
@@ -82,7 +81,6 @@ const StickyNode = ({ id, data, selected }: NodeProps<StickyNodeType>) => {
           isVisible={!!selected}
           minWidth={80}
           minHeight={60}
-          onResizeStart={beginInteraction}
           onResizeEnd={onResizeEnd}
         />
       )}

@@ -41,7 +41,6 @@ const TextNode = ({ id, data, selected }: NodeProps<TextNodeType>) => {
     readOnly,
     updateNodes,
     persistResize,
-    beginInteraction,
     editOnAppear,
     clearEditOnAppear,
   } = useWhiteboard();
@@ -70,7 +69,6 @@ const TextNode = ({ id, data, selected }: NodeProps<TextNodeType>) => {
           isVisible={!!selected}
           minWidth={60}
           minHeight={32}
-          onResizeStart={beginInteraction}
           onResizeEnd={onResizeEnd}
         />
       )}

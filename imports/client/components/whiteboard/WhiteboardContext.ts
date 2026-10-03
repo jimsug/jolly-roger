@@ -18,8 +18,6 @@ export interface WhiteboardActions {
   // Persists a node's size and position, and its children's positions, after
   // a resize (resizing from the top or left moves the origin).
   persistResize: (id: string) => void;
-  // Stops moves gliding while we drag or resize something ourselves.
-  beginInteraction: () => void;
   // Starts dragging one end of a line, from its grip.
   beginEndpointDrag: (
     edgeId: string,

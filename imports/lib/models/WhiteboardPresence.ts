@@ -21,7 +21,14 @@ const WhiteboardPresenceSchema = withTimestamps(
     connection: z.string().regex(Id),
     cursor: point.nullable().optional(),
     drag: z
-      .array(z.object({ node: foreignKey, x: z.number(), y: z.number() }))
+      .array(
+        z.object({
+          node: foreignKey,
+          x: z.number(),
+          y: z.number(),
+          parent: foreignKey.nullable().optional(),
+        }),
+      )
       .nullable()
       .optional(),
     stroke: z
