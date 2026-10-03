@@ -4,10 +4,8 @@ import { faBullhorn } from "@fortawesome/free-solid-svg-icons/faBullhorn";
 import { faDisplay } from "@fortawesome/free-solid-svg-icons/faDisplay";
 import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
 import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalLinkAlt";
-import { faFaucet } from "@fortawesome/free-solid-svg-icons/faFaucet";
 import { faMap } from "@fortawesome/free-solid-svg-icons/faMap";
 import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
-import { faReceipt } from "@fortawesome/free-solid-svg-icons/faReceipt";
 import { faTags } from "@fortawesome/free-solid-svg-icons/faTags";
 import { faUsers } from "@fortawesome/free-solid-svg-icons/faUsers";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -210,22 +208,6 @@ const HuntNav = () => {
         {customLink}
 
         <StyledPuzzleListLinkAnchor
-          to={`/hunts/${huntId}/guesses`}
-          title={
-            hunt.hasGuessQueue
-              ? t("guessQueue.title.guess", "Guesses")
-              : t("guessQueue.title.answer", "Answers")
-          }
-        >
-          <MenuIcon icon={faReceipt} />
-          <StyledPuzzleListLinkLabel>
-            {hunt.hasGuessQueue
-              ? t("guessQueue.title.guess", "Guesses")
-              : t("guessQueue.title.answer", "Answers")}
-          </StyledPuzzleListLinkLabel>
-        </StyledPuzzleListLinkAnchor>
-
-        <StyledPuzzleListLinkAnchor
           to={`/hunts/${huntId}/hunters`}
           title={t("hunterList.navTitle", "Hunters")}
         >
@@ -235,17 +217,8 @@ const HuntNav = () => {
           </StyledPuzzleListLinkLabel>
         </StyledPuzzleListLinkAnchor>
 
-        <StyledPuzzleListLinkAnchor
-          to={`/hunts/${huntId}/tags`}
-          title={t("tags.navTitle", "Tags")}
-        >
-          <MenuIcon icon={faTags} />
-          <StyledPuzzleListLinkLabel>
-            {t("tags.navTitle", "Tags")}
-          </StyledPuzzleListLinkLabel>
-        </StyledPuzzleListLinkAnchor>
-
-        {/* Show notes and firehose links only to operators */}
+        {/* Notes and the tag manager are operator tools. The guess queue and
+            firehose are linked from the More page instead of the bar. */}
         {canUpdate && (
           <StyledPuzzleListLinkAnchor
             to={`/hunts/${huntId}/notes`}
@@ -259,15 +232,16 @@ const HuntNav = () => {
         )}
         {canUpdate && (
           <StyledPuzzleListLinkAnchor
-            to={`/hunts/${huntId}/firehose`}
-            title={t("chat.firehose.title", "Firehose")}
+            to={`/hunts/${huntId}/tags`}
+            title={t("tags.navTitle", "Tags")}
           >
-            <MenuIcon icon={faFaucet} />
+            <MenuIcon icon={faTags} />
             <StyledPuzzleListLinkLabel>
-              {t("chat.firehose.title", "Firehose")}
+              {t("tags.navTitle", "Tags")}
             </StyledPuzzleListLinkLabel>
           </StyledPuzzleListLinkAnchor>
         )}
+        {huntLink}
 
         <StyledPuzzleListLinkAnchor
           to={`/hunts/${huntId}/more`}
@@ -278,7 +252,6 @@ const HuntNav = () => {
             {t("more.navTitle", "More")}
           </StyledPuzzleListLinkLabel>
         </StyledPuzzleListLinkAnchor>
-        {huntLink}
       </JRLinkList>
     );
   } else {

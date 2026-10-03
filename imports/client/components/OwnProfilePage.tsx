@@ -480,19 +480,6 @@ const OwnProfilePage = ({
       <h1>{t("profile.ownProfileTitle", "Account information")}</h1>
       <Avatar {...initialUser} size={64} />
       <EmailSection user={initialUser} />
-      {submitState === OwnProfilePageSubmitState.SUBMITTING ? (
-        <Alert variant="info">{t("common.saving", "Saving")}...</Alert>
-      ) : null}
-      {submitState === OwnProfilePageSubmitState.SUCCESS ? (
-        <Alert variant="success" dismissible onClose={dismissAlert}>
-          {t("common.saveSuccess", "Saved changes.")}
-        </Alert>
-      ) : null}
-      {submitState === OwnProfilePageSubmitState.ERROR ? (
-        <Alert variant="danger" dismissible onClose={dismissAlert}>
-          {t("common.saveFailed", "Saving failed")}: {submitError}
-        </Alert>
-      ) : null}
 
       <GoogleLinkBlock user={initialUser} />
 
@@ -534,22 +521,22 @@ const OwnProfilePage = ({
 
       <FormGroup className="mb-3" controlId={`${idPrefix}-dingwords`}>
         <FormLabel>
-          {t("profile.dingwords.label", "Dingwords (experimental)")}
+          {t("profile.dingwords.listLabel", "Dingwords (comma-separated)")}
         </FormLabel>
         <FormControl
           type="text"
           value={dingwordsFlat}
           disabled={shouldDisableForm}
           onChange={handleDingwordsChange}
-          placeholder="cryptic,biology,chemistry"
+          placeholder={t(
+            "profile.dingwords.placeholder",
+            "e.g. cryptic, akari, REO Speedwagon lyrics",
+          )}
         />
         <FormText>
           {t(
-            "profile.dingwords.help",
-            `Get an in-app notification if anyone sends a chat message, or adds
-            a tag, containing one of your comma-separated, case-insensitive
-            dingwords. Spaces are allowed. This feature is experimental and may
-            be disabled without notice.`,
+            "profile.dingwords.matchingHelp",
+            "If anyone sends a chat message, or adds a tag, that contains one of your dingwords, you'll get a notification. Separate dingwords by commas; spaces are allowed. Matching ignores case and only matches whole words or phrases, unless you pick “Match start” below.",
           )}
         </FormText>
       </FormGroup>
@@ -612,6 +599,21 @@ const OwnProfilePage = ({
           )}
         </FormText>
       </FormGroup>
+
+      {/* Save feedback sits next to the button that triggers it */}
+      {submitState === OwnProfilePageSubmitState.SUBMITTING ? (
+        <Alert variant="info">{t("common.saving", "Saving")}...</Alert>
+      ) : null}
+      {submitState === OwnProfilePageSubmitState.SUCCESS ? (
+        <Alert variant="success" dismissible onClose={dismissAlert}>
+          {t("common.saveSuccess", "Saved changes.")}
+        </Alert>
+      ) : null}
+      {submitState === OwnProfilePageSubmitState.ERROR ? (
+        <Alert variant="danger" dismissible onClose={dismissAlert}>
+          {t("common.saveFailed", "Saving failed")}: {submitError}
+        </Alert>
+      ) : null}
 
       <ActionButtonRow>
         <FormGroup className="mb-3">

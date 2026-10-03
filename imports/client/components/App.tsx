@@ -29,6 +29,8 @@ import type { StackFrame } from "stacktrace-js";
 import StackTrace from "stacktrace-js";
 import styled, { css, useTheme } from "styled-components";
 import isAdmin from "../../lib/isAdmin";
+import Hunts from "../../lib/models/Hunts";
+import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import { useBreadcrumbItems } from "../hooks/breadcrumb";
 import { type AppThemeState, useAppThemeState } from "../hooks/persisted-state";
 import lookupUrl from "../lookupUrl";
@@ -36,6 +38,7 @@ import ConnectionStatus from "./ConnectionStatus";
 import HuntNav from "./HuntNav";
 import Loading from "./Loading";
 import NotificationCenter from "./NotificationCenter";
+import OperatorModeMenuItem from "./OperatorModeMenuItem";
 import { NavBarHeight } from "./styling/constants";
 import { mediaBreakpointDown } from "./styling/responsive";
 
@@ -203,6 +206,14 @@ const AppNavbar = ({
 }) => {
   const userId = useTracker(() => Meteor.userId()!, []);
   const huntId = useParams<"huntId">().huntId!;
+  const hunt = useTracker(
+    () => (huntId ? Hunts.findOne(huntId) : undefined),
+    [huntId],
+  );
+  const canSwitchOperatorMode = useTracker(
+    () => userMayWritePuzzlesForHunt(Meteor.user(), hunt),
+    [hunt],
+  );
 
   const displayName = useTracker(
     () => Meteor.user()?.displayName ?? "<no name given>",
@@ -233,14 +244,21 @@ const AppNavbar = ({
             const last = index === crumbs.length - 1;
             if (last) {
               return (
-                <BreadcrumbItem key={crumb.path} aria-current="page">
+                <BreadcrumbItem
+                  key={crumb.path}
+                  aria-current="page"
+                  title={crumb.hoverText}
+                  aria-label={crumb.hoverText}
+                >
                   {crumb.title}
                 </BreadcrumbItem>
               );
             } else {
               return (
-                <BreadcrumbItem key={crumb.path}>
-                  <Link to={crumb.path}>{crumb.title}</Link>
+                <BreadcrumbItem key={crumb.path} title={crumb.hoverText}>
+                  <Link to={crumb.path} aria-label={crumb.hoverText}>
+                    {crumb.title}
+                  </Link>
                 </BreadcrumbItem>
               );
             }
@@ -354,6 +372,13 @@ const AppNavbar = ({
             >
               中文
             </DropdownItem>
+            {huntId && canSwitchOperatorMode && (
+              <>
+                <Dropdown.Divider />
+                <DropdownHeader>{hunt?.name}</DropdownHeader>
+                <OperatorModeMenuItem huntId={huntId} />
+              </>
+            )}
           </DropdownMenu>
         </Dropdown>
       </Nav>

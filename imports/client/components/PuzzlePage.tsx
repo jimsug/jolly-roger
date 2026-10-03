@@ -3153,8 +3153,8 @@ const PuzzleGuessModal = ({
               )}{" "}
               {operatorActionsHidden
                 ? t(
-                    "puzzle.answerOrGuess.operatorHint.turnOnOperatorInterface",
-                    "To see them, turn the Operator Interface on from the puzzle list page.",
+                    "puzzle.answerOrGuess.operatorHint.switchToDeputy",
+                    'To see alerts, turn on Deputy View: open the profile menu in the top-right, and choose "Switch to Deputy".',
                   )
                 : t(
                     "puzzle.answerOrGuess.operatorHint.reload",

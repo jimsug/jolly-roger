@@ -62,6 +62,7 @@ import "./unit/imports/server/mergeUsers";
 import "./acceptance/authentication";
 import "./acceptance/chatHooks";
 import "./acceptance/emails";
+import "./acceptance/huntNav";
 import "./acceptance/hunts";
 import "./acceptance/profiles";
 import "./acceptance/puzzles";

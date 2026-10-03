@@ -7,6 +7,7 @@ import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
+import { faPencilAlt } from "@fortawesome/free-solid-svg-icons/faPencilAlt";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -58,6 +59,7 @@ import computePuzzleSolvers, {
 import { findPuzzleForUrl } from "../../lib/puzzleUrl";
 import { computeSolvedness } from "../../lib/solvedness";
 import createPuzzle from "../../methods/createPuzzle";
+import { useBreadcrumb } from "../hooks/breadcrumb";
 import {
   useHuntPuzzleListCollapseGroups,
   useHuntPuzzleListDisplayMode,
@@ -791,9 +793,7 @@ const PuzzleListView = ({
         onSubmit={onAdd}
       />
       <OperatorActionsFormGroup>
-        <FormLabel>
-          {t("puzzleList.operatorInterface", "Operator Interface")}
-        </FormLabel>
+        <FormLabel>{t("puzzleList.viewMode.label", "View")}</FormLabel>
         <ButtonToolbar>
           <StyledToggleButtonGroup
             type="radio"
@@ -807,14 +807,16 @@ const PuzzleListView = ({
               variant="outline-info"
               value="hide"
             >
-              {t("common.off", "Off")}
+              <FontAwesomeIcon icon={faPencilAlt} />{" "}
+              {t("puzzleList.viewMode.solver", "Solver")}
             </ToggleButton>
             <ToggleButton
               id={`${idPrefix}-operator-actions-show-button`}
               variant="outline-info"
               value="show"
             >
-              {t("common.on", "On")}
+              <FontAwesomeIcon icon={faStar} />{" "}
+              {t("puzzleList.viewMode.deputy", "Deputy")}
             </ToggleButton>
           </StyledToggleButtonGroup>
         </ButtonToolbar>
@@ -1017,6 +1019,12 @@ const PuzzleListView = ({
 
 const PuzzleListPage = () => {
   const huntId = useParams<"huntId">().huntId!;
+  const { t } = useTranslation();
+
+  useBreadcrumb({
+    title: t("puzzleList.breadcrumbTitle", "Puzzles"),
+    path: `/hunts/${huntId}/puzzles`,
+  });
 
   // Assertion is safe because hunt is already subscribed and checked by HuntApp
   const hunt = useTracker(() => Hunts.findOne(huntId)!, [huntId]);
@@ -1036,8 +1044,6 @@ const PuzzleListPage = () => {
   // Don't bother including these in loading - it's ok if they trickle in
   useTypedSubscribe(puzzleActivityForHunt, { huntId });
   useTypedSubscribe(puzzleFeedbacksForHunt, { huntId });
-
-  const { t } = useTranslation();
 
   return loading ? (
     <span>{t("common.loading", "loading")}...</span>

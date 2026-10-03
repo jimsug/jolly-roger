@@ -11,7 +11,10 @@ import Logger from "../../Logger";
 
 type Crumb = {
   path: string;
-  title: string;
+  // A crumb may be an icon rather than text; hoverText then names it for
+  // tooltips and screen readers.
+  title: React.ReactNode;
+  hoverText?: string;
 };
 
 type CrumbId = string;
@@ -27,22 +30,41 @@ type BreadcrumbSubscribeHandle = {
 type BreadcrumbSubscribeCallback = (crumbs: CrumbWithId[]) => void;
 
 type BreadcrumbContextType = {
-  addCrumb: (path: string, title: string) => CrumbId;
+  addCrumb: (
+    path: string,
+    title: React.ReactNode,
+    hoverText?: string,
+  ) => CrumbId;
   removeCrumb: (crumbId: CrumbId) => void;
-  updateCrumb: (crumbId: CrumbId, path: string, title: string) => void;
+  updateCrumb: (
+    crumbId: CrumbId,
+    path: string,
+    title: React.ReactNode,
+    hoverText?: string,
+  ) => void;
   subscribe: (
     listener: BreadcrumbSubscribeCallback,
   ) => BreadcrumbSubscribeHandle;
 };
 
+// Log output is JSON-formatted, and an element title would drag its owner
+// fibre along with it.
+const loggableTitle = (title: React.ReactNode) =>
+  typeof title === "string" ? title : "<element>";
+
 const defaultCallbacks: BreadcrumbContextType = {
-  addCrumb: (_path: string, _title: string) => {
+  addCrumb: (_path: string, _title: React.ReactNode, _hoverText?: string) => {
     return Random.id();
   },
   removeCrumb: (_crumbId: CrumbId) => {
     /* noop */
   },
-  updateCrumb: (_crumbId: CrumbId, _path: string, _title: string) => {
+  updateCrumb: (
+    _crumbId: CrumbId,
+    _path: string,
+    _title: React.ReactNode,
+    _hoverText?: string,
+  ) => {
     /* noop */
   },
   subscribe: (_listener: BreadcrumbSubscribeCallback) => {
@@ -64,20 +86,28 @@ const BreadcrumbsProvider = ({ children }: { children: React.ReactNode }) => {
   const crumbsRef = useRef<CrumbWithId[]>([]);
   const listenersRef = useRef<((crumbs: CrumbWithId[]) => void)[]>([]);
 
-  const addCrumb = useCallback((path: string, title: string) => {
-    // Generate a new crumb ID, as this is a new crumb
-    const crumbId = Random.id();
-    const crumbWithId = {
-      id: crumbId,
-      path,
-      title,
-    };
-    Logger.debug("Added crumb", { crumbId, title, path });
-    crumbsRef.current = [...crumbsRef.current, crumbWithId];
-    crumbsRef.current.sort(byPathLength);
-    listenersRef.current.forEach((listener) => listener(crumbsRef.current));
-    return crumbId;
-  }, []);
+  const addCrumb = useCallback(
+    (path: string, title: React.ReactNode, hoverText?: string) => {
+      // Generate a new crumb ID, as this is a new crumb
+      const crumbId = Random.id();
+      const crumbWithId = {
+        id: crumbId,
+        path,
+        title,
+        hoverText,
+      };
+      Logger.debug("Added crumb", {
+        crumbId,
+        title: loggableTitle(title),
+        path,
+      });
+      crumbsRef.current = [...crumbsRef.current, crumbWithId];
+      crumbsRef.current.sort(byPathLength);
+      listenersRef.current.forEach((listener) => listener(crumbsRef.current));
+      return crumbId;
+    },
+    [],
+  );
 
   const removeCrumb = useCallback((crumbId: CrumbId) => {
     Logger.debug("Removing crumb", { crumbId });
@@ -100,14 +130,24 @@ const BreadcrumbsProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   const updateCrumb = useCallback(
-    (crumbId: CrumbId, path: string, title: string) => {
-      Logger.debug("Updating crumb", { crumbId, title, path });
+    (
+      crumbId: CrumbId,
+      path: string,
+      title: React.ReactNode,
+      hoverText?: string,
+    ) => {
+      Logger.debug("Updating crumb", {
+        crumbId,
+        title: loggableTitle(title),
+        path,
+      });
       const prevCrumbs = crumbsRef.current;
       const crumbIndex = prevCrumbs.findIndex((c) => c.id === crumbId);
       const newCrumbWithId = {
         id: crumbId,
         path,
         title,
+        hoverText,
       };
 
       const beforeUpdated = prevCrumbs.slice(0, crumbIndex);
@@ -153,7 +193,11 @@ const BreadcrumbsProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 function useBreadcrumb(crumb: Crumb): void {
-  Logger.debug("useBreadcrumb", crumb);
+  Logger.debug("useBreadcrumb", {
+    path: crumb.path,
+    title: loggableTitle(crumb.title),
+    hoverText: crumb.hoverText,
+  });
   const ctx = useContext<BreadcrumbContextType>(BreadcrumbContext);
   const crumbId = useRef<string | null>(null);
 
@@ -161,11 +205,11 @@ function useBreadcrumb(crumb: Crumb): void {
 
   useEffect(() => {
     if (crumbId.current === null) {
-      crumbId.current = addCrumb(crumb.path, crumb.title);
+      crumbId.current = addCrumb(crumb.path, crumb.title, crumb.hoverText);
     } else {
-      updateCrumb(crumbId.current, crumb.path, crumb.title);
+      updateCrumb(crumbId.current, crumb.path, crumb.title, crumb.hoverText);
     }
-  }, [addCrumb, updateCrumb, crumb.path, crumb.title]);
+  }, [addCrumb, updateCrumb, crumb.path, crumb.title, crumb.hoverText]);
 
   useEffect(() => {
     return () => {

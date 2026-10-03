@@ -21,13 +21,17 @@ import "./unit/imports/lib/tagNames";
 import "./unit/imports/lib/userStatusesToLastSeen";
 import "./unit/imports/lib/ValidateShape";
 
+import "./unit/imports/client/bookmarkButton";
+import "./unit/imports/client/breadcrumb";
 import "./unit/imports/client/callStateReducer";
 import "./unit/imports/client/guessDetails";
+import "./unit/imports/client/operatorModeMenuItem";
 import "./unit/imports/client/puzzleTitles";
 
 import "./acceptance/authentication";
 import "./acceptance/chatHooks";
 import "./acceptance/emails";
+import "./acceptance/huntNav";
 import "./acceptance/hunts";
 import "./acceptance/profiles";
 import "./acceptance/puzzles";
