@@ -73,6 +73,23 @@ export function primaryEmail(user: {
   return user.emails?.[0]?.address;
 }
 
+export type PendingEnrollment = {
+  email?: string;
+  when?: Date;
+};
+
+// The enrollment record Meteor keeps on a user who has been invited but has
+// not yet finished creating their account. `services` is untyped in Meteor's
+// declarations, so narrow it here in one place.
+export function pendingEnrollment(user: {
+  services?: unknown;
+}): PendingEnrollment | undefined {
+  const services = user.services as
+    | { password?: { enroll?: PendingEnrollment } }
+    | undefined;
+  return services?.password?.enroll;
+}
+
 export type ProfileFields =
   | "displayName"
   | "googleAccount"

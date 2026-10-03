@@ -49,19 +49,25 @@ defineMethod(updateHunt, {
       },
     );
 
+    // As in createHunt: a Drive or Discord failure here must not become an
+    // unhandled rejection.
     Meteor.defer(async () => {
-      // Sync discord roles
-      const userIds = (
-        await MeteorUsers.find({ hunts: huntId }).fetchAsync()
-      ).map((u) => u._id);
-      await addUsersToDiscordRole(userIds, huntId, { force: false });
+      try {
+        // Sync discord roles
+        const userIds = (
+          await MeteorUsers.find({ hunts: huntId }).fetchAsync()
+        ).map((u) => u._id);
+        await addUsersToDiscordRole(userIds, huntId, { force: false });
 
-      if (oldHunt?.name !== value.name) {
-        const folderId = await ensureHuntFolder({
-          _id: huntId,
-          name: value.name,
-        });
-        await renameDocument(folderId, await huntFolderName(value.name));
+        if (oldHunt?.name !== value.name) {
+          const folderId = await ensureHuntFolder({
+            _id: huntId,
+            name: value.name,
+          });
+          await renameDocument(folderId, await huntFolderName(value.name));
+        }
+      } catch (error) {
+        Logger.warn("Unable to finish updating hunt", { huntId, error });
       }
     });
   },

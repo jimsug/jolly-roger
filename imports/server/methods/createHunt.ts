@@ -1,6 +1,7 @@
-import { check } from "meteor/check";
+import { check, Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import Logger from "../../Logger";
+import { DEFAULT_HUNT_TAGS, parseInitialTags } from "../../lib/defaultHuntTags";
 import Hunts, { HuntPattern } from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import { addUserToRole, checkAdmin } from "../../lib/permission_stubs";
@@ -10,45 +11,43 @@ import { ensureHuntFolder } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
 
-const DEFAULT_TAGS = [
-  "is:meta",
-  "is:metameta",
-  "is:runaround",
-  "priority:high",
-  "priority:low",
-  "type:crossword",
-  "type:duck-konundrum",
-  "group:events",
-  "needs:extraction",
-  "needs:onsite",
-];
-
 defineMethod(createHunt, {
   validate(arg) {
-    check(arg, HuntPattern);
+    check(arg, { ...HuntPattern, initialTags: Match.Optional(String) });
     return arg;
   },
 
-  async run(arg) {
+  async run({ initialTags, ...hunt }) {
     check(this.userId, String);
     checkAdmin(await MeteorUsers.findOneAsync(this.userId));
 
-    Logger.info("Creating a new hunt", arg);
+    Logger.info("Creating a new hunt", { ...hunt, initialTags });
 
-    const huntId = await Hunts.insertAsync(arg);
+    const huntId = await Hunts.insertAsync(hunt);
     await addUserToRole(this.userId, huntId, "operator");
 
-    for (const tag of DEFAULT_TAGS) {
+    const tags =
+      initialTags === undefined
+        ? DEFAULT_HUNT_TAGS
+        : parseInitialTags(initialTags);
+    for (const tag of tags) {
       await getOrCreateTagByName(huntId, tag);
     }
 
+    // A failure here (say, Google Drive not being configured) must not take
+    // the server down: Meteor.defer drops the promise, so the rejection
+    // would otherwise be unhandled.
     Meteor.defer(async () => {
-      // Sync discord roles
-      const userIds = (
-        await MeteorUsers.find({ hunts: huntId }).fetchAsync()
-      ).map((u) => u._id);
-      await addUsersToDiscordRole(userIds, huntId);
-      await ensureHuntFolder({ _id: huntId, name: arg.name });
+      try {
+        // Sync discord roles
+        const userIds = (
+          await MeteorUsers.find({ hunts: huntId }).fetchAsync()
+        ).map((u) => u._id);
+        await addUsersToDiscordRole(userIds, huntId);
+        await ensureHuntFolder({ _id: huntId, name: hunt.name });
+      } catch (error) {
+        Logger.warn("Unable to finish setting up hunt", { huntId, error });
+      }
     });
 
     return huntId;

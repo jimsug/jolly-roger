@@ -20,12 +20,17 @@ import Row from "react-bootstrap/Row";
 import { createPortal } from "react-dom";
 import { Trans, useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router";
+import type { MultiValue } from "react-select";
+import Select from "react-select";
+import { useTheme } from "styled-components";
+import { DEFAULT_HUNT_TAGS } from "../../lib/defaultHuntTags";
 import DiscordCache from "../../lib/models/DiscordCache";
 import type {
   EditableHuntType,
+  HuntDefaultRole,
   SavedDiscordObjectType,
 } from "../../lib/models/Hunts";
-import Hunts from "../../lib/models/Hunts";
+import Hunts, { HUNT_DEFAULT_ROLES } from "../../lib/models/Hunts";
 import Settings from "../../lib/models/Settings";
 import discordChannelsForConfiguredGuild from "../../lib/publications/discordChannelsForConfiguredGuild";
 import discordRolesForConfiguredGuild from "../../lib/publications/discordRolesForConfiguredGuild";
@@ -44,6 +49,8 @@ enum SubmitState {
   FAILED = "failed",
 }
 
+type RoleSelectOption = { value: HuntDefaultRole; label: string };
+
 const splitLists = function (lists: string): string[] {
   const strippedLists = lists.trim();
   if (strippedLists === "") {
@@ -52,6 +59,9 @@ const splitLists = function (lists: string): string[] {
 
   return strippedLists.split(/[, ]+/);
 };
+
+const emptyToUndefined = (value: string): string | undefined =>
+  value === "" ? undefined : value;
 
 interface DiscordSelectorParams {
   disable: boolean;
@@ -197,6 +207,7 @@ const HuntEditPage = () => {
   );
 
   const { t } = useTranslation();
+  const theme = useTheme();
 
   useBreadcrumb({
     title: huntId
@@ -219,13 +230,21 @@ const HuntEditPage = () => {
   const [errorMessage, setErrorMessage] = useState("");
 
   const [name, setName] = useState(hunt?.name ?? "");
+  const [initialTags, setInitialTags] = useState(DEFAULT_HUNT_TAGS.join(", "));
   const [mailingLists, setMailingLists] = useState(
     hunt?.mailingLists.join(", ") ?? "",
   );
   const [signupMessage, setSignupMessage] = useState(hunt?.signupMessage ?? "");
+  const [moreInfo, setMoreInfo] = useState(hunt?.moreInfo ?? "");
+  const [defaultRoles, setDefaultRoles] = useState<HuntDefaultRole[]>(
+    hunt?.defaultRoles ?? [],
+  );
   const [openSignups, setOpenSignups] = useState(hunt?.openSignups ?? false);
   const [hasGuessQueue, setHasGuessQueue] = useState(
     hunt?.hasGuessQueue ?? true,
+  );
+  const [allowUnlockablePuzzles, setAllowUnlockablePuzzles] = useState(
+    hunt?.allowUnlockablePuzzles ?? false,
   );
   const [termsOfUse, setTermsOfUse] = useState(hunt?.termsOfUse ?? "");
   const [showTermsOfUsePreview, setShowTermsOfUsePreview] = useState(false);
@@ -234,12 +253,25 @@ const HuntEditPage = () => {
     [],
   );
   const [homepageUrl, setHomepageUrl] = useState(hunt?.homepageUrl ?? "");
+  const [isArchived, setIsArchived] = useState(hunt?.isArchived ?? false);
+  const [archivedHuntUrl, setArchivedHuntUrl] = useState(
+    hunt?.archivedHuntUrl ?? "",
+  );
   const [submitTemplate, setSubmitTemplate] = useState(
     hunt?.submitTemplate ?? "",
+  );
+  const [customLinkName, setCustomLinkName] = useState(
+    hunt?.customLinkName ?? "",
+  );
+  const [customLinkUrl, setCustomLinkUrl] = useState(hunt?.customLinkUrl ?? "");
+  const [customLinkEmbed, setCustomLinkEmbed] = useState(
+    hunt?.customLinkEmbed ?? false,
   );
   const [announcementDiscordChannel, setAnnouncementDiscordChannel] = useState(
     hunt?.announcementDiscordChannel,
   );
+  const [puzzleCreationDiscordChannel, setPuzzleCreationDiscordChannel] =
+    useState(hunt?.puzzleCreationDiscordChannel);
   const [puzzleHooksDiscordChannel, setPuzzleHooksDiscordChannel] = useState(
     hunt?.puzzleHooksDiscordChannel,
   );
@@ -257,6 +289,12 @@ const HuntEditPage = () => {
     [],
   );
 
+  const onInitialTagsChanged = useCallback<
+    NonNullable<FormControlProps["onChange"]>
+  >((e) => {
+    setInitialTags(e.currentTarget.value);
+  }, []);
+
   const onMailingListsChanged = useCallback<
     NonNullable<FormControlProps["onChange"]>
   >((e) => {
@@ -269,6 +307,19 @@ const HuntEditPage = () => {
     setSignupMessage(e.currentTarget.value);
   }, []);
 
+  const onMoreInfoChanged = useCallback<
+    NonNullable<FormControlProps["onChange"]>
+  >((e) => {
+    setMoreInfo(e.currentTarget.value);
+  }, []);
+
+  const onDefaultRolesChanged = useCallback(
+    (value: MultiValue<RoleSelectOption>) => {
+      setDefaultRoles(value.map((v) => v.value));
+    },
+    [],
+  );
+
   const onOpenSignupsChanged = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setOpenSignups(e.currentTarget.checked);
@@ -279,6 +330,13 @@ const HuntEditPage = () => {
   const onHasGuessQueueChanged = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setHasGuessQueue(e.currentTarget.checked);
+    },
+    [],
+  );
+
+  const onAllowUnlockablePuzzlesChanged = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setAllowUnlockablePuzzles(e.currentTarget.checked);
     },
     [],
   );
@@ -295,15 +353,54 @@ const HuntEditPage = () => {
     setHomepageUrl(e.currentTarget.value);
   }, []);
 
+  const onIsArchivedChanged = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setIsArchived(e.currentTarget.checked);
+    },
+    [],
+  );
+
+  const onArchivedHuntUrlChanged = useCallback<
+    NonNullable<FormControlProps["onChange"]>
+  >((e) => {
+    setArchivedHuntUrl(e.currentTarget.value);
+  }, []);
+
   const onSubmitTemplateChanged = useCallback<
     NonNullable<FormControlProps["onChange"]>
   >((e) => {
     setSubmitTemplate(e.currentTarget.value);
   }, []);
 
+  const onCustomLinkNameChanged = useCallback<
+    NonNullable<FormControlProps["onChange"]>
+  >((e) => {
+    setCustomLinkName(e.currentTarget.value);
+  }, []);
+
+  const onCustomLinkUrlChanged = useCallback<
+    NonNullable<FormControlProps["onChange"]>
+  >((e) => {
+    setCustomLinkUrl(e.currentTarget.value);
+  }, []);
+
+  const onCustomLinkEmbedChanged = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setCustomLinkEmbed(e.currentTarget.checked);
+    },
+    [],
+  );
+
   const onAnnnouncementDiscordChannelChanged = useCallback(
     (next: SavedDiscordObjectType | undefined) => {
       setAnnouncementDiscordChannel(next);
+    },
+    [],
+  );
+
+  const onPuzzleCreationDiscordChannelChanged = useCallback(
+    (next: SavedDiscordObjectType | undefined) => {
+      setPuzzleCreationDiscordChannel(next);
     },
     [],
   );
@@ -360,13 +457,22 @@ const HuntEditPage = () => {
       const state: EditableHuntType = {
         name,
         mailingLists: splitLists(mailingLists),
-        signupMessage: signupMessage === "" ? undefined : signupMessage,
+        signupMessage: emptyToUndefined(signupMessage),
+        moreInfo: emptyToUndefined(moreInfo),
         openSignups,
         hasGuessQueue,
-        termsOfUse: termsOfUse === "" ? undefined : termsOfUse,
-        homepageUrl: homepageUrl === "" ? undefined : homepageUrl,
-        submitTemplate: submitTemplate === "" ? undefined : submitTemplate,
+        defaultRoles,
+        allowUnlockablePuzzles,
+        termsOfUse: emptyToUndefined(termsOfUse),
+        homepageUrl: emptyToUndefined(homepageUrl),
+        isArchived,
+        archivedHuntUrl: emptyToUndefined(archivedHuntUrl),
+        submitTemplate: emptyToUndefined(submitTemplate),
+        customLinkName: emptyToUndefined(customLinkName),
+        customLinkUrl: emptyToUndefined(customLinkUrl),
+        customLinkEmbed,
         announcementDiscordChannel,
+        puzzleCreationDiscordChannel,
         puzzleHooksDiscordChannel,
         firehoseDiscordChannel,
         memberDiscordRole,
@@ -375,20 +481,30 @@ const HuntEditPage = () => {
       if (huntId) {
         updateHunt.call({ huntId, value: state }, onFormCallback);
       } else {
-        createHunt.call(state, onFormCallback);
+        createHunt.call({ ...state, initialTags }, onFormCallback);
       }
     },
     [
       huntId,
       name,
+      initialTags,
       mailingLists,
       signupMessage,
+      moreInfo,
       openSignups,
       hasGuessQueue,
+      defaultRoles,
+      allowUnlockablePuzzles,
       termsOfUse,
       homepageUrl,
+      isArchived,
+      archivedHuntUrl,
       submitTemplate,
+      customLinkName,
+      customLinkUrl,
+      customLinkEmbed,
       announcementDiscordChannel,
+      puzzleCreationDiscordChannel,
       puzzleHooksDiscordChannel,
       firehoseDiscordChannel,
       memberDiscordRole,
@@ -423,6 +539,11 @@ const HuntEditPage = () => {
 
   const idPrefix = useId();
 
+  const roleOptions: RoleSelectOption[] = HUNT_DEFAULT_ROLES.map((role) => ({
+    value: role,
+    label: role,
+  }));
+
   return (
     <Container>
       <h1>
@@ -449,6 +570,33 @@ const HuntEditPage = () => {
             />
           </Col>
         </FormGroup>
+
+        {!huntId && (
+          <FormGroup
+            as={Row}
+            className="mb-3"
+            controlId={`${idPrefix}-hunt-form-initial-tags`}
+          >
+            <FormLabel column xs={3}>
+              {t("huntEdit.initialTags.field", "Initial tags")}
+            </FormLabel>
+            <Col xs={9}>
+              <FormControl
+                type="text"
+                value={initialTags}
+                onChange={onInitialTagsChanged}
+                disabled={disableForm}
+              />
+              <FormText>
+                {t(
+                  "huntEdit.initialTags.help",
+                  `These (comma-separated) tags will be created along with
+                  the hunt. Leave this blank to start without any tags.`,
+                )}
+              </FormText>
+            </Col>
+          </FormGroup>
+        )}
 
         <h3>{t("huntEdit.usersAndPermissions", "Users and permissions")}</h3>
 
@@ -481,6 +629,62 @@ const HuntEditPage = () => {
         <FormGroup
           as={Row}
           className="mb-3"
+          controlId={`${idPrefix}-hunt-form-more-info`}
+        >
+          <FormLabel column xs={3}>
+            {t("huntEdit.moreInfo.field", "More information")}
+          </FormLabel>
+          <Col xs={9}>
+            <FormControl
+              as="textarea"
+              value={moreInfo}
+              onChange={onMoreInfoChanged}
+              disabled={disableForm}
+            />
+            <FormText>
+              {t(
+                "huntEdit.moreInfo.help",
+                `This message (rendered as markdown) will be shown to members
+                on the hunt's More page. It's a good place for links to
+                resources and other static information.`,
+              )}
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
+          controlId={`${idPrefix}-hunt-form-default-roles`}
+        >
+          <FormLabel column xs={3}>
+            {t("huntEdit.defaultRoles.field", "Default roles")}
+          </FormLabel>
+          <Col xs={9}>
+            <Select
+              inputId={`${idPrefix}-hunt-form-default-roles`}
+              isMulti
+              isDisabled={disableForm}
+              options={roleOptions}
+              value={defaultRoles.map(
+                (role): RoleSelectOption => ({ value: role, label: role }),
+              )}
+              onChange={onDefaultRolesChanged}
+              theme={theme.reactSelectTheme}
+            />
+            <FormText>
+              {t(
+                "huntEdit.defaultRoles.help",
+                `Every member of this hunt is treated as having these roles,
+                without the roles being assigned to their accounts.`,
+              )}
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
           controlId={`${idPrefix}-hunt-form-open-signups`}
         >
           <FormLabel column xs={3}>
@@ -498,7 +702,7 @@ const HuntEditPage = () => {
                 "huntEdit.openInvites.help",
                 `If open invites are enabled, then any current member of the
                 hunt can add a new member to the hunt. Otherwise, only
-                operators can add new members.`,
+                admins can add new members.`,
               )}
             </FormText>
           </Col>
@@ -525,6 +729,35 @@ const HuntEditPage = () => {
                 `If enabled, users can submit guesses for puzzles but
                 operators must mark them as correct. If disabled, any user can
                 enter the puzzle answer.`,
+              )}
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
+          controlId={`${idPrefix}-hunt-form-allow-unlockable-puzzles`}
+        >
+          <FormLabel column xs={3}>
+            {t(
+              "huntEdit.allowUnlockablePuzzles.field",
+              "Allow unlockable puzzles",
+            )}
+          </FormLabel>
+          <Col xs={9}>
+            <FormCheck
+              id={`${idPrefix}-hunt-form-allow-unlockable-puzzles`}
+              checked={allowUnlockablePuzzles}
+              onChange={onAllowUnlockablePuzzlesChanged}
+              disabled={disableForm}
+            />
+            <FormText>
+              {t(
+                "huntEdit.allowUnlockablePuzzles.help",
+                `If enabled, puzzles can be added in a locked state and
+                members can vote on which to unlock. If disabled, all puzzles
+                are created unlocked.`,
               )}
             </FormText>
           </Col>
@@ -595,6 +828,57 @@ const HuntEditPage = () => {
         <FormGroup
           as={Row}
           className="mb-3"
+          controlId={`${idPrefix}-hunt-form-is-archived`}
+        >
+          <FormLabel column xs={3}>
+            {t("huntEdit.archived.field", "Archived")}
+          </FormLabel>
+          <Col xs={9}>
+            <FormCheck
+              id={`${idPrefix}-hunt-form-is-archived`}
+              checked={isArchived}
+              onChange={onIsArchivedChanged}
+              disabled={disableForm}
+            />
+            <FormText>
+              {t(
+                "huntEdit.archived.help",
+                `If archived, this hunt is listed below active hunts on the
+                hunt list. It otherwise works as normal.`,
+              )}
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
+          controlId={`${idPrefix}-hunt-form-archived-hunt-url`}
+        >
+          <FormLabel column xs={3}>
+            {t("huntEdit.archivedUrl.field", "Archive URL")}
+          </FormLabel>
+          <Col xs={9}>
+            <FormControl
+              type="text"
+              value={archivedHuntUrl}
+              onChange={onArchivedHuntUrlChanged}
+              disabled={disableForm}
+            />
+            <FormText>
+              {t(
+                "huntEdit.archivedUrl.help",
+                `If provided, this replaces the homepage URL as the hunt link
+                in the navigation bar, e.g. once the hunt site has moved to an
+                archive.`,
+              )}
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
           controlId={`${idPrefix}-hunt-form-submit-template`}
         >
           <FormLabel column xs={3}>
@@ -632,6 +916,82 @@ const HuntEditPage = () => {
                           would work for the 2018 Mystery Hunt. If not specified, the puzzle
                           URL is used as the link to the guess submission page.`}
               />
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <h4>{t("huntEdit.customLink.heading", "Custom navigation link")}</h4>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
+          controlId={`${idPrefix}-hunt-form-custom-link-name`}
+        >
+          <FormLabel column xs={3}>
+            {t("huntEdit.customLink.name.field", "Link name")}
+          </FormLabel>
+          <Col xs={9}>
+            <FormControl
+              type="text"
+              value={customLinkName}
+              onChange={onCustomLinkNameChanged}
+              disabled={disableForm}
+            />
+            <FormText>
+              {t(
+                "huntEdit.customLink.name.help",
+                `If a name and URL are both provided, an extra link with this
+                name is shown in the hunt navigation bar.`,
+              )}
+            </FormText>
+          </Col>
+        </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
+          controlId={`${idPrefix}-hunt-form-custom-link-url`}
+        >
+          <FormLabel column xs={3}>
+            {t("huntEdit.customLink.url.field", "Link URL")}
+          </FormLabel>
+          <Col xs={9}>
+            <FormControl
+              type="text"
+              value={customLinkUrl}
+              onChange={onCustomLinkUrlChanged}
+              disabled={disableForm}
+            />
+          </Col>
+        </FormGroup>
+
+        <FormGroup
+          as={Row}
+          className="mb-3"
+          controlId={`${idPrefix}-hunt-form-custom-link-embed`}
+        >
+          <FormLabel column xs={3}>
+            {t("huntEdit.customLink.embed.field", "Embed link")}
+          </FormLabel>
+          <Col xs={9}>
+            <FormCheck
+              id={`${idPrefix}-hunt-form-custom-link-embed`}
+              type="switch"
+              checked={customLinkEmbed}
+              onChange={onCustomLinkEmbedChanged}
+              disabled={disableForm}
+              label={
+                customLinkEmbed
+                  ? t("huntEdit.customLink.embed.enabled", "Embedded")
+                  : t("huntEdit.customLink.embed.disabled", "Opens in new tab")
+              }
+            />
+            <FormText>
+              {t(
+                "huntEdit.customLink.embed.help",
+                `If enabled, the linked page is embedded inside Jolly Roger.
+                Otherwise it opens in a new tab.`,
+              )}
             </FormText>
           </Col>
         </FormGroup>
@@ -694,6 +1054,35 @@ const HuntEditPage = () => {
             <FormGroup
               as={Row}
               className="mb-3"
+              controlId={`${idPrefix}-hunt-form-puzzle-creation-discord-channel`}
+            >
+              <FormLabel column xs={3}>
+                {t(
+                  "huntEdit.puzzleCreationChannel.field",
+                  "Puzzle creation Discord channel",
+                )}
+              </FormLabel>
+              <Col xs={9}>
+                <DiscordChannelSelector
+                  guildId={guildId}
+                  disable={disableForm}
+                  value={puzzleCreationDiscordChannel}
+                  onChange={onPuzzleCreationDiscordChannelChanged}
+                />
+                <FormText>
+                  {t(
+                    "huntEdit.puzzleCreationChannel.help",
+                    `If this field is specified, when a puzzle in this hunt is
+                    added, a message will be sent to the specified channel
+                    instead of the puzzle notifications channel.`,
+                  )}
+                </FormText>
+              </Col>
+            </FormGroup>
+
+            <FormGroup
+              as={Row}
+              className="mb-3"
               controlId={`${idPrefix}-hunt-form-puzzle-hooks-discord-channel`}
             >
               <FormLabel column xs={3}>
@@ -713,8 +1102,9 @@ const HuntEditPage = () => {
                   {t(
                     "huntEdit.puzzleChannel.help",
                     `If this field is specified, when a puzzle in this hunt is
-                    added or solved, a message will be sent to the specified
-                    channel.`,
+                    solved, a message will be sent to the specified channel.
+                    Puzzle creation messages also go here unless a puzzle
+                    creation channel is set.`,
                   )}
                 </FormText>
               </Col>
@@ -743,7 +1133,8 @@ const HuntEditPage = () => {
                     "huntEdit.firehoseChannel.help",
                     `If this field is specified, all chat messages written in
                     puzzles associated with this hunt will be mirrored to the
-                    specified Discord channel.`,
+                    specified Discord channel. Puzzle renames are posted here
+                    too.`,
                   )}
                 </FormText>
               </Col>

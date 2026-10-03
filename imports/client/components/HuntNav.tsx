@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import { faBullhorn } from "@fortawesome/free-solid-svg-icons/faBullhorn";
+import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
 import { faFaucet } from "@fortawesome/free-solid-svg-icons/faFaucet";
 import { faMap } from "@fortawesome/free-solid-svg-icons/faMap";
 import { faReceipt } from "@fortawesome/free-solid-svg-icons/faReceipt";
@@ -148,9 +149,11 @@ const HuntNav = () => {
   const { t } = useTranslation();
 
   if (huntId && hunt) {
-    const huntLink = hunt.homepageUrl && (
+    // Once a hunt is archived its site often moves, so prefer the archive URL
+    const huntUrl = hunt.archivedHuntUrl ?? hunt.homepageUrl;
+    const huntLink = huntUrl && (
       <HuntLinkAnchor
-        to={hunt.homepageUrl}
+        to={huntUrl}
         target="_blank"
         rel="noopener noreferrer"
         title={t("navigation.huntLinkTitle", "Open the hunt homepage")}
@@ -221,6 +224,16 @@ const HuntNav = () => {
             </StyledPuzzleListLinkLabel>
           </StyledPuzzleListLinkAnchor>
         )}
+
+        <StyledPuzzleListLinkAnchor
+          to={`/hunts/${huntId}/more`}
+          title={t("more.navTitle", "More")}
+        >
+          <MenuIcon icon={faEllipsisH} />
+          <StyledPuzzleListLinkLabel>
+            {t("more.navTitle", "More")}
+          </StyledPuzzleListLinkLabel>
+        </StyledPuzzleListLinkAnchor>
         {huntLink}
       </JRLinkList>
     );

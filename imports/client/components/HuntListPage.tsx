@@ -222,11 +222,16 @@ const HuntListPage = () => {
     body.push(<div key="loading">{t("common.loading", "Loading")}...</div>);
   } else {
     const joinedHunts: React.JSX.Element[] = [];
+    const archivedHunts: React.JSX.Element[] = [];
     const otherHunts: React.JSX.Element[] = [];
     hunts.forEach((hunt) => {
       const huntTag = <Hunt key={hunt._id} hunt={hunt} />;
       if (myHunts.has(hunt._id)) {
-        joinedHunts.push(huntTag);
+        if (hunt.isArchived) {
+          archivedHunts.push(huntTag);
+        } else {
+          joinedHunts.push(huntTag);
+        }
       } else {
         otherHunts.push(huntTag);
       }
@@ -247,6 +252,20 @@ const HuntListPage = () => {
             "You're not a member of any hunts yet. Consider joining one, or asking an operator to invite you.",
           )}
         </div>,
+      );
+    }
+    if (archivedHunts.length > 0) {
+      body.push(
+        <details key="archivedhunts">
+          <summary>{t("huntList.archivedHunts", "Archived hunts")}:</summary>
+          <p>
+            {t(
+              "huntList.archivedHelp",
+              "These hunts have been archived, but you can still use them as normal.",
+            )}
+          </p>
+          <ul>{archivedHunts}</ul>
+        </details>,
       );
     }
     body.push(

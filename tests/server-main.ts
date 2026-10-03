@@ -6,8 +6,11 @@ import chaiAsPromised from "chai-as-promised";
 chai.use(chaiAsPromised);
 
 import "./unit/imports/lib/calendarTimeFormat";
+import "./unit/imports/lib/defaultHuntTags";
+import "./unit/imports/lib/permission_stubs";
 import "./unit/imports/lib/puzzle-sort-and-group";
 import "./unit/imports/lib/relativeTimeFormat";
+import "./unit/imports/lib/sortUsersByDisplayName";
 import "./unit/imports/lib/ValidateShape";
 
 // Disable rate limiting
@@ -17,6 +20,7 @@ if (!Meteor.isAppTest) {
 
 Accounts.removeDefaultRateLimit();
 
+import "./unit/imports/server/backfillHuntAdminFields";
 import "./unit/imports/server/Flags";
 import "./unit/imports/server/MigrationRegistry";
 import "./unit/imports/server/Model";
@@ -27,5 +31,6 @@ import "./unit/imports/server/mergeUsers";
 import "./acceptance/authentication";
 import "./acceptance/chatHooks";
 import "./acceptance/emails";
+import "./acceptance/hunts";
 import "./acceptance/profiles";
 import "./acceptance/smoke";

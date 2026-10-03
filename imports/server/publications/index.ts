@@ -16,6 +16,7 @@ import "./huntsAll";
 import "./jobForMerge";
 import "./jobsAll";
 import "./invitationCodesForHunt";
+import "./invitedUsers";
 import "./pendingAnnouncementsForSelf";
 import "./pendingGuessesForSelf";
 import "./puzzleActivityForHunt";

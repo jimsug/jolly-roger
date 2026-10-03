@@ -12,6 +12,7 @@ import {
   userMayUseDiscordBotAPIs,
 } from "../../lib/permission_stubs";
 import invitationCodesForHunt from "../../lib/publications/invitationCodesForHunt";
+import sortUsersByDisplayName from "../../lib/sortUsersByDisplayName";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import ProfileList from "./ProfileList";
 
@@ -30,10 +31,12 @@ const HuntProfileListPage = () => {
     () =>
       loading
         ? []
-        : MeteorUsers.find(
-            { hunts: huntId, displayName: { $ne: undefined } },
-            { sort: { displayName: 1 } },
-          ).fetch(),
+        : sortUsersByDisplayName(
+            MeteorUsers.find({
+              hunts: huntId,
+              displayName: { $ne: undefined },
+            }).fetch(),
+          ),
     [huntId, loading],
   );
 

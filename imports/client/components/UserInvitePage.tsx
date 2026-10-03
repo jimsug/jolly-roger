@@ -14,10 +14,14 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router";
 import styled from "styled-components";
 import Hunts from "../../lib/models/Hunts";
-import { userMayBulkAddToHunt } from "../../lib/permission_stubs";
+import MeteorUsers from "../../lib/models/MeteorUsers";
+import { userMayAddUsersToHunt } from "../../lib/permission_stubs";
+import invitedUsers from "../../lib/publications/invitedUsers";
 import addHuntUser from "../../methods/addHuntUser";
 import bulkAddHuntUsers from "../../methods/bulkAddHuntUsers";
 import { useBreadcrumb } from "../hooks/breadcrumb";
+import useTypedSubscribe from "../hooks/useTypedSubscribe";
+import InvitedUserList from "./InvitedUserList";
 
 const BulkError = styled.p`
   white-space: pre-wrap;
@@ -40,8 +44,10 @@ const UserInvitePage = () => {
     undefined,
   );
 
-  const canBulkInvite = useTracker(() => {
-    return userMayBulkAddToHunt(Meteor.user(), Hunts.findOne(huntId));
+  // Single and bulk invites follow the same policy, so one check gates both
+  // forms (the page is reachable by URL even when the Invite button is hidden)
+  const canInvite = useTracker(() => {
+    return userMayAddUsersToHunt(Meteor.user(), Hunts.findOne(huntId));
   }, [huntId]);
 
   const onEmailChanged: NonNullable<FormControlProps["onChange"]> = useCallback(
@@ -95,8 +101,29 @@ const UserInvitePage = () => {
 
   const idPrefix = useId();
 
+  // Only admins receive this publication; everyone else just sees no list.
+  const invitedLoading = useTypedSubscribe(invitedUsers);
+  const invitedReady = !invitedLoading();
+  const invitees = useTracker(() => {
+    return invitedReady
+      ? MeteorUsers.find(
+          { "services.password.enroll": { $exists: true }, hunts: huntId },
+          { sort: { "services.password.enroll.when": 1 } },
+        ).fetch()
+      : [];
+  }, [huntId, invitedReady]);
+
+  const pendingInvitations = useMemo(() => {
+    return invitees.length > 0 ? (
+      <div>
+        <h2>{t("invite.pendingInvitations", "Pending invitations")}</h2>
+        <InvitedUserList users={invitees} />
+      </div>
+    ) : undefined;
+  }, [invitees, t]);
+
   const bulkInvite = useMemo(() => {
-    return canBulkInvite ? (
+    return canInvite ? (
       <div>
         <h2>{t("invite.bulkInvite", "Bulk invite")}</h2>
 
@@ -129,7 +156,7 @@ const UserInvitePage = () => {
     ) : undefined;
   }, [
     idPrefix,
-    canBulkInvite,
+    canInvite,
     submitting,
     bulkEmails,
     bulkError,
@@ -152,41 +179,58 @@ const UserInvitePage = () => {
 
       <Row>
         <Col md={8}>
-          {error ? (
-            <Alert variant="danger">
-              <p>{error.reason}</p>
+          {canInvite ? (
+            <>
+              {error ? (
+                <Alert variant="danger">
+                  <p>{error.reason}</p>
+                </Alert>
+              ) : undefined}
+
+              <form onSubmit={onSubmit} className="form-horizontal">
+                <FormGroup
+                  as={Row}
+                  className="mb-3"
+                  controlId={`${idPrefix}-email`}
+                >
+                  <FormLabel column md={3}>
+                    {t("common.email", "Email address")}
+                  </FormLabel>
+                  <Col md={9}>
+                    <FormControl
+                      type="email"
+                      value={email}
+                      onChange={onEmailChanged}
+                      disabled={submitting}
+                    />
+                  </Col>
+                </FormGroup>
+
+                <FormGroup className="mb-3">
+                  <Col md={{ offset: 3, span: 9 }}>
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      disabled={submitting}
+                    >
+                      {t("invite.sendInvite", "Send invite")}
+                    </Button>
+                  </Col>
+                </FormGroup>
+              </form>
+
+              {bulkInvite}
+            </>
+          ) : (
+            <Alert variant="warning">
+              {t(
+                "invite.notAllowed",
+                "Only admins can invite people to this hunt, unless the hunt has open invites enabled.",
+              )}
             </Alert>
-          ) : undefined}
+          )}
 
-          <form onSubmit={onSubmit} className="form-horizontal">
-            <FormGroup
-              as={Row}
-              className="mb-3"
-              controlId={`${idPrefix}-email`}
-            >
-              <FormLabel column md={3}>
-                {t("common.email", "Email address")}
-              </FormLabel>
-              <Col md={9}>
-                <FormControl
-                  type="email"
-                  value={email}
-                  onChange={onEmailChanged}
-                  disabled={submitting}
-                />
-              </Col>
-            </FormGroup>
-
-            <FormGroup className="mb-3">
-              <Col md={{ offset: 3, span: 9 }}>
-                <Button type="submit" variant="primary" disabled={submitting}>
-                  {t("invite.sendInvite", "Send invite")}
-                </Button>
-              </Col>
-            </FormGroup>
-          </form>
-
-          {bulkInvite}
+          {pendingInvitations}
         </Col>
       </Row>
     </div>

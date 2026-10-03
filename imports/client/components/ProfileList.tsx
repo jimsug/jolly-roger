@@ -246,10 +246,13 @@ const OperatorControls = ({
   hunt: HuntType;
 }) => {
   const self = useTracker(() => user._id === Meteor.userId(), [user._id]);
-  const { userIsOperator, userIsAdmin } = useTracker(() => {
+  const { userIsOperator, userIsAdmin, operatorByDefault } = useTracker(() => {
     return {
       userIsOperator: userIsOperatorForHunt(user, hunt),
       userIsAdmin: isAdmin(user),
+      // When the hunt makes every member an operator there is nothing to
+      // promote or demote, so only the badge is shown.
+      operatorByDefault: hunt.defaultRoles?.includes("operator") ?? false,
     };
   }, [user, hunt]);
 
@@ -309,17 +312,18 @@ const OperatorControls = ({
           huntId={hunt._id}
         />
       )}
-      {userIsOperator ? (
-        !self && (
-          <Button size="sm" variant="warning" onClick={showDemoteModal}>
-            {t("hunterList.demoteButton", "Demote")}
+      {!operatorByDefault &&
+        (userIsOperator ? (
+          !self && (
+            <Button size="sm" variant="warning" onClick={showDemoteModal}>
+              {t("hunterList.demoteButton", "Demote")}
+            </Button>
+          )
+        ) : (
+          <Button size="sm" variant="warning" onClick={showPromoteModal}>
+            {t("hunterList.makeOperator", "Make operator")}
           </Button>
-        )
-      ) : (
-        <Button size="sm" variant="warning" onClick={showPromoteModal}>
-          {t("hunterList.makeOperator", "Make operator")}
-        </Button>
-      )}
+        ))}
     </OperatorBox>
   );
 };
@@ -426,6 +430,7 @@ const ProfileList = ({
   users,
   roles,
   invitationCode,
+  invitedCount,
 }: {
   hunt?: HuntType;
   canInvite?: boolean;
@@ -435,6 +440,8 @@ const ProfileList = ({
   users: Meteor.User[];
   roles?: Record<string, string[]>;
   invitationCode?: string;
+  // Number of pending invitations (admins only, on the all-users list)
+  invitedCount?: number;
 }) => {
   const [searchString, setSearchString] = useState("");
 
@@ -700,7 +707,18 @@ const ProfileList = ({
 
   return (
     <div>
-      <h1>{t("hunterList.title", "List of hunters")}</h1>
+      <h1>
+        {t("hunterList.title", "List of hunters")}
+        {invitedCount !== undefined && (
+          <>
+            {" "}
+            <Badge as={Link} to="/users/invited" bg="info">
+              {t("hunterList.invitedBadge", "Invited")}{" "}
+              <Badge bg="secondary">{invitedCount}</Badge>
+            </Badge>
+          </>
+        )}
+      </h1>
       <ProfilesSummary>
         {t("hunterList.totalHunters", "Total hunters")}: {users.length}
       </ProfilesSummary>

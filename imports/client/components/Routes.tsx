@@ -1,3 +1,5 @@
+import { Meteor } from "meteor/meteor";
+import { useTracker } from "meteor/react-meteor-data";
 import React, { Suspense, useEffect } from "react";
 import type { RouteObject } from "react-router";
 import { Navigate, useRoutes } from "react-router";
@@ -21,9 +23,11 @@ import HuntListApp from "./HuntListApp";
 import HuntListPage from "./HuntListPage";
 import HuntProfileListPage from "./HuntProfileListPage";
 import HuntTagManagerPage from "./HuntTagManagerPage";
+import InvitedUserListPage from "./InvitedUserListPage";
 import JoinHunt from "./JoinHunt";
 import Loading from "./Loading";
 import LoginForm from "./LoginForm";
+import MoreAppPage from "./MoreAppPage";
 import PasswordResetForm from "./PasswordResetForm";
 import ProfilePage from "./ProfilePage";
 import PuzzleListPage from "./PuzzleListPage";
@@ -36,6 +40,12 @@ import VerifyEmailPage from "./VerifyEmailPage";
 const HuntEditPage = React.lazy(() => import("./HuntEditPage"));
 const SetupPage = React.lazy(() => import("./SetupPage"));
 const RTCDebugPage = React.lazy(() => import("./RTCDebugPage"));
+
+// /profile is a stable link to the current user's own profile page
+const ProfileRedirect = () => {
+  const userId = useTracker(() => Meteor.userId(), []);
+  return <Navigate to={userId ? `/users/${userId}` : "/login"} replace />;
+};
 
 /* Authenticated routes - if user not logged in, get redirected to /login */
 export const AuthenticatedRouteList: RouteObject[] = [
@@ -62,6 +72,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
           { path: "puzzles/:puzzleId", element: <PuzzlePage /> },
           { path: "puzzles", element: <PuzzleListPage /> },
           { path: "tags", element: <HuntTagManagerPage /> },
+          { path: "more", element: <MoreAppPage /> },
           { path: "edit", element: <HuntEditPage /> },
           { path: "", element: <Navigate to="puzzles" replace /> },
         ],
@@ -70,10 +81,12 @@ export const AuthenticatedRouteList: RouteObject[] = [
       { path: "", element: <HuntListPage /> },
     ],
   },
+  { path: "/profile", element: <ProfileRedirect /> },
   {
     path: "/users",
     element: <UsersApp />,
     children: [
+      { path: "invited", element: <InvitedUserListPage /> },
       { path: ":userId", element: <ProfilePage /> },
       { path: "", element: <AllProfileListPage /> },
     ],

@@ -450,11 +450,11 @@
     },
     "puzzleChannel": {
       "field": "Discord 谜题频道",
-      "help": "新加谜题和解开谜题时，会自动发送消息到该频道。"
+      "help": "解开谜题时，会自动发送消息到该频道。未设置谜题创建频道时，新加谜题的消息也会发送到这里。"
     },
     "firehoseChannel": {
       "field": "Discord 聊天频道",
-      "help": "所有谜题内的聊天消息会自动发送到该频道。"
+      "help": "所有谜题内的聊天消息会自动发送到该频道。谜题改名的消息也会发送到这里。"
     },
     "discordRole": {
       "field": "Discord 角色",

@@ -100,7 +100,11 @@ const DiscordHooks: Hookset = {
 
     const puzzle = (await Puzzles.findOneAsync(puzzleId))!;
     const hunt = (await Hunts.findOneAsync(puzzle.hunt))!;
-    if (hunt.puzzleHooksDiscordChannel) {
+    // Creation messages go to their own channel when one is configured, so
+    // the solve channel stays low-traffic.
+    const channel =
+      hunt.puzzleCreationDiscordChannel ?? hunt.puzzleHooksDiscordChannel;
+    if (channel) {
       const title = i18n.t("discord.hooks.unlocked", "{{puzzle}} unlocked", {
         lng: serverLanguage,
         puzzle: puzzle.title,
@@ -130,10 +134,7 @@ const DiscordHooks: Hookset = {
           fields,
         },
       };
-      await bot.postMessageToChannel(
-        hunt.puzzleHooksDiscordChannel.id,
-        messageObj,
-      );
+      await bot.postMessageToChannel(channel.id, messageObj);
     }
   },
 
@@ -149,7 +150,10 @@ const DiscordHooks: Hookset = {
     }
 
     const hunt = (await Hunts.findOneAsync(puzzle.hunt))!;
-    if (hunt.puzzleHooksDiscordChannel) {
+    // Renames are chatter rather than progress, so they go to the firehose
+    // channel rather than the solve channel.
+    const channel = hunt.firehoseDiscordChannel;
+    if (channel) {
       const title = i18n.t(
         "discord.hooks.renamed",
         "{{oldTitle}} renamed to {{newTitle}}",
@@ -184,10 +188,7 @@ const DiscordHooks: Hookset = {
           fields,
         },
       };
-      await bot.postMessageToChannel(
-        hunt.puzzleHooksDiscordChannel.id,
-        messageObj,
-      );
+      await bot.postMessageToChannel(channel.id, messageObj);
     }
   },
 
