@@ -91,6 +91,10 @@ import RelatedPuzzleGroup, { PuzzleGroupDiv } from "./RelatedPuzzleGroup";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import ResponsiveToggleButtonGroup from "./styling/ResponsiveToggleButtonGroup";
 import { mediaBreakpointDown } from "./styling/responsive";
+import {
+  HuntHasWhiteboardContext,
+  useHuntHasWhiteboard,
+} from "./whiteboard/ShowOnBoardLink";
 
 const ViewControls = styled.div<{ $canAdd?: boolean; $toggles: number }>`
   display: grid;
@@ -1025,6 +1029,7 @@ const PuzzleListPage = () => {
   // Don't bother including these in loading - it's ok if they trickle in
   useTypedSubscribe(puzzleActivityForHunt, { huntId });
   useTypedSubscribe(puzzleInterestsForHunt, { huntId });
+  const huntHasWhiteboard = useHuntHasWhiteboard(huntId);
 
   return loading ? (
     <span>{t("common.loading", "loading")}...</span>
@@ -1034,12 +1039,14 @@ const PuzzleListPage = () => {
         <HuntNav />
       </HuntNavWrapper>
 
-      <PuzzleListView
-        huntId={huntId}
-        canAdd={canAdd}
-        canUpdate={canUpdate}
-        loading={loading}
-      />
+      <HuntHasWhiteboardContext value={huntHasWhiteboard}>
+        <PuzzleListView
+          huntId={huntId}
+          canAdd={canAdd}
+          canUpdate={canUpdate}
+          loading={loading}
+        />
+      </HuntHasWhiteboardContext>
     </div>
   );
 };

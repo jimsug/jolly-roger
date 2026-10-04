@@ -28,6 +28,7 @@ import styled, { css, useTheme } from "styled-components";
 import { useMediaQuery } from "usehooks-ts";
 import Flags from "../../Flags";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
+import chatMessagePath from "../../lib/chatMessagePath";
 import correctedAnswer from "../../lib/correctedAnswer";
 import { SUPPRESS_ALL_DINGWORDS } from "../../lib/dingwordLogic";
 import isAdmin from "../../lib/isAdmin";
@@ -920,16 +921,13 @@ const ChatNotificationMessage = ({
     muteForPuzzle();
   }, [muteForPuzzle]);
 
-  // A message on the whiteboard opens the board, at its comment if it's
-  // part of one.
-  let messageLink = `/hunts/${hunt._id}/puzzles/${puzzle._id}${
-    cn.message ? `#msg=${cn.message}` : ""
-  }`;
-  if (isWhiteboardPuzzle(puzzle)) {
-    messageLink = `/hunts/${hunt._id}/whiteboard${
-      cn.thread ? `?comment=${cn.thread}` : ""
-    }`;
-  }
+  const messageLink = chatMessagePath({
+    hunt: hunt._id,
+    puzzle: puzzle._id,
+    whiteboard: isWhiteboardPuzzle(puzzle),
+    message: cn.message,
+    thread: cn.thread,
+  });
 
   return (
     <Toast onClose={dismiss}>

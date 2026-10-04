@@ -161,7 +161,11 @@ import { mediaBreakpointDown } from "./styling/responsive";
 import TagList from "./TagList";
 import type { BoardFocus } from "./whiteboard/BoardFocusContext";
 import BoardFocusContext from "./whiteboard/BoardFocusContext";
+import ChatLoadedContext from "./whiteboard/ChatLoadedContext";
 import describeCommentTarget from "./whiteboard/describeCommentTarget";
+import ShowOnBoardLink, {
+  useHuntHasWhiteboard,
+} from "./whiteboard/ShowOnBoardLink";
 
 // Shows a state dump as an in-page overlay when enabled.
 const DEBUG_SHOW_CALL_STATE = false;
@@ -1712,6 +1716,7 @@ const PuzzlePageMetadata = ({
 
   const hunt = useTracker(() => Hunts.findOne(huntId), [huntId]);
   const hasGuessQueue = hunt?.hasGuessQueue ?? false;
+  const huntHasWhiteboard = useHuntHasWhiteboard(huntId);
   const canUpdate = useTracker(
     () => userMayWritePuzzlesForHunt(Meteor.user(), hunt),
     [hunt],
@@ -2040,6 +2045,9 @@ const PuzzlePageMetadata = ({
           variant="link"
           size="sm"
         />
+        {huntHasWhiteboard && (
+          <ShowOnBoardLink huntId={huntId} puzzleId={puzzleId} />
+        )}
         {puzzleLink}
         {documentLink}
         {documentCopyLink}
@@ -3043,7 +3051,15 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
       : `/hunts/${huntId}/puzzles/${puzzleId}`,
   });
 
-  const documentTitle = `${title} :: Jolly Roger`;
+  // The board belongs to the hunt rather than being one of its puzzles, so
+  // it's titled like the hunt's other pages.
+  const huntName = useTracker(
+    () => (isWhiteboard ? Hunts.findOne(huntId)?.name : undefined),
+    [isWhiteboard, huntId],
+  );
+  const documentTitle = huntName
+    ? `${title} :: ${huntName} :: Jolly Roger`
+    : `${title} :: Jolly Roger`;
   useDocumentTitle(documentTitle);
 
   const {
@@ -3410,6 +3426,9 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
       />
     </BoardFocusContext>
   );
+  const shownContent = content ? (
+    <ChatLoadedContext value={!chatDataLoading}>{content}</ChatLoadedContext>
+  ) : undefined;
   const deletedModal = activePuzzle.deleted && (
     <PuzzleDeletedModal
       puzzleId={puzzleId}
@@ -3536,7 +3555,7 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
             <PuzzleContent>
               {metadata}
               {showMetadataButton}
-              {content ?? (
+              {shownContent ?? (
                 <PuzzlePageMultiplayerDocument
                   document={document}
                   selfUser={selfUser}
@@ -3575,7 +3594,7 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
           </ButtonGroup>
         </NarrowPaneToggle>
         <NarrowPanes>
-          {narrowPane === "content" && <NarrowPane>{content}</NarrowPane>}
+          {narrowPane === "content" && <NarrowPane>{shownContent}</NarrowPane>}
           <NarrowPane $hidden={narrowPane !== "chat"}>{chat}</NarrowPane>
         </NarrowPanes>
       </FixedLayout>

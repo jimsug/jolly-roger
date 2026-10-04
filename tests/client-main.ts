@@ -4,6 +4,7 @@ import chaiAsPromised from "chai-as-promised";
 chai.use(chaiAsPromised);
 
 import "./unit/imports/lib/calendarTimeFormat";
+import "./unit/imports/lib/chatMessagePath";
 import "./unit/imports/lib/chatMessagePlainText";
 import "./unit/imports/lib/correctedAnswer";
 import "./unit/imports/lib/defaultHuntTags";
@@ -31,7 +32,10 @@ import "./unit/imports/lib/whiteboard-connectors";
 import "./unit/imports/lib/whiteboard-contributors";
 import "./unit/imports/lib/whiteboard-ink";
 import "./unit/imports/lib/whiteboard-layout";
+import "./unit/imports/lib/whiteboard-links";
 import "./unit/imports/lib/whiteboard-liveDrags";
+import "./unit/imports/lib/whiteboard-minimap";
+import "./unit/imports/lib/whiteboard-search";
 import "./unit/imports/Logger";
 
 import "./unit/imports/client/bookmarkButton";
@@ -48,6 +52,7 @@ import "./unit/imports/client/puzzleTitles";
 import "./unit/imports/client/search";
 import "./unit/imports/client/useCallState";
 import "./unit/imports/client/usePushToTalk";
+import "./unit/imports/client/whiteboardSearch";
 
 import "./acceptance/authentication";
 import "./acceptance/chatHooks";

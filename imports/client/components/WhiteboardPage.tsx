@@ -1,6 +1,6 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import { useTranslation } from "react-i18next";
@@ -20,6 +20,11 @@ import {
 } from "../../lib/permission_stubs";
 import whiteboardContents from "../../lib/publications/whiteboardContents";
 import whiteboardForHunt from "../../lib/publications/whiteboardForHunt";
+import {
+  BOARD_TARGET_PARAMS,
+  boardTargetFromParams,
+  boardTargetKey,
+} from "../../lib/whiteboard/links";
 import createWhiteboard from "../../methods/createWhiteboard";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
@@ -152,6 +157,35 @@ const WhiteboardPage = () => {
       ),
     [setSearchParams],
   );
+  // A ?puzzle=, ?node= or ?v= link, read once per link. Each of them is
+  // dropped once it's been shown, as is a ?v= that doesn't make sense.
+  const puzzleParam = searchParams.get("puzzle") ?? undefined;
+  const nodeParam = searchParams.get("node") ?? undefined;
+  const viewParam = searchParams.get("v") ?? undefined;
+  const initialTarget = useMemo(
+    () =>
+      boardTargetFromParams({
+        puzzle: puzzleParam,
+        node: nodeParam,
+        v: viewParam,
+      }),
+    [puzzleParam, nodeParam, viewParam],
+  );
+  const clearInitialTarget = useCallback(
+    () =>
+      setSearchParams(
+        (params) => {
+          BOARD_TARGET_PARAMS.forEach((name) => params.delete(name));
+          return params;
+        },
+        { replace: true },
+      ),
+    [setSearchParams],
+  );
+  const hasBadView = !initialTarget && !!viewParam;
+  useEffect(() => {
+    if (hasBadView) clearInitialTarget();
+  }, [hasBadView, clearInitialTarget]);
   const focusRef = useRef<((threadId: string) => void) | undefined>(undefined);
   const boardFocus: BoardFocus = useMemo(
     () => ({
@@ -189,7 +223,7 @@ const WhiteboardPage = () => {
     <BoardFocusContext value={boardFocus}>
       <PuzzlePage
         puzzleIdOverride={board.puzzle}
-        showContentFor={initialComment}
+        showContentFor={initialComment ?? boardTargetKey(initialTarget)}
         content={
           <WhiteboardCanvas
             boardId={board._id}
@@ -207,6 +241,8 @@ const WhiteboardPage = () => {
             focusRef={focusRef}
             initialComment={initialComment}
             onInitialCommentShown={clearInitialComment}
+            initialTarget={initialTarget}
+            onInitialTargetShown={clearInitialTarget}
           />
         }
       />

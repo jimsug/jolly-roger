@@ -1,6 +1,7 @@
 import { Meteor } from "meteor/meteor";
 import i18n from "i18next";
 import Flags from "../../Flags";
+import chatMessagePath, { commentThreadOf } from "../../lib/chatMessagePath";
 import isReaction from "../../lib/isReaction";
 import Announcements from "../../lib/models/Announcements";
 import type { ChatMessageContentType } from "../../lib/models/ChatMessages";
@@ -16,6 +17,7 @@ import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import nodeIsText from "../../lib/nodeIsText";
 import { computeSolvedness } from "../../lib/solvedness";
+import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import { DiscordBot } from "../discord";
 import { serverLanguage } from "../lang";
 import type Hookset from "./Hookset";
@@ -294,8 +296,17 @@ const DiscordHooks: Hookset = {
         }
       }
 
+      // A whiteboard message links to the board (at its thread, for a
+      // comment) rather than the hidden puzzle, which would only redirect.
+      const whiteboard = isWhiteboardPuzzle(puzzle);
       const url = Meteor.absoluteUrl(
-        `hunts/${chatMessage.hunt}/puzzles/${chatMessage.puzzle}`,
+        chatMessagePath({
+          hunt: chatMessage.hunt,
+          puzzle: chatMessage.puzzle,
+          whiteboard,
+          message: whiteboard ? chatMessage._id : undefined,
+          thread: commentThreadOf(chatMessage),
+        }),
       );
       let title = puzzle.title;
       if (title.length > 25) {

@@ -1,4 +1,5 @@
 import Flags from "../../Flags";
+import { commentThreadOf } from "../../lib/chatMessagePath";
 import {
   dingwordsMatchingMessage,
   normalizedForDingwordSearch,
@@ -179,8 +180,7 @@ const ChatNotificationHooks: Hookset = {
     }
 
     // Create notifications for each user who should be dinged by this message.
-    const thread =
-      chatMessage.thread ?? (chatMessage.comment ? chatMessage._id : undefined);
+    const thread = commentThreadOf(chatMessage);
     const mentionedPuzzles = [
       ...new Set(
         chatMessage.content.children

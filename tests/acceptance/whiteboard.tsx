@@ -37,6 +37,7 @@ import {
 import addHuntUser from "../../imports/methods/addHuntUser";
 import createFixtureHunt from "../../imports/methods/createFixtureHunt";
 import createWhiteboard from "../../imports/methods/createWhiteboard";
+import deleteWhiteboardComment from "../../imports/methods/deleteWhiteboardComment";
 import deleteWhiteboardNodes from "../../imports/methods/deleteWhiteboardNodes";
 import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
@@ -519,6 +520,421 @@ if (Meteor.isClient) {
         await waitFor(() => {
           assert.include(panelText(), "Is this the meta?");
         });
+      });
+    });
+
+    describe("finding things", function () {
+      // Temperance, from the fixture hunt
+      const puzzleId = "yZKtXk5oLJMGqwP6E";
+      let boardId: string;
+      let cardId: string;
+      let cardHome: { parent?: string; position: { x: number; y: number } };
+
+      const paneCentre = () => {
+        const box = document
+          .querySelector(".react-flow__pane")!
+          .getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      };
+
+      // The card is marked, and has been brought to the middle of the board.
+      const assertShown = () => {
+        assert.isNotNull(
+          document.querySelector(`.jr-node-pulse[data-node="${cardId}"]`),
+        );
+        const card = nodeElement(cardId);
+        assert.isNotNull(card);
+        const box = card.getBoundingClientRect();
+        const centre = paneCentre();
+        assert.closeTo(box.left + box.width / 2, centre.x, 4);
+        assert.closeTo(box.top + box.height / 2, centre.y, 4);
+      };
+
+      before(async function () {
+        this.timeout(10000);
+        boardId = (await ensureBoard())._id;
+        subs.push(await typedSubscribe.async(whiteboardContents, { boardId }));
+        const card = await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          puzzle: puzzleId,
+        });
+        assert.ok(card);
+        cardId = card._id;
+        cardHome = { parent: card.parent, position: card.position };
+      });
+
+      // Deleting a card hides it; putting it back where it was undoes that.
+      const hideCard = () =>
+        deleteWhiteboardNodes.callPromise({ boardId, nodeIds: [cardId] });
+      const restoreCard = () =>
+        upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: cardId,
+              hidden: false,
+              parent: cardHome.parent ?? null,
+              position: cardHome.position,
+            },
+          ],
+        });
+
+      const searchFor = async (text: string) => {
+        const search = await screen.findByRole(
+          "combobox",
+          { name: "Search the board" },
+          { timeout: 20000 },
+        );
+        await act(async () => {
+          fireEvent.focus(search);
+          fireEvent.change(search, { target: { value: text } });
+          await stabilize();
+        });
+        return search;
+      };
+
+      beforeEach(function () {
+        // Opens well away from the card
+        localStorage.setItem(
+          `whiteboard:viewport:${boardId}`,
+          JSON.stringify({ x: 4000, y: 4000, zoom: 0.5 }),
+        );
+      });
+
+      it("pans to a card the search finds, and marks it", async function () {
+        this.timeout(30000);
+        render(<TestApp />);
+        await goTo(boardPath);
+        const search = await screen.findByRole(
+          "combobox",
+          { name: "Search the board" },
+          { timeout: 20000 },
+        );
+        await act(async () => {
+          fireEvent.focus(search);
+          fireEvent.change(search, { target: { value: "temperance" } });
+          await stabilize();
+        });
+        const option = await screen.findByRole("option", {
+          name: /^Temperance/,
+        });
+        await act(async () => {
+          fireEvent.click(option);
+          await stabilize();
+        });
+        await waitFor(assertShown, { timeout: 10000 });
+      });
+
+      it("shows the card a ?puzzle= link names, then drops the link", async function () {
+        this.timeout(30000);
+        render(<TestApp />);
+        await goTo(`${boardPath}?puzzle=${puzzleId}`);
+        await waitFor(
+          () => {
+            assertShown();
+            assert.equal(location.current?.search, "");
+          },
+          { timeout: 20000 },
+        );
+      });
+
+      it("opens the view a ?v= link names, then drops the link", async function () {
+        this.timeout(30000);
+        render(<TestApp />);
+        await goTo(`${boardPath}?v=1000,-500,1.5`);
+        await waitFor(
+          () => {
+            const centre = paneCentre();
+            const viewport = document.querySelector<HTMLElement>(
+              ".react-flow__viewport",
+            )!;
+            const { a, e, f } = new DOMMatrix(
+              getComputedStyle(viewport).transform,
+            );
+            const pane = document
+              .querySelector(".react-flow__pane")!
+              .getBoundingClientRect();
+            assert.closeTo(a, 1.5, 0.001);
+            // Board point (1000, -500) is in the middle of the pane
+            assert.closeTo(pane.left + e + 1000 * a, centre.x, 1);
+            assert.closeTo(pane.top + f - 500 * a, centre.y, 1);
+            assert.equal(location.current?.search, "");
+          },
+          { timeout: 20000 },
+        );
+      });
+
+      it("opens a card's puzzle on a double-click", async function () {
+        this.timeout(30000);
+        render(<TestApp />);
+        await goTo(`${boardPath}?puzzle=${puzzleId}`);
+        await waitFor(assertShown, { timeout: 20000 });
+        const box = nodeElement(cardId)!.getBoundingClientRect();
+        await act(async () => {
+          fireEvent.doubleClick(nodeElement(cardId)!, {
+            // Clear of the handles at the middle of each side
+            clientX: box.left + 30,
+            clientY: box.top + box.height / 2 + 10,
+          });
+          await stabilize();
+        });
+        await waitFor(() => {
+          assert.equal(
+            location.current?.pathname,
+            `/hunts/${huntId}/puzzles/${puzzleId}`,
+          );
+        });
+      });
+
+      it("goes from a puzzle's page to its card on the board", async function () {
+        this.timeout(30000);
+        render(<TestApp />);
+        await goTo(`/hunts/${huntId}/puzzles/${puzzleId}`);
+        // The related puzzles' rows have their own
+        const show = await waitFor(
+          () => {
+            const found = screen
+              .getAllByRole("link", { name: "Show on board" })
+              .find((link) =>
+                link.getAttribute("href")?.endsWith(`?puzzle=${puzzleId}`),
+              );
+            assert.exists(found);
+            return found;
+          },
+          { timeout: 20000 },
+        );
+        await act(async () => {
+          fireEvent.click(show);
+          await stabilize();
+        });
+        await waitFor(
+          () => {
+            assert.equal(location.current?.pathname, boardPath);
+            assert.equal(location.current?.search, "");
+            assertShown();
+          },
+          { timeout: 20000 },
+        );
+      });
+
+      it("puts back a hidden card from the search only when asked", async function () {
+        this.timeout(30000);
+        await hideCard();
+        try {
+          render(<TestApp />);
+          await goTo(boardPath);
+          const search = await searchFor("temperance");
+          const option = await screen.findByRole("option", {
+            name: /^Temperance/,
+          });
+          assert.include(option.textContent ?? "", "Not on the board");
+          // Enter on the row, or a click on it, leaves the card where it is
+          await act(async () => {
+            fireEvent.keyDown(search, { key: "Enter" });
+            fireEvent.click(option);
+            await stabilize();
+          });
+          assert.isTrue(
+            (await WhiteboardNodes.findOneAsync(cardId))?.hidden ?? false,
+          );
+          await act(async () => {
+            fireEvent.click(
+              within(option).getByRole("button", { name: "Put back" }),
+            );
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const card = await WhiteboardNodes.findOneAsync(cardId);
+              assert.ok(card);
+              assert.isNotOk(card.hidden);
+              assert.isNotNull(
+                document.querySelector(`.jr-node-pulse[data-node="${cardId}"]`),
+              );
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          await restoreCard();
+        }
+      });
+
+      it("finds a hidden card on a read-only board, with no way to put it back", async function () {
+        this.timeout(30000);
+        await hideCard();
+        await setHuntArchived.callPromise({ huntId, isArchived: true });
+        try {
+          render(<TestApp />);
+          await goTo(boardPath);
+          await screen.findByText("Viewing only", {}, { timeout: 20000 });
+          const search = await searchFor("temperance");
+          const option = await screen.findByRole("option", {
+            name: /^Temperance/,
+          });
+          assert.equal(option.getAttribute("aria-disabled"), "true");
+          assert.include(option.textContent ?? "", "Not on the board");
+          assert.isNull(
+            within(option).queryByRole("button", { name: "Put back" }),
+          );
+          await act(async () => {
+            fireEvent.keyDown(search, { key: "Enter" });
+            await stabilize();
+          });
+          assert.isTrue(
+            (await WhiteboardNodes.findOneAsync(cardId))?.hidden ?? false,
+          );
+        } finally {
+          await setHuntArchived.callPromise({ huntId, isArchived: false });
+          await restoreCard();
+        }
+      });
+
+      it("says so when a ?puzzle= link's card is hidden, then drops the link", async function () {
+        this.timeout(30000);
+        await hideCard();
+        try {
+          render(<TestApp />);
+          await goTo(`${boardPath}?puzzle=${puzzleId}`);
+          await screen.findByText(
+            "That puzzle isn't on the board.",
+            {},
+            { timeout: 20000 },
+          );
+          await waitFor(() => assert.equal(location.current?.search, ""));
+        } finally {
+          await restoreCard();
+        }
+      });
+
+      it("shows the node a ?node= link names, then drops the link", async function () {
+        this.timeout(30000);
+        const sticky = Random.id();
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: sticky,
+              type: "sticky",
+              position: { x: 3000, y: 3000 },
+              width: 160,
+              height: 120,
+              text: "Linked note",
+            },
+          ],
+        });
+        try {
+          render(<TestApp />);
+          await goTo(`${boardPath}?node=${sticky}`);
+          await waitFor(
+            () => {
+              assert.isNotNull(
+                document.querySelector(`.jr-node-pulse[data-node="${sticky}"]`),
+              );
+              assert.equal(location.current?.search, "");
+            },
+            { timeout: 20000 },
+          );
+        } finally {
+          await deleteWhiteboardNodes.callPromise({
+            boardId,
+            nodeIds: [sticky],
+          });
+        }
+      });
+
+      it("drops a ?v= link it can't read, without a notice", async function () {
+        this.timeout(30000);
+        render(<TestApp />);
+        await goTo(`${boardPath}?v=abc`);
+        await screen.findByRole(
+          "combobox",
+          { name: "Search the board" },
+          { timeout: 20000 },
+        );
+        await waitFor(() => assert.equal(location.current?.search, ""));
+        assert.isNull(screen.queryByText(/^That (puzzle )?isn't on the board/));
+      });
+
+      it("jumps to the search on / while the board has focus, and leaves Ctrl+F alone elsewhere", async function () {
+        this.timeout(30000);
+        render(<TestApp />);
+        await goTo(boardPath);
+        const search = await screen.findByRole(
+          "combobox",
+          { name: "Search the board" },
+          { timeout: 20000 },
+        );
+        // Lets the canvas's effects, which listen for the keys, run
+        await act(async () => {
+          await stabilize();
+        });
+        const pane = document.querySelector(".react-flow__pane")!;
+        const box = pane.getBoundingClientRect();
+        const at = {
+          button: 0,
+          pointerId: 1,
+          clientX: box.left + box.width * 0.6,
+          clientY: box.top + box.height * 0.6,
+        };
+        await act(async () => {
+          fireEvent.pointerDown(pane, at);
+          fireEvent.pointerUp(pane, at);
+          fireEvent.keyDown(pane, { key: "/" });
+          await stabilize();
+        });
+        assert.equal(document.activeElement, search);
+
+        await act(async () => {
+          search.blur();
+          fireEvent.pointerDown(document.body);
+          await stabilize();
+        });
+        let notCancelled = true;
+        await act(async () => {
+          notCancelled = fireEvent.keyDown(document.body, {
+            key: "f",
+            ctrlKey: true,
+          });
+          await stabilize();
+        });
+        assert.isTrue(notCancelled, "the browser's find still runs");
+        assert.notEqual(document.activeElement, search);
+      });
+
+      it("says so when a ?comment= link's thread has gone", async function () {
+        this.timeout(30000);
+        const board = await ensureBoard();
+        await sendChatMessage.callPromise({
+          puzzleId: board.puzzle,
+          content: JSON.stringify({
+            type: "message",
+            children: [{ text: "Soon gone" }],
+          }),
+          comment: { x: 777, y: 777 },
+        });
+        render(<TestApp />);
+        await goTo(boardPath);
+        const commentId = await waitFor(
+          async () => {
+            const found = await ChatMessages.findOneAsync({
+              "comment.x": 777,
+            });
+            assert.ok(found);
+            return found._id;
+          },
+          { timeout: 20000 },
+        );
+        await deleteWhiteboardComment.callPromise({ messageId: commentId });
+        await waitFor(async () => {
+          assert.isUndefined(await ChatMessages.findOneAsync(commentId));
+        });
+        await goTo(`${boardPath}?comment=${commentId}`);
+        await screen.findByText(
+          "That comment is gone.",
+          {},
+          { timeout: 20000 },
+        );
+        await waitFor(() => assert.equal(location.current?.search, ""));
       });
     });
 

@@ -16,6 +16,7 @@ import React, {
   type ComponentPropsWithRef,
   type FC,
   useCallback,
+  useContext,
   useId,
   useMemo,
   useRef,
@@ -52,6 +53,24 @@ import PuzzleModalForm from "./PuzzleModalForm";
 import PuzzleUnlockModal from "./PuzzleUnlockModal";
 import { mediaBreakpointDown } from "./styling/responsive";
 import TagList from "./TagList";
+import ShowOnBoardLink, {
+  HuntHasWhiteboardContext,
+} from "./whiteboard/ShowOnBoardLink";
+
+// Shown while the row is hovered or has focus, and always on touch screens,
+// which can't hover.
+const RowBoardLink = styled(ShowOnBoardLink)`
+  margin-left: 0.5rem;
+  opacity: 0;
+
+  &:focus-visible {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    opacity: 1;
+  }
+`;
 
 const PuzzleDiv = styled.div<{
   $solvedness: Solvedness;
@@ -83,6 +102,10 @@ const PuzzleDiv = styled.div<{
   &:hover {
     filter: ${({ theme }) =>
       theme.basicMode === "dark" ? "brightness(1.2)" : "brightness(0.95)"};
+  }
+
+  &:hover ${RowBoardLink}, &:focus-within ${RowBoardLink} {
+    opacity: 1;
   }
 
   ${mediaBreakpointDown(
@@ -312,6 +335,7 @@ const Puzzle = React.memo(
       puzzle.hunt,
     );
     const showEdit = canUpdate && !operatorActionsHidden;
+    const huntHasWhiteboard = useContext(HuntHasWhiteboardContext);
 
     // Generating the edit modals for all puzzles is expensive, so we do it
     // lazily. The first time the modal button is clicked, we change this state
@@ -650,6 +674,9 @@ const Puzzle = React.memo(
         </PuzzleControlButtonsColumn>
         <PuzzleTitleColumn>
           <Link to={linkTarget}>{puzzle.title}</Link>
+          {huntHasWhiteboard && (
+            <RowBoardLink huntId={puzzle.hunt} puzzleId={puzzle._id} />
+          )}
           {noteLines.length > 0 && (
             <OverlayTrigger
               placement="top"

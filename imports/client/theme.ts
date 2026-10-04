@@ -117,6 +117,13 @@ export interface Theme {
       unsolved: string;
       solved: string;
     };
+    // Cards on the whiteboard's mini map, stronger than the card backgrounds
+    // so they show at that size
+    miniMapSolvedness: {
+      noAnswers: string;
+      unsolved: string;
+      solved: string;
+    };
     // Five steps from "no activity" to "most activity"
     contributionsGraph: readonly [string, string, string, string, string];
   };
@@ -228,6 +235,11 @@ export const lightTheme: Theme = {
       noAnswers: "#dfdfff",
       unsolved: "#f0f0f0",
       solved: "#dfffdf",
+    },
+    miniMapSolvedness: {
+      noAnswers: "#5c7cfa",
+      unsolved: "#adb5bd",
+      solved: "#2f9e44",
     },
     contributionsGraph: ["#ebedf0", "#c6e48b", "#7bc96f", "#239a3b", "#196127"],
   },
@@ -367,6 +379,11 @@ export const darkTheme: Theme = {
       noAnswers: "rgb(77, 77, 118)",
       unsolved: "rgb(46, 46, 46)",
       solved: "rgb(32, 66, 32)",
+    },
+    miniMapSolvedness: {
+      noAnswers: "#748ffc",
+      unsolved: "#868e96",
+      solved: "#51cf66",
     },
     contributionsGraph: ["#22272e", "#004225", "#006d32", "#30a14e", "#39d353"],
   },

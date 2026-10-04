@@ -1,11 +1,17 @@
 ---
 files:
   - imports/client/components/WhiteboardPage.tsx
+  - imports/client/components/whiteboard/BoardSearch.tsx
   - imports/client/components/whiteboard/EditPolicyModal.tsx
+  - imports/client/components/whiteboard/ShowOnBoardLink.tsx
+  - imports/lib/chatMessagePath.ts
   - imports/lib/models/WhiteboardEdges.ts
   - imports/lib/models/WhiteboardNodes.ts
   - imports/lib/models/Whiteboards.ts
   - imports/lib/whiteboard/limits.ts
+  - imports/lib/whiteboard/links.ts
+  - imports/lib/whiteboard/minimap.ts
+  - imports/lib/whiteboard/search.ts
   - imports/methods/setWhiteboardEditPolicy.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
   - imports/server/models/WhiteboardPresence.ts
@@ -37,7 +43,8 @@ The board's chat and call belong to a hidden puzzle (`kind: "whiteboard"`)
 created with the board. Comment threads are chat messages on that puzzle, so
 they also show in the board's chat. Most puzzle methods refuse the hidden
 puzzle (`assertNotWhiteboardPuzzle`), and the puzzle list, tags and notes
-pages leave it out.
+pages leave it out. The board page's tab is titled with the hunt's name, like
+the hunt's other pages ("Whiteboard :: <hunt> :: Jolly Roger").
 
 ## Who may edit and comment
 
@@ -164,13 +171,91 @@ on the toolbar, whose title names the current policy. It opens
 `EditPolicyModal`, which picks people from the hunt's display names and stays
 open until a save comes back.
 
+## Finding things on the board
+
+### Search
+
+The search field at the start of the toolbar, there on read-only boards too,
+finds puzzles by title, answer or tag, using the puzzle list's own matcher
+(`compilePuzzleMatcher`) so a search finds the same puzzles in both places. It
+also finds frames by the label they show, sticky notes and text boxes by their
+contents, and the lines the board is drawing by their label (not a line to a
+hidden card, or a feeder arrow the viewer has turned off). `/` or Ctrl+F
+(Cmd+F on a Mac) jumps to it while the board has focus, meaning the last press
+or focus was on the board; anywhere else, and from the search field itself,
+Ctrl+F is the browser's own find.
+
+The results drop down under the field. Arrow keys move through them and Enter
+picks one, as does a click. Picking something pans the board to it, zooming in
+to at least 0.8 if it's further out, and marks it with a pulse for a couple of
+seconds; a line is marked at its middle. A puzzle whose card is hidden, or
+that has no card, is listed last as "Not on the board". Picking that row does
+nothing; anyone who can edit gets a "Put back" button on it, which puts the
+card back at the middle of the screen, so a search never moves a card by
+itself. The matching is
+`searchBoard` in `imports/lib/whiteboard/search.ts`. Hidden frames and hidden
+feeder arrows aren't found, since nothing can put them back yet.
+
+### Links
+
+The board page follows four kinds of link, each of which waits for the board
+to load, shows what it names, and is then dropped from the address:
+
+- `?comment=<threadId>` opens a comment thread and pulses its pin. A thread
+  that has been deleted gives a notice, "That comment is gone.", rather than
+  waiting for ever, and one on something that has been hidden or deleted
+  says "That isn't on the board any more." The canvas knows the thread is
+  gone once the puzzle page's chat has loaded, which the page tells it through
+  `ChatLoadedContext`.
+- `?puzzle=<puzzleId>` pans to that puzzle's card and marks it, or says the
+  puzzle isn't on the board.
+- `?node=<nodeId>` does the same for any node.
+- `?v=x,y,zoom` opens the view with board point (x, y) in the middle at that
+  zoom. Anything that isn't three numbers on the board (within
+  `MAX_COORDINATE`) at a zoom the board allows is ignored and dropped.
+
+A board opened from a link doesn't fit itself to the screen first, so it
+doesn't jump twice; if the link names something that isn't there, it fits
+then.
+
+The toolbar's link button, "Copy link to here", copies a link to the selected
+card (`?puzzle=`), to a selected frame, note or text box (`?node=`), or else
+to the current view (`?v=`), for pasting into chat (`boardLinkQuery` in
+`imports/lib/whiteboard/links.ts`). Nothing can be selected on a read-only
+board, so there it always copies the view.
+
+Elsewhere, the puzzle page has a "Show on board" link beside the bookmark,
+and each row of the puzzle list has one too, showing while the row is hovered
+or focused (always, on touch screens). Both go to `?puzzle=`, and only show
+when the hunt has a board and the whiteboard is on. The puzzle list works
+that out once for the page (`HuntHasWhiteboardContext`) rather than in every
+row. Double-clicking a card on
+the board opens its puzzle, unless something sits on top of it there.
+
+Notifications link the same way, through `chatMessagePath` in
+`imports/lib/chatMessagePath.ts`. A ding on a board message opens the board
+with chat scrolled to it (`#msg=`); one in a comment thread also opens the
+thread (`?comment=`). Messages on the board that go to the hunt's Discord
+firehose link there too, rather than to the hidden puzzle, which would only
+redirect.
+
+### The mini map
+
+On a wide screen the mini map shows each card in its solvedness colour and
+each frame in its colour, faintly, so solved rounds stand out. The card
+colours are the theme's `miniMapSolvedness`, stronger than the card
+backgrounds so they show at that size, and frames take the strong version of
+their colour. Free line ends are left off, and everything else is grey
+(`miniMapColor` in `imports/lib/whiteboard/minimap.ts`).
+
 ## Flags
 
 - `disable.whiteboard` turns the board off. Creating one, every node and line
   write, new comments, resolving and deleting comments, and policy changes are
   refused; the whiteboard publications return nothing; placement stops; and
-  live updates do nothing. The page says the whiteboard is turned off and the
-  hunt nav hides its link. Ordinary chat on the hidden puzzle isn't gated.
+  live updates do nothing. The page says the whiteboard is turned off, the
+  hunt nav hides its link, and the puzzle page and list hide "Show on board".
+  Ordinary chat on the hidden puzzle isn't gated.
 - `disable.whiteboard_live` turns off cursors, live drags and strokes: the
   presence publication returns nothing and `setLive` does nothing.
 

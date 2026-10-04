@@ -8,6 +8,7 @@ import { faDiagramProject } from "@fortawesome/free-solid-svg-icons/faDiagramPro
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faEyeSlash } from "@fortawesome/free-solid-svg-icons/faEyeSlash";
 import { faFont } from "@fortawesome/free-solid-svg-icons/faFont";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faObjectGroup } from "@fortawesome/free-solid-svg-icons/faObjectGroup";
 import { faPen } from "@fortawesome/free-solid-svg-icons/faPen";
@@ -15,7 +16,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type {
   AriaLabelConfig,
   EdgeChange,
-  Node,
   NodeChange,
   OnBeforeDelete,
   OnConnectEnd,
@@ -40,6 +40,7 @@ import {
 } from "@xyflow/react";
 import React, {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -50,6 +51,7 @@ import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
 import FormSelect from "react-bootstrap/FormSelect";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router";
 import styled, { css, useTheme } from "styled-components";
 import Flags from "../../../Flags";
 import type { ChatMessageCommentAnchorType } from "../../../lib/models/ChatMessages";
@@ -67,6 +69,8 @@ import type {
   WhiteboardAccessReason,
 } from "../../../lib/permission_stubs";
 import whiteboardPresence from "../../../lib/publications/whiteboardPresence";
+import type { Solvedness } from "../../../lib/solvedness";
+import { computeSolvedness } from "../../../lib/solvedness";
 import type {
   AlignMode,
   ArrangeItem,
@@ -109,8 +113,17 @@ import {
   MAX_LIVE_DRAG_NODES,
 } from "../../../lib/whiteboard/limits";
 import type { LineStyle } from "../../../lib/whiteboard/lineStyle";
+import type { BoardTarget } from "../../../lib/whiteboard/links";
+import {
+  boardLinkQuery,
+  boardTargetKey,
+  MAX_ZOOM,
+  MIN_ZOOM,
+} from "../../../lib/whiteboard/links";
 import type { SeenDrag } from "../../../lib/whiteboard/liveDrags";
 import { liveDrags, seeDrags } from "../../../lib/whiteboard/liveDrags";
+import { miniMapColor } from "../../../lib/whiteboard/minimap";
+import type { BoardSearchHit } from "../../../lib/whiteboard/search";
 import deleteWhiteboardEdges from "../../../methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
 import type { WhiteboardLiveState } from "../../../methods/setWhiteboardLive";
@@ -142,7 +155,10 @@ import useWhiteboardSync, {
   selectionUnits,
 } from "../../hooks/useWhiteboardSync";
 import WhiteboardPresence from "../../WhiteboardPresence";
+import CopyToClipboardButton from "../CopyToClipboardButton";
 import ArrangeIcon from "./ArrangeIcon";
+import BoardSearch from "./BoardSearch";
+import ChatLoadedContext from "./ChatLoadedContext";
 import ColorPicker from "./ColorPicker";
 import type { CommentPin } from "./CommentLayer";
 import CommentLayer from "./CommentLayer";
@@ -158,6 +174,7 @@ import InkNode from "./InkNode";
 import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
 import LineStyleIcon from "./LineStyleIcon";
 import { MIN_SIZES } from "./NodeChrome";
+import NodePulse from "./NodePulse";
 import PeopleContext from "./PeopleContext";
 import PointNode from "./PointNode";
 import PuzzleCardNode from "./PuzzleCardNode";
@@ -220,9 +237,13 @@ const OVERLAYS =
 const ATTACH_MARGIN = 8;
 const FRAME_ATTACH_MARGIN = 12;
 
-// Free line ends are too small to show on the mini map.
-const miniMapNodeColor = (node: Node) =>
-  node.type === "point" ? "transparent" : "rgb(128 128 128 / 45%)";
+// Frames on the mini map take their colour's strong version, which still
+// shows when faded. Black's strong version is the theme's text colour, which
+// isn't a fixed value, so black frames take their fill.
+const MINI_MAP_FRAMES = {
+  ...colors.stroke,
+  black: colors.fill.black,
+};
 
 const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
   /* stylelint-disable selector-class-pattern -- React Flow's class names */
@@ -522,8 +543,10 @@ interface Drawing {
   parent?: string;
 }
 
-// How long a pin pulses after the board pans to it.
+// How long a pin or node pulses after the board pans to it.
 const PULSE_MS = 2200;
+// How long a note about a link that couldn't be followed stays up.
+const NOTICE_MS = 8000;
 
 interface CanvasProps {
   boardId: string;
@@ -547,6 +570,10 @@ interface CanvasProps {
   // A comment to show once the board has loaded (from a ?comment= link).
   initialComment?: string;
   onInitialCommentShown?: () => void;
+  // A card, node or view to show once the board has loaded (from a ?puzzle=,
+  // ?node= or ?v= link).
+  initialTarget?: BoardTarget;
+  onInitialTargetShown?: () => void;
 }
 
 const CanvasInner = ({
@@ -563,9 +590,12 @@ const CanvasInner = ({
   focusRef,
   initialComment,
   onInitialCommentShown,
+  initialTarget,
+  onInitialTargetShown,
 }: CanvasProps) => {
   const theme = useTheme();
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const flow = useReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const readOnly = access !== "edit";
@@ -640,12 +670,44 @@ const CanvasInner = ({
     () => new Set(livePuzzles.map((p) => p._id)),
     [livePuzzles],
   );
+  // Each puzzle's solvedness, for colouring its card on the mini map.
+  const solvedness = useTracker(
+    () =>
+      showMiniMap
+        ? new Map<string, Solvedness>(
+            Puzzles.find(
+              { hunt: huntId, kind: { $ne: "whiteboard" } },
+              {
+                projection: {
+                  answers: 1,
+                  expectedAnswerCount: 1,
+                  completedWithNoAnswer: 1,
+                },
+              },
+            ).map((p) => [p._id, computeSolvedness(p)]),
+          )
+        : undefined,
+    [huntId, showMiniMap],
+  );
+  const miniMapNodeColor = useCallback(
+    (node: WhiteboardFlowNode) =>
+      miniMapColor(
+        node.data.doc,
+        {
+          solvedness: theme.colors.miniMapSolvedness,
+          frames: MINI_MAP_FRAMES,
+        },
+        (id) => solvedness?.get(id),
+      ),
+    [solvedness, theme],
+  );
 
   // Each viewer's own pan and zoom for the board, and their tool settings.
   const [savedViewport, setSavedViewport] = useWhiteboardViewport(boardId);
   // Only the viewport the board opened at counts; it's fitted to the board
-  // when there's none.
+  // when there's none, unless a link says where to look.
   const [initialViewport] = useState(savedViewport);
+  const [openedAt] = useState(boardTargetKey(initialTarget));
   const [showFeederArrows, setShowFeederArrows] = useWhiteboardFeederArrows();
   const [tool, setTool] = useState<Tool>("select");
   // A board that becomes read-only (say, the hunt is archived) puts any
@@ -685,6 +747,11 @@ const CanvasInner = ({
   const [draft, setDraft] = useState<ChatMessageCommentAnchorType>();
   const [pulse, setPulse] = useState<string | undefined>();
   const pulseTimer = useRef<number | undefined>(undefined);
+  const [nodePulse, setNodePulse] = useState<{
+    node?: string;
+    point?: XYPosition;
+  }>();
+  const nodePulseTimer = useRef<number | undefined>(undefined);
   // Timeouts that only tidy up this component's state, cleared with it.
   const tidyTimers = useRef(new Set<number>());
   const tidyLater = useCallback((tidy: () => void, ms: number) => {
@@ -1668,6 +1735,7 @@ const CanvasInner = ({
     );
   }, [livePuzzles, nodeDocs]);
 
+  // Puts a card back at the middle of the screen, and says which node it is.
   const putBack = useCallback(
     (card: MissingCard) => {
       const center = paneCenter();
@@ -1675,11 +1743,12 @@ const CanvasInner = ({
         x: Math.round(center.x - CARD_WIDTH / 2),
         y: Math.round(center.y - CARD_HEIGHT / 2),
       };
+      const _id = card.id ?? Random.id();
       updateNodes([
         card.id
-          ? { _id: card.id, hidden: false, parent: null, position }
+          ? { _id, hidden: false, parent: null, position }
           : {
-              _id: Random.id(),
+              _id,
               type: "puzzle",
               puzzle: card.puzzle,
               position,
@@ -1687,6 +1756,7 @@ const CanvasInner = ({
               height: CARD_HEIGHT,
             },
       ]);
+      return _id;
     },
     [paneCenter, updateNodes],
   );
@@ -1812,32 +1882,140 @@ const CanvasInner = ({
     }
   }, [openThreadData, markCommentSeen]);
 
-  // Pans to a comment and opens it, if it's on the board.
-  const showComment = useCallback(
-    (threadId: string) => {
-      const anchor = threads.get(threadId)?.root.comment;
-      if (!anchor) return;
-      const at = commentPosition(
-        anchor,
-        anchor.node ? absoluteRect(anchor.node) : undefined,
-      );
-      if (!at) return;
-      setShowHidden(false);
-      setDraft(undefined);
-      setOpenThread(threadId);
+  // Brings a point on the board to the middle of the screen, zooming in far
+  // enough to read a card.
+  const panTo = useCallback(
+    (at: XYPosition) => {
       void flow.setCenter(at.x, at.y, {
         zoom: Math.max(flow.getZoom(), 0.8),
         duration: 400,
       });
+    },
+    [flow],
+  );
+
+  // Marks a node, or a point, for a moment after the board pans to it.
+  const pulseAt = useCallback(
+    (target: { node?: string; point?: XYPosition }) => {
+      setNodePulse(target);
+      window.clearTimeout(nodePulseTimer.current);
+      nodePulseTimer.current = window.setTimeout(
+        () => setNodePulse(undefined),
+        PULSE_MS,
+      );
+    },
+    [],
+  );
+
+  // Pans to a node and marks it, if it's on the board.
+  const showNode = useCallback(
+    (id: string) => {
+      const rect = absoluteRect(id);
+      if (!rect) return false;
+      panTo(centerOf(rect));
+      pulseAt({ node: id });
+      return true;
+    },
+    [absoluteRect, panTo, pulseAt],
+  );
+
+  // Pans to the middle of a line and marks it.
+  const showLine = useCallback(
+    (id: string) => {
+      const edge = flow.getEdge(id);
+      const from = edge && nodeCenter(edge.source);
+      const to = edge && nodeCenter(edge.target);
+      if (!from || !to) return;
+      const middle = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+      panTo(middle);
+      pulseAt({ point: middle });
+    },
+    [flow, nodeCenter, panTo, pulseAt],
+  );
+
+  // Pans to a comment and opens it, if it's on the board, and says whether
+  // it was.
+  const showComment = useCallback(
+    (threadId: string) => {
+      const anchor = threads.get(threadId)?.root.comment;
+      if (!anchor) return false;
+      const at = commentPosition(
+        anchor,
+        anchor.node ? absoluteRect(anchor.node) : undefined,
+      );
+      if (!at) return false;
+      setShowHidden(false);
+      setDraft(undefined);
+      setOpenThread(threadId);
+      panTo(at);
       setPulse(threadId);
       window.clearTimeout(pulseTimer.current);
       pulseTimer.current = window.setTimeout(
         () => setPulse(undefined),
         PULSE_MS,
       );
+      return true;
     },
-    [threads, flow, absoluteRect],
+    [threads, absoluteRect, panTo],
   );
+
+  // What picking something the search found does: pan to it, or put a
+  // puzzle that isn't on the board back and mark it there.
+  const showSearchHit = useCallback(
+    (hit: BoardSearchHit) => {
+      if (hit.node) showNode(hit.node);
+      else if (hit.edge) showLine(hit.edge);
+    },
+    [showNode, showLine],
+  );
+  const putBackSearchHit = useCallback(
+    (hit: BoardSearchHit) => {
+      if (readOnly || !hit.puzzle) return;
+      const id = putBack({
+        id: hit.node,
+        puzzle: hit.puzzle,
+        title: hit.label,
+      });
+      pulseAt({ node: id });
+    },
+    [readOnly, putBack, pulseAt],
+  );
+  const searchRef = useRef<HTMLInputElement>(null);
+  const drawnEdges = useMemo(() => new Set(edges.map((e) => e.id)), [edges]);
+
+  // A link to what's selected (a card, or another node), or else to this
+  // view, for pasting into chat.
+  const linkToHere = useCallback(() => {
+    const selected = flow.getNodes().filter((n) => n.selected);
+    const [only] = selected.length === 1 ? selected : [];
+    const query = boardLinkQuery(only?.data.doc, {
+      ...paneCenter(),
+      zoom: flow.getZoom(),
+    });
+    return Meteor.absoluteUrl(`hunts/${huntId}/whiteboard?${query}`);
+  }, [flow, paneCenter, huntId]);
+
+  // A short message under the toolbar about a link that couldn't be
+  // followed, gone after a while.
+  const [linkNotice, setLinkNotice] = useState<{ id: number; text: string }>();
+  const showLinkNotice = useCallback(
+    (text: string) => {
+      const id = Date.now();
+      setLinkNotice({ id, text });
+      tidyLater(
+        () =>
+          setLinkNotice((current) =>
+            current?.id === id ? undefined : current,
+          ),
+        NOTICE_MS,
+      );
+    },
+    [tidyLater],
+  );
+  const dismissLinkNotice = useCallback(() => setLinkNotice(undefined), []);
+
+  // Once the board's chat has loaded, a thread that isn't in it is gone.
+  const commentsLoaded = useContext(ChatLoadedContext);
 
   // A comment asked for before the board has its nodes laid out, or before
   // the thread has reached this client, is shown as soon as both are ready.
@@ -1865,8 +2043,8 @@ const CanvasInner = ({
 
   const focusComment = useCallback(
     (threadId: string) => {
-      if (readyToShow(threadId)) return showComment(threadId);
-      setPendingFocus(threadId);
+      if (readyToShow(threadId)) showComment(threadId);
+      else setPendingFocus(threadId);
     },
     [readyToShow, showComment],
   );
@@ -1874,14 +2052,30 @@ const CanvasInner = ({
   // React Flow takes in new nodes before this component's effects run, so
   // this is rechecked whenever they change.
   useEffect(() => {
-    if (!pendingFocus || !readyToShow(pendingFocus)) return;
+    if (!pendingFocus) return;
+    if (commentsLoaded && !threads.has(pendingFocus)) {
+      setPendingFocus(undefined);
+      showLinkNotice(t("whiteboard.link.commentGone", "That comment is gone."));
+      if (pendingFocus === initialComment) onInitialCommentShown?.();
+      return;
+    }
+    if (!readyToShow(pendingFocus)) return;
     setPendingFocus(undefined);
-    showComment(pendingFocus);
+    if (!showComment(pendingFocus)) {
+      // What the comment was on has been hidden or deleted.
+      showLinkNotice(
+        t("whiteboard.link.nodeGone", "That isn't on the board any more."),
+      );
+    }
     if (pendingFocus === initialComment) onInitialCommentShown?.();
   }, [
     pendingFocus,
+    commentsLoaded,
+    threads,
     readyToShow,
     showComment,
+    showLinkNotice,
+    t,
     initialComment,
     onInitialCommentShown,
     nodes,
@@ -1894,7 +2088,78 @@ const CanvasInner = ({
     };
   }, [focusRef, focusComment]);
 
-  useEffect(() => () => window.clearTimeout(pulseTimer.current), []);
+  // A ?puzzle=, ?node= or ?v= link waits in the same way for the board to
+  // load, and for the node it names to be laid out.
+  const [pendingTarget, setPendingTarget] = useState(initialTarget);
+  const [linkedTarget, setLinkedTarget] = useState(
+    boardTargetKey(initialTarget),
+  );
+  if (boardTargetKey(initialTarget) !== linkedTarget) {
+    setLinkedTarget(boardTargetKey(initialTarget));
+    if (initialTarget) setPendingTarget(initialTarget);
+  }
+  useEffect(() => {
+    if (!pendingTarget || !boardLoaded || !flow.viewportInitialized) return;
+    const done = () => {
+      setPendingTarget(undefined);
+      if (boardTargetKey(pendingTarget) === boardTargetKey(initialTarget)) {
+        onInitialTargetShown?.();
+      }
+    };
+    if (pendingTarget.kind === "view") {
+      void flow.setCenter(pendingTarget.x, pendingTarget.y, {
+        zoom: pendingTarget.zoom,
+      });
+      done();
+      return;
+    }
+    const doc =
+      pendingTarget.kind === "puzzle"
+        ? nodeDocs.find(
+            (d) => d.type === "puzzle" && d.puzzle === pendingTarget.id,
+          )
+        : nodeDocs.find((d) => d._id === pendingTarget.id);
+    const gone =
+      !doc ||
+      !!doc.hidden ||
+      (doc.type === "puzzle" && !livePuzzleIds.has(doc.puzzle ?? ""));
+    if (gone) {
+      showLinkNotice(
+        pendingTarget.kind === "puzzle"
+          ? t("whiteboard.link.puzzleGone", "That puzzle isn't on the board.")
+          : t("whiteboard.link.nodeGone", "That isn't on the board any more."),
+      );
+      // The board skipped fitting itself to open here, so it does now.
+      if (!initialViewport && boardTargetKey(pendingTarget) === openedAt) {
+        void flow.fitView();
+      }
+      done();
+      return;
+    }
+    if (showNode(doc._id)) done();
+  }, [
+    pendingTarget,
+    boardLoaded,
+    flow,
+    nodeDocs,
+    livePuzzleIds,
+    showNode,
+    showLinkNotice,
+    t,
+    initialTarget,
+    initialViewport,
+    openedAt,
+    onInitialTargetShown,
+    nodes,
+  ]);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(pulseTimer.current);
+      window.clearTimeout(nodePulseTimer.current);
+    },
+    [],
+  );
 
   const commentPins = useMemo(() => {
     const pins: CommentPin[] = [];
@@ -2420,6 +2685,22 @@ const CanvasInner = ({
     setErasingStrokes(new Set());
   }, [tool, setNodes, setEdges]);
 
+  // Whether the board has focus: the last press or focus was on it.
+  const canvasActive = useRef(false);
+  useEffect(() => {
+    const track = (event: Event) => {
+      canvasActive.current =
+        event.target instanceof globalThis.Node &&
+        !!wrapperRef.current?.contains(event.target);
+    };
+    window.addEventListener("pointerdown", track, true);
+    window.addEventListener("focusin", track, true);
+    return () => {
+      window.removeEventListener("pointerdown", track, true);
+      window.removeEventListener("focusin", track, true);
+    };
+  }, []);
+
   useEffect(() => {
     const isTyping = (target: EventTarget | null) =>
       target instanceof HTMLElement &&
@@ -2427,6 +2708,25 @@ const CanvasInner = ({
         ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") spaceHeld.current = true;
+      // / or Ctrl+F searches the board while it has focus. Elsewhere, and
+      // from the search field itself, Ctrl+F is the browser's find.
+      const modified = event.ctrlKey || event.metaKey;
+      const wantsSearch =
+        (event.key === "/" &&
+          !modified &&
+          !event.altKey &&
+          !isTyping(event.target)) ||
+        (modified &&
+          !event.shiftKey &&
+          !event.altKey &&
+          event.key.toLowerCase() === "f" &&
+          event.target !== searchRef.current);
+      if (wantsSearch && canvasActive.current && searchRef.current) {
+        event.preventDefault();
+        searchRef.current.focus();
+        searchRef.current.select();
+        return;
+      }
       if (event.key === "Escape" && !isTyping(event.target)) {
         setDraft(undefined);
         setConnecting(undefined);
@@ -2479,6 +2779,35 @@ const CanvasInner = ({
       window.removeEventListener("keyup", onKeyUp);
     };
   }, [readOnly, tool, flow, deleteNodes]);
+
+  // Double-clicking a card opens its puzzle, on any board, as long as nothing
+  // sits over it there. Caught before React Flow's double-click zoom.
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return undefined;
+    const onDoubleClick = (event: MouseEvent) => {
+      if (tool !== "select" || !(event.target instanceof Element)) return;
+      if (
+        event.target.closest(
+          `${OVERLAYS}, .react-flow__edge, .react-flow__edgelabel-renderer, a, button, input, textarea, [contenteditable="true"]`,
+        )
+      ) {
+        return;
+      }
+      const at = flow.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+      const under = commentAnchorAt(at).node;
+      const doc = under ? flow.getNode(under)?.data.doc : undefined;
+      if (doc?.type !== "puzzle" || !doc.puzzle) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void navigate(`/hunts/${huntId}/puzzles/${doc.puzzle}`);
+    };
+    wrapper.addEventListener("dblclick", onDoubleClick, true);
+    return () => wrapper.removeEventListener("dblclick", onDoubleClick, true);
+  }, [tool, flow, commentAnchorAt, navigate, huntId]);
 
   const toggleFeederArrows = useCallback(
     () => setShowFeederArrows((current) => !current),
@@ -2540,6 +2869,41 @@ const CanvasInner = ({
       "Editing needs a wider screen. You can still comment.",
     ),
   };
+  const linkNoticeAlert = linkNotice ? (
+    <AccessNotice
+      variant="warning"
+      dismissible
+      closeLabel={t("common.close", "Close")}
+      onClose={dismissLinkNotice}
+    >
+      {linkNotice.text}
+    </AccessNotice>
+  ) : null;
+  const searchTools = (
+    <>
+      <BoardSearch
+        boardId={boardId}
+        huntId={huntId}
+        drawnEdges={drawnEdges}
+        canPutBack={!readOnly}
+        inputRef={searchRef}
+        onShow={showSearchHit}
+        onPutBack={putBackSearchHit}
+      />
+      <CopyToClipboardButton
+        size="sm"
+        variant="outline-secondary"
+        text={linkToHere}
+        tooltipText={t(
+          "whiteboard.toolbar.copyLinkHelp",
+          "Copy a link to what's selected, or to this view",
+        )}
+        aria-label={t("whiteboard.toolbar.copyLink", "Copy link to here")}
+      >
+        <FontAwesomeIcon icon={faLink} />
+      </CopyToClipboardButton>
+    </>
+  );
   const accessNoticeAlert = accessNotice ? (
     <AccessNotice
       variant="info"
@@ -2678,9 +3042,9 @@ const CanvasInner = ({
             connectionRadius={0}
             colorMode={theme.basicMode === "dark" ? "dark" : "light"}
             defaultViewport={initialViewport}
-            fitView={!initialViewport}
-            minZoom={0.1}
-            maxZoom={2}
+            fitView={!initialViewport && !openedAt}
+            minZoom={MIN_ZOOM}
+            maxZoom={MAX_ZOOM}
             nodesDraggable={!readOnly && !drawingTool}
             nodesConnectable={!readOnly && !drawingTool}
             elementsSelectable={!readOnly && !drawingTool}
@@ -2693,7 +3057,11 @@ const CanvasInner = ({
             <Background />
             <Controls showInteractive={false} />
             {showMiniMap && (
-              <MiniMap pannable zoomable nodeColor={miniMapNodeColor} />
+              <MiniMap<WhiteboardFlowNode>
+                pannable
+                zoomable
+                nodeColor={miniMapNodeColor}
+              />
             )}
             <FrameLabelLayer />
             <CursorLayer boardId={boardId} liveEnabled={liveEnabled} />
@@ -2703,6 +3071,9 @@ const CanvasInner = ({
               pulseId={pulse}
               onOpen={openComment}
             />
+            {nodePulse && (
+              <NodePulse node={nodePulse.node} point={nodePulse.point} />
+            )}
             {localStroke && localStroke.points.length > 0 && (
               <ViewportPortal>
                 <LocalStroke>
@@ -2766,6 +3137,7 @@ const CanvasInner = ({
             {readOnly ? (
               <Panel position="top-left">
                 <ToolBox>
+                  {searchTools}
                   <ReadOnlyNote>
                     <span>
                       {t("whiteboard.toolbar.viewingOnly", "Viewing only")}
@@ -2808,10 +3180,12 @@ const CanvasInner = ({
                   )}
                 </ToolBox>
                 {accessNoticeAlert}
+                {linkNoticeAlert}
               </Panel>
             ) : (
               <Panel position="top-left">
                 <ToolBox>
+                  {searchTools}
                   <ButtonGroup size="sm">
                     <ToolButton
                       tool="select"
@@ -2968,6 +3342,7 @@ const CanvasInner = ({
                   )}
                 </ToolBox>
                 {accessNoticeAlert}
+                {linkNoticeAlert}
               </Panel>
             )}
             {!readOnly && tool === "select" && selectedLines.length > 0 && (
