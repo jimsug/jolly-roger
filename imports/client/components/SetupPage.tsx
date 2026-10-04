@@ -15,6 +15,7 @@ import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
 import FormText from "react-bootstrap/FormText";
+import Modal from "react-bootstrap/Modal";
 import Table from "react-bootstrap/Table";
 import { useTranslation } from "react-i18next";
 import Creatable from "react-select/creatable";
@@ -2934,17 +2935,32 @@ const TagSynonymsSection = () => {
     [rules],
   );
 
+  // Dropping the saved table can't be undone, so it asks first. The question
+  // stays up until the server answers, so a refusal has somewhere to show.
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [resetError, setResetError] = useState<string>();
+  const resetting = confirmingReset && shouldDisableForm;
+  const askReset = useCallback(() => {
+    setResetError(undefined);
+    setConfirmingReset(true);
+  }, []);
+  const cancelReset = useCallback(() => {
+    if (!resetting) setConfirmingReset(false);
+  }, [resetting]);
+
   // Drops the saved table, as a blank list of default tags does, so the
   // built-in rules apply again.
   const resetToBuiltIn = useCallback(() => {
+    setResetError(undefined);
     setSubmitState(SubmitState.SUBMITTING);
     configureTagSynonyms.call({ rules: [], reset: true }, (err) => {
       if (err) {
-        setSubmitError(err.message);
-        setSubmitState(SubmitState.ERROR);
+        setResetError(err.reason ?? err.message);
+        setSubmitState(SubmitState.IDLE);
       } else {
         setRows(tagSynonymRows(TAG_SYNONYMS));
         setSubmitState(SubmitState.SUCCESS);
+        setConfirmingReset(false);
       }
     });
   }, []);
@@ -3038,7 +3054,7 @@ const TagSynonymsSection = () => {
           </Button>
           <Button
             variant="outline-secondary"
-            onClick={resetToBuiltIn}
+            onClick={askReset}
             disabled={shouldDisableForm || !hasSavedTable}
           >
             {t("serverSetup.tagSynonyms.useBuiltIn", "Use the built-in rules")}
@@ -3060,6 +3076,64 @@ const TagSynonymsSection = () => {
           </FormText>
         )}
       </form>
+      <Modal
+        show={confirmingReset}
+        onHide={cancelReset}
+        backdrop={resetting ? "static" : true}
+        keyboard={!resetting}
+      >
+        <Modal.Header closeButton={!resetting}>
+          <Modal.Title>
+            {t(
+              "serverSetup.tagSynonyms.resetConfirm.title",
+              "Use the built-in rules?",
+            )}
+          </Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className={resetError ? undefined : "mb-0"}>
+            {t(
+              "serverSetup.tagSynonyms.resetConfirm.body",
+              "This removes the saved table and its {{count}} rules, and goes back to the rules Jolly Roger comes with. It can't be undone.",
+              { count: savedRules.length },
+            )}
+          </p>
+          {resetError && (
+            <Alert variant="danger" className="mb-0">
+              {t(
+                "serverSetup.tagSynonyms.resetConfirm.failed",
+                "Couldn't remove the saved table: {{reason}}",
+                {
+                  reason: resetError,
+                  // React escapes text, so i18next's escaping would only show
+                  // entities.
+                  interpolation: { escapeValue: false },
+                },
+              )}
+            </Alert>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={cancelReset}
+            disabled={resetting}
+          >
+            {t("common.cancel", "Cancel")}
+          </Button>
+          <Button
+            variant="danger"
+            onClick={resetToBuiltIn}
+            disabled={resetting}
+            aria-busy={resetting}
+          >
+            {t(
+              "serverSetup.tagSynonyms.resetConfirm.confirm",
+              "Remove the saved table",
+            )}
+          </Button>
+        </Modal.Footer>
+      </Modal>
       <Subsection>
         <SubsectionHeader>
           {t(

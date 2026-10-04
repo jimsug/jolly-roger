@@ -16,8 +16,12 @@ import type {
   VersionSummary,
 } from "../../../../imports/lib/whiteboard/versions";
 import {
+  pickToRestore,
+  planItemRestore,
   planRestore,
+  restoreItemSet,
   versionDecision,
+  versionDifferences,
   versionsToPrune,
 } from "../../../../imports/lib/whiteboard/versions";
 
@@ -25,6 +29,35 @@ const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const now = new Date(Date.UTC(2026, 9, 4, 12, 0, 0));
 const ago = (ms: number) => new Date(now.getTime() - ms);
+
+const base = {
+  hunt: "hunt",
+  board: "board",
+  contributors: [],
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+  createdBy: "creator",
+};
+const node = (
+  _id: string,
+  fields: Partial<WhiteboardNodeType> = {},
+): WhiteboardNodeType => ({
+  ...base,
+  _id,
+  type: "sticky",
+  position: { x: 0, y: 0 },
+  ...fields,
+});
+const card = (_id: string, puzzle: string, parent?: string) =>
+  node(_id, { type: "puzzle", puzzle, parent });
+const frame = (_id: string, fields: Partial<WhiteboardNodeType> = {}) =>
+  node(_id, { type: "frame", width: 300, height: 200, ...fields });
+const edge = (
+  _id: string,
+  source: string,
+  target: string,
+  fields: Partial<WhiteboardEdgeType> = {},
+): WhiteboardEdgeType => ({ ...base, _id, source, target, ...fields });
 
 describe("whiteboard versions", function () {
   describe("versionDecision", function () {
@@ -278,35 +311,6 @@ describe("whiteboard versions", function () {
   });
 
   describe("planRestore", function () {
-    const base = {
-      hunt: "hunt",
-      board: "board",
-      contributors: [],
-      createdAt: new Date(0),
-      updatedAt: new Date(0),
-      createdBy: "creator",
-    };
-    const node = (
-      _id: string,
-      fields: Partial<WhiteboardNodeType> = {},
-    ): WhiteboardNodeType => ({
-      ...base,
-      _id,
-      type: "sticky",
-      position: { x: 0, y: 0 },
-      ...fields,
-    });
-    const card = (_id: string, puzzle: string, parent?: string) =>
-      node(_id, { type: "puzzle", puzzle, parent });
-    const frame = (_id: string, fields: Partial<WhiteboardNodeType> = {}) =>
-      node(_id, { type: "frame", width: 300, height: 200, ...fields });
-    const edge = (
-      _id: string,
-      source: string,
-      target: string,
-      fields: Partial<WhiteboardEdgeType> = {},
-    ): WhiteboardEdgeType => ({ ...base, _id, source, target, ...fields });
-
     const plan = (
       current: { nodes: WhiteboardNodeType[]; edges?: WhiteboardEdgeType[] },
       target: { nodes: WhiteboardNodeType[]; edges?: WhiteboardEdgeType[] },
@@ -488,6 +492,229 @@ describe("whiteboard versions", function () {
       assert.isTrue(
         planRestore({ nodes: [], edges: [] }, { nodes: stored, edges: [] }).ok,
       );
+    });
+  });
+
+  describe("pickToRestore", function () {
+    it("is nothing for no selection and several things", function () {
+      assert.isUndefined(pickToRestore([]));
+      assert.isUndefined(pickToRestore([node("a"), node("b")]));
+      assert.isUndefined(
+        pickToRestore([
+          node("ink1", { type: "ink", stroke: "s" }),
+          node("ink2", { type: "ink", stroke: "t" }),
+        ]),
+      );
+      assert.isUndefined(
+        pickToRestore([
+          node("ink1", { type: "ink", stroke: "s" }),
+          node("sticky"),
+        ]),
+      );
+    });
+
+    it("takes one node, saying whether it's a frame", function () {
+      assert.deepEqual(pickToRestore([node("a")]), {
+        ids: ["a"],
+        frame: false,
+      });
+      assert.deepEqual(pickToRestore([frame("f")]), {
+        ids: ["f"],
+        frame: true,
+      });
+    });
+
+    it("takes every segment of one ink stroke as one pick", function () {
+      assert.deepEqual(
+        pickToRestore([
+          node("ink1", { type: "ink", stroke: "s" }),
+          node("ink2", { type: "ink", stroke: "s" }),
+        ]),
+        { ids: ["ink1", "ink2"], frame: false },
+      );
+    });
+  });
+
+  describe("restoreItemSet", function () {
+    it("brings a frame's contents, their lines and the lines' free ends", function () {
+      const target = {
+        nodes: [
+          frame("round"),
+          frame("inner", { parent: "round" }),
+          node("deep", { parent: "inner" }),
+          node("ink1", { type: "ink", stroke: "s" }),
+          node("ink2", { type: "ink", stroke: "s" }),
+          node("ink3", { type: "ink", stroke: "t" }),
+          node("loose", { type: "point" }),
+          node("elsewhere"),
+        ],
+        edges: [
+          edge("toLoose", "deep", "loose"),
+          edge("unrelated", "elsewhere", "ink3"),
+        ],
+      };
+      const items = restoreItemSet(target, ["round", "ink1"]);
+      assert.sameMembers(
+        [...(items?.nodes ?? [])],
+        ["round", "inner", "deep", "ink1", "loose"],
+      );
+      assert.sameMembers([...(items?.edges ?? [])], ["toLoose"]);
+    });
+
+    it("is empty for no ids and undefined for one the version doesn't have", function () {
+      const target = { nodes: [node("a")], edges: [] };
+      assert.deepEqual(restoreItemSet(target, []), {
+        nodes: new Set(),
+        edges: new Set(),
+      });
+      assert.isUndefined(restoreItemSet(target, ["a", "missing"]));
+    });
+  });
+
+  describe("planItemRestore", function () {
+    const planItems = (
+      current: { nodes: WhiteboardNodeType[]; edges?: WhiteboardEdgeType[] },
+      target: { nodes: WhiteboardNodeType[]; edges?: WhiteboardEdgeType[] },
+      ids: string[],
+    ) => {
+      const full = {
+        current: { nodes: current.nodes, edges: current.edges ?? [] },
+        target: { nodes: target.nodes, edges: target.edges ?? [] },
+      };
+      const items = restoreItemSet(full.target, ids);
+      if (!items) throw new Error("not in the version");
+      return planItemRestore(full.current, full.target, items);
+    };
+
+    it("inserts what's gone, updates matches and never removes", function () {
+      const result = planItems(
+        {
+          nodes: [
+            frame("liveFrame", { tag: "round" }),
+            card("newCard", "p1", "liveFrame"),
+            node("added", { parent: "liveFrame" }),
+          ],
+        },
+        {
+          nodes: [
+            frame("oldFrame", { tag: "round", position: { x: 50, y: 0 } }),
+            card("oldCard", "p1"),
+            node("gone", { parent: "oldFrame" }),
+          ],
+        },
+        ["oldFrame", "oldCard"],
+      );
+      assert.isTrue(result.ok);
+      if (!result.ok) return;
+      assert.deepEqual(
+        result.plan.nodes.insert.map((n) => n._id),
+        ["gone"],
+      );
+      assert.equal(result.plan.nodes.insert[0]?.parent, "liveFrame");
+      assert.sameMembers(
+        result.plan.nodes.change.map((c) => c._id),
+        ["liveFrame", "newCard"],
+      );
+      assert.deepEqual(result.plan.nodes.remove, []);
+      assert.deepEqual(result.plan.edges.remove, []);
+      assert.deepEqual(result.puzzles, ["p1"]);
+    });
+
+    it("lifts a node whose frame is gone to where it was on the board", function () {
+      const result = planItems(
+        { nodes: [] },
+        {
+          nodes: [
+            frame("round", { position: { x: 100, y: 200 } }),
+            node("note", { parent: "round", position: { x: 10, y: 20 } }),
+          ],
+        },
+        ["note"],
+      );
+      assert.isTrue(result.ok);
+      if (!result.ok) return;
+      assert.deepEqual(result.plan.nodes.insert, [
+        node("note", { parent: undefined, position: { x: 110, y: 220 } }),
+      ]);
+    });
+
+    it("drops a line whose other end isn't on the board, with its free end", function () {
+      const result = planItems(
+        { nodes: [node("kept")] },
+        {
+          nodes: [
+            node("kept"),
+            node("note"),
+            node("gone"),
+            node("end", { type: "point" }),
+          ],
+          edges: [edge("toGone", "note", "gone"), edge("toEnd", "note", "end")],
+        },
+        ["note"],
+      );
+      assert.isTrue(result.ok);
+      if (!result.ok) return;
+      assert.sameMembers(
+        result.plan.nodes.insert.map((n) => n._id),
+        ["note", "end"],
+      );
+      assert.deepEqual(
+        result.plan.edges.insert.map((e) => e._id),
+        ["toEnd"],
+      );
+    });
+
+    it("refuses past the node cap", function () {
+      const live = Array.from({ length: MAX_NODES_PER_BOARD }, (_, i) =>
+        node(`s${i}`),
+      );
+      assert.deepEqual(
+        planItems({ nodes: live }, { nodes: [node("new")] }, ["new"]),
+        { ok: false, reason: "tooBig" },
+      );
+    });
+  });
+
+  describe("versionDifferences", function () {
+    it("marks what's missing, moved, restyled or reframed, matching by identity", function () {
+      const live = {
+        nodes: [
+          frame("liveFrame", { tag: "round" }),
+          card("newCard", "p1", "liveFrame"),
+          node("same"),
+          node("moved", { position: { x: 5, y: 0 } }),
+          node("recoloured", { color: "blue" }),
+          node("reframed"),
+        ],
+        edges: [edge("line", "same", "moved", { dashed: true })],
+      };
+      const version = {
+        nodes: [
+          frame("oldFrame", { tag: "round" }),
+          card("oldCard", "p1", "oldFrame"),
+          node("same"),
+          node("moved"),
+          node("recoloured", { color: "pink" }),
+          node("reframed", { parent: "oldFrame" }),
+          node("missing"),
+        ],
+        edges: [
+          edge("line", "same", "moved"),
+          edge("sameLine", "same", "moved"),
+        ],
+      };
+      assert.sameMembers(
+        [...versionDifferences(live, version)],
+        ["moved", "recoloured", "reframed", "missing", "line", "sameLine"],
+      );
+    });
+
+    it("finds nothing when the board hasn't changed", function () {
+      const board = {
+        nodes: [node("a"), node("b")],
+        edges: [edge("l", "a", "b")],
+      };
+      assert.equal(versionDifferences(board, board).size, 0);
     });
   });
 });

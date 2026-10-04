@@ -19,11 +19,13 @@ import type { WhiteboardVersionType } from "../../../../imports/lib/models/White
 import WhiteboardVersions from "../../../../imports/lib/models/WhiteboardVersions";
 import whiteboardVersions from "../../../../imports/lib/publications/whiteboardVersions";
 import {
+  MAX_BATCH,
   MAX_NODES_PER_BOARD,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_INTERVAL_MS,
 } from "../../../../imports/lib/whiteboard/limits";
 import fetchWhiteboardVersion from "../../../../imports/methods/fetchWhiteboardVersion";
+import restoreWhiteboardItems from "../../../../imports/methods/restoreWhiteboardItems";
 import restoreWhiteboardVersion from "../../../../imports/methods/restoreWhiteboardVersion";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEditPolicy";
@@ -41,6 +43,7 @@ import {
   compressVersion,
   decodeVersion,
   pruneWhiteboardVersions,
+  restoreItems,
   restoreVersion,
   serializeBoard,
 } from "../../../../imports/server/whiteboardVersions";
@@ -782,6 +785,380 @@ describe("whiteboard versions", function () {
       );
       assert.ok(await WhiteboardNodes.findOneAsync(id));
       assert.lengthOf(await versions(), 1);
+    });
+  });
+
+  describe("restoring items", function () {
+    const frame = async (position: { x: number; y: number }) => {
+      const _id = Random.id();
+      await upsertNodes(member, boardId, [
+        { _id, type: "frame", position, width: 3000, height: 3000 },
+      ]);
+      return _id;
+    };
+    const stickiesIn = async (parent: string, count: number) => {
+      const ids = Array.from({ length: count }, () => Random.id());
+      await upsertNodes(
+        member,
+        boardId,
+        ids.map((_id, i) => ({
+          _id,
+          type: "sticky" as const,
+          parent,
+          position: {
+            x: 24 + (i % 10) * 200,
+            y: 64 + Math.floor(i / 10) * 200,
+          },
+        })),
+      );
+      return ids;
+    };
+    const nodeById = async (id: string) =>
+      (await WhiteboardNodes.findOneAsync(id))!;
+
+    it("restores one deleted sticky from a version", async function () {
+      const gone = await sticky(member, { x: 300, y: 40 });
+      await upsertNodes(member, boardId, [{ _id: gone, text: "remember me" }]);
+      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+      await asUser(member, () =>
+        sendChatMessage.callPromise({
+          puzzleId,
+          content: JSON.stringify(contentFromMessage("on the sticky")),
+          comment: { node: gone, x: 10, y: 20 },
+        }),
+      );
+      const pin = (await ChatMessages.findOneAsync({
+        "content.children.text": "on the sticky",
+      }))!._id;
+      await nextWindow();
+      await deleteNodes(member, boardId, [gone]);
+      const version = await newest();
+      assert.notOk(await WhiteboardNodes.findOneAsync(gone));
+
+      const changed = await asUser(member, () =>
+        restoreWhiteboardItems.callPromise({
+          boardId,
+          versionId: version._id,
+          nodeIds: [gone],
+        }),
+      );
+
+      assert.isTrue(changed.restored);
+      const restored = await nodeById(gone);
+      assert.deepEqual(restored.position, { x: 300, y: 40 });
+      assert.equal(restored.text, "remember me");
+      assert.deepEqual((await ChatMessages.findOneAsync(pin))?.comment, {
+        node: gone,
+        x: 10,
+        y: 20,
+      });
+    });
+
+    it("changes nothing, and says so, for an item that's as the version has it", async function () {
+      const id = await sticky(member, { x: 300, y: 40 });
+      await nextWindow();
+      await sticky(member, { x: 900, y: 40 });
+      const version = await newest();
+      const before = await board();
+      const recorded = (await versions()).map((v) => v._id);
+
+      const changed = await asUser(member, () =>
+        restoreWhiteboardItems.callPromise({
+          boardId,
+          versionId: version._id,
+          nodeIds: [id],
+        }),
+      );
+
+      assert.isFalse(changed.restored);
+      const after = await board();
+      assert.sameDeepMembers(after.nodes, before.nodes);
+      assert.sameDeepMembers(after.edges, before.edges);
+      assert.sameMembers(
+        (await versions()).map((v) => v._id),
+        recorded,
+      );
+    });
+
+    it("takes comments off a node it hides", async function () {
+      // A deleted card is hidden, and a version can have it so
+      const card = (await WhiteboardNodes.findOneAsync({
+        board: boardId,
+        type: "puzzle",
+      }))!;
+      await deleteNodes(member, boardId, [card._id]);
+      await nextWindow();
+      await upsertNodes(member, boardId, [{ _id: card._id, hidden: false }]);
+      const version = await newest();
+      assert.notOk((await nodeById(card._id)).hidden);
+      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+      await asUser(member, () =>
+        sendChatMessage.callPromise({
+          puzzleId,
+          content: JSON.stringify(contentFromMessage("on the shown card")),
+          comment: { node: card._id, x: 10, y: 20 },
+        }),
+      );
+      const pin = (await ChatMessages.findOneAsync({
+        "content.children.text": "on the shown card",
+      }))!._id;
+
+      assert.isTrue(
+        await restoreItems(member, boardId, version._id, [card._id]),
+      );
+
+      assert.isTrue((await nodeById(card._id)).hidden);
+      const comment = (await ChatMessages.findOneAsync(pin))?.comment;
+      assert.isUndefined(comment?.node);
+      assert.equal(comment?.detachedFrom, card._id);
+    });
+
+    it("restores a frame and its children within the cap and refuses past it", async function () {
+      const small = await frame({ x: 6000, y: 0 });
+      const children = await stickiesIn(small, 3);
+      const big = await frame({ x: 12000, y: 0 });
+      const crowd = await stickiesIn(big, MAX_BATCH);
+      await nextWindow();
+      await upsertNodes(member, boardId, [
+        { _id: children[0]!, parent: null, position: { x: 9000, y: 9000 } },
+      ]);
+      const version = await newest();
+      await deleteNodes(member, boardId, [small, big]);
+      assert.notOk(await WhiteboardNodes.findOneAsync(small));
+
+      await restoreItems(member, boardId, version._id, [small]);
+
+      assert.ok(await WhiteboardNodes.findOneAsync(small));
+      for (const [i, id] of children.entries()) {
+        const child = await nodeById(id);
+        assert.equal(child.parent, small);
+        assert.deepEqual(child.position, { x: 24 + i * 200, y: 64 });
+      }
+
+      const before = await board();
+      const recorded = (await versions()).map((v) => v._id);
+      await assert.isRejected(
+        restoreItems(member, boardId, version._id, [big]),
+        /too much to restore at once/,
+      );
+      assert.notOk(await WhiteboardNodes.findOneAsync(big));
+      assert.sameDeepMembers((await board()).nodes, before.nodes);
+      assert.sameMembers(
+        (await versions()).map((v) => v._id),
+        recorded,
+      );
+      assert.lengthOf(crowd, MAX_BATCH);
+    });
+
+    it("leaves live documents outside the set alone", async function () {
+      const round = await frame({ x: 6000, y: 0 });
+      const [inside] = await stickiesIn(round, 1);
+      const outside = await sticky(member, { x: 0, y: 6000 });
+      await nextWindow();
+      await upsertNodes(member, boardId, [
+        { _id: inside!, parent: null, position: { x: 9000, y: 9000 } },
+        { _id: outside, position: { x: 100, y: 7000 } },
+      ]);
+      const version = await newest();
+      // Added since: a sticky in the frame and a line to it
+      const [added] = await stickiesIn(round, 1);
+      await upsertNodes(member, boardId, [
+        { _id: added!, position: { x: 1200, y: 1200 } },
+      ]);
+      const line = Random.id();
+      await upsertEdges(member, boardId, [
+        { _id: line, source: added!, target: outside },
+      ]);
+      const before = await board();
+
+      await restoreItems(member, boardId, version._id, [round]);
+
+      const after = await board();
+      assert.includeMembers(
+        after.nodes.map((n) => n._id),
+        before.nodes.map((n) => n._id),
+      );
+      assert.includeMembers(
+        after.edges.map((e) => e._id),
+        before.edges.map((e) => e._id),
+      );
+      assert.equal((await nodeById(inside!)).parent, round);
+      const stillAdded = await nodeById(added!);
+      assert.equal(stillAdded.parent, round);
+      assert.deepEqual(stillAdded.position, { x: 1200, y: 1200 });
+      assert.deepEqual((await nodeById(outside)).position, {
+        x: 100,
+        y: 7000,
+      });
+    });
+
+    it("updates a live card whose stored id changed instead of inserting a duplicate", async function () {
+      const card = (await WhiteboardNodes.findOneAsync({
+        board: boardId,
+        type: "puzzle",
+      }))!;
+      await nextWindow();
+      await sticky(member);
+      const version = await newest();
+
+      // The card is replaced by another for the same puzzle, somewhere else
+      await WhiteboardNodes.removeAsync(card._id);
+      const replacement = await WhiteboardNodes.insertAsync({
+        hunt: huntId,
+        board: boardId,
+        type: "puzzle",
+        puzzle: card.puzzle,
+        position: { x: 9000, y: 9000 },
+        manual: true,
+        createdBy: operator,
+      });
+
+      await restoreItems(member, boardId, version._id, [card._id]);
+
+      const cards = await WhiteboardNodes.find({
+        board: boardId,
+        puzzle: card.puzzle,
+      }).fetchAsync();
+      assert.lengthOf(cards, 1);
+      assert.equal(cards[0]!._id, replacement);
+      assert.deepEqual(cards[0]!.position, card.position);
+      assert.equal(cards[0]!.parent, card.parent);
+      assert.isUndefined(cards[0]!.manual);
+    });
+
+    it("refuses without edit access, on an archived hunt and with history off", async function () {
+      const id = await sticky(member);
+      await nextWindow();
+      await deleteNodes(member, boardId, [id]);
+      const version = await newest();
+      await asUser(operator, () =>
+        setWhiteboardEditPolicy.callPromise({
+          boardId,
+          editPolicy: "operators",
+          editors: [],
+        }),
+      );
+      await assert.isRejected(
+        asUser(member, () =>
+          restoreWhiteboardItems.callPromise({
+            boardId,
+            versionId: version._id,
+            nodeIds: [id],
+          }),
+        ),
+        /Only operators/,
+      );
+      await assert.isRejected(
+        restoreItems(outsider, boardId, version._id, [id]),
+        /member/,
+      );
+      await assert.isRejected(
+        restoreItems(operator, boardId, Random.id(), [id]),
+        /Unknown version/,
+      );
+      await assert.isRejected(
+        restoreItems(operator, boardId, version._id, [Random.id()]),
+        /isn't in this version/,
+      );
+      await assert.isRejected(
+        restoreItems(operator, boardId, version._id, []),
+        /Nothing to restore/,
+      );
+      await assert.isRejected(
+        restoreItems(
+          operator,
+          boardId,
+          version._id,
+          Array.from({ length: MAX_BATCH + 1 }, () => id),
+        ),
+        /Too many nodes/,
+      );
+
+      await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+      await assert.isRejected(
+        restoreItems(operator, boardId, version._id, [id]),
+        /archived/,
+      );
+      await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
+
+      await FeatureFlags.insertAsync({
+        name: "disable.whiteboard_versions",
+        type: "on",
+        createdBy: operator,
+      });
+      await assert.isRejected(
+        restoreItems(operator, boardId, version._id, [id]),
+        /history is turned off/,
+      );
+      assert.notOk(await WhiteboardNodes.findOneAsync(id));
+      assert.lengthOf(await versions(), 2);
+    });
+
+    it("refuses a version from another board", async function () {
+      const otherHunt = await Hunts.insertAsync({
+        name: "Another hunt",
+        openSignups: true,
+        hasGuessQueue: true,
+        createdBy: operator,
+      });
+      await MeteorUsers.updateAsync(operator, {
+        $addToSet: { hunts: otherHunt },
+        $set: { [`roles.${otherHunt}`]: ["operator"] },
+      });
+      const otherBoard = await ensureWhiteboard(operator, otherHunt);
+      const foreignSticky = Random.id();
+      await upsertNodes(operator, otherBoard, [
+        { _id: foreignSticky, type: "sticky", position: { x: 0, y: 0 } },
+      ]);
+      const foreign = (await WhiteboardVersions.findOneAsync({
+        board: otherBoard,
+      }))!;
+      const before = await board();
+      const recorded = (await versions()).map((v) => v._id);
+
+      await assert.isRejected(
+        restoreItems(operator, boardId, foreign._id, [foreignSticky]),
+        /Unknown version/,
+      );
+      const after = await board();
+      assert.sameDeepMembers(after.nodes, before.nodes);
+      assert.sameDeepMembers(after.edges, before.edges);
+      assert.sameMembers(
+        (await versions()).map((v) => v._id),
+        recorded,
+      );
+    });
+
+    it("records an edits version, not a restore one, and leaves lastRewrittenAt unset", async function () {
+      const id = await sticky(member);
+      await nextWindow();
+      await deleteNodes(member, boardId, [id]);
+      const version = await newest();
+      await nextWindow();
+
+      await restoreItems(other, boardId, version._id, [id]);
+
+      const recorded = await newest();
+      assert.notEqual(recorded._id, version._id);
+      assert.equal(recorded.kind, "edits");
+      assert.deepEqual(
+        recorded.users.map((u) => u.user),
+        [other],
+      );
+      const payload = await payloadOf(recorded);
+      assert.notInclude(
+        payload.nodes.map((n) => n._id),
+        id,
+      );
+      assert.isUndefined(
+        (await Whiteboards.findOneAsync(boardId))?.lastRewrittenAt,
+      );
+
+      // It coalesces with the same person's next edit
+      await sticky(other);
+      const after = await newest();
+      assert.equal(after._id, recorded._id);
+      assert.equal(after.changeCount, 2);
     });
   });
 

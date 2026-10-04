@@ -73,6 +73,15 @@
       "activitySummary_other": "{{day}} {{from}} - {{to}}: {{count}} activities ({{breakdown}})"
     }
   },
+  "serverSetup": {
+    "tagSynonyms": {
+      "resetConfirm": {
+        "body_zero": "This removes the saved table, which has no rules, so synonyms are turned back on with the rules Jolly Roger comes with. It can't be undone.",
+        "body_one": "This removes the saved table and its {{count}} rule, and goes back to the rules Jolly Roger comes with. It can't be undone.",
+        "body_other": "This removes the saved table and its {{count}} rules, and goes back to the rules Jolly Roger comes with. It can't be undone."
+      }
+    }
+  },
   "whiteboard": {
     "comments": {
       "replies_one": "{{count}} reply",

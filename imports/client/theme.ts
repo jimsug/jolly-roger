@@ -90,6 +90,8 @@ export interface Theme {
     whiteboardStuckEdge: string;
     whiteboardFinishedTick: string;
     whiteboardUnsolvedInside: string;
+    // What a preview of an earlier version has differently from the board
+    whiteboardPreviewChanged: string;
     guess: {
       correct: {
         background: string;
@@ -212,6 +214,7 @@ export const lightTheme: Theme = {
     whiteboardStuckEdge: "var(--bs-danger)",
     whiteboardFinishedTick: "var(--bs-success)",
     whiteboardUnsolvedInside: "var(--bs-warning)",
+    whiteboardPreviewChanged: "var(--bs-pink)",
     guess: {
       correct: {
         background: "#f0fff0",
@@ -359,6 +362,7 @@ export const darkTheme: Theme = {
     whiteboardStuckEdge: "var(--bs-danger)",
     whiteboardFinishedTick: "var(--bs-success)",
     whiteboardUnsolvedInside: "var(--bs-warning)",
+    whiteboardPreviewChanged: "var(--bs-pink)",
     guess: {
       correct: {
         background: "#155724",

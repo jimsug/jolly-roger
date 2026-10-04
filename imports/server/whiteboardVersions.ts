@@ -15,9 +15,13 @@ import type { WhiteboardNodeType } from "../lib/models/WhiteboardNodes";
 import WhiteboardNodes from "../lib/models/WhiteboardNodes";
 import type { WhiteboardType } from "../lib/models/Whiteboards";
 import Whiteboards from "../lib/models/Whiteboards";
-import type { WhiteboardVersionKind } from "../lib/models/WhiteboardVersions";
+import type {
+  WhiteboardVersionKind,
+  WhiteboardVersionType,
+} from "../lib/models/WhiteboardVersions";
 import WhiteboardVersions from "../lib/models/WhiteboardVersions";
 import {
+  MAX_BATCH,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_CHUNK_BYTES,
   VERSION_INTERVAL_MS,
@@ -25,10 +29,13 @@ import {
 import type {
   PrunableVersion,
   RestoreChange,
+  RestorePlan,
   VersionSummary,
 } from "../lib/whiteboard/versions";
 import {
+  planItemRestore,
   planRestore,
+  restoreItemSet,
   versionDecision,
   versionsToPrune,
 } from "../lib/whiteboard/versions";
@@ -616,6 +623,118 @@ const modifierFor = ({ $set, $unset }: RestoreChange) => ({
   ...(Object.keys($unset).length > 0 ? { $unset } : {}),
 });
 
+// A version's nodes and lines as they'd be restored, with merged-away
+// accounts mapped to where they went. Only for callers holding the board's
+// lock, whose renew this calls between the slow steps.
+async function readVersionLocked(
+  version: WhiteboardVersionType,
+  renew: () => Promise<void>,
+) {
+  const chunks = await WhiteboardVersionChunks.find(
+    { version: version._id },
+    { sort: { index: 1 } },
+  ).fetchAsync();
+  await renew();
+  if (!(await WhiteboardVersions.findOneAsync(version._id))) {
+    throw unknownVersion();
+  }
+  if (
+    chunks.length !== version.chunkCount ||
+    chunks.some((c, i) => c.index !== i)
+  ) {
+    throw unrestorable();
+  }
+
+  const stored = await decodeVersion(chunks.map((c) => c.data));
+  await renew();
+  const account = await mergedAccounts();
+  const target = {
+    nodes: stored.nodes.map((n) => withMergedAccounts(n, account)),
+    edges: stored.edges.map((e) => withMergedAccounts(e, account)),
+  };
+  await renew();
+  return target;
+}
+
+async function readBoard(boardId: string) {
+  return {
+    nodes: await WhiteboardNodes.find({ board: boardId }).fetchAsync(),
+    edges: await WhiteboardEdges.find({ board: boardId }).fetchAsync(),
+  };
+}
+
+// Writes a restore plan to the board: comments come off the nodes leaving or
+// being hidden, then documents are removed, changed and inserted, and then
+// comments go back on nodes that are back. Only for callers holding the
+// board's lock.
+async function writeRestorePlan(
+  board: WhiteboardType,
+  liveNodes: WhiteboardNodeType[],
+  plan: RestorePlan,
+  renew: () => Promise<void>,
+) {
+  let writes = 0;
+  const wrote = async () => {
+    writes += 1;
+    if (writes % WRITES_PER_RENEWAL === 0) await renew();
+  };
+
+  // Before anything moves, since a pin's place on the board is worked out
+  // from its node's frames.
+  const liveById = new Map(liveNodes.map((n) => [n._id, n]));
+  for (const id of plan.detach) {
+    const node = liveById.get(id);
+    if (node) await detachComments(board.puzzle, node);
+    await wrote();
+  }
+
+  if (plan.edges.remove.length > 0) {
+    await WhiteboardEdges.removeAsync({
+      board: board._id,
+      _id: { $in: plan.edges.remove },
+    });
+  }
+  if (plan.nodes.remove.length > 0) {
+    await WhiteboardNodes.removeAsync({
+      board: board._id,
+      _id: { $in: plan.nodes.remove },
+    });
+  }
+  await renew();
+  for (const change of plan.nodes.change) {
+    await WhiteboardNodes.updateAsync(change._id, modifierFor(change));
+    await wrote();
+  }
+  for (const change of plan.edges.change) {
+    await WhiteboardEdges.updateAsync(change._id, modifierFor(change));
+    await wrote();
+  }
+  // What comes back is new on the board as it is now, so it draws on top
+  // like anything the restore changed.
+  const updatedAt = new Date();
+  [...plan.nodes.insert, ...plan.edges.insert].forEach((doc) => {
+    doc.updatedAt = updatedAt;
+  });
+  for (let i = 0; i < plan.nodes.insert.length; i += WRITES_PER_RENEWAL) {
+    await WhiteboardNodes.insertManyAsync(
+      plan.nodes.insert.slice(i, i + WRITES_PER_RENEWAL),
+    );
+    await renew();
+  }
+  for (let i = 0; i < plan.edges.insert.length; i += WRITES_PER_RENEWAL) {
+    await WhiteboardEdges.insertManyAsync(
+      plan.edges.insert.slice(i, i + WRITES_PER_RENEWAL),
+    );
+    await renew();
+  }
+
+  for (const { node, from } of plan.reattach) {
+    const doc = await WhiteboardNodes.findOneAsync(node);
+    if (doc) await reattachComments(board.puzzle, doc, from);
+    await wrote();
+  }
+}
+
 // Puts the board back as a version has it, recording the board as it is
 // first. Comments stay, coming off nodes the restore takes away and going
 // back on nodes it brings back. Who may edit the board isn't changed.
@@ -636,34 +755,9 @@ export async function restoreVersion(
     // Anything may have changed while this waited for the lock
     const { board: current } = await assertMayEditBoard(userId, boardId);
     await assertHistoryEnabled();
-    const chunks = await WhiteboardVersionChunks.find(
-      { version: versionId },
-      { sort: { index: 1 } },
-    ).fetchAsync();
-    await renew();
-    if (!(await WhiteboardVersions.findOneAsync(versionId))) {
-      throw unknownVersion();
-    }
-    if (
-      chunks.length !== version.chunkCount ||
-      chunks.some((c, i) => c.index !== i)
-    ) {
-      throw unrestorable();
-    }
+    const target = await readVersionLocked(version, renew);
 
-    const stored = await decodeVersion(chunks.map((c) => c.data));
-    await renew();
-    const account = await mergedAccounts();
-    const target = {
-      nodes: stored.nodes.map((n) => withMergedAccounts(n, account)),
-      edges: stored.edges.map((e) => withMergedAccounts(e, account)),
-    };
-    await renew();
-
-    const live = {
-      nodes: await WhiteboardNodes.find({ board: boardId }).fetchAsync(),
-      edges: await WhiteboardEdges.find({ board: boardId }).fetchAsync(),
-    };
+    const live = await readBoard(boardId);
     await renew();
     const result = planRestore(live, target);
     if (!result.ok) {
@@ -681,66 +775,7 @@ export async function restoreVersion(
       restoredFromAt: version.createdAt,
     });
 
-    let writes = 0;
-    const wrote = async () => {
-      writes += 1;
-      if (writes % WRITES_PER_RENEWAL === 0) await renew();
-    };
-
-    // Before anything moves, since a pin's place on the board is worked out
-    // from its node's frames.
-    const liveById = new Map(live.nodes.map((n) => [n._id, n]));
-    for (const id of plan.detach) {
-      const node = liveById.get(id);
-      if (node) await detachComments(current.puzzle, node);
-      await wrote();
-    }
-
-    if (plan.edges.remove.length > 0) {
-      await WhiteboardEdges.removeAsync({
-        board: boardId,
-        _id: { $in: plan.edges.remove },
-      });
-    }
-    if (plan.nodes.remove.length > 0) {
-      await WhiteboardNodes.removeAsync({
-        board: boardId,
-        _id: { $in: plan.nodes.remove },
-      });
-    }
-    await renew();
-    for (const change of plan.nodes.change) {
-      await WhiteboardNodes.updateAsync(change._id, modifierFor(change));
-      await wrote();
-    }
-    for (const change of plan.edges.change) {
-      await WhiteboardEdges.updateAsync(change._id, modifierFor(change));
-      await wrote();
-    }
-    // What comes back is new on the board as it is now, so it draws on top
-    // like anything the restore changed.
-    const updatedAt = new Date();
-    [...plan.nodes.insert, ...plan.edges.insert].forEach((doc) => {
-      doc.updatedAt = updatedAt;
-    });
-    for (let i = 0; i < plan.nodes.insert.length; i += WRITES_PER_RENEWAL) {
-      await WhiteboardNodes.insertManyAsync(
-        plan.nodes.insert.slice(i, i + WRITES_PER_RENEWAL),
-      );
-      await renew();
-    }
-    for (let i = 0; i < plan.edges.insert.length; i += WRITES_PER_RENEWAL) {
-      await WhiteboardEdges.insertManyAsync(
-        plan.edges.insert.slice(i, i + WRITES_PER_RENEWAL),
-      );
-      await renew();
-    }
-
-    for (const { node, from } of plan.reattach) {
-      const doc = await WhiteboardNodes.findOneAsync(node);
-      if (doc) await reattachComments(current.puzzle, doc, from);
-      await wrote();
-    }
+    await writeRestorePlan(current, live.nodes, plan, renew);
 
     await Whiteboards.updateAsync(boardId, {
       $set: { lastRewrittenAt: new Date() },
@@ -757,4 +792,67 @@ export async function restoreVersion(
     board.hunt,
     puzzles.map((p) => p._id),
   );
+}
+
+// Puts some of a version's nodes back as the version has them, with what
+// restoreItemSet adds to them, leaving the rest of the board alone. It's an
+// edit, recorded and coalesced like any other: nothing live is removed and
+// the board isn't marked as rewritten. Returns whether anything on the board
+// changed.
+export async function restoreItems(
+  userId: string,
+  boardId: string,
+  versionId: string,
+  nodeIds: string[],
+): Promise<boolean> {
+  const { board } = await assertMayEditBoard(userId, boardId);
+  await assertHistoryEnabled();
+  const version = await WhiteboardVersions.findOneAsync({
+    _id: versionId,
+    board: boardId,
+  });
+  if (!version) throw unknownVersion();
+  if (nodeIds.length === 0) throw new Meteor.Error(400, "Nothing to restore");
+  if (nodeIds.length > MAX_BATCH) {
+    throw new Meteor.Error(400, "Too many nodes at once");
+  }
+
+  const { puzzles, restored } = await withBoardLock(boardId, async (renew) => {
+    // Anything may have changed while this waited for the lock
+    const { board: current } = await assertMayEditBoard(userId, boardId);
+    await assertHistoryEnabled();
+    const target = await readVersionLocked(version, renew);
+
+    const items = restoreItemSet(target, nodeIds);
+    if (!items) throw new Meteor.Error(404, "That isn't in this version");
+    if (items.nodes.size > MAX_BATCH || items.edges.size > MAX_BATCH) {
+      throw new Meteor.Error(400, "That's too much to restore at once");
+    }
+
+    const live = await readBoard(boardId);
+    await renew();
+    const result = planItemRestore(live, target, items);
+    if (!result.ok) throw new Meteor.Error(400, "This board is full");
+    const { plan } = result;
+
+    // Nothing has been written yet, so a failure here leaves the board as
+    // it was.
+    await recordVersionLocked(current, userId, "edits", renew);
+    await renew();
+    await writeRestorePlan(current, live.nodes, plan, renew);
+    return {
+      puzzles: result.puzzles,
+      restored:
+        plan.nodes.change.length > 0 ||
+        plan.nodes.insert.length > 0 ||
+        plan.edges.change.length > 0 ||
+        plan.edges.insert.length > 0,
+    };
+  });
+
+  // Puts restored cards that placement looks after into their rounds, and
+  // redraws their feeder arrows. It takes the board's lock, so it can't run
+  // inside it.
+  deferSyncPuzzlesOnBoard(board.hunt, puzzles);
+  return restored;
 }

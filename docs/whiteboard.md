@@ -55,6 +55,7 @@ files:
   - imports/methods/fetchWhiteboardVersion.ts
   - imports/methods/placeWhiteboardCardsByTags.ts
   - imports/methods/resetWhiteboardLayout.ts
+  - imports/methods/restoreWhiteboardItems.ts
   - imports/methods/restoreWhiteboardVersion.ts
   - imports/methods/setWhiteboardEditPolicy.ts
   - imports/methods/upsertWhiteboardEdges.ts
@@ -63,6 +64,7 @@ files:
   - imports/server/methods/fetchWhiteboardVersion.ts
   - imports/server/methods/placeWhiteboardCardsByTags.ts
   - imports/server/methods/resetWhiteboardLayout.ts
+  - imports/server/methods/restoreWhiteboardItems.ts
   - imports/server/methods/restoreWhiteboardVersion.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
   - imports/server/models/WhiteboardPresence.ts
@@ -524,15 +526,16 @@ nothing has to run later to finish one off, and the live board is always the
 newest state. It doesn't hold comments, cursors, the board's own document or
 its edit policy, so a restore never changes who may edit.
 
-Node and line edits (`upsertNodes`, `deleteNodes`, `upsertEdges`,
-`deleteEdges` and `placeByTags`) call `recordVersionBeforeEdit` in
-`imports/server/whiteboardVersions.ts` after their checks and before their
-first write. Comments, live drags and strokes, placement from puzzle hooks,
-and an `upsertNodes` batch that does nothing but collapse or expand frames
-never record one. Versions hold each frame's `collapsed` like any other
-field, so a restore brings it back. The rule for whether an edit records a version is
-`versionDecision` in `imports/lib/whiteboard/versions.ts`. Each version
-lists who edited after it and when each of them started:
+Node and line edits (`upsertNodes`, `deleteNodes`, `upsertEdges`, `deleteEdges`
+and `placeByTags`) call `recordVersionBeforeEdit` in
+`imports/server/whiteboardVersions.ts` after their checks and before their first
+write. Restoring one item (`restoreItems`, below) records the same way from
+under the board's lock. Comments, live drags and strokes, placement from puzzle
+hooks, and an `upsertNodes` batch that does nothing but collapse or expand
+frames never record one. Versions hold each frame's `collapsed` like any other
+field, so a restore brings it back. The rule for whether an edit records a
+version is `versionDecision` in `imports/lib/whiteboard/versions.ts`. Each
+version lists who edited after it and when each of them started:
 
 1. If someone has edited in the last 10 minutes (`VERSION_INTERVAL_MS`,
    counted from when they joined the version, not when it started), their
@@ -566,23 +569,33 @@ ends with "Older history was cleared to save space". With history turned off
 it says so instead.
 
 Picking a row previews it. The client fetches the version's chunks with
-`Whiteboards.methods.fetchVersion`, one call per chunk, joins them, unpacks
-them with `DecompressionStream("gzip")` and hands the nodes and lines to
+`Whiteboards.methods.fetchVersion`, one call per chunk, joins them, unpacks them
+with `DecompressionStream("gzip")` and hands the nodes and lines to
 `useWhiteboardSync` in place of the live board. While previewing, the board
-can't be edited or commented on, comment pins, cursors and other people's
-drags are hidden, the viewer's own cursor comes off everyone else's screens,
-and a banner at the top says "Viewing the board as it was
-at 14:20." with "Restore this version" and "Back to now". Restore asks first:
-"Restore the board to 14:20? Changes since then, by anyone, are undone.
-Comments are kept. The board as it is now is saved in history, so you can
-come back to it." The question stays up, its buttons disabled, until the
-server answers; a refusal shows in it. Once it's done, the preview closes and
-a notice says "Board restored to 14:20." For anyone who can't edit, Restore
-is disabled with the reason beside it. Rows give only the time, under their
-day; the banner, the question, the notice and a restore row's "restored the
-… version" add the day when it isn't today. Escape leaves a preview, and
-then closes the panel. A browser without `DecompressionStream` can list
-versions but not preview them, and says so.
+can't be edited or commented on, comment pins, cursors and other people's drags
+are hidden, the viewer's own cursor comes off everyone else's screens, and a
+banner at the top says "Viewing the board as it was at 14:20." with "Restore
+this version" and "Back to now". Nodes and lines the version has differently
+from the board as it is now get a pink outline (`versionDifferences` in
+`imports/lib/whiteboard/versions.ts`): ones the board no longer has, and ones
+with a different place, frame, size, text, label, colour, ends, line style, or
+hidden or collapsed state. They're matched by what they are, as a restore
+matches them, so a card that has only changed id isn't marked. The outline
+follows the live board, so it goes from anything that's put back. Nodes can be
+selected in a preview, though nothing can be moved, and a single selected node,
+or a whole ink stroke, offers "Restore this item" (see below). Opening,
+switching or leaving a preview clears the selection, so nothing picked in one
+stays selected on the live board. Restore asks first: "Restore the board to
+14:20? Changes since then, by anyone, are undone. Comments are kept. The board
+as it is now is saved in history, so you can come back to it." The question
+stays up, its buttons disabled, until the server answers; a refusal shows in it.
+Once it's done, the preview closes and a notice says "Board restored to 14:20."
+For anyone who can't edit, Restore is disabled with the reason beside it, and so
+is "Restore this item". Rows give only the time, under their day; the banner,
+the question, the notice and a restore row's "restored the … version" add the
+day when it isn't today. Escape leaves a preview, and then closes the panel. A
+browser without `DecompressionStream` can list versions but not preview them,
+and says so.
 
 ### Restoring
 
@@ -624,6 +637,49 @@ land while a restore runs may survive on top or be overwritten. A restore
 that loses the board's lock part-way stops and says so (see "When the board
 is busy" below). Pins that came off a node before this feature have no
 `detachedFrom` and stay free.
+
+### Restoring one item
+
+"Restore this item", on a node selected in a preview, puts back just that
+node, for when someone deleted a sticky and nobody wants to roll back
+everyone else's work. Selecting part of an ink stroke selects all of it, and
+the button then puts back the whole stroke. On a frame it reads "Restore this
+frame and everything in it as it was at 14:20", since the frame brings
+everything inside it back too, undoing later edits to those by anyone. On
+success the board's notice says "Put back as it was at 14:20." (or "That's
+already as it was at 14:20." when nothing differed) and the preview stays
+open; a refusal shows in the usual "Couldn't save" alert.
+
+`Whiteboards.methods.restoreItems` (`restoreItems` in
+`imports/server/whiteboardVersions.ts`) takes 1 to 100 node ids from one
+version and returns whether anything on the board changed. It needs edit
+access and history turned on, and the version must be this board's. Under the
+board's lock it checks those again and reads the version as a whole restore
+does. `restoreItemSet` adds everything inside a frame (in the version), the
+lines touching any of it and those lines' free ends. If that comes to more
+than 100 nodes or 100 lines it refuses with "That's too much to restore at
+once", and the button is disabled with that reason when the client can see it
+coming.
+
+`planItemRestore` matches documents the way `planRestore` does, so a card
+whose puzzle now has a card under another id, or a frame whose tag now has
+another frame, updates the one on the board instead of inserting a second.
+Only the documents in that set are written. It never removes anything: live
+documents outside the set stay as they are, including things added to a
+restored frame since the version. A node whose frame isn't on the board (and
+isn't being restored with it), or that would make a loop, goes to the top
+level where the version had it on screen. A line whose other end isn't on the
+board isn't restored, nor is its free end. Putting things back that would
+take the board past its node or line limit is refused with "This board is
+full".
+
+It's an edit, not a rewrite: it records a version of kind `edits` through
+`recordVersionLocked`, which coalesces with the same person's other edits
+like any save (even when nothing in the set differs, as other edits do), and
+it doesn't set `lastRewrittenAt`. Comments come off nodes it hides and go
+back on nodes it brings back, as for a whole restore. After the lock, a
+placement sync of any cards it touched puts them back in step with their
+rounds.
 
 ### Retention and storage
 
@@ -833,23 +889,24 @@ puzzle they only have open in a hidden tab or last did something on.
 The badge, icons and chips come from `puzzleStatusFromTags` in
 `imports/lib/puzzleTagStatus.ts`, which the puzzle list's rows use too, so the
 two agree on which tags make a meta, a priority or a stuck puzzle. The list
-leaves those tags out of its chips (`shownAsStatus`). Both read tags through
-the tag vocabulary in `imports/lib/tagNames.ts` (`tagKind`), through the
-server-wide synonym table admins edit on the Setup page (by default `loc:` and
-`location:` are synonyms for `where:` and `stuck` for `is:stuck`); the
-whiteboard's layout finds metas with its `isMetaForTag` too. The table
-can't rewrite into or out of `group:`, `meta-for:` or `is:`
-(`tagSynonymRuleProblems` calls that `structural`), apart from the built-in
-`stuck` rule, so the tags that organise a hunt keep the names they're stored
-under: a round's state, for one, reads `group:` and `meta-for:` tags as
-written. Without that, a tag stored before a rule existed would mean one
-thing there and another through the table. "Use the built-in rules" on the
-Setup page drops a saved table (it's greyed out, with a line saying the
-built-in rules are in use, when there's none), and saving an empty one turns
-synonyms off. The helpers take
-the table as an argument: components get it from `useTagSynonyms`, and server
-code (placing cards, a reset's seed layout) from `currentTagSynonyms` in
-`imports/server/tagSynonyms.ts`, which follows the setting.
+leaves those tags out of its chips (`shownAsStatus`). Both read tags through the
+tag vocabulary in `imports/lib/tagNames.ts` (`tagKind`), through the server-wide
+synonym table admins edit on the Setup page (by default `loc:` and `location:`
+are synonyms for `where:` and `stuck` for `is:stuck`); the whiteboard's layout
+finds metas with its `isMetaForTag` too. The table can't rewrite into or out of
+`group:`, `meta-for:` or `is:` (`tagSynonymRuleProblems` calls that
+`structural`), apart from the built-in `stuck` rule, so the tags that organise a
+hunt keep the names they're stored under: a round's state, for one, reads
+`group:` and `meta-for:` tags as written. Without that, a tag stored before a
+rule existed would mean one thing there and another through the table. "Use the
+built-in rules" on the Setup page drops a saved table, after asking and saying
+how many rules will go (it's greyed out, with a line saying the built-in rules
+are in use, when there's none). The question stays up, its buttons disabled,
+until the server answers, and a refusal shows in it. Saving an empty table turns
+synonyms off. The helpers take the table as an argument: components get it from
+`useTagSynonyms`, and server code (placing cards, a reset's seed layout) from
+`currentTagSynonyms` in `imports/server/tagSynonyms.ts`, which follows the
+setting.
 
 ### Rounds
 

@@ -93,6 +93,7 @@ import removeTagAlias from "../../../../imports/methods/removeTagAlias";
 import removeUserAccountEmail from "../../../../imports/methods/removeUserAccountEmail";
 import renameTag from "../../../../imports/methods/renameTag";
 import resetWhiteboardLayout from "../../../../imports/methods/resetWhiteboardLayout";
+import restoreWhiteboardItems from "../../../../imports/methods/restoreWhiteboardItems";
 import restoreWhiteboardVersion from "../../../../imports/methods/restoreWhiteboardVersion";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import sendUserVerificationEmail from "../../../../imports/methods/sendUserVerificationEmail";
@@ -211,6 +212,7 @@ const METHODS = {
   removeUserAccountEmail,
   renameTag,
   resetWhiteboardLayout,
+  restoreWhiteboardItems,
   restoreWhiteboardVersion,
   sendChatMessage,
   sendUserVerificationEmail,

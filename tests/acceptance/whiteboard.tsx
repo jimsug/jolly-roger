@@ -1603,11 +1603,18 @@ if (Meteor.isClient) {
           await login(MEMBER_EMAIL, MEMBER_PASSWORD);
         });
 
+        // Nodes made for a test, removed once an operator is back
+        const leftovers: string[] = [];
+
         after(async function () {
           this.timeout(10000);
           await promisify(Meteor.logout)();
           await login(USER_EMAIL, USER_PASSWORD);
           await setPolicy("members");
+          await deleteWhiteboardNodes.callPromise({
+            boardId,
+            nodeIds: leftovers.splice(0),
+          });
         });
 
         it("shows non-editors why they can't edit and keeps the comment tool", async function () {
@@ -1671,6 +1678,88 @@ if (Meteor.isClient) {
           assert.isNull(
             screen.queryByRole("button", { name: /^Not on the board/ }),
           );
+        });
+
+        it("disables Restore this item for a viewer", async function () {
+          this.timeout(60000);
+          // A version with a note on it, made as an operator
+          await promisify(Meteor.logout)();
+          await login(USER_EMAIL, USER_PASSWORD);
+          const note = Random.id();
+          leftovers.push(note);
+          const base = { x: 33000, y: 33000 };
+          try {
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [
+                {
+                  _id: note,
+                  type: "sticky",
+                  position: base,
+                  width: 200,
+                  height: 160,
+                },
+              ],
+            });
+            await clearWhiteboardVersions.callPromise({ boardId });
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: note, text: "Changed since" }],
+            });
+          } finally {
+            await promisify(Meteor.logout)();
+            await login(MEMBER_EMAIL, MEMBER_PASSWORD);
+          }
+          localStorage.setItem(
+            `whiteboard:viewport:${boardId}`,
+            JSON.stringify({ x: 150 - base.x, y: 150 - base.y, zoom: 1 }),
+          );
+          try {
+            render(<TestApp />);
+            await goTo(boardPath);
+            await screen.findByText("Viewing only", {}, { timeout: 20000 });
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: "History" }));
+              await stabilize();
+            });
+            const row = await waitFor(
+              () => {
+                const found = [
+                  ...document.querySelectorAll<HTMLElement>(
+                    ".react-flow__panel.top.right button",
+                  ),
+                ].find((b) => b.textContent?.startsWith("Before edits by"));
+                assert.exists(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            await act(async () => {
+              fireEvent.click(row);
+              await stabilize();
+            });
+            const shown = await waitFor(
+              () => {
+                const found = nodeElement(note);
+                assert.isNotNull(found);
+                return found as HTMLElement;
+              },
+              { timeout: 10000 },
+            );
+            await act(async () => {
+              fireEvent.click(shown);
+              await stabilize();
+            });
+            const button = await screen.findByRole("button", {
+              name: "Restore this item",
+            });
+            assert.isTrue(button.hasAttribute("disabled"));
+            within(button.parentElement!).getByText(
+              "Only people who can edit the board can restore it.",
+            );
+          } finally {
+            localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+          }
         });
 
         it("lets a non-editor place a comment", async function () {
@@ -4386,6 +4475,107 @@ if (Meteor.isClient) {
             boardId,
             nodes: [{ _id: a._id, parent: a.parent, position: a.position }],
           });
+        }
+      });
+
+      it("restores one item from a preview", async function () {
+        this.timeout(60000);
+        const note = Random.id();
+        const base = { x: 31000, y: 31000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: note,
+              type: "sticky",
+              position: base,
+              width: 200,
+              height: 160,
+              text: "Deleted by mistake",
+            },
+          ],
+        });
+        // The deletion is then the first edit, so the version it records
+        // has the note on it
+        await clearWhiteboardVersions.callPromise({ boardId });
+        await removeNodes([note]);
+        lookAt(base);
+        try {
+          await openBoard();
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "History" }));
+            await stabilize();
+          });
+          const row = await waitFor(
+            () => {
+              const found = [
+                ...document.querySelectorAll<HTMLElement>(
+                  ".react-flow__panel.top.right button",
+                ),
+              ].find((b) => b.textContent?.startsWith("Before edits by"));
+              assert.exists(found);
+              return found;
+            },
+            { timeout: 10000 },
+          );
+          await act(async () => {
+            fireEvent.click(row);
+            await stabilize();
+          });
+          await screen.findByText(
+            /^Viewing the board as it was at /,
+            {},
+            { timeout: 10000 },
+          );
+          const shown = await nodeShown(note);
+          await waitFor(() =>
+            assert.isTrue(shown.classList.contains("jr-changed")),
+          );
+
+          await select(note);
+          const button = await screen.findByRole("button", {
+            name: "Restore this item",
+          });
+          await act(async () => {
+            fireEvent.click(button);
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const restored = await savedNode(note);
+              assert.equal(restored?.text, "Deleted by mistake");
+              assert.deepEqual(restored?.position, base);
+            },
+            { timeout: 10000 },
+          );
+          await screen.findByText(/^Put back as it was at /);
+          // Still previewing, and the note now matches the board
+          screen.getByText(/^Viewing the board as it was at /);
+          await waitFor(() =>
+            assert.isFalse(nodeElement(note)?.classList.contains("jr-changed")),
+          );
+
+          // What was picked in the preview isn't selected on the board
+          assert.isTrue(nodeElement(note)?.classList.contains("selected"));
+          await act(async () => {
+            fireEvent.click(
+              screen.getByRole("button", { name: "Back to now" }),
+            );
+            await stabilize();
+          });
+          await waitFor(() =>
+            assert.isNull(
+              screen.queryByText(/^Viewing the board as it was at /),
+            ),
+          );
+          const live = await nodeShown(note);
+          assert.isFalse(live.classList.contains("selected"));
+          assert.isNull(
+            screen.queryByRole("button", { name: "Restore this item" }),
+          );
+        } finally {
+          forgetView();
+          await removeNodes([note]);
         }
       });
 

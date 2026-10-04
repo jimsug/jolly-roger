@@ -747,7 +747,7 @@ if (Meteor.isClient) {
         );
       });
 
-      it("goes back to the built-in rules from the Setup page", async function () {
+      it("goes back to the built-in rules from the Setup page once confirmed", async function () {
         this.timeout(30000);
         await setUpHunt("tag synonyms reset", []);
         await configureTagSynonyms.callPromise({
@@ -767,10 +767,52 @@ if (Meteor.isClient) {
             "room:",
           );
         });
+        // Cancelling the confirmation keeps the saved table
         fireEvent.click(
           section.getByRole("button", { name: "Use the built-in rules" }),
         );
+        let dialog = within(await screen.findByRole("dialog"));
+        dialog.getByText(/removes the saved table and its 1 rule,/);
+        fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => {
+          assert.isNull(screen.queryByRole("dialog"));
+        });
+        assert.equal(
+          section.getByRole<HTMLInputElement>("textbox", {
+            name: "Synonym in rule 1",
+          }).value,
+          "room:",
+        );
+        assert.isFalse(
+          section
+            .getByRole("button", { name: "Use the built-in rules" })
+            .hasAttribute("disabled"),
+        );
+
+        fireEvent.click(
+          section.getByRole("button", { name: "Use the built-in rules" }),
+        );
+        dialog = within(await screen.findByRole("dialog"));
+        fireEvent.click(
+          dialog.getByRole("button", { name: "Remove the saved table" }),
+        );
+        // The question stays up, with its buttons off, until the server
+        // answers
+        assert.isNotNull(screen.queryByRole("dialog"));
+        assert.isTrue(
+          dialog
+            .getByRole("button", { name: "Remove the saved table" })
+            .hasAttribute("disabled"),
+        );
+        assert.isTrue(
+          dialog
+            .getByRole("button", { name: "Cancel" })
+            .hasAttribute("disabled"),
+        );
         await section.findByText("Saved changes.", {}, { timeout: 5000 });
+        await waitFor(() => {
+          assert.isNull(screen.queryByRole("dialog"));
+        });
         assert.deepEqual(
           TAG_SYNONYMS.map(
             (_rule, i) =>

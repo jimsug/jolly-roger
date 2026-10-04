@@ -146,9 +146,15 @@ import { liveDrags, seeDrags } from "../../../lib/whiteboard/liveDrags";
 import { miniMapColor } from "../../../lib/whiteboard/minimap";
 import { finishedFrames } from "../../../lib/whiteboard/rounds";
 import type { BoardSearchHit } from "../../../lib/whiteboard/search";
+import {
+  pickToRestore,
+  restoreItemSet,
+  versionDifferences,
+} from "../../../lib/whiteboard/versions";
 import deleteWhiteboardEdges from "../../../methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
 import placeWhiteboardCardsByTags from "../../../methods/placeWhiteboardCardsByTags";
+import restoreWhiteboardItems from "../../../methods/restoreWhiteboardItems";
 import restoreWhiteboardVersion from "../../../methods/restoreWhiteboardVersion";
 import type { WhiteboardLiveState } from "../../../methods/setWhiteboardLive";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
@@ -315,6 +321,9 @@ const MINI_MAP_FRAMES = {
   black: colors.fill.black,
 };
 
+// Marks what a preview has differently from the board as it is now.
+const CHANGED_CLASS = "jr-changed";
+
 const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
   /* stylelint-disable selector-class-pattern -- React Flow's class names */
   position: relative;
@@ -344,6 +353,19 @@ const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
         pointer-events: auto;
       }
     `}
+
+  /* In a preview, what the version has differently from the board. */
+  .react-flow__node.${CHANGED_CLASS} {
+    outline: 3px solid ${({ theme }) => theme.colors.whiteboardPreviewChanged};
+    outline-offset: 4px;
+    border-radius: 8px;
+  }
+
+  .react-flow__edge.${CHANGED_CLASS} .react-flow__edge-path {
+    filter: drop-shadow(
+      0 0 3px ${({ theme }) => theme.colors.whiteboardPreviewChanged}
+    );
+  }
 
   /* On a phone a thread opens in a sheet along the bottom, as wide as the
      board, clear of the keyboard and short of the top of both the screen
@@ -451,6 +473,11 @@ const ReadOnlyNote = styled.div`
 
 const ReadOnlyReason = styled.span`
   color: ${({ theme }) => theme.colors.textSecondary};
+`;
+
+const PreviewItemBox = styled(ToolBox)`
+  max-width: 320px;
+  font-size: 13px;
 `;
 
 // Where a thread's panel goes: the top right of the board or, on a phone, a
@@ -784,6 +811,7 @@ interface Drawing {
 
 const NO_REMOTE_DRAGS = new Map<string, RemoteDrag>();
 const NO_PINS: CommentPin[] = [];
+const NO_CHANGES: ReadonlySet<string> = new Set();
 const NO_SOLVEDNESS = new Map<string, Solvedness>();
 
 // A set with ids added or taken away, or the same set if that changes
@@ -3992,6 +4020,123 @@ const CanvasInner = ({
     });
   }, [preview, boardId, showNotice, t, previewTime]);
 
+  // Nodes keep their selection by id when the board is redrawn, so opening,
+  // switching or leaving a preview starts with nothing selected. Otherwise a
+  // pick in a preview would stay selected on the live board, where a viewer
+  // who can't edit has no way to clear it, and a live selection would offer
+  // a restore before anything was picked.
+  const previewVersionId = preview?.version._id;
+  useEffect(() => {
+    setNodes((nds) =>
+      nds.some((n) => n.selected)
+        ? nds.map((n) => (n.selected ? { ...n, selected: false } : n))
+        : nds,
+    );
+    setEdges((eds) =>
+      eds.some((e) => e.selected)
+        ? eds.map((e) => (e.selected ? { ...e, selected: false } : e))
+        : eds,
+    );
+  }, [previewVersionId, setNodes, setEdges]);
+
+  // In a preview, the board as it is now, so what the version has
+  // differently can be marked. Nodes and lines are matched by what they are,
+  // as a restore matches them.
+  const liveBoard = useTracker(
+    () =>
+      preview
+        ? {
+            nodes: WhiteboardNodes.find({ board: boardId }).fetch(),
+            edges: WhiteboardEdges.find({ board: boardId }).fetch(),
+          }
+        : undefined,
+    [preview, boardId],
+  );
+  const changed = useMemo(
+    () =>
+      preview && liveBoard
+        ? versionDifferences(liveBoard, preview)
+        : NO_CHANGES,
+    [preview, liveBoard],
+  );
+  const shownNodes = useMemo(
+    () =>
+      changed.size === 0
+        ? nodes
+        : nodes.map((n) =>
+            changed.has(n.id) ? { ...n, className: CHANGED_CLASS } : n,
+          ),
+    [nodes, changed],
+  );
+  const shownEdges = useMemo(
+    () =>
+      changed.size === 0
+        ? edges
+        : edges.map((e) =>
+            changed.has(e.id) ? { ...e, className: CHANGED_CLASS } : e,
+          ),
+    [edges, changed],
+  );
+
+  // The one thing picked in a preview (a node, or a whole ink stroke), which
+  // can be put back on its own, and whether it brings too much with it to
+  // restore at once.
+  const previewPick = useMemo(() => {
+    if (!preview) return undefined;
+    const pick = pickToRestore(
+      nodes.filter((n) => n.selected).map((n) => n.data.doc),
+    );
+    if (!pick) return undefined;
+    const items = restoreItemSet(preview, pick.ids);
+    return {
+      ...pick,
+      tooBig:
+        !items || items.nodes.size > MAX_BATCH || items.edges.size > MAX_BATCH,
+    };
+  }, [preview, nodes]);
+  const [restoringItem, setRestoringItem] = useState(false);
+  const restoreItem = useCallback(() => {
+    if (!preview || !previewPick) return;
+    setRestoringItem(true);
+    restoreWhiteboardItems.call(
+      {
+        boardId,
+        versionId: preview.version._id,
+        nodeIds: previewPick.ids,
+      },
+      (error, result) => {
+        setRestoringItem(false);
+        if (error) {
+          reportRefusal(error);
+          return;
+        }
+        const restored = result?.restored;
+        showNotice(
+          restored
+            ? t(
+                "whiteboard.history.restoredItem",
+                "Put back as it was at {{time}}.",
+                { time: previewTime },
+              )
+            : t(
+                "whiteboard.history.itemUnchanged",
+                "That's already as it was at {{time}}.",
+                { time: previewTime },
+              ),
+          restored ? "success" : "warning",
+        );
+      },
+    );
+  }, [
+    preview,
+    previewPick,
+    boardId,
+    reportRefusal,
+    showNotice,
+    t,
+    previewTime,
+  ]);
+
   // Reset layout records the board first so History can undo it, so it's
   // only offered while history is on.
   const historyOn = useTracker(
@@ -4265,6 +4410,12 @@ const CanvasInner = ({
               "whiteboard.history.cantEdit",
               "Only people who can edit the board can restore it.",
             );
+  // A frame with too much in it can't be put back in one go.
+  const restoreItemBlocked =
+    restoreBlocked ??
+    (previewPick?.tooBig
+      ? t("whiteboard.history.tooBig", "That's too much to restore at once.")
+      : undefined);
   const restoreLabel = t(
     "whiteboard.history.restoreButton",
     "Restore this version",
@@ -4345,8 +4496,8 @@ const CanvasInner = ({
                 onClickCapture={onTapFollowUp}
               >
                 <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
-                  nodes={nodes}
-                  edges={edges}
+                  nodes={shownNodes}
+                  edges={shownEdges}
                   nodeTypes={nodeTypes}
                   edgeTypes={edgeTypes}
                   onNodesChange={onNodesChange}
@@ -4373,7 +4524,9 @@ const CanvasInner = ({
                   maxZoom={MAX_ZOOM}
                   nodesDraggable={!readOnly && !drawingTool}
                   nodesConnectable={!readOnly && !drawingTool}
-                  elementsSelectable={!readOnly && !drawingTool}
+                  // A preview can't be changed, but a node in it can be picked
+                  // to restore on its own.
+                  elementsSelectable={(!readOnly || !!preview) && !drawingTool}
                   panOnDrag={!drawingTool || (compact && tool === "comment")}
                   selectionOnDrag={false}
                   deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
@@ -4783,6 +4936,36 @@ const CanvasInner = ({
                         </ToolBox>
                       </NodeToolbar>
                     )}
+                  {preview && !compact && previewPick && (
+                    <NodeToolbar
+                      nodeId={previewPick.ids[0]}
+                      isVisible
+                      position={Position.Top}
+                    >
+                      <PreviewItemBox>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          disabled={!!restoreItemBlocked || restoringItem}
+                          onClick={restoreItem}
+                        >
+                          {previewPick.frame
+                            ? t(
+                                "whiteboard.history.restoreFrame",
+                                "Restore this frame and everything in it as it was at {{time}}",
+                                { time: previewTime },
+                              )
+                            : t(
+                                "whiteboard.history.restoreItem",
+                                "Restore this item",
+                              )}
+                        </Button>
+                        {restoreItemBlocked && (
+                          <ReadOnlyReason>{restoreItemBlocked}</ReadOnlyReason>
+                        )}
+                      </PreviewItemBox>
+                    </NodeToolbar>
+                  )}
                   {!readOnly &&
                     tool === "select" &&
                     selectedLines.length > 0 && (

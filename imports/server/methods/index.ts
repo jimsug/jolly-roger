@@ -79,6 +79,7 @@ import "./removePuzzleTag";
 import "./removeTagAlias";
 import "./renameTag";
 import "./resetWhiteboardLayout";
+import "./restoreWhiteboardItems";
 import "./restoreWhiteboardVersion";
 import "./sendChatMessage";
 import "./sendUserVerificationEmail";
