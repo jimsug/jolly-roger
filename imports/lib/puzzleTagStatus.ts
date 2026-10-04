@@ -1,7 +1,9 @@
 import {
   canonicalTagName,
   isStuckTag,
+  TAG_SYNONYMS,
   type TagKind,
+  type TagSynonymRule,
   tagKind,
   tagPrefixValue,
 } from "./tagNames";
@@ -22,6 +24,7 @@ export interface PuzzleTagStatus {
 
 export function puzzleStatusFromTags(
   tagNames: Iterable<string | undefined>,
+  synonyms: readonly TagSynonymRule[] = TAG_SYNONYMS,
 ): PuzzleTagStatus {
   const names = [
     ...new Set(
@@ -29,8 +32,10 @@ export function puzzleStatusFromTags(
     ),
   ];
   const ofKind = (...kinds: TagKind[]) =>
-    names.filter((name) => kinds.includes(tagKind(name)));
-  const canonicalNames = new Set(names.map((name) => canonicalTagName(name)));
+    names.filter((name) => kinds.includes(tagKind(name, synonyms)));
+  const canonicalNames = new Set(
+    names.map((name) => canonicalTagName(name, synonyms)),
+  );
 
   let meta: PuzzleTagStatus["meta"];
   if (ofKind("metameta").length > 0) {
@@ -46,7 +51,7 @@ export function puzzleStatusFromTags(
     priority = "low";
   }
 
-  const stuckNames = names.filter(isStuckTag);
+  const stuckNames = names.filter((name) => isStuckTag(name, synonyms));
   const stuck = stuckNames.length > 0;
 
   const shownAsStatus = new Set<string>();
@@ -58,14 +63,16 @@ export function puzzleStatusFromTags(
   }
   if (priority) {
     names
-      .filter((name) => canonicalTagName(name) === `priority:${priority}`)
+      .filter(
+        (name) => canonicalTagName(name, synonyms) === `priority:${priority}`,
+      )
       .forEach((name) => shownAsStatus.add(name));
   }
   stuckNames.forEach((name) => shownAsStatus.add(name));
 
   // A bare prefix ("needs:") says nothing worth a chip.
   const chips = ofKind("needs", "location").filter(
-    (name) => tagPrefixValue(name) !== "",
+    (name) => tagPrefixValue(name, synonyms) !== "",
   );
 
   return { meta, priority, stuck, chips, shownAsStatus };

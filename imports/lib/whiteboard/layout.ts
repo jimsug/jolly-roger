@@ -4,7 +4,11 @@ import type { TagType } from "../models/Tags";
 import type { WhiteboardFrameKind } from "../models/WhiteboardNodes";
 import type { PuzzleGroup } from "../puzzle-sort-and-group";
 import { puzzleGroupsByRelevance } from "../puzzle-sort-and-group";
-import { isMetaForTag as isMetaForTagName } from "../tagNames";
+import {
+  isMetaForTag as isMetaForTagName,
+  TAG_SYNONYMS,
+  type TagSynonymRule,
+} from "../tagNames";
 import isWhiteboardPuzzle from "./isWhiteboardPuzzle";
 
 // All layout is in flow (canvas) units and never depends on anyone's screen,
@@ -64,9 +68,13 @@ interface SeedResult {
 const GROUP_PREFIX = "group:";
 const META_FOR_PREFIX = "meta-for:";
 
-// Whether a tag marks its puzzle as a meta for a round (meta-for:X).
-export function isMetaForTag(tag: Pick<TagType, "name">): boolean {
-  return isMetaForTagName(tag.name);
+// Whether a tag marks its puzzle as a meta for a round (meta-for:X), read
+// through the synonym table (the server passes the saved one).
+export function isMetaForTag(
+  tag: Pick<TagType, "name">,
+  synonyms: readonly TagSynonymRule[] = TAG_SYNONYMS,
+): boolean {
+  return isMetaForTagName(tag.name, synonyms);
 }
 
 function isFrameTag(tag: Pick<TagType, "name">): boolean {
@@ -266,6 +274,7 @@ export function chooseFrameForPuzzle(
   puzzle: PuzzleType,
   tags: TagType[],
   frames: FrameRef[],
+  synonyms: readonly TagSynonymRule[] = TAG_SYNONYMS,
 ): FrameChoice {
   const tagsById = indexedById(tags);
   const tagsByName = new Map(tags.map((t) => [t.name, t]));
@@ -278,7 +287,7 @@ export function chooseFrameForPuzzle(
     .toSorted(byCreatedAt);
 
   for (const tag of puzzleTags) {
-    if (!isMetaForTag(tag)) continue;
+    if (!isMetaForTag(tag, synonyms)) continue;
     const groupTag = tagsByName.get(
       `${GROUP_PREFIX}${tag.name.slice(META_FOR_PREFIX.length)}`,
     );
@@ -400,6 +409,7 @@ export function seedLayout(
   allPuzzles: PuzzleType[],
   tags: TagType[],
   ungroupedLabel: string,
+  synonyms: readonly TagSynonymRule[] = TAG_SYNONYMS,
 ): SeedResult {
   const puzzles = allPuzzles
     .filter((p) => !p.deleted && !isWhiteboardPuzzle(p))
@@ -430,7 +440,7 @@ export function seedLayout(
       metas: 0,
     };
   };
-  const roots = puzzleGroupsByRelevance(puzzles, tags)
+  const roots = puzzleGroupsByRelevance(puzzles, tags, synonyms)
     .toSorted(compareGroups)
     .map(convert)
     .filter((f): f is FrameSpec => !!f);
@@ -446,7 +456,7 @@ export function seedLayout(
   puzzles.forEach((puzzle) => {
     const metaFrame = puzzle.tags
       .map((id) => tagsById.get(id))
-      .filter((t): t is TagType => !!t && isMetaForTag(t))
+      .filter((t): t is TagType => !!t && isMetaForTag(t, synonyms))
       .toSorted(byCreatedAt)
       .map((t) =>
         tagsByName.get(

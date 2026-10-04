@@ -11,6 +11,7 @@ import type {
   BoardSearchKind,
 } from "../../../lib/whiteboard/search";
 import { searchBoard, searchKeys } from "../../../lib/whiteboard/search";
+import useTagSynonyms from "../../hooks/useTagSynonyms";
 import { compilePuzzleMatcher } from "../../search";
 
 const SearchBox = styled.div`
@@ -114,6 +115,7 @@ const BoardSearch = ({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
 
+  const tagSynonyms = useTagSynonyms();
   const hits = useTracker(() => {
     if (searchKeys(query).length === 0) return [];
     const tags = Tags.find({ hunt: huntId }).fetch();
@@ -144,10 +146,11 @@ const BoardSearch = ({
         hunt: huntId,
         kind: { $ne: "whiteboard" },
       }).fetch(),
-      puzzleMatcher: (keys) => compilePuzzleMatcher(tags, keys),
+      puzzleMatcher: (keys) =>
+        compilePuzzleMatcher(tags, keys, undefined, tagSynonyms),
       tagNames: new Map(tags.map((tag) => [tag._id, tag.name])),
     });
-  }, [query, boardId, huntId, drawnEdges]);
+  }, [query, boardId, huntId, drawnEdges, tagSynonyms]);
 
   const kindNames: Record<BoardSearchKind, string> = {
     puzzle: t("whiteboard.search.kind.puzzle", "Puzzle"),

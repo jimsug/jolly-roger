@@ -21,6 +21,7 @@ import { type TagKind, tagKind, tagPrefixValue } from "../../lib/tagNames";
 import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import { DiscordBot } from "../discord";
 import { serverLanguage } from "../lang";
+import currentTagSynonyms from "../tagSynonyms";
 import type Hookset from "./Hookset";
 
 async function makeDiscordBotFromSettings(): Promise<DiscordBot | undefined> {
@@ -60,8 +61,9 @@ const TAG_KIND_EMOJI: Partial<Record<TagKind, string>> = {
 // Prefixed tags show an icon in place of the prefix so a long tag list stays
 // readable in an embed. A synonym ("loc:") shows as its canonical kind.
 export function formatTagForDiscord(tagName: string): string {
-  const emoji = TAG_KIND_EMOJI[tagKind(tagName)];
-  const value = tagPrefixValue(tagName);
+  const synonyms = currentTagSynonyms();
+  const emoji = TAG_KIND_EMOJI[tagKind(tagName, synonyms)];
+  const value = tagPrefixValue(tagName, synonyms);
   if (emoji && value !== undefined) {
     return `${emoji} ${escapeDiscordMarkdown(value)}`;
   }

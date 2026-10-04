@@ -14,6 +14,7 @@ import "./unit/imports/lib/guessTitleFromUrl";
 import "./unit/imports/lib/isReaction";
 import "./unit/imports/lib/matchPuzzles";
 import "./unit/imports/lib/permission_stubs";
+import "./unit/imports/lib/planTagSynonymApply";
 import "./unit/imports/lib/presenceStatus";
 import "./unit/imports/lib/puzzle-sort-and-group";
 import "./unit/imports/lib/puzzleTagStatus";

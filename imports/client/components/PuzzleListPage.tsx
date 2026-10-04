@@ -61,6 +61,7 @@ import {
 } from "../hooks/persisted-state";
 import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
 import usePuzzleViewers from "../hooks/usePuzzleViewers";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import {
@@ -361,11 +362,13 @@ const PuzzleListView = ({
     [lockedFilterActive, lockedDisplayMode],
   );
 
+  const tagSynonyms = useTagSynonyms();
   const matchingSearch = puzzlesMatchingSearchString(
     allPuzzles,
     allTags,
     searchString,
     viewerNames,
+    tagSynonyms,
   );
   const matchingSearchAndFilters = puzzlesMatchingLockedFilter(
     puzzlesMatchingSolvedFilter(matchingSearch, showSolved),
@@ -386,6 +389,7 @@ const PuzzleListView = ({
       allTags,
       searchString,
       viewerNames,
+      tagSynonyms,
     );
 
   const clearSearch = useCallback(() => {
@@ -535,7 +539,11 @@ const PuzzleListView = ({
           // We group and sort first, and only filter afterward, to avoid losing the
           // relative group structure as a result of removing some puzzles from
           // consideration.
-          const unfilteredGroups = puzzleGroupsByRelevance(allPuzzles, allTags);
+          const unfilteredGroups = puzzleGroupsByRelevance(
+            allPuzzles,
+            allTags,
+            tagSynonyms,
+          );
           const puzzleGroups = filteredPuzzleGroups(
             unfilteredGroups,
             retainedIds,
@@ -674,6 +682,7 @@ const PuzzleListView = ({
       addPuzzleCallback,
       viewersShown,
       viewersByPuzzle,
+      tagSynonyms,
       t,
     ],
   );

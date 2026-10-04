@@ -25,10 +25,12 @@ import { sortPuzzlesByRelevanceWithinPuzzleGroup } from "../../lib/puzzle-sort-a
 import {
   GROUP_TAG_PREFIX,
   isMetaForTag,
+  type TagSynonymRule,
   tagKind,
   tagPrefixValue,
 } from "../../lib/tagNames";
 import useIsOffsite from "../hooks/useIsOffsite";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import CopyToClipboardButton from "./CopyToClipboardButton";
 import { removePunctuation } from "./PuzzleAnswer";
 import RelatedPuzzleTable from "./RelatedPuzzleTable";
@@ -170,9 +172,12 @@ const PopoverPadding = {
 
 // Calculate the tag name to use when determining related puzzles
 // There may be more cases here in the future
-function getRelatedPuzzlesSharedTagName(name: string) {
-  if (isMetaForTag(name)) {
-    return `${GROUP_TAG_PREFIX}${tagPrefixValue(name)}`;
+function getRelatedPuzzlesSharedTagName(
+  name: string,
+  synonyms: readonly TagSynonymRule[],
+) {
+  if (isMetaForTag(name, synonyms)) {
+    return `${GROUP_TAG_PREFIX}${tagPrefixValue(name, synonyms)}`;
   }
   return name;
 }
@@ -267,6 +272,7 @@ const Tag = (props: TagProps) => {
     }
   }, [onRemove, tag._id]);
 
+  const tagSynonyms = useTagSynonyms();
   const allTagsIfPresent = props.popoverRelated ? props.allTags : undefined;
   const allPuzzlesIfPresent = props.popoverRelated
     ? props.allPuzzles
@@ -275,7 +281,10 @@ const Tag = (props: TagProps) => {
     if (!props.popoverRelated) {
       return [];
     }
-    const sharedTagName = getRelatedPuzzlesSharedTagName(props.tag.name);
+    const sharedTagName = getRelatedPuzzlesSharedTagName(
+      props.tag.name,
+      tagSynonyms,
+    );
     const sharedTag = allTagsIfPresent!.find((t) => t.name === sharedTagName);
     return sharedTag
       ? allPuzzlesIfPresent!.filter((p) => p.tags.includes(sharedTag._id))
@@ -285,6 +294,7 @@ const Tag = (props: TagProps) => {
     props.tag.name,
     allTagsIfPresent,
     allPuzzlesIfPresent,
+    tagSynonyms,
   ]);
 
   // The copied list is in the order the popover shows it
@@ -294,13 +304,17 @@ const Tag = (props: TagProps) => {
       return "";
     }
     const tagIndex = indexedById(allTagsIfPresent!);
-    const sharedTagName = getRelatedPuzzlesSharedTagName(props.tag.name);
+    const sharedTagName = getRelatedPuzzlesSharedTagName(
+      props.tag.name,
+      tagSynonyms,
+    );
     const sharedTag = allTagsIfPresent!.find((t) => t.name === sharedTagName);
     const relatedPuzzles = sortPuzzlesByRelevanceWithinPuzzleGroup(
       getRelatedPuzzles(),
       sharedTag,
       tagIndex,
       isOffsite,
+      tagSynonyms,
     );
     const clipboardData = relatedPuzzles
       .map((puzzle) => {
@@ -331,10 +345,11 @@ const Tag = (props: TagProps) => {
     getRelatedPuzzles,
     segmentAnswers,
     isOffsite,
+    tagSynonyms,
   ]);
 
   const name = props.tag.name;
-  const kind = tagKind(name);
+  const kind = tagKind(name, tagSynonyms);
 
   // Group, meta-for and location prefixes are drawn as an icon instead of the
   // prefix text (see the legend on the puzzle list).
@@ -404,7 +419,10 @@ const Tag = (props: TagProps) => {
   const { t } = useTranslation();
   const popoverId = useId();
   if (props.popoverRelated) {
-    const sharedTagName = getRelatedPuzzlesSharedTagName(props.tag.name);
+    const sharedTagName = getRelatedPuzzlesSharedTagName(
+      props.tag.name,
+      tagSynonyms,
+    );
     const relatedPuzzles = getRelatedPuzzles();
     const respaceButtonVariant = segmentAnswers
       ? "secondary"

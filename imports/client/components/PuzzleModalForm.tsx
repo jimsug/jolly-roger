@@ -28,6 +28,7 @@ import Hunts from "../../lib/models/Hunts";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import { compareTagNames, isFunctionalTag } from "../../lib/tagNames";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import LabelledRadioGroup from "./LabelledRadioGroup";
 import Loading from "./Loading";
 import type { ModalFormHandle } from "./ModalForm";
@@ -419,13 +420,14 @@ const PuzzleModalForm = ({
       return tags;
     }
   }, [tagsDirty, puzzle, tagNamesForIds, tags]);
+  const tagSynonyms = useTagSynonyms();
   const currentFunctionalTags = useMemo(
-    () => currentTags.filter(isFunctionalTag),
-    [currentTags],
+    () => currentTags.filter((name) => isFunctionalTag(name, tagSynonyms)),
+    [currentTags, tagSynonyms],
   );
   const currentContentTags = useMemo(
-    () => currentTags.filter((name) => !isFunctionalTag(name)),
-    [currentTags],
+    () => currentTags.filter((name) => !isFunctionalTag(name, tagSynonyms)),
+    [currentTags, tagSynonyms],
   );
 
   // Each tag input replaces its own half of the tag list and keeps the other.
@@ -512,10 +514,10 @@ const PuzzleModalForm = ({
     return { value: t, label: t };
   });
   const functionalSelectOptions = selectOptions.filter((o) =>
-    isFunctionalTag(o.value),
+    isFunctionalTag(o.value, tagSynonyms),
   );
   const contentSelectOptions = selectOptions.filter(
-    (o) => !isFunctionalTag(o.value),
+    (o) => !isFunctionalTag(o.value, tagSynonyms),
   );
   const tagsPlaceholder = t(
     "puzzle.edit.tagsPlaceholder",

@@ -18,6 +18,7 @@ import addHuntUser from "../../../../imports/methods/addHuntUser";
 import addPuzzleAnswer from "../../../../imports/methods/addPuzzleAnswer";
 import addPuzzleTag from "../../../../imports/methods/addPuzzleTag";
 import addUserAccountEmail from "../../../../imports/methods/addUserAccountEmail";
+import applyTagSynonyms from "../../../../imports/methods/applyTagSynonyms";
 import bookmarkPuzzle from "../../../../imports/methods/bookmarkPuzzle";
 import bulkAddHuntUsers from "../../../../imports/methods/bulkAddHuntUsers";
 import clearHuntInvitationCode from "../../../../imports/methods/clearHuntInvitationCode";
@@ -38,6 +39,7 @@ import configureListS3Buckets from "../../../../imports/methods/configureListS3B
 import configureOrganizeGoogleDrive from "../../../../imports/methods/configureOrganizeGoogleDrive";
 import configureS3ImageBucket from "../../../../imports/methods/configureS3ImageBucket";
 import configureServerLanguage from "../../../../imports/methods/configureServerLanguage";
+import configureTagSynonyms from "../../../../imports/methods/configureTagSynonyms";
 import configureTeamName from "../../../../imports/methods/configureTeamName";
 import confirmUserMerge from "../../../../imports/methods/confirmUserMerge";
 import createAPIKey from "../../../../imports/methods/createAPIKey";
@@ -77,6 +79,7 @@ import mediasoupSetPeerState from "../../../../imports/methods/mediasoupSetPeerS
 import mediasoupSetProducerPaused from "../../../../imports/methods/mediasoupSetProducerPaused";
 import placeWhiteboardCardsByTags from "../../../../imports/methods/placeWhiteboardCardsByTags";
 import postAnnouncement from "../../../../imports/methods/postAnnouncement";
+import previewTagSynonyms from "../../../../imports/methods/previewTagSynonyms";
 import promoteOperator from "../../../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../../../imports/methods/provisionFirstUser";
 import provisionScreenshotData from "../../../../imports/methods/provisionScreenshotData";
@@ -132,6 +135,7 @@ const METHODS = {
   addHuntUser,
   addPuzzleAnswer,
   addPuzzleTag,
+  applyTagSynonyms,
   addUserAccountEmail,
   bookmarkPuzzle,
   bulkAddHuntUsers,
@@ -153,6 +157,7 @@ const METHODS = {
   configureOrganizeGoogleDrive,
   configureS3ImageBucket,
   configureServerLanguage,
+  configureTagSynonyms,
   configureTeamName,
   confirmUserMerge,
   createAPIKey,
@@ -192,6 +197,7 @@ const METHODS = {
   mediasoupSetProducerPaused,
   placeWhiteboardCardsByTags,
   postAnnouncement,
+  previewTagSynonyms,
   promoteOperator,
   provisionFirstUser,
   provisionScreenshotData,

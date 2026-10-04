@@ -10,6 +10,7 @@ import { MAX_BATCH } from "../lib/whiteboard/limits";
 import type { ResetPlacement } from "../lib/whiteboard/reset";
 import { planReset, resetSeedInput } from "../lib/whiteboard/reset";
 import ignoringDuplicateKeyErrors from "./ignoringDuplicateKeyErrors";
+import currentTagSynonyms from "./tagSynonyms";
 import {
   PLACEMENT_PROJECTION,
   syncAutoEdges,
@@ -112,7 +113,12 @@ export async function resetLayout(
       { projection: PLACEMENT_PROJECTION },
     ).fetchAsync();
     const input = resetSeedInput(puzzles, tags, nodes, putBack);
-    const seed = seedLayout(input.puzzles, input.tags, ungroupedLabel());
+    const seed = seedLayout(
+      input.puzzles,
+      input.tags,
+      ungroupedLabel(),
+      currentTagSynonyms(),
+    );
     const plan = planReset(seed.nodes, nodes, { putBack });
     await renew();
 

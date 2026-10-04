@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import {
   canonicalTagName,
+  cleanTagSynonymRules,
   compareTagNames,
   escapeRegExp,
   isFunctionalTag,
@@ -13,11 +14,13 @@ import {
   normalizeTagName,
   TAG_SYNONYMS,
   type TagKind,
+  type TagSynonymRule,
   tagKind,
   tagNameMatcher,
   tagPrefixValue,
   tagSynonymMatcher,
   tagSynonymNames,
+  tagSynonymRuleProblems,
 } from "../../../../imports/lib/tagNames";
 
 describe("normalizeTagName", function () {
@@ -94,16 +97,22 @@ describe("canonicalTagName", function () {
 
   it("follows a table it is given", function () {
     const synonyms = [
-      { kind: "prefix", from: "round:", to: "group:" },
+      { kind: "prefix", match: "round:", to: "group:" },
     ] as const;
     assert.equal(canonicalTagName("round:1", synonyms), "group:1");
     assert.equal(canonicalTagName("loc:x", synonyms), "loc:x");
     assert.equal(canonicalTagName("loc:x", []), "loc:x");
   });
 
+  it("leaves every name alone with an empty table", function () {
+    for (const name of ["loc:x", "location:x", "stuck", "where:x", ""]) {
+      assert.equal(canonicalTagName(name, []), name);
+    }
+  });
+
   it("covers every rule in the default table", function () {
     for (const rule of TAG_SYNONYMS) {
-      const name = rule.kind === "tag" ? rule.from : `${rule.from}x`;
+      const name = rule.kind === "tag" ? rule.match : `${rule.match}x`;
       const expected = rule.kind === "tag" ? rule.to : `${rule.to}x`;
       assert.equal(canonicalTagName(name), expected, name);
     }
@@ -122,6 +131,31 @@ describe("tagSynonymNames", function () {
   it("is just the name for a tag without synonyms", function () {
     assert.deepEqual(tagSynonymNames("group:events"), ["group:events"]);
     assert.deepEqual(tagSynonymNames("Loc:x"), ["Loc:x"]);
+  });
+
+  it("follows a table it is given", function () {
+    const synonyms: TagSynonymRule[] = [
+      { kind: "prefix", match: "round:", to: "group:" },
+      { kind: "tag", match: "meta", to: "is:meta" },
+    ];
+    assert.sameMembers(tagSynonymNames("round:1", synonyms), [
+      "round:1",
+      "group:1",
+    ]);
+    assert.sameMembers(tagSynonymNames("group:1", synonyms), [
+      "round:1",
+      "group:1",
+    ]);
+    assert.sameMembers(tagSynonymNames("is:meta", synonyms), [
+      "meta",
+      "is:meta",
+    ]);
+    assert.deepEqual(tagSynonymNames("loc:x", synonyms), ["loc:x"]);
+  });
+
+  it("is just the name with an empty table", function () {
+    assert.deepEqual(tagSynonymNames("loc:x", []), ["loc:x"]);
+    assert.deepEqual(tagSynonymNames("stuck", []), ["stuck"]);
   });
 });
 
@@ -231,5 +265,157 @@ describe("compareTagNames", function () {
     assert.equal(compareTagNames("Logic", "logic"), 0);
     assert.isBelow(compareTagNames("a", "B"), 0);
     assert.isAbove(compareTagNames("b", "A"), 0);
+  });
+});
+
+describe("tag helpers given a synonym table", function () {
+  it("read names through it in place of the built-in one", function () {
+    const custom: TagSynonymRule[] = [
+      { kind: "prefix", match: "round:", to: "group:" },
+    ];
+    assert.equal(canonicalTagName("round:1", custom), "group:1");
+    assert.equal(canonicalTagName("loc:x", custom), "loc:x");
+    assert.equal(tagKind("round:1", custom), "group");
+
+    assert.equal(canonicalTagName("stuck", []), "stuck");
+    assert.isFalse(isStuckTag("stuck", []));
+
+    assert.equal(canonicalTagName("loc:x"), "where:x");
+    assert.isTrue(isStuckTag("stuck"));
+  });
+});
+
+describe("cleanTagSynonymRules", function () {
+  it("normalises both names as tag names are", function () {
+    assert.deepEqual(
+      cleanTagSynonymRules([
+        { kind: "prefix", match: "  loc: ", to: "where:" },
+        { kind: "tag", match: "very  stuck", to: " is:stuck" },
+      ]),
+      [
+        { kind: "prefix", match: "loc:", to: "where:" },
+        { kind: "tag", match: "very stuck", to: "is:stuck" },
+      ],
+    );
+  });
+});
+
+describe("tagSynonymRuleProblems", function () {
+  const problems = (rules: TagSynonymRule[]) => [
+    ...tagSynonymRuleProblems(rules),
+  ];
+
+  it("accepts the built-in table, an empty one and a custom one", function () {
+    assert.deepEqual(problems([...TAG_SYNONYMS]), []);
+    assert.deepEqual(problems([]), []);
+    assert.deepEqual(
+      problems([
+        { kind: "prefix", match: "round:", to: "group:" },
+        { kind: "prefix", match: "r:", to: "group:" },
+        { kind: "tag", match: "meta", to: "is:meta" },
+        { kind: "tag", match: "loc:", to: "where:" },
+      ]),
+      [],
+    );
+  });
+
+  it("refuses an empty name", function () {
+    assert.deepEqual(problems([{ kind: "tag", match: "", to: "is:stuck" }]), [
+      [0, "empty"],
+    ]);
+    assert.deepEqual(problems([{ kind: "prefix", match: "loc:", to: "" }]), [
+      [0, "empty"],
+    ]);
+  });
+
+  it("refuses a prefix rule whose names don't end in a colon", function () {
+    assert.deepEqual(
+      problems([
+        { kind: "prefix", match: "loc", to: "where:" },
+        { kind: "prefix", match: "loc:", to: "where" },
+        { kind: "tag", match: "stuck", to: "is:stuck" },
+      ]),
+      [
+        [0, "prefixColon"],
+        [1, "prefixColon"],
+      ],
+    );
+  });
+
+  it("refuses a rule that maps a name to itself", function () {
+    assert.deepEqual(problems([{ kind: "tag", match: "x", to: "x" }]), [
+      [0, "self"],
+    ]);
+  });
+
+  it("refuses a canonical name that another rule rewrites", function () {
+    assert.deepEqual(
+      problems([
+        { kind: "prefix", match: "loc:", to: "where:" },
+        { kind: "prefix", match: "where:", to: "place:" },
+      ]),
+      [[0, "chain"]],
+    );
+    assert.deepEqual(
+      problems([
+        { kind: "tag", match: "stuck", to: "is:stuck" },
+        { kind: "tag", match: "is:stuck", to: "help" },
+      ]),
+      [[0, "chain"]],
+    );
+    // A whole tag pointing into a rewritten prefix is a chain too
+    assert.deepEqual(
+      problems([
+        { kind: "tag", match: "atrium", to: "loc:atrium" },
+        { kind: "prefix", match: "loc:", to: "where:" },
+      ]),
+      [[0, "chain"]],
+    );
+    // As is a prefix rule whose canonical prefix starts with its own
+    assert.deepEqual(problems([{ kind: "prefix", match: "a:", to: "a:b:" }]), [
+      [0, "chain"],
+    ]);
+    // A prefix rule's canonical names run on past its prefix, so a rule
+    // matching a longer name under it rewrites some of them
+    assert.deepEqual(
+      problems([
+        { kind: "prefix", match: "loc:", to: "where:" },
+        { kind: "prefix", match: "where:room:", to: "room:" },
+      ]),
+      [[0, "chain"]],
+    );
+    assert.deepEqual(
+      problems([
+        { kind: "prefix", match: "loc:", to: "where:" },
+        { kind: "tag", match: "where:x", to: "x" },
+      ]),
+      [[0, "chain"]],
+    );
+    assert.deepEqual(
+      problems([{ kind: "prefix", match: "where:a:", to: "where:" }]),
+      [[0, "chain"]],
+    );
+  });
+
+  it("refuses a rule repeating an earlier one's kind and match", function () {
+    assert.deepEqual(
+      problems([
+        { kind: "prefix", match: "loc:", to: "where:" },
+        { kind: "prefix", match: "loc:", to: "place:" },
+        { kind: "tag", match: "loc:", to: "where:" },
+      ]),
+      [[1, "duplicate"]],
+    );
+  });
+
+  it("matches case-sensitively", function () {
+    assert.deepEqual(
+      problems([
+        { kind: "prefix", match: "loc:", to: "where:" },
+        { kind: "prefix", match: "Where:", to: "place:" },
+        { kind: "prefix", match: "Loc:", to: "where:" },
+      ]),
+      [],
+    );
   });
 });

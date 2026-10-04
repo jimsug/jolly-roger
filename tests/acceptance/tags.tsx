@@ -1,4 +1,5 @@
 import { promisify } from "node:util";
+import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import {
   act,
@@ -7,28 +8,69 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { assert } from "chai";
 import { MemoryRouter } from "react-router";
+import applyTagSynonymsJob from "../../imports/lib/jobs/applyTagSynonyms";
 import type { EditableHuntType } from "../../imports/lib/models/Hunts";
 import PuzzleNotifications from "../../imports/lib/models/PuzzleNotifications";
 import Puzzles from "../../imports/lib/models/Puzzles";
 import Tags from "../../imports/lib/models/Tags";
 import puzzleNotificationsForSelf from "../../imports/lib/publications/puzzleNotificationsForSelf";
 import puzzlesForPuzzleList from "../../imports/lib/publications/puzzlesForPuzzleList";
-import { MAX_TAG_NAME_LENGTH } from "../../imports/lib/tagNames";
+import { MAX_TAG_NAME_LENGTH, TAG_SYNONYMS } from "../../imports/lib/tagNames";
 import addHuntUser from "../../imports/methods/addHuntUser";
 import addPuzzleTag from "../../imports/methods/addPuzzleTag";
+import configureTagSynonyms from "../../imports/methods/configureTagSynonyms";
 import createHunt from "../../imports/methods/createHunt";
 import createPuzzle from "../../imports/methods/createPuzzle";
 import dismissPuzzleNotification from "../../imports/methods/dismissPuzzleNotification";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
 import removePuzzleTag from "../../imports/methods/removePuzzleTag";
 import renameTag from "../../imports/methods/renameTag";
+import TypedMethod from "../../imports/methods/TypedMethod";
 import updateProfile from "../../imports/methods/updateProfile";
 import resetDatabase from "../lib/resetDatabase";
 import createUser from "./createTestUser";
 import { stabilize, USER_EMAIL, USER_PASSWORD } from "./lib";
+
+// Runs the queued apply job, since the job worker doesn't run under test
+const runPendingApplyJobs = new TypedMethod<void, number>(
+  "test.methods.tags.runPendingApplyJobs",
+);
+
+if (Meteor.isServer) {
+  const defineMethod: typeof import("../../imports/server/methods/defineMethod").default =
+    require("../../imports/server/methods/defineMethod").default;
+  const Jobs: typeof import("../../imports/lib/models/Jobs").default =
+    require("../../imports/lib/models/Jobs").default;
+  const runJob: typeof import("../lib/runJob").default =
+    require("../lib/runJob").default;
+
+  defineMethod(runPendingApplyJobs, {
+    async run() {
+      check(this.userId, String);
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+
+      const jobs = await Jobs.find({
+        type: applyTagSynonymsJob.name,
+        status: "pending",
+      }).fetchAsync();
+      for (const job of jobs) {
+        await runJob(
+          applyTagSynonymsJob,
+          {},
+          { jobId: job._id, userId: this.userId },
+        );
+        await Jobs.updateAsync(job._id, { $set: { status: "completed" } });
+      }
+      return jobs.length;
+    },
+  });
+}
 
 if (Meteor.isClient) {
   const Routes: typeof import("../../imports/client/components/Routes").default =
@@ -495,6 +537,214 @@ if (Meteor.isClient) {
         );
         puzzleSub.stop();
         notificationSub.stop();
+      });
+    });
+
+    describe("tag synonyms", function () {
+      afterEach(function () {
+        cleanup();
+      });
+
+      const renderPage = (path: string) => {
+        render(
+          <MemoryRouter initialEntries={[path]}>
+            <Routes />
+          </MemoryRouter>,
+        );
+      };
+      const synonymsSection = async () => {
+        await screen.findByText("Tag synonyms", {}, { timeout: 10000 });
+        return within(document.querySelector<HTMLElement>("#tag-synonyms")!);
+      };
+
+      it("files tags under a rule an admin adds on the Setup page", async function () {
+        this.timeout(30000);
+        const { huntId, puzzleIds } = await setUpHunt(
+          "tag synonyms setup page",
+          [[]],
+        );
+
+        renderPage("/setup");
+        await act(async () => {
+          await stabilize();
+        });
+        const section = await synonymsSection();
+        fireEvent.click(section.getByRole("button", { name: "Add rule" }));
+        const rule = TAG_SYNONYMS.length + 1;
+        fireEvent.change(
+          section.getByRole("textbox", { name: `Synonym in rule ${rule}` }),
+          { target: { value: "room:" } },
+        );
+        // A prefix rule's names end in a colon, and the page says so
+        fireEvent.change(
+          section.getByRole("textbox", {
+            name: `Canonical name in rule ${rule}`,
+          }),
+          { target: { value: "where" } },
+        );
+        await section.findByText(/names both end in a colon/);
+        assert.isTrue(
+          section
+            .getByRole("button", { name: "Save" })
+            .hasAttribute("disabled"),
+        );
+        fireEvent.change(
+          section.getByRole("textbox", {
+            name: `Canonical name in rule ${rule}`,
+          }),
+          { target: { value: "where:" } },
+        );
+        fireEvent.click(section.getByRole("button", { name: "Save" }));
+        await section.findByText("Saved changes.", {}, { timeout: 5000 });
+
+        await addPuzzleTag.callPromise({
+          puzzleId: puzzleIds[0]!,
+          tagName: "room:atrium",
+        });
+        const sub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        assert.sameMembers(
+          (await Tags.find({ hunt: huntId }).fetchAsync()).map((t) => t.name),
+          ["where:atrium"],
+        );
+        sub.stop();
+      });
+
+      it("merges existing tags from the Setup page and finds them by the old name", async function () {
+        this.timeout(30000);
+        const { huntId, puzzleIds } = await setUpHunt("tag synonyms apply", [
+          ["where:atrium"],
+          ["cryptic"],
+          ["foyer"],
+          ["foyer"],
+        ]);
+        // Tags named before a rule covered them: renaming to a name no
+        // rule covers keeps it as given
+        const sub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        const cryptic = await Tags.findOneAsync({
+          hunt: huntId,
+          name: "cryptic",
+        });
+        const where = await Tags.findOneAsync({
+          hunt: huntId,
+          name: "where:atrium",
+        });
+        assert.isDefined(cryptic);
+        assert.isDefined(where);
+        sub.stop();
+        await configureTagSynonyms.callPromise({ rules: [] });
+        await renameTag.callPromise({
+          tagId: cryptic._id,
+          name: "loc:atrium",
+          keepOldNameAsAlias: false,
+        });
+        await configureTagSynonyms.callPromise({ rules: [...TAG_SYNONYMS] });
+
+        renderPage("/setup");
+        await act(async () => {
+          await stabilize();
+        });
+        const section = await synonymsSection();
+        fireEvent.click(
+          section.getByRole("button", {
+            name: "Apply synonyms to existing tags…",
+          }),
+        );
+        const dialog = within(await screen.findByRole("dialog"));
+        const row = (await dialog.findByText("Test Hunt")).closest("tr")!;
+        assert.deepEqual(
+          [...row.querySelectorAll("td")].map((td) => td.textContent),
+          ["Test Hunt", "0", "1"],
+        );
+        fireEvent.click(dialog.getByRole("button", { name: "Apply synonyms" }));
+        await section.findByText(/Applying synonyms in the background/);
+        assert.equal(await runPendingApplyJobs.callPromise(), 1);
+        cleanup();
+
+        const afterSub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        assert.isUndefined(await Tags.findOneAsync(cryptic._id));
+        const merged = await Tags.findOneAsync(where._id);
+        assert.deepEqual(merged?.aliases, ["loc:atrium"]);
+        assert.sameMembers(
+          (await Puzzles.findOneAsync(puzzleIds[1]))?.tags ?? [],
+          [where._id],
+        );
+        afterSub.stop();
+
+        // The old name finds the merged tag, both when tagging and searching
+        await addPuzzleTag.callPromise({
+          puzzleId: puzzleIds[2]!,
+          tagName: "LOC:Atrium",
+        });
+        const searchSub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        assert.include(
+          (await Puzzles.findOneAsync(puzzleIds[2]))?.tags ?? [],
+          where._id,
+        );
+        searchSub.stop();
+
+        renderPage(`/hunts/${huntId}/puzzles?q=loc:atrium`);
+        await act(async () => {
+          await stabilize();
+        });
+        // Puzzles 0 to 2 carry the tag; new puzzle notifications name all
+        // four, so count the list's matches rather than looking for titles
+        await screen.findByText(
+          /^Showing 3 of \d+ items$/,
+          {},
+          { timeout: 10000 },
+        );
+      });
+
+      it("reads tags through a saved table in the puzzle list's search and chips", async function () {
+        this.timeout(30000);
+        const { huntId, puzzleIds } = await setUpHunt("tag synonyms client", [
+          [],
+          [],
+        ]);
+        // No rule covers room: yet, so the tag keeps the name it's given
+        await addPuzzleTag.callPromise({
+          puzzleId: puzzleIds[0]!,
+          tagName: "room:atrium",
+        });
+        await configureTagSynonyms.callPromise({
+          rules: [{ kind: "prefix", match: "room:", to: "where:" }],
+        });
+
+        renderPage(`/hunts/${huntId}/puzzles?q=where:atrium`);
+        await act(async () => {
+          await stabilize();
+        });
+        await screen.findByText(
+          /^Showing 1 of \d+ items$/,
+          {},
+          { timeout: 10000 },
+        );
+        // The chip reads as a location: an icon in place of its prefix
+        await waitFor(() => {
+          const chip = document.querySelector<HTMLElement>(
+            '[data-tag-name="room:atrium"]',
+          );
+          assert.isNotNull(chip?.querySelector("svg"));
+          assert.equal(
+            chip?.querySelector(".visually-hidden")?.textContent,
+            "room:",
+          );
+        });
+
+        await configureTagSynonyms.callPromise({ rules: [] });
+        await screen.findByText(
+          /^Showing 0 of \d+ items$/,
+          {},
+          { timeout: 10000 },
+        );
       });
     });
 

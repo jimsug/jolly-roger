@@ -138,10 +138,12 @@ on.
 Renaming a tag can keep the old name as an alias, so adding a tag by either
 name finds the same tag, and renaming a tag to another tag's name merges the
 two. The tag manager lists each tag's aliases and can remove one, after which
-that name no longer finds the tag through it. `where:` tags record a puzzle's location. A new tag named with `loc:` or
-`location:` is filed under `where:`, and a bare `stuck` under `is:stuck`, so
-the different spellings end up as one tag. Renaming a tag to one of those
-spellings files it the same way. `group:`, `meta-for:` and
+that name no longer finds the tag through it. `where:` tags record a puzzle's
+location. By default, a new tag named with `loc:` or `location:` is filed under
+`where:`, and a bare `stuck` under `is:stuck`, so the different spellings end
+up as one tag. Renaming a tag to one of those spellings files it the same way.
+Server admins configure these synonyms for the whole server on the Setup page,
+and can apply them to tags that already exist. `group:`, `meta-for:` and
 `where:` tags show an icon in place of their prefix (the puzzle list has a
 legend), and each row of the puzzle list has a column for priority and stuck
 markers and one for a meta or metameta badge. Server admins can set the tags new

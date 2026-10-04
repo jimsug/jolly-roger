@@ -1,3 +1,4 @@
+import "./applyTagSynonyms";
 import "./discordSyncRole";
 import "./mergeUsers";
 import "./purgeHunt";

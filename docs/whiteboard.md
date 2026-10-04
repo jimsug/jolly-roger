@@ -28,6 +28,7 @@ files:
   - imports/client/hooks/usePuzzleViewers.ts
   - imports/client/hooks/usePuzzleViewerUsers.ts
   - imports/client/hooks/useRoundStates.ts
+  - imports/client/hooks/useTagSynonyms.ts
   - imports/client/hooks/useWhiteboardSync.ts
   - imports/lib/chatMessagePath.ts
   - imports/lib/models/WhiteboardEdges.ts
@@ -63,6 +64,7 @@ files:
   - imports/server/models/WhiteboardPresence.ts
   - imports/server/models/WhiteboardVersionChunks.ts
   - imports/server/publications/whiteboardVersions.ts
+  - imports/server/tagSynonyms.ts
   - imports/server/whiteboard.ts
   - imports/server/whiteboardEdits.ts
   - imports/server/whiteboardLive.ts
@@ -232,13 +234,13 @@ open until a save comes back.
 
 The search field at the start of the toolbar, there on read-only boards too,
 finds puzzles by title, answer or tag, using the puzzle list's own matcher
-(`compilePuzzleMatcher`) so a search finds the same puzzles in both places. It
-also finds frames by the label they show, sticky notes and text boxes by their
-contents, and the lines the board is drawing by their label (not a line to a
-hidden card, or a feeder arrow the viewer has turned off). `/` or Ctrl+F
-(Cmd+F on a Mac) jumps to it while the board has focus, meaning the last press
-or focus was on the board; anywhere else, and from the search field itself,
-Ctrl+F is the browser's own find.
+(`compilePuzzleMatcher`, with the same tag synonyms) so a search finds the same
+puzzles in both places. It also finds frames by the label they show, sticky
+notes and text boxes by their contents, and the lines the board is drawing by
+their label (not a line to a hidden card, or a feeder arrow the viewer has
+turned off). `/` or Ctrl+F (Cmd+F on a Mac) jumps to it while the board has
+focus, meaning the last press or focus was on the board; anywhere else, and
+from the search field itself, Ctrl+F is the browser's own find.
 
 The results drop down under the field. Arrow keys move through them and Enter
 picks one, as does a click. Picking something pans the board to it, zooming in
@@ -819,9 +821,13 @@ The badge, icons and chips come from `puzzleStatusFromTags` in
 `imports/lib/puzzleTagStatus.ts`, which the puzzle list's rows use too, so the
 two agree on which tags make a meta, a priority or a stuck puzzle. The list
 leaves those tags out of its chips (`shownAsStatus`). Both read tags through
-the tag vocabulary in `imports/lib/tagNames.ts` (`tagKind`), where `loc:` and
-`location:` are synonyms for `where:` and `stuck` for `is:stuck`; the
-whiteboard's layout finds metas with its `isMetaForTag` too.
+the tag vocabulary in `imports/lib/tagNames.ts` (`tagKind`), through the
+server-wide synonym table admins edit on the Setup page (by default `loc:` and
+`location:` are synonyms for `where:` and `stuck` for `is:stuck`); the
+whiteboard's layout finds metas with its `isMetaForTag` too. The helpers take
+the table as an argument: components get it from `useTagSynonyms`, and server
+code (placing cards, a reset's seed layout) from `currentTagSynonyms` in
+`imports/server/tagSynonyms.ts`, which follows the setting.
 
 ### Rounds
 

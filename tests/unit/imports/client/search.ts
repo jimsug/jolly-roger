@@ -88,6 +88,28 @@ describe("compilePuzzleMatcher", function () {
     );
     assert.isFalse(compilePuzzleMatcher(allTags, ["cross", "red"])(crossword));
   });
+
+  it("matches tags through the synonym table", function () {
+    const tags = [tag("w", "where:atrium"), tag("l", "loc:foyer")];
+    const inAtrium = puzzle({ _id: "atrium", tags: ["w"] });
+    const inFoyer = puzzle({ _id: "foyer", tags: ["l"] });
+    assert.isTrue(compilePuzzleMatcher(tags, ["loc:atrium"])(inAtrium));
+    assert.isTrue(compilePuzzleMatcher(tags, ["location:atr"])(inAtrium));
+    assert.isTrue(compilePuzzleMatcher(tags, ["where:foyer"])(inFoyer));
+    assert.isFalse(compilePuzzleMatcher(tags, ["loc:foyer"])(inAtrium));
+
+    const custom = [{ kind: "prefix" as const, match: "room:", to: "where:" }];
+    assert.isTrue(
+      compilePuzzleMatcher(tags, ["room:atrium"], undefined, custom)(inAtrium),
+    );
+    assert.isFalse(
+      compilePuzzleMatcher(tags, ["loc:atrium"], undefined, custom)(inAtrium),
+      "Only the given table's synonyms count",
+    );
+    assert.isFalse(
+      compilePuzzleMatcher(tags, ["loc:atrium"], undefined, [])(inAtrium),
+    );
+  });
 });
 
 describe("puzzlesMatchingSearchString", function () {

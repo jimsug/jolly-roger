@@ -32,6 +32,7 @@ import "./puzzlesForHuntProfileList";
 import "./puzzlesForPuzzleList";
 import "./settingsAll";
 import "./settingsByName";
+import "./tagSynonymsForHuntApp";
 import "./userStatusesForHunt";
 import "./userStatusForHuntApp";
 import "./whiteboardContents";

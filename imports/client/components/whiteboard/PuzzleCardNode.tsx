@@ -21,6 +21,7 @@ import type { Solvedness } from "../../../lib/solvedness";
 import { computeSolvedness } from "../../../lib/solvedness";
 import { isLocationTag } from "../../../lib/tagNames";
 import usePuzzleViewerUsers from "../../hooks/usePuzzleViewerUsers";
+import useTagSynonyms from "../../hooks/useTagSynonyms";
 import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import AvatarStack from "../AvatarStack";
 import PuzzleAnswer from "../PuzzleAnswer";
@@ -259,13 +260,17 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
   // The same tags make a meta, a priority or a stuck flag as in the puzzle
   // list.
   const tagKey = puzzle?.tags.join(",") ?? "";
+  const tagSynonyms = useTagSynonyms();
   const status = useTracker(() => {
     const tagIds = tagKey ? tagKey.split(",") : [];
     const names = new Map(
       Tags.find({ _id: { $in: tagIds } }).map((tag) => [tag._id, tag.name]),
     );
-    return puzzleStatusFromTags(tagIds.map((id) => names.get(id)));
-  }, [tagKey]);
+    return puzzleStatusFromTags(
+      tagIds.map((id) => names.get(id)),
+      tagSynonyms,
+    );
+  }, [tagKey, tagSynonyms]);
 
   if (!puzzle) return null;
 
@@ -324,7 +329,11 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
           {status.chips.length > 0 && (
             <Chips>
               {status.chips.map((chip) => (
-                <Chip key={chip} $location={isLocationTag(chip)} title={chip}>
+                <Chip
+                  key={chip}
+                  $location={isLocationTag(chip, tagSynonyms)}
+                  title={chip}
+                >
                   {chip}
                 </Chip>
               ))}

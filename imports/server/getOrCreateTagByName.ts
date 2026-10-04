@@ -10,13 +10,14 @@ import {
   tagPrefixValue,
   tagSynonymMatcher,
 } from "../lib/tagNames";
+import currentTagSynonyms from "./tagSynonyms";
 
 // Resolves a tag name to a tag id, creating the tag if needed. The name is
 // normalised (see normalizeTagName) and matched against existing tags and
 // their aliases ignoring case, so "  Group:Events " resolves to "group:events".
-// Synonyms (see TAG_SYNONYMS) match too: "loc:atrium" finds an existing
-// "where:atrium" and "where:atrium" an existing "loc:atrium". A new tag is
-// created under the canonical name.
+// Synonyms (the server-wide table, see currentTagSynonyms) match too:
+// "loc:atrium" finds an existing "where:atrium" and "where:atrium" an existing
+// "loc:atrium". A new tag is created under the canonical name.
 export default async function getOrCreateTagByName(
   huntId: string,
   name: string,
@@ -33,7 +34,8 @@ export default async function getOrCreateTagByName(
     return exactTag._id;
   }
 
-  const canonicalName = canonicalTagName(cleanName);
+  const synonyms = currentTagSynonyms();
+  const canonicalName = canonicalTagName(cleanName, synonyms);
   if (canonicalName !== cleanName) {
     const canonicalTag = await Tags.findOneAsync({
       hunt: huntId,
@@ -44,7 +46,7 @@ export default async function getOrCreateTagByName(
     }
   }
 
-  const matcher = tagSynonymMatcher(cleanName);
+  const matcher = tagSynonymMatcher(cleanName, synonyms);
   const existingTag = await Tags.findOneAsync({
     hunt: huntId,
     $or: [{ name: matcher }, { aliases: matcher }],
@@ -67,8 +69,8 @@ export default async function getOrCreateTagByName(
   });
 
   // When creating a `group:*` tag, also ensure a matching `meta-for:` tag exists.
-  if (isGroupTag(canonicalName)) {
-    const groupName = tagPrefixValue(canonicalName) ?? "";
+  if (isGroupTag(canonicalName, synonyms)) {
+    const groupName = tagPrefixValue(canonicalName, synonyms) ?? "";
     await getOrCreateTagByName(huntId, `${META_FOR_TAG_PREFIX}${groupName}`);
   }
 

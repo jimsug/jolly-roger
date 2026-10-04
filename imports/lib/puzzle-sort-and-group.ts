@@ -9,6 +9,8 @@ import {
   isMetametaTag,
   isMetaTag,
   META_FOR_TAG_PREFIX,
+  TAG_SYNONYMS,
+  type TagSynonymRule,
   tagKind,
   tagPrefixValue,
 } from "./tagNames";
@@ -39,6 +41,7 @@ function puzzleInterestingness(
   indexedTags: Map<string, TagType>,
   group: string | undefined,
   isOffsite: boolean,
+  synonyms: readonly TagSynonymRule[] = TAG_SYNONYMS,
 ): number {
   // If the shared tag for this group is group:<something>, then group will equal '<something>', and
   // we wish to sort a puzzle named 'meta-for:<something>' at the top.
@@ -57,7 +60,10 @@ function puzzleInterestingness(
     if (!tag) {
       return;
     }
-    if (isOffsite && ONSITE_ONLY_TAGS.has(canonicalTagName(tag.name))) {
+    if (
+      isOffsite &&
+      ONSITE_ONLY_TAGS.has(canonicalTagName(tag.name, synonyms))
+    ) {
       minScore = Math.max(2, minScore);
     } else if (tag.name === "priority:low") {
       minScore = Math.max(1, minScore);
@@ -73,21 +79,21 @@ function puzzleInterestingness(
       // loads, so just pretend that tag doesn't exist if the join from id -> Tag object here
       // comes back undefined.
 
-      if (isGroupTag(tag.name)) {
+      if (isGroupTag(tag.name, synonyms)) {
         isGroup = true;
       }
 
-      if (tagKind(tag.name) === "administrivia") {
+      if (tagKind(tag.name, synonyms) === "administrivia") {
         // First comes any administrivia
         minScore = Math.min(-4, minScore);
         isAdministrivia = true;
       } else if (desiredTagName && tag.name === desiredTagName) {
         // Matching meta gets sorted top.
         minScore = Math.min(-3, minScore);
-      } else if (isMetametaTag(tag.name)) {
+      } else if (isMetametaTag(tag.name, synonyms)) {
         // Metameta sorts above meta.
         minScore = Math.min(-2, minScore);
-      } else if (isMetaTag(tag.name)) {
+      } else if (isMetaTag(tag.name, synonyms)) {
         // Meta sorts above non-meta.
         minScore = Math.min(-1, minScore);
       }
@@ -105,6 +111,7 @@ function interestingnessOfGroup(
   puzzles: PuzzleType[],
   sharedTag: TagType | undefined,
   indexedTags: Map<string, TagType>,
+  synonyms: readonly TagSynonymRule[],
 ) {
   // Rough idea: sort, from top to bottom:
   // -3 administrivia always floats to the top
@@ -120,14 +127,14 @@ function interestingnessOfGroup(
   // Guarantees that if ia === ib, then sharedTag exists.
   if (!sharedTag) return 1;
 
-  if (tagKind(sharedTag.name) === "administrivia") {
+  if (tagKind(sharedTag.name, synonyms) === "administrivia") {
     return -3;
   }
 
   // Look for a puzzle with meta-for:(this group's shared tag)
   let metaForTag: string | undefined;
-  if (isGroupTag(sharedTag.name)) {
-    metaForTag = `${META_FOR_TAG_PREFIX}${tagPrefixValue(sharedTag.name)}`;
+  if (isGroupTag(sharedTag.name, synonyms)) {
+    metaForTag = `${META_FOR_TAG_PREFIX}${tagPrefixValue(sharedTag.name, synonyms)}`;
   }
 
   let hasSolvedMetaForSharedGroup = false;
@@ -153,7 +160,7 @@ function interestingnessOfGroup(
           } else {
             hasUnsolvedMetaForSharedGroup = true;
           }
-        } else if (isMetaTag(tag.name) && solvedness === "unsolved") {
+        } else if (isMetaTag(tag.name, synonyms) && solvedness === "unsolved") {
           hasUnsolvedOtherMeta = true;
         }
       }
@@ -271,6 +278,7 @@ function filteredPuzzleGroups(
 function puzzleGroupsByRelevance(
   allPuzzles: PuzzleType[],
   allTags: TagType[],
+  synonyms: readonly TagSynonymRule[] = TAG_SYNONYMS,
 ): PuzzleGroup[] {
   // Maps tag id to list of puzzles holding that tag.
   const groupsMap: Map<string, PuzzleType[]> = new Map();
@@ -287,7 +295,8 @@ function puzzleGroupsByRelevance(
       // and that tag here will be undefined.  Handle this case gracefully.
       if (
         tag?.name &&
-        (tagKind(tag.name) === "administrivia" || isGroupTag(tag.name))
+        (tagKind(tag.name, synonyms) === "administrivia" ||
+          isGroupTag(tag.name, synonyms))
       ) {
         grouped = true;
         if (!groupsMap.has(tag._id)) {
@@ -312,6 +321,7 @@ function puzzleGroupsByRelevance(
       puzzles,
       sharedTag,
       tagsByIndex,
+      synonyms,
     );
     return {
       sharedTag,
@@ -397,6 +407,7 @@ function puzzleGroupsByRelevance(
       ungroupedPuzzles,
       undefined,
       tagsByIndex,
+      synonyms,
     );
     groups.push({
       puzzles: ungroupedPuzzles,
@@ -420,15 +431,28 @@ function sortPuzzlesByRelevanceWithinPuzzleGroup(
   sharedTag: TagType | undefined,
   indexedTags: Map<string, TagType>,
   isOffsite: boolean,
+  synonyms: readonly TagSynonymRule[] = TAG_SYNONYMS,
 ) {
   let group: string;
-  if (sharedTag && isGroupTag(sharedTag.name)) {
+  if (sharedTag && isGroupTag(sharedTag.name, synonyms)) {
     group = sharedTag.name.slice(GROUP_TAG_PREFIX.length);
   }
   const sortedPuzzles = puzzles.slice(0);
   sortedPuzzles.sort((a, b) => {
-    const ia = puzzleInterestingness(a, indexedTags, group, isOffsite);
-    const ib = puzzleInterestingness(b, indexedTags, group, isOffsite);
+    const ia = puzzleInterestingness(
+      a,
+      indexedTags,
+      group,
+      isOffsite,
+      synonyms,
+    );
+    const ib = puzzleInterestingness(
+      b,
+      indexedTags,
+      group,
+      isOffsite,
+      synonyms,
+    );
     if (ia !== ib) {
       return ia - ib;
     } else {

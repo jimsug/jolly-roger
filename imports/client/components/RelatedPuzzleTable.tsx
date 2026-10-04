@@ -4,6 +4,7 @@ import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import { sortPuzzlesByRelevanceWithinPuzzleGroup } from "../../lib/puzzle-sort-and-group";
 import useIsOffsite from "../hooks/useIsOffsite";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import PuzzleTable from "./PuzzleTable";
 
 const RelatedPuzzleTable = React.memo(
@@ -21,6 +22,7 @@ const RelatedPuzzleTable = React.memo(
     // Puzzles that need someone on site sink for remote hunters, as on the
     // puzzle list
     const isOffsite = useIsOffsite();
+    const tagSynonyms = useTagSynonyms();
     // Sort the puzzles within each tag group by interestingness.  For instance, metas
     // should probably be at the top of the group, then of the round puzzles, unsolved should
     // maybe sort above solved, and then perhaps by unlock order.
@@ -30,6 +32,7 @@ const RelatedPuzzleTable = React.memo(
       sharedTag,
       tagIndex,
       isOffsite,
+      tagSynonyms,
     );
     return (
       <PuzzleTable puzzles={sortedPuzzles} segmentAnswers={segmentAnswers} />

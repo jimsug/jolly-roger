@@ -45,6 +45,7 @@ import removePuzzleTag from "../../methods/removePuzzleTag";
 import removeTagAlias from "../../methods/removeTagAlias";
 import renameTag from "../../methods/renameTag";
 import { useBreadcrumb } from "../hooks/breadcrumb";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import { compilePuzzleMatcher } from "../search";
 import ModalForm, { type ModalFormHandle } from "./ModalForm";
@@ -759,6 +760,7 @@ const BulkAddRemoveSection = ({
     [],
   );
 
+  const tagSynonyms = useTagSynonyms();
   const puzzlesMatchingSearchString = useCallback(
     (puzzles: PuzzleType[]): PuzzleType[] => {
       const searchKeys = searchString.split(" ");
@@ -772,11 +774,13 @@ const BulkAddRemoveSection = ({
         const isInteresting = compilePuzzleMatcher(
           allTags,
           searchKeysWithEmptyKeysRemoved,
+          undefined,
+          tagSynonyms,
         );
         return puzzles.filter(isInteresting);
       }
     },
-    [searchString, allTags],
+    [searchString, allTags, tagSynonyms],
   );
 
   const matchingSearch = puzzlesMatchingSearchString(allPuzzles);

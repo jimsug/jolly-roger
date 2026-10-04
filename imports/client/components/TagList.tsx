@@ -12,7 +12,13 @@ import ButtonGroup from "react-bootstrap/ButtonGroup";
 import styled from "styled-components";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
-import { compareTagNames, type TagKind, tagKind } from "../../lib/tagNames";
+import {
+  compareTagNames,
+  type TagKind,
+  type TagSynonymRule,
+  tagKind,
+} from "../../lib/tagNames";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import Tag from "./Tag";
 import TagEditor from "./TagEditor";
 
@@ -69,13 +75,18 @@ const KIND_ORDER: Partial<Record<TagKind, number>> = {
   location: -1,
 };
 
-const soloTagInterestingness = (tag: TagType) =>
-  KIND_ORDER[tagKind(tag.name)] ?? 0;
+const soloTagInterestingness = (
+  tag: TagType,
+  synonyms: readonly TagSynonymRule[],
+) => KIND_ORDER[tagKind(tag.name, synonyms)] ?? 0;
 
-const sortedTagsForSinglePuzzle = (tags: TagType[]) => {
+const sortedTagsForSinglePuzzle = (
+  tags: TagType[],
+  synonyms: readonly TagSynonymRule[],
+) => {
   return tags.toSorted((a, b) => {
-    const ia = soloTagInterestingness(a);
-    const ib = soloTagInterestingness(b);
+    const ia = soloTagInterestingness(a, synonyms);
+    const ib = soloTagInterestingness(b, synonyms);
     if (ia !== ib) {
       return ia - ib;
     } else {
@@ -129,7 +140,8 @@ const TagList = React.memo((props: TagListProps) => {
 
   const showControls = props.showControls ?? true;
 
-  const tags = sortedTagsForSinglePuzzle(props.tags);
+  const tagSynonyms = useTagSynonyms();
+  const tags = sortedTagsForSinglePuzzle(props.tags, tagSynonyms);
   const components = [];
   tags.forEach((tag) => {
     components.push(

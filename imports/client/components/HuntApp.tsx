@@ -16,6 +16,7 @@ import {
   userMayUpdateHunt,
 } from "../../lib/permission_stubs";
 import huntForHuntApp from "../../lib/publications/huntForHuntApp";
+import tagSynonymsForHuntApp from "../../lib/publications/tagSynonymsForHuntApp";
 import userStatusForHuntApp from "../../lib/publications/userStatusForHuntApp";
 import acceptUserHuntTerms from "../../methods/acceptUserHuntTerms";
 import addHuntUser from "../../methods/addHuntUser";
@@ -153,6 +154,11 @@ const HuntApp = React.memo(() => {
     hunt: huntId,
     status: visible ? "online" : "away",
   });
+
+  // The server-wide tag synonym table, which tag chips, sorting and search
+  // read tags through (see useTagSynonyms). Until it arrives they use the
+  // built-in one.
+  useTypedSubscribe(tagSynonymsForHuntApp);
 
   useBreadcrumb({
     title: loading || !hunt ? "loading..." : hunt.name,

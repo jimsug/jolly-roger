@@ -311,6 +311,12 @@ export function userMayConfigureDefaultHuntTags(
   return isAdmin(user);
 }
 
+export function userMayConfigureTagSynonyms(
+  user: Pick<Meteor.User, "roles"> | null | undefined,
+): boolean {
+  return isAdmin(user);
+}
+
 export function userMayConfigureAssets(
   user: Pick<Meteor.User, "roles"> | null | undefined,
 ): boolean {

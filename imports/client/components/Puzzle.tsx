@@ -47,6 +47,7 @@ import updatePuzzle from "../../methods/updatePuzzle";
 import { useOperatorActionsHiddenForHunt } from "../hooks/persisted-state";
 import usePuzzleInterest from "../hooks/usePuzzleInterest";
 import usePuzzleViewerUsers from "../hooks/usePuzzleViewerUsers";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import AvatarStack from "./AvatarStack";
 import BookmarkButton from "./BookmarkButton";
 import PuzzleActivity from "./PuzzleActivity";
@@ -467,13 +468,14 @@ const Puzzle = React.memo(
 
     // id, title, answer, tags
     const linkTarget = `/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`;
+    const tagSynonyms = useTagSynonyms();
     const tagIndex = indexedById(allTags);
     const tagNames = new Set(
       puzzle.tags.map((tagId) => tagIndex.get(tagId)?.name),
     );
 
     // Some tags are shown as icons in their own columns rather than as chips.
-    const status = puzzleStatusFromTags(tagNames);
+    const status = puzzleStatusFromTags(tagNames, tagSynonyms);
 
     // Inside a group:X section the meta-for:X chip only repeats the heading.
     const suppressedTagIds = new Set(suppressTags);
@@ -481,9 +483,13 @@ const Puzzle = React.memo(
       [...suppressedTagIds]
         .map((tagId) => tagIndex.get(tagId)?.name)
         .filter(
-          (name): name is string => name !== undefined && isGroupTag(name),
+          (name): name is string =>
+            name !== undefined && isGroupTag(name, tagSynonyms),
         )
-        .map((name) => `${META_FOR_TAG_PREFIX}${tagPrefixValue(name)}`),
+        .map(
+          (name) =>
+            `${META_FOR_TAG_PREFIX}${tagPrefixValue(name, tagSynonyms)}`,
+        ),
     );
 
     const ownTags = puzzle.tags

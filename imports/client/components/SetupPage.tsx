@@ -1,6 +1,7 @@
 import { Google } from "meteor/google-oauth";
 import { Meteor } from "meteor/meteor";
 import { OAuth } from "meteor/oauth";
+import { Random } from "meteor/random";
 import { useTracker } from "meteor/react-meteor-data";
 import { ServiceConfiguration } from "meteor/service-configuration";
 import type React from "react";
@@ -14,6 +15,7 @@ import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
 import FormText from "react-bootstrap/FormText";
+import Table from "react-bootstrap/Table";
 import { useTranslation } from "react-i18next";
 import Creatable from "react-select/creatable";
 import styled, { useTheme } from "styled-components";
@@ -27,6 +29,11 @@ import type { SettingType } from "../../lib/models/Settings";
 import Settings from "../../lib/models/Settings";
 import discordGuildsAll from "../../lib/publications/discordGuildsAll";
 import settingsAll from "../../lib/publications/settingsAll";
+import {
+  cleanTagSynonymRules,
+  type TagSynonymRule,
+  tagSynonymRuleProblems,
+} from "../../lib/tagNames";
 import { MAX_VERSION_BYTES_PER_BOARD } from "../../lib/whiteboard/limits";
 import configureClearGdriveCreds from "../../methods/configureClearGdriveCreds";
 import configureDefaultHuntTags from "../../methods/configureDefaultHuntTags";
@@ -44,14 +51,18 @@ import configureListS3Buckets from "../../methods/configureListS3Buckets";
 import configureOrganizeGoogleDrive from "../../methods/configureOrganizeGoogleDrive";
 import configureS3ImageBucket from "../../methods/configureS3ImageBucket";
 import configureServerLanguage from "../../methods/configureServerLanguage";
+import configureTagSynonyms from "../../methods/configureTagSynonyms";
 import configureTeamName from "../../methods/configureTeamName";
 import generateUploadToken from "../../methods/generateUploadToken";
 import setFeatureFlag from "../../methods/setFeatureFlag";
 import type { DiscordGuildType } from "../discord";
 import { useBreadcrumb } from "../hooks/breadcrumb";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import lookupUrl from "../lookupUrl";
 import ActionButtonRow from "./ActionButtonRow";
+import ApplyTagSynonymsModal from "./ApplyTagSynonymsModal";
+import TagSynonymRuleRow from "./TagSynonymRuleRow";
 
 const PageContainer = styled.div`
   max-width: 800px;
@@ -2841,6 +2852,225 @@ const HuntDefaultsSection = () => {
   );
 };
 
+// Rows carry a key of their own so removing one doesn't shift the others'
+// inputs.
+type TagSynonymRow = TagSynonymRule & { key: string };
+
+const tagSynonymRows = (rules: readonly TagSynonymRule[]): TagSynonymRow[] =>
+  rules.map((rule) => ({ ...rule, key: Random.id() }));
+
+const TagSynonymsSection = () => {
+  const { t } = useTranslation();
+
+  const savedRules = useTagSynonyms();
+  const [rows, setRows] = useState(() => tagSynonymRows(savedRules));
+  const [submitState, setSubmitState] = useState(SubmitState.IDLE);
+  const [submitError, setSubmitError] = useState("");
+  const [applyOpen, setApplyOpen] = useState(false);
+  const [applyStarted, setApplyStarted] = useState(false);
+  const dismissAlert = useCallback(() => {
+    setSubmitState(SubmitState.IDLE);
+  }, []);
+  const dismissApplyStarted = useCallback(() => {
+    setApplyStarted(false);
+  }, []);
+
+  const rules = useMemo(
+    () =>
+      cleanTagSynonymRules(
+        rows.map(({ kind, match, to }) => ({ kind, match, to })),
+      ),
+    [rows],
+  );
+  const problems = useMemo(() => tagSynonymRuleProblems(rules), [rules]);
+  // Applying uses the saved rules, so it waits until what's shown is saved.
+  const unsaved =
+    rules.length !== savedRules.length ||
+    rules.some((rule, i) => {
+      const saved = savedRules[i];
+      return (
+        rule.kind !== saved?.kind ||
+        rule.match !== saved.match ||
+        rule.to !== saved.to
+      );
+    });
+
+  const onRuleChange = useCallback((index: number, rule: TagSynonymRule) => {
+    setRows((current) =>
+      current.map((row, i) => (i === index ? { ...rule, key: row.key } : row)),
+    );
+  }, []);
+  const onRuleRemove = useCallback((index: number) => {
+    setRows((current) => current.filter((_row, i) => i !== index));
+  }, []);
+  const addRule = useCallback(() => {
+    setRows((current) => [
+      ...current,
+      ...tagSynonymRows([{ kind: "prefix", match: "", to: "" }]),
+    ]);
+  }, []);
+
+  const shouldDisableForm = submitState === SubmitState.SUBMITTING;
+
+  const onSubmit = useCallback(
+    (e: React.SubmitEvent<HTMLFormElement>) => {
+      e.preventDefault();
+
+      setSubmitState(SubmitState.SUBMITTING);
+      configureTagSynonyms.call({ rules }, (err) => {
+        if (err) {
+          setSubmitError(err.message);
+          setSubmitState(SubmitState.ERROR);
+        } else {
+          setSubmitState(SubmitState.SUCCESS);
+        }
+      });
+    },
+    [rules],
+  );
+
+  const openApply = useCallback(() => {
+    setApplyStarted(false);
+    setApplyOpen(true);
+  }, []);
+  const hideApply = useCallback(() => {
+    setApplyOpen(false);
+  }, []);
+  const onApplyStarted = useCallback(() => {
+    setApplyOpen(false);
+    setApplyStarted(true);
+  }, []);
+
+  return (
+    <Section id="tag-synonyms">
+      <SectionHeader>
+        <SectionHeaderLabel>
+          {t("serverSetup.tagSynonyms.title", "Tag synonyms")}
+        </SectionHeaderLabel>
+      </SectionHeader>
+      <p>
+        {t(
+          "serverSetup.tagSynonyms.description",
+          "A synonym is another way of writing a tag. A tag added under a synonym is filed under its canonical name, so loc:atrium and where:atrium end up as one tag, and the puzzle list reads tags that already exist through the same rules.",
+        )}
+      </p>
+      <p>
+        {t(
+          "serverSetup.tagSynonyms.rulesHelp",
+          "A prefix rule rewrites the start of a name and a whole-tag rule the entire name; both match case exactly. Synonyms apply to every hunt on this server. A tag's aliases are different: they're the old names of one tag in one hunt, kept when it's renamed or merged.",
+        )}
+      </p>
+      {submitState === SubmitState.SUCCESS ? (
+        <Alert variant="success" dismissible onClose={dismissAlert}>
+          {t("common.saveSuccess", "Saved changes.")}
+        </Alert>
+      ) : null}
+      {submitState === SubmitState.ERROR ? (
+        <Alert variant="danger" dismissible onClose={dismissAlert}>
+          {`${t("common.saveFailed", "Saving failed")}: ${submitError}`}
+        </Alert>
+      ) : null}
+      <form onSubmit={onSubmit}>
+        <Table size="sm" className="mb-2">
+          <thead>
+            <tr>
+              <th>{t("serverSetup.tagSynonyms.kind", "Kind")}</th>
+              <th>{t("serverSetup.tagSynonyms.match", "Synonym")}</th>
+              <th>{t("serverSetup.tagSynonyms.to", "Canonical name")}</th>
+              <th aria-hidden />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <TagSynonymRuleRow
+                key={row.key}
+                index={index}
+                rule={row}
+                problem={problems.get(index)}
+                disabled={shouldDisableForm}
+                onChange={onRuleChange}
+                onRemove={onRuleRemove}
+              />
+            ))}
+          </tbody>
+        </Table>
+        {rows.length === 0 && (
+          <FormText as="p">
+            {t(
+              "serverSetup.tagSynonyms.empty",
+              "No rules, so tags are only matched by name and alias.",
+            )}
+          </FormText>
+        )}
+        <ActionButtonRow>
+          <Button
+            variant="outline-secondary"
+            onClick={addRule}
+            disabled={shouldDisableForm}
+          >
+            {t("serverSetup.tagSynonyms.add", "Add rule")}
+          </Button>
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={shouldDisableForm || problems.size > 0}
+          >
+            {t("common.save", "Save")}
+          </Button>
+        </ActionButtonRow>
+      </form>
+      <Subsection>
+        <SubsectionHeader>
+          {t(
+            "serverSetup.tagSynonyms.applyTitle",
+            "Apply synonyms to existing tags",
+          )}
+        </SubsectionHeader>
+        <p>
+          {t(
+            "serverSetup.tagSynonyms.applyHelp",
+            "Tags made before a rule existed keep their names. This renames them, in every hunt, to their canonical names using the saved rules, merging a tag into one that already has its canonical name and keeping each old name as an alias. You'll see how many tags would change before anything happens.",
+          )}
+        </p>
+        {applyStarted && (
+          <Alert variant="success" dismissible onClose={dismissApplyStarted}>
+            {t(
+              "serverSetup.tagSynonyms.applyStarted",
+              "Applying synonyms in the background. The server log records each hunt and a summary when it's done.",
+            )}
+          </Alert>
+        )}
+        {unsaved && (
+          <FormText as="p">
+            {t(
+              "serverSetup.tagSynonyms.applyUnsaved",
+              "Save your changes before applying them.",
+            )}
+          </FormText>
+        )}
+        <ActionButtonRow>
+          <Button
+            variant="outline-danger"
+            onClick={openApply}
+            disabled={unsaved}
+          >
+            {t(
+              "serverSetup.tagSynonyms.apply",
+              "Apply synonyms to existing tags…",
+            )}
+          </Button>
+        </ActionButtonRow>
+        {applyOpen && (
+          <ApplyTagSynonymsModal
+            onHide={hideApply}
+            onStarted={onApplyStarted}
+          />
+        )}
+      </Subsection>
+    </Section>
+  );
+};
+
 const SetupPage = () => {
   const { t } = useTranslation();
   useBreadcrumb({
@@ -2879,6 +3109,7 @@ const SetupPage = () => {
       <BrandingSection />
       <LanguageSection />
       <HuntDefaultsSection />
+      <TagSynonymsSection />
       <CircuitBreakerSection />
     </PageContainer>
   );

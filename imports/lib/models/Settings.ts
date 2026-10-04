@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TagSynonymRuleSchema } from "../tagNames";
 import { nonEmptyString } from "../typedModel/customTypes";
 import type { ModelType } from "../typedModel/Model";
 import SoftDeletedModel from "../typedModel/SoftDeletedModel";
@@ -76,6 +77,12 @@ const SettingDiscriminatedUnion = z.discriminatedUnion("name", [
       // built-in list in imports/lib/defaultHuntTags.ts.
       defaultHuntTags: nonEmptyString.optional(),
     }),
+  }),
+  z.object({
+    // Tag synonyms for every hunt, replacing TAG_SYNONYMS in
+    // imports/lib/tagNames.ts. An empty list turns synonyms off.
+    name: z.literal("tag.synonyms"),
+    value: z.object({ rules: TagSynonymRuleSchema.array() }),
   }),
 ]);
 

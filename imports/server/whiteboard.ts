@@ -37,6 +37,7 @@ import ignoringDuplicateKeyErrors, {
   isDuplicateKeyError,
 } from "./ignoringDuplicateKeyErrors";
 import { serverLanguage } from "./lang";
+import currentTagSynonyms from "./tagSynonyms";
 import withLock from "./withLock";
 
 export async function assertWhiteboardEnabled() {
@@ -151,6 +152,7 @@ async function placePuzzle(
       tag: f.tag,
       depth: ancestorsOf(nodesById, f._id).length,
     })),
+    currentTagSynonyms(),
   );
 
   let frame: WhiteboardNodeType | undefined;
@@ -358,7 +360,8 @@ export async function syncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
         ).fetchAsync()
       ).map((n) => [n._id, n]),
     );
-    const metaTags = tags.filter(isMetaForTag);
+    const synonyms = currentTagSynonyms();
+    const metaTags = tags.filter((t) => isMetaForTag(t, synonyms));
     const metaPuzzles =
       metaTags.length > 0
         ? await Puzzles.find(
@@ -455,7 +458,12 @@ async function seedBoard(
 ) {
   const puzzles = await Puzzles.find({ hunt: board.hunt }).fetchAsync();
   const tags = await Tags.find({ hunt: board.hunt }).fetchAsync();
-  const { nodes, edges } = seedLayout(puzzles, tags, ungroupedLabel());
+  const { nodes, edges } = seedLayout(
+    puzzles,
+    tags,
+    ungroupedLabel(),
+    currentTagSynonyms(),
+  );
 
   // Parents come before their children, so every parent key is already
   // mapped to an id by the time a child needs it.

@@ -48,6 +48,7 @@ import {
   useNotesPageShowSolved,
   useNotesPageViewMode,
 } from "../hooks/persisted-state";
+import useTagSynonyms from "../hooks/useTagSynonyms";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import {
   puzzlesMatchingSearchString,
@@ -553,13 +554,20 @@ const NotesPage = () => {
     setSearchString("");
   }, []);
 
+  const tagSynonyms = useTagSynonyms();
   const shownPuzzles = useMemo(
     () =>
       puzzlesMatchingSolvedFilter(
-        puzzlesMatchingSearchString(allPuzzles, allTags, searchString),
+        puzzlesMatchingSearchString(
+          allPuzzles,
+          allTags,
+          searchString,
+          undefined,
+          tagSynonyms,
+        ),
         showSolved,
       ),
-    [allPuzzles, allTags, searchString, showSolved],
+    [allPuzzles, allTags, searchString, showSolved, tagSynonyms],
   );
 
   if (loading) {
