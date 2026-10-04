@@ -64,6 +64,16 @@ const Pin = styled.button<{
       $open || $unread ? theme.colors.primary : theme.colors.border};
   box-shadow: 0 1px 4px rgb(0 0 0 / 25%);
   opacity: ${({ $resolved, $open }) => ($resolved && !$open ? 0.6 : 1)};
+
+  /* A finger gets a 44px target: 5px past the pin's edge, measured from
+     inside its 2px border. */
+  @media (pointer: coarse) {
+    &::after {
+      content: "";
+      position: absolute;
+      inset: -7px;
+    }
+  }
   ${({ $pulse, theme }) =>
     $pulse &&
     css`

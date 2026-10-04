@@ -145,7 +145,7 @@ describe("whiteboard comment panel", function () {
       isReaction,
     ).get("root")!;
 
-    const renderThread = (canComment: boolean) =>
+    const renderThread = (canComment: boolean, compact = false) =>
       render(
         <ThemeProvider theme={lightTheme}>
           <CommentPanel
@@ -154,6 +154,7 @@ describe("whiteboard comment panel", function () {
             thread={thread}
             targetLabel="the board"
             canComment={canComment}
+            compact={compact}
             offline={false}
             onClose={sinon.fake()}
             onDeleted={sinon.fake()}
@@ -178,6 +179,8 @@ describe("whiteboard comment panel", function () {
         ),
       );
       assert.lengthOf(screen.getAllByRole("button", { name: "React" }), 2);
+      assert.exists(screen.getByRole("button", { name: "Resolve" }));
+      assert.exists(screen.getByRole("button", { name: "Send" }));
     });
 
     it("shows reactions without a way to react when it can't comment", async function () {
@@ -187,6 +190,70 @@ describe("whiteboard comment panel", function () {
       });
       assert.isTrue(pill.disabled);
       assert.isNull(screen.queryByRole("button", { name: "React" }));
+      assert.isNull(screen.queryByRole("button", { name: "Resolve" }));
+      assert.isNull(screen.queryByRole("button", { name: "Send" }));
+    });
+
+    it("lays out as a sheet when compact", async function () {
+      const box = document.createElement("div");
+      box.style.width = "360px";
+      box.style.display = "flex";
+      box.style.flexDirection = "column";
+      document.body.append(box);
+      try {
+        render(
+          <ThemeProvider theme={lightTheme}>
+            <CommentPanel
+              huntId="hunt"
+              puzzleId="puzzle"
+              thread={thread}
+              targetLabel="the board"
+              canComment
+              compact
+              offline={false}
+              onClose={sinon.fake()}
+              onDeleted={sinon.fake()}
+              onDraftSent={sinon.fake()}
+              onError={sinon.fake()}
+            />
+          </ThemeProvider>,
+          { container: box },
+        );
+        const panel = await screen.findByRole("dialog");
+        const style = getComputedStyle(panel);
+        assert.equal(panel.getBoundingClientRect().width, 360);
+        assert.equal(style.borderTopLeftRadius, "12px");
+        assert.equal(style.borderTopRightRadius, "12px");
+        assert.equal(style.borderBottomLeftRadius, "0px");
+        // Finger-sized buttons, and an editor iOS won't zoom in on
+        const resolve = screen.getByRole("button", { name: "Resolve" });
+        assert.include(resolve.className, "btn-lg");
+        assert.include(
+          screen.getByRole("button", { name: "Close" }).className,
+          "btn-lg",
+        );
+        const send = screen.getByRole("button", { name: "Send" });
+        assert.isAtLeast(send.getBoundingClientRect().height, 44);
+        const editor = await waitFor(() => {
+          const found = panel.querySelector<HTMLElement>("[data-slate-editor]");
+          assert.isNotNull(found);
+          return found;
+        });
+        assert.equal(getComputedStyle(editor).fontSize, "16px");
+        // Scrolling the thread doesn't scroll the page behind it
+        let messages = screen.getByText("reply").parentElement;
+        while (messages && getComputedStyle(messages).overflowY !== "auto") {
+          messages = messages.parentElement;
+        }
+        assert.exists(messages);
+        assert.equal(getComputedStyle(messages).overscrollBehaviorY, "contain");
+        // An existing thread doesn't bring up the keyboard
+        assert.isFalse(editor.contains(document.activeElement));
+        assert.equal(document.activeElement, panel);
+      } finally {
+        cleanup();
+        box.remove();
+      }
     });
   });
 });

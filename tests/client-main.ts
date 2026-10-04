@@ -55,6 +55,7 @@ import "./unit/imports/client/PuzzleHistoryPage";
 import "./unit/imports/client/puzzleTitles";
 import "./unit/imports/client/search";
 import "./unit/imports/client/useCallState";
+import "./unit/imports/client/useKeyboardInset";
 import "./unit/imports/client/usePushToTalk";
 import "./unit/imports/client/whiteboardSearch";
 

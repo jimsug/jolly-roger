@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import Button from "react-bootstrap/Button";
 import { useTranslation } from "react-i18next";
 import type { Descendant } from "slate";
-import styled from "styled-components";
+import styled, { css } from "styled-components";
 import Puzzles from "../../../lib/models/Puzzles";
 import {
   cleanEditorMessage,
@@ -24,7 +24,8 @@ const Row = styled.div`
   gap: 6px;
 `;
 
-const EditorBox = styled.div`
+// On a phone the text is 16px, below which iOS zooms in on focus.
+const EditorBox = styled.div<{ $compact: boolean }>`
   flex: 1 1 auto;
   min-width: 0;
   max-height: 160px;
@@ -33,6 +34,19 @@ const EditorBox = styled.div`
   border-radius: 4px;
   border: 1px solid ${({ theme }) => theme.colors.border};
   background: ${({ theme }) => theme.colors.fancyEditorBackground};
+  ${({ $compact }) =>
+    $compact &&
+    css`
+      font-size: 16px;
+    `}
+`;
+
+const SendButton = styled(Button)<{ $compact: boolean }>`
+  ${({ $compact }) =>
+    $compact &&
+    css`
+      min-height: 44px;
+    `}
 `;
 
 const ImageNote = styled.output`
@@ -51,6 +65,7 @@ const CommentComposer = ({
   puzzleId,
   placeholder,
   autoFocus = false,
+  compact = false,
   disabled = false,
   onSend,
   onHasTextChange,
@@ -61,6 +76,8 @@ const CommentComposer = ({
   placeholder: string;
   // Takes focus when it first shows.
   autoFocus?: boolean;
+  // Sized for a phone.
+  compact?: boolean;
   // Keeps what's written but won't send it.
   disabled?: boolean;
   // Receives the message content as the JSON string sendChatMessage takes,
@@ -104,16 +121,19 @@ const CommentComposer = ({
     [],
   );
   const [imageNote, setImageNote] = useState<string>();
-  // Chat's own words for a server with nowhere to put images.
   const imagesOff = t(
     "whiteboard.comments.imagesOff",
-    "S3 presignedPost creation failed, check server settings to ensure S3 image bucket is configured correctly.",
+    "Images can't be added here: this server has nowhere to store them.",
   );
   const onUploadFailed = useCallback(
     (failure: ChatImageUploadFailure) => {
       let reason: string;
       if (failure.stage === "request") {
-        reason = failure.error?.reason ?? failure.error?.message ?? imagesOff;
+        if (!failure.error) {
+          setImageNote(imagesOff);
+          return;
+        }
+        reason = failure.error.reason ?? failure.error.message;
       } else {
         reason =
           failure.error instanceof Error
@@ -184,7 +204,7 @@ const CommentComposer = ({
   return (
     <>
       <Row ref={rowRef} className="nodrag nowheel">
-        <EditorBox>
+        <EditorBox $compact={compact}>
           <FancyEditor
             key={editorKey}
             ref={editor}
@@ -197,13 +217,14 @@ const CommentComposer = ({
             onSubmit={send}
           />
         </EditorBox>
-        <Button
+        <SendButton
           size="sm"
+          $compact={compact}
           onClick={send}
           disabled={disabled || !hasText || loadingImage}
         >
           {t("whiteboard.comments.send", "Send")}
-        </Button>
+        </SendButton>
       </Row>
       {imageNote ? <ImageNote>{imageNote}</ImageNote> : null}
     </>

@@ -153,6 +153,7 @@ import {
   useWhiteboardShowResolvedComments,
   useWhiteboardViewport,
 } from "../../hooks/persisted-state";
+import useKeyboardInset from "../../hooks/useKeyboardInset";
 import usePuzzlePeople from "../../hooks/usePuzzlePeople";
 import useRoundStates from "../../hooks/useRoundStates";
 import useTypedSubscribe from "../../hooks/useTypedSubscribe";
@@ -255,6 +256,16 @@ interface Connecting {
   pressedAt?: { x: number; y: number };
 }
 
+// A press with the Comment tool, which places a comment if it's let go
+// without moving. A touch press leaves the board free to pan and pinch.
+interface CommentPress {
+  point: XYPosition;
+  clientX: number;
+  clientY: number;
+  pointerId: number;
+  pointerType: string;
+}
+
 // Where nodes are being moved to, each in its frame (if any).
 type NodeMoves = Map<string, { position: XYPosition; parent?: string }>;
 
@@ -315,6 +326,23 @@ const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
         pointer-events: auto;
       }
     `}
+
+  /* On a phone a thread opens in a sheet along the bottom, as wide as the
+     board, clear of the keyboard and short of the top of both the screen
+     and the board. */
+  .react-flow__panel.bottom.center.jr-comment-sheet {
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: min(
+      60%,
+      100% - var(--kb-inset, 0px) - 8px,
+      var(--vv-height, 100dvh) - 48px
+    );
+    margin: 0;
+    transform: none;
+  }
 
   /* Line labels, grips and attribution sit above everything, so a grip on
      the edge of the thing a line is attached to can still be grabbed. */
@@ -405,6 +433,68 @@ const ReadOnlyNote = styled.div`
 
 const ReadOnlyReason = styled.span`
   color: ${({ theme }) => theme.colors.textSecondary};
+`;
+
+// Where a thread's panel goes: the top right of the board or, on a phone, a
+// sheet along its bottom that rises above the keyboard. It stays the same
+// element either way, so the screen changing size mid-reply doesn't throw
+// away what's been typed.
+const CommentPanelPlace = ({
+  compact,
+  children,
+}: {
+  compact: boolean;
+  children: React.ReactNode;
+}) => {
+  const { inset, height } = useKeyboardInset();
+  const style = useMemo(
+    () =>
+      compact
+        ? ({
+            bottom: inset,
+            "--kb-inset": `${inset}px`,
+            "--vv-height": height === undefined ? undefined : `${height}px`,
+          } as React.CSSProperties)
+        : undefined,
+    [compact, inset, height],
+  );
+  return (
+    <Panel
+      position={compact ? "bottom-center" : "top-right"}
+      className={compact ? "jr-comment-sheet" : undefined}
+      style={style}
+    >
+      {children}
+    </Panel>
+  );
+};
+
+// The read-only toolbar's buttons, finger-sized on a phone.
+const ReadOnlyButtons = styled(ButtonGroup)<{ $compact: boolean }>`
+  ${({ $compact }) =>
+    $compact &&
+    css`
+      > .btn {
+        min-width: 44px;
+        min-height: 44px;
+      }
+    `}
+`;
+
+const CommentHint = styled.output`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 8px;
+  background: ${({ theme }) => theme.colors.background};
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
+
+  .btn {
+    min-height: 44px;
+  }
 `;
 
 const AccessNotice = styled(Alert)`
@@ -659,6 +749,10 @@ interface Drawing {
 const unannounced = (reason: WhiteboardAccessReason | undefined) =>
   reason === "narrow" || reason === "offline";
 
+// How far below the middle of the screen (as a share of the board's height)
+// the board centres on a pin on a phone, so the pin sits above the comment
+// sheet.
+const SHEET_OFFSET = 0.3;
 // How long a pin or node pulses after the board pans to it.
 const PULSE_MS = 2200;
 // How long a note about a link that couldn't be followed stays up.
@@ -677,8 +771,12 @@ interface CanvasProps {
   mayChangeEditPolicy: boolean;
   editPolicy: WhiteboardEditPolicy;
   editors: string[];
-  // Off on a narrow screen, where it would cover half the board.
+  // Off on a phone, where it would cover half the board.
   showMiniMap: boolean;
+  // A phone-sized screen (see WhiteboardPage): bigger targets, a tap places
+  // a comment without stopping the board panning, and threads open in a
+  // sheet along the bottom.
+  compact: boolean;
   // Whether the board's nodes and lines have arrived.
   boardLoaded: boolean;
   // Set to the canvas's way of showing a comment, for the board's chat.
@@ -702,6 +800,7 @@ const CanvasInner = ({
   editPolicy,
   editors,
   showMiniMap,
+  compact,
   boardLoaded,
   focusRef,
   initialComment,
@@ -833,11 +932,11 @@ const CanvasInner = ({
     setTool("select");
   }
   // Says so when the viewer's edit rights come or go while the board is
-  // open. A screen crossing the narrow breakpoint isn't news, and losing the
-  // connection has its own banner. The reason is tracked even when edit
-  // rights don't change, so a later change is judged against the current
-  // one. Time offline isn't tracked, so a change made meanwhile is
-  // announced on reconnecting.
+  // open. A screen becoming phone-sized (compact, see WhiteboardPage) or
+  // ceasing to be isn't news, and losing the connection has its own
+  // banner. The reason is tracked even when edit rights don't change, so a
+  // later change is judged against the current one. Time offline isn't
+  // tracked, so a change made meanwhile is announced on reconnecting.
   const mayEdit = !readOnly;
   const [seenAccess, setSeenAccess] = useState({
     mayEdit,
@@ -896,7 +995,12 @@ const CanvasInner = ({
       timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
-  const commentPress = useRef<XYPosition | undefined>(undefined);
+  // Where a press with the Comment tool started, until it's let go there.
+  const commentPress = useRef<CommentPress | undefined>(undefined);
+  // Set when a tap places a comment, until the next press, so the click the
+  // browser makes from the tap afterwards doesn't also follow a link or take
+  // focus from the new comment's composer.
+  const commentTapped = useRef(false);
   // The node a click-to-connect line starts from, and where the pointer is
   // while it waits for the next click.
   const clickConnectFrom = useRef<string | undefined>(undefined);
@@ -2157,6 +2261,19 @@ const CanvasInner = ({
     [flow, absoluteRect],
   );
 
+  // Brings a pin to the middle of the screen at the given zoom or, on a
+  // phone, to the middle of the part above the comment sheet.
+  const panToPin = useCallback(
+    (at: XYPosition, zoom: number) => {
+      const height = compact ? (wrapperRef.current?.clientHeight ?? 0) : 0;
+      void flow.setCenter(at.x, at.y + (SHEET_OFFSET * height) / zoom, {
+        zoom,
+        duration: 400,
+      });
+    },
+    [flow, compact],
+  );
+
   const openComment = useCallback(
     (id: string) => {
       if (id === "draft") return;
@@ -2164,8 +2281,19 @@ const CanvasInner = ({
       setSteppedThread(undefined);
       setDraft(undefined);
       closeHiddenPanel();
+      // On a phone the thread's sheet covers the bottom of the board, so the
+      // board moves the pin up out of its way.
+      if (!compact) return;
+      const anchor = threads.get(id)?.root.comment;
+      const at =
+        anchor &&
+        commentPosition(
+          anchor,
+          anchor.node ? absoluteRect(anchor.node) : undefined,
+        );
+      if (at) panToPin(at, flow.getZoom());
     },
-    [closeHiddenPanel],
+    [closeHiddenPanel, compact, threads, absoluteRect, panToPin, flow],
   );
 
   const closeComment = useCallback(() => {
@@ -2306,7 +2434,7 @@ const CanvasInner = ({
       closeHiddenPanel();
       setDraft(undefined);
       setOpenThread(threadId);
-      panTo(at);
+      panToPin(at, Math.max(flow.getZoom(), 0.8));
       setPulse(threadId);
       window.clearTimeout(pulseTimer.current);
       pulseTimer.current = window.setTimeout(
@@ -2315,7 +2443,7 @@ const CanvasInner = ({
       );
       return true;
     },
-    [threads, absoluteRect, panTo, closeHiddenPanel],
+    [threads, absoluteRect, panToPin, flow, closeHiddenPanel],
   );
 
   // What picking something the search found does: pan to it, or put a
@@ -2631,6 +2759,15 @@ const CanvasInner = ({
 
   const onPointerDownCapture = useCallback(
     (event: React.PointerEvent) => {
+      commentTapped.current = false;
+      // A second finger means a pinch, not a tap.
+      if (
+        commentPress.current &&
+        commentPress.current.pointerId !== event.pointerId
+      ) {
+        commentPress.current = undefined;
+        return;
+      }
       if (
         !onBoard(event) ||
         (readOnly && tool !== "comment") ||
@@ -2644,15 +2781,23 @@ const CanvasInner = ({
       if (target.closest(`${OVERLAYS}, .react-flow__resize-control`)) {
         return;
       }
+      const point = flowPoint(event);
+      if (tool === "comment") {
+        commentPress.current = {
+          point,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          pointerId: event.pointerId,
+          pointerType: event.pointerType,
+        };
+        // A touch is left to React Flow too, so a finger that moves pans the
+        // board (and a second one pinches) instead of placing a comment.
+        if (event.pointerType === "touch") return;
+      }
       event.preventDefault();
       event.stopPropagation();
       wrapperRef.current?.setPointerCapture(event.pointerId);
-      const point = flowPoint(event);
-
-      if (tool === "comment") {
-        commentPress.current = point;
-        return;
-      }
+      if (tool === "comment") return;
 
       if (tool === "eraser") {
         eraseAt(point);
@@ -2760,6 +2905,17 @@ const CanvasInner = ({
 
   const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
+      const press = commentPress.current;
+      if (
+        press &&
+        press.pointerId === event.pointerId &&
+        Math.hypot(
+          event.clientX - press.clientX,
+          event.clientY - press.clientY,
+        ) > CLICK_SLOP
+      ) {
+        commentPress.current = undefined;
+      }
       if (!onBoard(event)) return;
       const point = flowPoint(event);
       if (event.pointerType !== "touch") live.setCursor(point);
@@ -2882,13 +3038,13 @@ const CanvasInner = ({
       }
       if (tool === "comment") {
         const press = commentPress.current;
+        if (!press || press.pointerId !== event.pointerId) return;
         commentPress.current = undefined;
-        if (press) {
-          setDraft(commentAnchorAt(press));
-          setOpenThread(undefined);
-          closeHiddenPanel();
-          setTool("select");
-        }
+        if (press.pointerType === "touch") commentTapped.current = true;
+        setDraft(commentAnchorAt(press.point));
+        setOpenThread(undefined);
+        closeHiddenPanel();
+        setTool("select");
         return;
       }
       if (isPlaceTool(tool)) {
@@ -2929,17 +3085,34 @@ const CanvasInner = ({
   );
 
   // A cancelled pointer (a touch taken over by a gesture, say) drops a line
-  // being drawn rather than finishing it; anything else ends as usual.
+  // being drawn or a comment being placed rather than finishing it; anything
+  // else ends as usual.
   const onPointerCancel = useCallback(
     (event: React.PointerEvent) => {
-      if (!connecting) {
-        onPointerUp(event);
+      if (connecting) {
+        setConnecting(undefined);
         return;
       }
-      setConnecting(undefined);
+      if (tool === "comment") {
+        commentPress.current = undefined;
+        return;
+      }
+      onPointerUp(event);
     },
-    [connecting, onPointerUp],
+    [connecting, tool, onPointerUp],
   );
+
+  // The browser follows a tap with mouse events and a click, which would
+  // take focus from the composer of the comment the tap just placed, or
+  // follow a link it was on.
+  const onTapFollowUp = useCallback((event: React.MouseEvent) => {
+    if (!commentTapped.current) return;
+    event.preventDefault();
+    if (event.type === "click") {
+      event.stopPropagation();
+      commentTapped.current = false;
+    }
+  }, []);
 
   const onPointerLeave = useCallback(() => {
     live.setCursor(null);
@@ -3079,6 +3252,7 @@ const CanvasInner = ({
     () => ({
       readOnly,
       readOnlyForLayout: accessReason === "narrow",
+      compact,
       updateNodes,
       updateEdge,
       persistResize,
@@ -3089,6 +3263,7 @@ const CanvasInner = ({
     [
       readOnly,
       accessReason,
+      compact,
       updateNodes,
       updateEdge,
       persistResize,
@@ -3170,12 +3345,17 @@ const CanvasInner = ({
         searchRef.current.select();
         return;
       }
-      // Escape closes an open thread first; then it drops a comment being
-      // started, a line being drawn or joined, or an erase, and goes back to
-      // Select. The thread's panel closes itself on Escape from inside it.
+      // Escape closes an open thread first, then the Comments list; then it
+      // drops a comment being started, a line being drawn or joined, or an
+      // erase, and goes back to Select. The thread's panel closes itself on
+      // Escape from inside it.
       if (event.key === "Escape" && !isTyping(event.target)) {
         if (openThreadId) {
           dismissComment();
+          return;
+        }
+        if (commentListShown) {
+          setSidePanel(undefined);
           return;
         }
         setDraft(undefined);
@@ -3283,6 +3463,7 @@ const CanvasInner = ({
     flow,
     deleteNodes,
     openThreadId,
+    commentListShown,
     dismissComment,
     cancelClickConnect,
     selectAll,
@@ -3328,6 +3509,10 @@ const CanvasInner = ({
     setSidePanel((current) => (current === "hidden" ? undefined : "hidden"));
     closeComment();
   }, [closeComment]);
+  const stopCommenting = useCallback(() => {
+    commentPress.current = undefined;
+    setTool("select");
+  }, []);
   // With a thread (or a comment being started) in the list's place, the
   // button closes it and goes back to the list.
   const toggleCommentList = useCallback(() => {
@@ -3606,6 +3791,8 @@ const CanvasInner = ({
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerCancel}
               onPointerLeave={onPointerLeave}
+              onMouseDownCapture={onTapFollowUp}
+              onClickCapture={onTapFollowUp}
             >
               <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
                 nodes={nodes}
@@ -3637,7 +3824,7 @@ const CanvasInner = ({
                 nodesDraggable={!readOnly && !drawingTool}
                 nodesConnectable={!readOnly && !drawingTool}
                 elementsSelectable={!readOnly && !drawingTool}
-                panOnDrag={!drawingTool}
+                panOnDrag={!drawingTool || (compact && tool === "comment")}
                 selectionOnDrag={false}
                 deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
                 onlyRenderVisibleElements
@@ -3757,7 +3944,7 @@ const CanvasInner = ({
                           </ReadOnlyReason>
                         )}
                       </ReadOnlyNote>
-                      <ButtonGroup size="sm">
+                      <ReadOnlyButtons size="sm" $compact={compact}>
                         {canComment && (
                           <CommentToolButton
                             active={tool === "comment"}
@@ -3780,14 +3967,30 @@ const CanvasInner = ({
                             {resolvedCount}
                           </Button>
                         )}
-                      </ButtonGroup>
-                      {mayChangeEditPolicy && (
+                      </ReadOnlyButtons>
+                      {mayChangeEditPolicy && !compact && (
                         <EditPolicyButton
                           policy={editPolicy}
                           onClick={openEditPolicy}
                         />
                       )}
                     </ToolBox>
+                    {compact && tool === "comment" && (
+                      <CommentHint>
+                        <span>
+                          {t(
+                            "whiteboard.toolbar.commentHint",
+                            "Tap where your comment goes",
+                          )}
+                        </span>
+                        <Button
+                          variant="outline-secondary"
+                          onClick={stopCommenting}
+                        >
+                          {t("common.cancel", "Cancel")}
+                        </Button>
+                      </CommentHint>
+                    )}
                     {offlineAlert}
                     {accessNoticeAlert}
                     {saveErrorAlert}
@@ -4037,7 +4240,7 @@ const CanvasInner = ({
                   </Panel>
                 )}
                 {(draft ?? openThreadData) && (
-                  <Panel position="top-right">
+                  <CommentPanelPlace compact={compact}>
                     <CommentPanel
                       key={
                         draft
@@ -4050,6 +4253,7 @@ const CanvasInner = ({
                       draft={draft}
                       targetLabel={commentTarget}
                       canComment={canComment}
+                      compact={compact}
                       offline={accessReason === "offline"}
                       focusPanel={
                         !!openThreadId && openThreadId === steppedThread
@@ -4059,7 +4263,7 @@ const CanvasInner = ({
                       onDraftSent={onDraftSent}
                       onError={reportRefusal}
                     />
-                  </Panel>
+                  </CommentPanelPlace>
                 )}
                 {commentListShown && (
                   <Panel position="top-right">

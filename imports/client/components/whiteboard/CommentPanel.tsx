@@ -13,7 +13,7 @@ import React, {
 import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 import { useTranslation } from "react-i18next";
-import styled from "styled-components";
+import styled, { css } from "styled-components";
 import type {
   ChatMessageCommentAnchorType,
   ChatMessageType,
@@ -37,8 +37,9 @@ import RelativeTime from "../RelativeTime";
 import CommentComposer from "./CommentComposer";
 
 // A dialog that isn't modal, so it sits where it's put rather than where the
-// browser puts dialogs.
-const Panel = styled.dialog`
+// browser puts dialogs. On a phone it's a sheet, as wide and as tall as the
+// place it's put allows.
+const Panel = styled.dialog<{ $compact: boolean }>`
   position: static;
   margin: 0;
   padding: 0;
@@ -52,6 +53,17 @@ const Panel = styled.dialog`
   border: 1px solid ${({ theme }) => theme.colors.border};
   box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
   font-size: 13px;
+
+  ${({ $compact }) =>
+    $compact &&
+    css`
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      max-height: none;
+      border-bottom: none;
+      border-radius: 12px 12px 0 0;
+    `}
 `;
 
 const Header = styled.div`
@@ -75,6 +87,7 @@ const Messages = styled.div`
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px 8px;
 `;
 
@@ -220,8 +233,8 @@ const NO_REACTIONS: ChatMessageType[] = [];
 // render exactly as they do in chat, and stay in the board's chat too. It's
 // a dialog beside the board: when it opens, focus goes to its composer (or
 // the panel itself, with nothing to write in, for a thread opened on a
-// touch screen, which would otherwise bring up the keyboard, or for one
-// stepped to with N, so the next N still works), and Escape closes it.
+// phone, where the keyboard would cover the board, or for one stepped to
+// with N, so the next N still works), and Escape closes it.
 const CommentPanel = ({
   huntId,
   puzzleId,
@@ -229,6 +242,7 @@ const CommentPanel = ({
   draft,
   targetLabel,
   canComment,
+  compact = false,
   offline,
   focusPanel = false,
   onClose,
@@ -243,6 +257,9 @@ const CommentPanel = ({
   targetLabel: string;
   // Off once the hunt is archived; the edit policy never takes it away.
   canComment: boolean;
+  // A phone-sized screen: a sheet with finger-sized buttons, and an existing
+  // thread doesn't bring up the keyboard.
+  compact?: boolean;
   // The connection is down, which takes commenting away until it's back.
   offline: boolean;
   // Focus goes to the panel rather than its composer when it opens.
@@ -259,10 +276,7 @@ const CommentPanel = ({
   // Where focus goes is settled when the panel opens; access changing later
   // (going offline, say) leaves focus wherever the viewer has put it.
   const [focusComposer] = useState(
-    () =>
-      canComment &&
-      !focusPanel &&
-      (!!draft || !window.matchMedia("(pointer: coarse)").matches),
+    () => canComment && !focusPanel && (!!draft || !compact),
   );
   const composerFocusPending = useRef(focusComposer);
   useEffect(() => {
@@ -430,6 +444,7 @@ const CommentPanel = ({
     [onClose],
   );
 
+  const buttonSize = compact ? "lg" : "sm";
   const title = draft
     ? t("whiteboard.comments.newOn", "New comment on {{target}}", {
         target: targetLabel,
@@ -448,6 +463,7 @@ const CommentPanel = ({
     <Panel
       ref={panelRef}
       open
+      $compact={compact}
       className="nodrag nowheel nopan"
       aria-label={title}
       tabIndex={-1}
@@ -457,7 +473,7 @@ const CommentPanel = ({
         <Title title={title}>{title}</Title>
         {thread && canComment && (
           <Button
-            size="sm"
+            size={buttonSize}
             variant="outline-secondary"
             onClick={toggleResolved}
           >
@@ -467,12 +483,16 @@ const CommentPanel = ({
           </Button>
         )}
         {canDelete && (
-          <Button size="sm" variant="outline-danger" onClick={askToDelete}>
+          <Button
+            size={buttonSize}
+            variant="outline-danger"
+            onClick={askToDelete}
+          >
             {t("whiteboard.comments.delete", "Delete")}
           </Button>
         )}
         <Button
-          size="sm"
+          size={buttonSize}
           variant="link"
           onClick={onClose}
           aria-label={t("common.close", "Close")}
@@ -530,6 +550,7 @@ const CommentPanel = ({
                 : t("whiteboard.comments.replyPlaceholder", "Reply")
             }
             autoFocus={composerFocusPending.current}
+            compact={compact}
             disabled={!canComment}
             onSend={onSend}
             onHasTextChange={setComposerHasText}

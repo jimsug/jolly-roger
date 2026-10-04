@@ -207,8 +207,8 @@ const EditableText = ({
   // Losing edit rights mid-edit (the edit policy changes, the hunt is
   // archived, or the connection drops) closes the editor, keeping what was
   // typed unsaved, since the server would refuse it, to retry once the board
-  // can be edited again. A screen narrowing only stops further edits, so
-  // what was typed is saved.
+  // can be edited again. A screen becoming phone-sized (compact, see
+  // WhiteboardPage) only stops further edits, so what was typed is saved.
   useEffect(() => {
     if (!readOnly || !editing) return;
     if (saveOnReadOnly) {

@@ -7,6 +7,7 @@ files:
   - imports/client/components/tagColors.ts
   - imports/client/components/whiteboard/BoardSearch.tsx
   - imports/client/components/whiteboard/CommentComposer.tsx
+  - imports/client/components/whiteboard/CommentLayer.tsx
   - imports/client/components/whiteboard/CommentList.tsx
   - imports/client/components/whiteboard/CommentPanel.tsx
   - imports/client/components/whiteboard/EditPolicyModal.tsx
@@ -20,6 +21,7 @@ files:
   - imports/client/components/whiteboard/WhiteboardCanvas.tsx
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
   - imports/client/hooks/useChatImageUpload.ts
+  - imports/client/hooks/useKeyboardInset.ts
   - imports/client/hooks/useRoundStates.ts
   - imports/lib/chatMessagePath.ts
   - imports/lib/models/WhiteboardEdges.ts
@@ -178,8 +180,8 @@ on the board who lost them.
 
 `WhiteboardPage` works out the viewer's access with `whiteboardAccess` and
 passes it to the canvas, which treats anything below `edit` as read-only and
-anything from `comment` up as able to comment. Below the desktop breakpoint
-the page lowers `edit` to `comment` with the reason `narrow`. That is a layout
+anything from `comment` up as able to comment. On a phone (see Phones) the
+page lowers `edit` to `comment` with the reason `narrow`. That is a layout
 choice, not a security boundary, and the server never sees it. While Meteor
 is disconnected the page also lowers any access to `view`, with the reason
 `offline` (see Offline).
@@ -189,8 +191,8 @@ below, and keeps the Comment tool for anyone who can comment, and the
 Comments button (see Comments) for everyone. When the
 viewer's edit rights come or go while the board is open, a notice says so,
 and a note being edited closes, keeping what was typed as "Not saved" until
-it can be retried (see When a save is refused). A screen narrowing past the
-breakpoint isn't announced, and text being typed then is saved, since the
+it can be retried (see When a save is refused). A window becoming
+phone-sized isn't announced, and text being typed then is saved, since the
 server still takes it.
 
 On a hunt with no board, operators get a button to create one, unless the
@@ -269,7 +271,7 @@ redirect.
 
 ### The mini map
 
-On a wide screen the mini map shows each card in its solvedness colour and
+Except on a phone (see Phones), the mini map shows each card in its solvedness colour and
 each frame in its colour, faintly, so solved rounds stand out. The card
 colours are the theme's `miniMapSolvedness`, stronger than the card
 backgrounds so they show at that size, and frames take the strong version of
@@ -303,8 +305,8 @@ board.
 N goes to the next unread thread: the newest one if none is open, otherwise
 the next older unread one after the open thread, starting again from the
 newest after the oldest. With nothing unread it does nothing. A thread N
-opens takes focus on its panel rather than its composer, as on a touch
-screen, so the next N carries on; the Comments button's tooltip names the
+opens takes focus on its panel rather than its composer, as on a phone, so
+the next N carries on; the Comments button's tooltip names the
 key. `threadList` and `nextUnread` in `imports/lib/whiteboard/comments.ts` do
 the ordering.
 
@@ -325,7 +327,9 @@ the comment, which can't be sent until the upload finishes. Both use
 own way: chat in a dialog, the composer in a line under it. A failed image
 doesn't count as something to send, so a comment that is only a failed image
 can't be sent. When the server has no S3 image bucket, the image isn't
-uploaded and the composer shows the same message chat gives in that case.
+uploaded and the composer says "Images can't be added here: this server has
+nowhere to store them." in plain words, rather than the setup message chat
+shows admins.
 
 ### Highlights
 
@@ -357,7 +361,7 @@ tooltip shows its key.
 | N | Go to the next comment thread with something unread (see Comments) | |
 | 1, 2, 3 | Thin, medium or thick pen | edit |
 | Ctrl+A (Cmd+A on a Mac) | Select everything but frames (a selected frame carries its contents anyway) and no lines, switching to Select | edit |
-| Escape | Close an open comment thread; with none open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
+| Escape | Close an open comment thread, then the Comments list; with neither open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
 | / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
 | Delete or Backspace | Delete the selection | edit |
 | Arrow keys | Move the selection 5 units, 20 with Shift; it joins or leaves a frame as a drop would | edit |
@@ -372,12 +376,16 @@ unless the composer's suggestions are open, when it closes those, or the
 composer has something written in it, when it does nothing, so a slip of the
 key doesn't throw the text away.
 
+With the Comment tool, a press on the board starts a comment where it was
+pressed once it's let go. A press that moves more than a few pixels first
+doesn't start one, whether it's a mouse, a pen or a finger.
+
 A thread's panel is a dialog named after what the comment is on. Opening a
 thread moves focus to its reply box, or to the panel when the viewer can't
-comment. On a touch screen (`pointer: coarse`) an existing thread focuses
-the panel too, so the on-screen keyboard doesn't cover the board; a new
-comment still focuses its composer. Focus only moves when the panel opens,
-not when access changes while it's open. Closing it with its Close button or
+comment. On a phone an existing thread focuses the panel too, so the
+on-screen keyboard doesn't cover the board; a new comment still focuses its
+composer. Focus only moves when the panel opens, not when access changes
+while it's open. Closing it with its Close button or
 Escape puts focus back on its pin; deleting the thread puts focus on the node
 it was on, if any.
 
@@ -460,6 +468,54 @@ Delete on a thread's panel asks first, in a dialog that says the comment and
 every reply to it go and that it can't be undone. Cancel leaves the thread as
 it was. Who may delete is unchanged: the author until someone else replies,
 and operators at any time.
+
+## Phones
+
+A phone gets the board read-only plus comments. `WhiteboardPage` treats the
+screen as compact when it matches `(max-width: 575px), (pointer: coarse) and
+(max-height: 575px)`: narrower than the puzzle page's desktop breakpoint, or
+a touch screen too short for the toolbar and a thread, which catches phones
+held on their side. A compact board lowers `edit` to `comment` with the
+reason `narrow`, hides the mini map, and passes `compact` to the canvas and
+its context. The server doesn't know or care: someone who may edit can still
+do so from a desktop.
+
+On a phone the viewer can pan and pinch, open puzzles from cards, show and
+hide resolved pins, open a pin's thread, place a comment, reply, react,
+resolve and reopen, delete their own thread while nobody else has replied
+(operators can always), use search and the Comments list, copy a link to the
+view, and follow "Show on board" from chat. Nothing else: no tools, no
+moving, no who-can-edit button.
+
+The toolbar says "Viewing only" with "Editing needs a wider screen. You can
+still comment." under it, and its Comment, Comments and resolved buttons are
+44px square. While the Comment tool is out, a banner under the toolbar says
+"Tap where your comment goes", with Cancel to put the tool away.
+
+A tap places the comment. With the tool out on a phone the board still pans
+under a finger: React Flow's `panOnDrag` stays on, and the canvas leaves a
+touch press to React Flow rather than taking it over as it does a mouse
+press. A press that moves more than a few pixels, a second finger, or a
+cancelled touch drops it without a comment, so panning and pinching never
+leave a stray draft. The click the browser makes from the tap is ignored, so
+a tap on a card's link places the comment without opening the puzzle.
+
+A thread opens in a sheet along the bottom of the board, as wide as the
+board, with rounded top corners, at most 60% of its height, never within
+48px of the top of what's showing, and never past the top of the board, so
+its header stays in view when the keyboard lifts it. The sheet and the
+top-right panel a wider screen uses are one element, so the screen changing
+size while a comment is being written keeps what's written. Its buttons are full size and it scrolls
+without dragging the page with it. Opening a pin, or showing a comment from
+chat or the Comments list, pans the board so the pin sits above the sheet. A
+new comment's composer takes focus, which brings up the keyboard; opening an
+existing thread doesn't. `useKeyboardInset` (in `imports/client/hooks/`)
+follows `window.visualViewport`, and the sheet sits that far up from the
+bottom so the keyboard doesn't cover it. The composer's text is 16px on a
+phone, so iOS doesn't zoom in when it takes focus, and Send is 44px tall.
+
+On any touch screen (`pointer: coarse`) a pin takes presses from 5px past its
+edge, a 44px target, without looking any bigger.
 
 ## What cards and rounds show
 

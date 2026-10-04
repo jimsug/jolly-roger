@@ -33,6 +33,11 @@ import type { BoardFocus } from "./whiteboard/BoardFocusContext";
 import BoardFocusContext from "./whiteboard/BoardFocusContext";
 import WhiteboardCanvas from "./whiteboard/WhiteboardCanvas";
 
+// A phone, upright or on its side: narrower than PuzzlePage's own breakpoint,
+// or a touch screen too short for the toolbar and a thread. A compact board
+// can be looked at and commented on, but not edited.
+const compactQuery = `(max-width: ${MinimumDesktopWidth - 1}px), (pointer: coarse) and (max-height: 575px)`;
+
 const EmptyWhiteboard = ({ huntId }: { huntId: string }) => {
   const { t } = useTranslation();
   const title = t("whiteboard.title", "Whiteboard");
@@ -130,9 +135,7 @@ const WhiteboardPage = () => {
   }, [huntId]);
   const disabled = useTracker(() => Flags.active("disable.whiteboard"), []);
   const connected = useTracker(() => Meteor.status().connected, []);
-  // PuzzlePage's own breakpoint; narrower than this the board can only be
-  // commented on.
-  const isDesktop = useMediaQuery(`(min-width: ${MinimumDesktopWidth}px)`);
+  const compact = useMediaQuery(compactQuery);
   let access: WhiteboardAccess = policyAccess.access;
   let accessReason: WhiteboardAccessReason | undefined = policyAccess.reason;
   if (access !== "none" && !connected) {
@@ -140,7 +143,7 @@ const WhiteboardPage = () => {
     // whenever it reconnects, so the board is view-only until then.
     access = "view";
     accessReason = "offline";
-  } else if (access === "edit" && !isDesktop) {
+  } else if (access === "edit" && compact) {
     access = "comment";
     accessReason = "narrow";
   }
@@ -242,7 +245,8 @@ const WhiteboardPage = () => {
             }
             editPolicy={policyAccess.editPolicy}
             editors={policyAccess.editors}
-            showMiniMap={isDesktop}
+            showMiniMap={!compact}
+            compact={compact}
             boardLoaded={!contentsLoading()}
             focusRef={focusRef}
             initialComment={initialComment}

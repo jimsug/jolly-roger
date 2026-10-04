@@ -7,9 +7,13 @@ import type { WhiteboardNodeInput } from "../../../methods/upsertWhiteboardNodes
 // What the board's nodes and lines need from the canvas.
 export interface WhiteboardActions {
   readOnly: boolean;
-  // Read-only only because the screen is narrow. The server still takes this
-  // viewer's edits, so text being typed when the screen narrows is saved.
+  // Read-only only because the screen is phone-sized (compact, see
+  // WhiteboardPage). The server still takes this viewer's edits, so text
+  // being typed when the screen becomes compact is saved.
   readOnlyForLayout: boolean;
+  // A phone-sized screen, where the board can only be looked at and
+  // commented on, with bigger targets for fingers.
+  compact: boolean;
   // Each saves through its method and reports a refusal on the board;
   // onDone hears whether it was refused, once every batch is back.
   updateNodes: (

@@ -232,6 +232,52 @@ if (Meteor.isClient) {
       }
     });
 
+  // Stands in for a phone held upright, until restore puts things back:
+  // PuzzlePage's narrow layout goes by innerWidth, and the board's compact
+  // query (and anything else asking for a minimum or maximum width) by
+  // matchMedia, which usehooks-ts reads. setPhone(false) makes those queries
+  // answer as a wider screen would, and tells whatever is listening, leaving
+  // innerWidth alone.
+  const simulatePhone = () => {
+    const width = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 500,
+    });
+    let phone = true;
+    const listeners = new Set<() => void>();
+    const realMatchMedia = window.matchMedia.bind(window);
+    const matchMedia = sinon
+      .stub(window, "matchMedia")
+      .callsFake((query: string) => {
+        if (!/m(in|ax)-width/.test(query)) return realMatchMedia(query);
+        return {
+          matches: phone !== query.includes("min-width"),
+          media: query,
+          onchange: null,
+          addEventListener: sinon.fake(),
+          removeEventListener: sinon.fake(),
+          addListener: (listener: () => void) => listeners.add(listener),
+          removeListener: (listener: () => void) => listeners.delete(listener),
+          dispatchEvent: () => false,
+        } as unknown as MediaQueryList;
+      });
+    return {
+      setPhone: (on: boolean) => {
+        phone = on;
+        listeners.forEach((listener) => listener());
+      },
+      restore: () => {
+        matchMedia.restore();
+        if (width) {
+          Object.defineProperty(window, "innerWidth", width);
+        } else {
+          delete (window as { innerWidth?: number }).innerWidth;
+        }
+      },
+    };
+  };
+
   // Types into a Slate editor, which takes text from beforeinput at the
   // selection focusing it set.
   const typeInto = async (editor: HTMLElement, text: string) => {
@@ -2873,27 +2919,7 @@ if (Meteor.isClient) {
 
       it("switches between the board and chat on a narrow screen", async function () {
         this.timeout(30000);
-        const width = Object.getOwnPropertyDescriptor(window, "innerWidth");
-        Object.defineProperty(window, "innerWidth", {
-          configurable: true,
-          value: 500,
-        });
-        const realMatchMedia = window.matchMedia.bind(window);
-        const matchMedia = sinon
-          .stub(window, "matchMedia")
-          .callsFake((query: string) => {
-            if (!query.includes("min-width")) return realMatchMedia(query);
-            return {
-              matches: false,
-              media: query,
-              onchange: null,
-              addEventListener: sinon.fake(),
-              removeEventListener: sinon.fake(),
-              addListener: sinon.fake(),
-              removeListener: sinon.fake(),
-              dispatchEvent: () => false,
-            } as MediaQueryList;
-          });
+        const phone = simulatePhone();
         try {
           render(<TestApp />);
           await goTo(boardPath);
@@ -2927,13 +2953,546 @@ if (Meteor.isClient) {
             "Editing needs a wider screen. You can still comment.",
           );
         } finally {
-          matchMedia.restore();
-          if (width) {
-            Object.defineProperty(window, "innerWidth", width);
-          } else {
-            delete (window as { innerWidth?: number }).innerWidth;
-          }
+          phone.restore();
         }
+      });
+
+      describe("on a phone", function () {
+        let phone: ReturnType<typeof simulatePhone>;
+        beforeEach(function () {
+          phone = simulatePhone();
+        });
+        afterEach(function () {
+          phone.restore();
+        });
+
+        // Threads made by each test, deleted afterwards.
+        const threads: string[] = [];
+        afterEach(async function () {
+          for (const messageId of threads.splice(0)) {
+            await deleteWhiteboardComment.callPromise({ messageId });
+          }
+        });
+
+        const openPhoneBoard = async () => {
+          render(<TestApp />);
+          await goTo(boardPath);
+          await screen.findByText(
+            "Editing needs a wider screen. You can still comment.",
+            {},
+            { timeout: 20000 },
+          );
+          await waitFor(
+            () =>
+              assert.isNotNull(
+                document.querySelector(".react-flow__node-puzzle"),
+              ),
+            { timeout: 20000 },
+          );
+          // Lets the canvas's effects run
+          await act(async () => {
+            await stabilize();
+          });
+        };
+        const armComment = async () => {
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: /^Comment:/ }));
+            await stabilize();
+          });
+          screen.getByText("Tap where your comment goes");
+        };
+        const touch = (at: { x: number; y: number }, pointerId: number) => ({
+          button: 0,
+          pointerId,
+          pointerType: "touch",
+          isPrimary: pointerId === 1,
+          clientX: at.x,
+          clientY: at.y,
+        });
+        const sheet = () =>
+          document.querySelector<HTMLElement>(
+            ".react-flow__panel.jr-comment-sheet",
+          );
+        const draftPin = () =>
+          document.querySelector('.jr-comment-pin[data-thread="draft"]');
+        const middleOf = (element: Element) => {
+          const box = element.getBoundingClientRect();
+          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        };
+        // A comment of this test's own, found once it reaches this client,
+        // which needs the board open.
+        const leaveComment = async (
+          text: string,
+          comment: { node?: string; x: number; y: number },
+        ) => {
+          await sendChatMessage.callPromise({
+            puzzleId: boardPuzzle,
+            content: JSON.stringify({
+              type: "message",
+              children: [{ text }],
+            }),
+            comment,
+          });
+          const id = await waitFor(
+            async () => {
+              const found = await ChatMessages.findOneAsync({
+                "comment.x": comment.x,
+                "comment.y": comment.y,
+              });
+              assert.ok(found);
+              return found._id;
+            },
+            { timeout: 10000 },
+          );
+          threads.push(id);
+          return id;
+        };
+        let boardPuzzle: string;
+        before(async function () {
+          this.timeout(10000);
+          boardPuzzle = (await ensureBoard()).puzzle;
+        });
+
+        it("places a comment on a card from a phone with a tap", async function () {
+          this.timeout(30000);
+          const { a } = await sideBySideCards(boardId);
+          await openPhoneBoard();
+          const card = await waitFor(() => {
+            const found = nodeElement(a._id);
+            assert.exists(found);
+            return found;
+          });
+          await armComment();
+          // The board still pans under a finger while the tool is out
+          assert.isTrue(pane().classList.contains("draggable"));
+          // A tap on the card's link, which the browser follows with a
+          // mousedown and a click
+          const link = within(card as HTMLElement).getByRole("link", {
+            name: "Open puzzle",
+          });
+          const at = middleOf(link);
+          const mouse = {
+            view: window,
+            button: 0,
+            clientX: at.x,
+            clientY: at.y,
+          };
+          await act(async () => {
+            fireEvent.pointerDown(link, touch(at, 1));
+            fireEvent.pointerUp(link, touch(at, 1));
+            fireEvent.mouseDown(link, mouse);
+            fireEvent.mouseUp(link, mouse);
+            fireEvent.click(link, mouse);
+            await stabilize();
+          });
+          // which places the comment without opening the puzzle
+          assert.equal(location.current?.pathname, boardPath);
+          const panel = await waitFor(() => {
+            const found = sheet()?.querySelector<HTMLElement>("dialog[open]");
+            assert.exists(found);
+            assert.include(found.textContent ?? "", "New comment on");
+            return found;
+          });
+          assert.isNull(screen.queryByText("Tap where your comment goes"));
+          // The sheet runs the width of the board, along its bottom
+          const board = document
+            .querySelector(".react-flow")!
+            .getBoundingClientRect();
+          const box = sheet()!.getBoundingClientRect();
+          assert.closeTo(box.width, board.width, 1);
+          assert.closeTo(box.bottom, board.bottom, 1);
+          assert.isAtMost(box.height, board.height * 0.6 + 1);
+          // A new comment's composer takes focus
+          const editor = await waitFor(() => {
+            const found = panel.querySelector<HTMLElement>(
+              "[data-slate-editor]",
+            );
+            assert.exists(found);
+            assert.isTrue(found.contains(document.activeElement));
+            return found;
+          });
+          await typeInto(editor, "Tapped on from a phone");
+          await act(async () => {
+            fireEvent.click(
+              within(panel).getByRole("button", { name: "Send" }),
+            );
+            await stabilize();
+          });
+          const sent = await waitFor(
+            async () => {
+              const found = await ChatMessages.findOneAsync({
+                "comment.node": a._id,
+                sender: Meteor.userId()!,
+              });
+              assert.exists(found);
+              return found;
+            },
+            { timeout: 10000 },
+          );
+          threads.push(sent._id);
+        });
+
+        it("doesn't place one when the press turns into a pan", async function () {
+          // A real finger pans the board through React Flow's touch events,
+          // which a PointerEvent doesn't make, so whether the board pans is
+          // a check on a device. This checks the press drafts nothing.
+          this.timeout(30000);
+          await openPhoneBoard();
+          await armComment();
+          const at = middleOf(pane());
+          const moved = { x: at.x + 30, y: at.y + 20 };
+          await act(async () => {
+            fireEvent.pointerDown(pane(), touch(at, 1));
+            fireEvent.pointerMove(pane(), touch(moved, 1));
+            fireEvent.pointerUp(pane(), touch(moved, 1));
+            await stabilize();
+          });
+          assert.isNull(sheet());
+          assert.isNull(draftPin());
+          // nor does a pinch, whichever finger lifts first
+          const other = { x: at.x + 80, y: at.y };
+          await act(async () => {
+            fireEvent.pointerDown(pane(), touch(at, 1));
+            fireEvent.pointerDown(pane(), touch(other, 2));
+            fireEvent.pointerUp(pane(), touch(at, 1));
+            fireEvent.pointerUp(pane(), touch(other, 2));
+            await stabilize();
+          });
+          assert.isNull(sheet());
+          assert.isNull(draftPin());
+          // and the tool is still out for the next tap
+          screen.getByText("Tap where your comment goes");
+        });
+
+        it("doesn't leave a draft after a cancelled touch", async function () {
+          this.timeout(30000);
+          await openPhoneBoard();
+          await armComment();
+          const at = middleOf(pane());
+          await act(async () => {
+            fireEvent.pointerDown(pane(), touch(at, 1));
+            fireEvent.pointerCancel(pane(), touch(at, 1));
+            await stabilize();
+          });
+          assert.isNull(sheet());
+          assert.isNull(draftPin());
+          // Cancel puts the tool away
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+            await stabilize();
+          });
+          assert.isNull(screen.queryByText("Tap where your comment goes"));
+          assert.equal(
+            screen
+              .getByRole("button", { name: /^Comment:/ })
+              .getAttribute("aria-pressed"),
+            "false",
+          );
+        });
+
+        it("replies to, reacts to and resolves a comment from a phone", async function () {
+          this.timeout(30000);
+          await openPhoneBoard();
+          const id = await leaveComment("Reply from your phone", {
+            x: 5100,
+            y: 5100,
+          });
+          await goTo(`${boardPath}?comment=${id}`);
+          const panel = await waitFor(
+            () => {
+              const found = sheet()?.querySelector<HTMLElement>("dialog[open]");
+              assert.exists(found);
+              assert.include(found.textContent ?? "", "Reply from your phone");
+              return found;
+            },
+            { timeout: 20000 },
+          );
+          // An existing thread leaves the keyboard down
+          const editor = panel.querySelector<HTMLElement>(
+            "[data-slate-editor]",
+          )!;
+          await waitFor(() => assert.equal(document.activeElement, panel));
+          assert.isFalse(editor.contains(document.activeElement));
+
+          await typeInto(editor, "Replied from a phone");
+          await act(async () => {
+            fireEvent.click(
+              within(panel).getByRole("button", { name: "Send" }),
+            );
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              assert.exists(
+                await ChatMessages.findOneAsync({
+                  parentId: id,
+                  "content.children.text": "Replied from a phone",
+                }),
+              );
+            },
+            { timeout: 10000 },
+          );
+
+          await act(async () => {
+            fireEvent.click(
+              within(panel).getAllByRole("button", { name: "React" })[0]!,
+            );
+            await stabilize();
+          });
+          const tick = await waitFor(
+            () => {
+              const found = document.querySelector('[data-unified="2705"]');
+              assert.exists(found);
+              return found;
+            },
+            { timeout: 10000 },
+          );
+          await act(async () => {
+            fireEvent.click(tick);
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              assert.exists(
+                await ChatMessages.findOneAsync({
+                  parentId: id,
+                  "content.children.text": "✅",
+                }),
+              );
+            },
+            { timeout: 10000 },
+          );
+
+          await act(async () => {
+            fireEvent.click(
+              within(panel).getByRole("button", { name: "Resolve" }),
+            );
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const root = await ChatMessages.findOneAsync(id);
+              assert.exists(root?.comment?.resolvedAt);
+            },
+            { timeout: 10000 },
+          );
+          const reopen = await within(panel).findByRole("button", {
+            name: "Reopen",
+          });
+          await act(async () => {
+            fireEvent.click(reopen);
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const root = await ChatMessages.findOneAsync(id);
+              assert.notExists(root?.comment?.resolvedAt);
+            },
+            { timeout: 10000 },
+          );
+        });
+
+        it("doesn't let anything be moved on a phone", async function () {
+          this.timeout(30000);
+          // The board opens fitted to everything, so there's a card to try
+          localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+          const save = sinon.spy(upsertWhiteboardNodes, "call");
+          const remove = sinon.spy(deleteWhiteboardNodes, "call");
+          try {
+            await openPhoneBoard();
+            assert.isNull(screen.queryByRole("button", { name: /^Select/ }));
+            assert.isNull(screen.queryByLabelText("Who can edit"));
+            const card = document.querySelector<HTMLElement>(
+              ".react-flow__node-puzzle",
+            )!;
+            assert.isFalse(card.classList.contains("draggable"));
+            assert.isFalse(card.classList.contains("selectable"));
+            // Where the card is on the board; a drag may still pan the board
+            const before = card.style.transform;
+            const from = middleOf(card);
+            const to = { x: from.x + 120, y: from.y + 60 };
+            await act(async () => {
+              fireEvent.mouseDown(card, {
+                view: window,
+                button: 0,
+                clientX: from.x,
+                clientY: from.y,
+              });
+              fireEvent.mouseMove(document, {
+                view: window,
+                clientX: to.x,
+                clientY: to.y,
+              });
+              fireEvent.mouseUp(document, {
+                view: window,
+                clientX: to.x,
+                clientY: to.y,
+              });
+              await stabilize();
+            });
+            await press(card, { key: "ArrowRight" });
+            await press(card, { key: "Delete" });
+            assert.equal(
+              document.querySelector<HTMLElement>(
+                `.react-flow__node[data-id="${card.dataset.id}"]`,
+              )?.style.transform,
+              before,
+            );
+            assert.isTrue(save.notCalled);
+            assert.isTrue(remove.notCalled);
+          } finally {
+            remove.restore();
+            save.restore();
+          }
+        });
+
+        it("shows a comment from chat on a phone, above the sheet", async function () {
+          this.timeout(30000);
+          await openPhoneBoard();
+          const id = await leaveComment("Shown from chat on a phone", {
+            x: 5200,
+            y: 5200,
+          });
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+            await stabilize();
+          });
+          const text = await screen.findByText(
+            "Shown from chat on a phone",
+            {},
+            { timeout: 20000 },
+          );
+          let message: HTMLElement | null = text;
+          let show: HTMLElement | undefined;
+          while (message && !show) {
+            show = within(message)
+              .queryAllByText("Show on board", { selector: "button" })
+              .at(0);
+            message = message.parentElement;
+          }
+          assert.exists(show);
+          await act(async () => {
+            fireEvent.click(show);
+            await stabilize();
+          });
+          const panel = await waitFor(
+            () => {
+              const found = sheet()?.querySelector<HTMLElement>("dialog[open]");
+              assert.exists(found);
+              assert.include(
+                found.textContent ?? "",
+                "Shown from chat on a phone",
+              );
+              return found;
+            },
+            { timeout: 20000 },
+          );
+          await waitFor(
+            () => {
+              const pin = document.querySelector(
+                `.jr-comment-pin[data-thread="${id}"]`,
+              );
+              assert.exists(pin);
+              const top = panel.getBoundingClientRect().top;
+              const board = document
+                .querySelector(".react-flow")!
+                .getBoundingClientRect();
+              const box = pin.getBoundingClientRect();
+              assert.isAbove(box.top, board.top);
+              assert.isBelow(box.bottom, top);
+              // The board centres a little below the pin, which ends up a
+              // fifth of the way down, clear of a sheet up to 60% tall
+              assert.closeTo(box.bottom, board.top + board.height * 0.2, 4);
+            },
+            { timeout: 5000 },
+          );
+        });
+
+        it("pans a pin tapped low on the board up above the sheet", async function () {
+          this.timeout(30000);
+          await openPhoneBoard();
+          // The board point 80% of the way down the pane
+          const pane = document
+            .querySelector(".react-flow__pane")!
+            .getBoundingClientRect();
+          const { a, e, f } = new DOMMatrix(
+            getComputedStyle(
+              document.querySelector<HTMLElement>(".react-flow__viewport")!,
+            ).transform,
+          );
+          const id = await leaveComment("Tapped low on a phone", {
+            x: Math.round((pane.width / 2 - e) / a),
+            y: Math.round((pane.height * 0.8 - f) / a),
+          });
+          const pin = await waitFor(
+            () => {
+              const found = document.querySelector<HTMLElement>(
+                `.jr-comment-pin[data-thread="${id}"]`,
+              );
+              assert.exists(found);
+              return found;
+            },
+            { timeout: 10000 },
+          );
+          assert.closeTo(
+            pin.getBoundingClientRect().bottom,
+            pane.top + pane.height * 0.8,
+            4,
+          );
+          await act(async () => {
+            fireEvent.click(pin);
+            await stabilize();
+          });
+          const panel = await waitFor(() => {
+            const found = sheet()?.querySelector<HTMLElement>("dialog[open]");
+            assert.exists(found);
+            assert.include(found.textContent ?? "", "Tapped low on a phone");
+            return found;
+          });
+          await waitFor(
+            () => {
+              const box = pin.getBoundingClientRect();
+              assert.isBelow(box.bottom, panel.getBoundingClientRect().top);
+              assert.closeTo(box.bottom, pane.top + pane.height * 0.2, 4);
+            },
+            { timeout: 5000 },
+          );
+        });
+
+        it("keeps what's written when the screen stops being compact", async function () {
+          this.timeout(30000);
+          await openPhoneBoard();
+          await armComment();
+          const at = middleOf(pane());
+          await act(async () => {
+            fireEvent.pointerDown(pane(), touch(at, 1));
+            fireEvent.pointerUp(pane(), touch(at, 1));
+            await stabilize();
+          });
+          const editor = await waitFor(() => {
+            const found = sheet()?.querySelector<HTMLElement>(
+              "dialog[open] [data-slate-editor]",
+            );
+            assert.exists(found);
+            return found;
+          });
+          await typeInto(editor, "Half a thought");
+          // Say, a landscape tablet whose keyboard went away
+          await act(async () => {
+            phone.setPhone(false);
+            await stabilize();
+          });
+          await waitFor(() => {
+            assert.isNull(sheet());
+            assert.isNotNull(
+              document.querySelector(
+                ".react-flow__panel.top.right dialog[open]",
+              ),
+            );
+          });
+          assert.isTrue(editor.isConnected);
+          assert.include(editor.textContent ?? "", "Half a thought");
+        });
       });
 
       describe("with someone else on the board", function () {
@@ -3077,6 +3636,23 @@ if (Meteor.isClient) {
             assert.deepEqual(rows().slice(0, 2), [newer, older]);
             assert.equal(listButton.getAttribute("aria-pressed"), "true");
           });
+        });
+
+        it("closes the Comments list on Escape", async function () {
+          this.timeout(30000);
+          await openBoard();
+          await theyComment("Listed, then put away", 27250);
+          const listButton = screen.getByRole("button", { name: "Comments" });
+          await act(async () => {
+            fireEvent.click(listButton);
+            await stabilize();
+          });
+          await waitFor(() =>
+            assert.include(panelText(), "Listed, then put away"),
+          );
+          await press(listButton, { key: "Escape" });
+          assert.equal(listButton.getAttribute("aria-pressed"), "false");
+          assert.isNull(document.querySelector(".react-flow__panel.top.right"));
         });
 
         it("goes to the next unread comment on N, and on from there", async function () {
@@ -3346,9 +3922,9 @@ if (Meteor.isClient) {
             const editor = await pasteImageIntoComment();
             await waitFor(() => {
               const note = document.querySelector("dialog[open] output");
-              assert.include(
-                note?.textContent ?? "",
-                "S3 presignedPost creation failed",
+              assert.equal(
+                note?.textContent,
+                "Images can't be added here: this server has nowhere to store them.",
               );
             });
             assert.isTrue(upload.notCalled);
