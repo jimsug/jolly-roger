@@ -468,7 +468,7 @@ describe("whiteboard locks", function () {
     assert.isTrue(reset.locked);
   });
 
-  it("restores locked nodes, and the locks a version has", async function () {
+  it("restores locked nodes, and for an operator the locks a version has", async function () {
     const note = await sticky({ x: 100, y: 100 });
     await nextWindow();
     await sticky({ x: 9000, y: 9000 });
@@ -483,17 +483,52 @@ describe("whiteboard locks", function () {
     const lockedVersion = await newestVersion();
     assert.notEqual(lockedVersion._id, unlockedVersion._id);
 
-    await restoreVersion(other, boardId, unlockedVersion._id);
+    await restoreVersion(operator, boardId, unlockedVersion._id);
     const restored = await node(note);
     assert.deepEqual(restored.position, { x: 100, y: 100 });
     assert.notProperty(restored, "locked");
     assert.notProperty(restored, "lockedBy");
 
-    await restoreVersion(other, boardId, lockedVersion._id);
+    await restoreVersion(operator, boardId, lockedVersion._id);
     const relocked = await node(note);
     assert.deepEqual(relocked.position, { x: 700, y: 700 });
     assert.isTrue(relocked.locked);
     assert.equal(relocked.lockedBy, member);
+  });
+
+  it("keeps the board's locks when someone who isn't an operator restores", async function () {
+    const kept = await sticky({ x: 100, y: 100 });
+    const unlocked = await sticky({ x: 200, y: 100 });
+    const removed = await sticky({ x: 300, y: 100 });
+    await setLocked(member, unlocked, true);
+    await setLocked(member, removed, true);
+    await nextWindow();
+    await sticky({ x: 9000, y: 9000 });
+    const version = await newestVersion();
+
+    await upsertNodes(member, boardId, [
+      { _id: kept, position: { x: 700, y: 700 } },
+    ]);
+    await setLocked(member, kept, true);
+    await setLocked(member, unlocked, false);
+    await setLocked(member, removed, false);
+    await deleteNodes(member, boardId, [removed]);
+
+    await restoreVersion(other, boardId, version._id);
+
+    // Laid out as the version has it, locked as the board had it
+    const keptNow = await node(kept);
+    assert.deepEqual(keptNow.position, { x: 100, y: 100 });
+    assert.isTrue(keptNow.locked);
+    assert.equal(keptNow.lockedBy, member);
+    const unlockedNow = await node(unlocked);
+    assert.notProperty(unlockedNow, "locked");
+    assert.notProperty(unlockedNow, "lockedBy");
+    // Put back, but not locked
+    const removedNow = await node(removed);
+    assert.deepEqual(removedNow.position, { x: 300, y: 100 });
+    assert.notProperty(removedNow, "locked");
+    assert.notProperty(removedNow, "lockedBy");
   });
 
   it("won't restore one item over a locked node, even for its locker", async function () {

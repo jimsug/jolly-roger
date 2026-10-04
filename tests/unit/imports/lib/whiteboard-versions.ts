@@ -478,6 +478,51 @@ describe("whiteboard versions", function () {
       assert.deepEqual(result.detach, []);
     });
 
+    it("puts back the version's locks, or keeps the board's with keepLocks", function () {
+      const live = [
+        node("lockedNow", { locked: true, lockedBy: "u1" }),
+        node("unlockedNow", { position: { x: 5, y: 0 } }),
+      ];
+      const stored = [
+        node("lockedNow", { position: { x: 9, y: 0 } }),
+        node("unlockedNow", { locked: true, lockedBy: "u2" }),
+        node("back", { locked: true, lockedBy: "u2" }),
+      ];
+
+      const asStored = plan({ nodes: live }, { nodes: stored });
+      assert.sameDeepMembers(asStored.nodes.change, [
+        {
+          _id: "lockedNow",
+          $set: { position: { x: 9, y: 0 } },
+          $unset: { locked: "", lockedBy: "" },
+        },
+        {
+          _id: "unlockedNow",
+          $set: { position: { x: 0, y: 0 }, locked: true, lockedBy: "u2" },
+          $unset: {},
+        },
+      ]);
+      assert.isTrue(asStored.nodes.insert[0]?.locked);
+
+      const result = planRestore(
+        { nodes: live, edges: [] },
+        { nodes: stored, edges: [] },
+        { keepLocks: true },
+      );
+      if (!result.ok) throw new Error("refused");
+      assert.sameDeepMembers(result.plan.nodes.change, [
+        { _id: "lockedNow", $set: { position: { x: 9, y: 0 } }, $unset: {} },
+        {
+          _id: "unlockedNow",
+          $set: { position: { x: 0, y: 0 } },
+          $unset: {},
+        },
+      ]);
+      assert.deepEqual(insertedIds(result.plan), ["back"]);
+      assert.notProperty(result.plan.nodes.insert[0], "locked");
+      assert.notProperty(result.plan.nodes.insert[0], "lockedBy");
+    });
+
     it("refuses past the node cap", function () {
       const stored = Array.from({ length: MAX_NODES_PER_BOARD }, (_, i) =>
         node(`s${i}`),
@@ -716,6 +761,43 @@ describe("whiteboard versions", function () {
       };
       const version = { nodes: [node("a"), node("b")], edges: [] };
       assert.sameMembers([...versionDifferences(live, version)], ["a"]);
+    });
+
+    it("marks a node locked by someone else in the version", function () {
+      const live = {
+        nodes: [
+          node("a", { locked: true, lockedBy: "u1" }),
+          node("b", { locked: true, lockedBy: "u1" }),
+        ],
+        edges: [],
+      };
+      const version = {
+        nodes: [
+          node("a", { locked: true, lockedBy: "u2" }),
+          node("b", { locked: true, lockedBy: "u1" }),
+        ],
+        edges: [],
+      };
+      assert.sameMembers([...versionDifferences(live, version)], ["a"]);
+      assert.equal(versionDifferences(live, version, { locks: false }).size, 0);
+    });
+
+    it("leaves a lock difference unmarked without locks", function () {
+      const live = {
+        nodes: [
+          node("a", { locked: true, lockedBy: "u1" }),
+          node("b", { locked: true, lockedBy: "u1" }),
+        ],
+        edges: [],
+      };
+      const version = {
+        nodes: [node("a"), node("b", { position: { x: 5, y: 0 } })],
+        edges: [],
+      };
+      assert.sameMembers(
+        [...versionDifferences(live, version, { locks: false })],
+        ["b"],
+      );
     });
 
     it("finds nothing when the board hasn't changed", function () {

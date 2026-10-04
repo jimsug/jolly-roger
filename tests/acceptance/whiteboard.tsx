@@ -1533,6 +1533,298 @@ if (Meteor.isClient) {
           localStorage.removeItem(`whiteboard:viewport:${boardId}`);
         }
       });
+
+      describe("feeders", function () {
+        // The Robber's feeders as the board has them: the rest of Games
+        // Island, all in its frame, row by row.
+        const feedersInBoardOrder = async () => {
+          const feeders = await Puzzles.find({
+            hunt: huntId,
+            $and: [{ tags: gamesIsland }, { _id: { $ne: robber } }],
+          }).fetchAsync();
+          const cards = await WhiteboardNodes.find({
+            board: boardId,
+            puzzle: { $in: feeders.map((p) => p._id) },
+          }).fetchAsync();
+          assert.lengthOf(cards, feeders.length);
+          assert.lengthOf(new Set(cards.map((c) => c.parent)), 1);
+          const byPuzzle = new Map(feeders.map((p) => [p._id, p]));
+          return cards
+            .toSorted(
+              (a, b) =>
+                a.position.y - b.position.y || a.position.x - b.position.x,
+            )
+            .map((c) => byPuzzle.get(c.puzzle!)!);
+        };
+
+        // Opens the board at zoom 1 with The Robber's card in view, so
+        // nothing moves while the test works with it, and opens its Feeders.
+        const openFeeders = async () => {
+          // Lets the last test's page let go of its subscriptions first, or
+          // subscribing takes one of them over and gives back no handle.
+          await stabilize();
+          subs.push(
+            await typedSubscribe.async(whiteboardContents, { boardId }),
+          );
+          const card = await WhiteboardNodes.findOneAsync({
+            board: boardId,
+            puzzle: robber,
+          });
+          assert.ok(card?.parent);
+          const frame = await WhiteboardNodes.findOneAsync(card.parent);
+          assert.ok(frame);
+          localStorage.setItem(
+            `whiteboard:viewport:${boardId}`,
+            JSON.stringify({
+              x: 200 - frame.position.x - card.position.x,
+              y: 200 - frame.position.y - card.position.y,
+              zoom: 1,
+            }),
+          );
+          render(<TestApp />);
+          await goTo(boardPath);
+          return clickFeeders("The Robber", 20000);
+        };
+
+        // Opens the Feeders popover of the card with this title.
+        const clickFeeders = async (title: string, timeout = 10000) => {
+          const button = await waitFor(
+            () => {
+              const card = [
+                ...document.querySelectorAll<HTMLElement>(
+                  ".react-flow__node-puzzle",
+                ),
+              ].find((el) => el.textContent?.includes(title));
+              assert.ok(card);
+              return within(card).getByRole("button", { name: "Feeders" });
+            },
+            { timeout },
+          );
+          act(() => {
+            fireEvent.click(button);
+          });
+          return waitFor(
+            () => {
+              const popover = document.querySelector<HTMLElement>(".popover");
+              assert.isNotNull(popover);
+              assert.isNotEmpty(popover.querySelectorAll("li"));
+              return popover;
+            },
+            { timeout: 10000 },
+          );
+        };
+
+        const popoverClosed = () =>
+          waitFor(() => assert.isNull(document.querySelector(".popover")), {
+            timeout: 10000,
+          });
+
+        const rowTitles = (popover: HTMLElement) =>
+          [...popover.querySelectorAll("li a > span:first-child")].map(
+            (el) => el.textContent,
+          );
+
+        afterEach(function () {
+          localStorage.removeItem("whiteboard:feederOrder");
+          localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+        });
+
+        it("lists a meta's feeders with their answers, by board or solve time, and copies the answers", async function () {
+          this.timeout(30000);
+          let last: { _id: string; answers: string[] } | undefined;
+          const writeText = sinon.stub().resolves();
+          const realClipboard = Object.getOwnPropertyDescriptor(
+            navigator,
+            "clipboard",
+          );
+          Object.defineProperty(navigator, "clipboard", {
+            configurable: true,
+            value: { writeText },
+          });
+          try {
+            // The page brings the puzzles and cards the expected list is
+            // worked out from.
+            const popover = await openFeeders();
+            const feeders = await feedersInBoardOrder();
+            const feeder = feeders.at(-1)!;
+            last = feeder;
+            assert.deepEqual(
+              rowTitles(popover),
+              feeders.map((p) => p.title),
+            );
+            const solved = feeders.filter(
+              (p) => p.answers.length >= p.expectedAnswerCount,
+            ).length;
+            assert.include(
+              popover.textContent,
+              `${solved} of ${feeders.length} solved`,
+            );
+
+            await act(async () => {
+              fireEvent.click(
+                within(popover).getByRole("button", { name: /Copy answers/ }),
+              );
+              await stabilize();
+            });
+            assert.isTrue(writeText.calledOnce);
+            assert.equal(
+              writeText.firstCall.args[0],
+              feeders.map((p) => p.answers.join(", ")).join("\n"),
+            );
+
+            // Answering the last feeder makes it the most recent
+            await setPuzzleAnswers.callPromise({
+              puzzleId: feeder._id,
+              answers: ["LATEST"],
+            });
+            act(() => {
+              fireEvent.click(within(popover).getByLabelText("By solve time"));
+            });
+            await waitFor(
+              () => assert.equal(rowTitles(popover)[0], feeder.title),
+              { timeout: 10000 },
+            );
+            assert.equal(
+              localStorage.getItem("whiteboard:feederOrder"),
+              '"solveTime"',
+            );
+
+            // With History open, Escape closes only the popover
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: "History" }));
+              await stabilize();
+            });
+            await popoverClosed();
+            await screen.findByRole("button", { name: "Now" });
+            const reopened = await clickFeeders("The Robber");
+            const escape = { key: "Escape", code: "Escape", keyCode: 27 };
+            await act(async () => {
+              fireEvent.keyDown(
+                within(reopened).getByRole("button", { name: /Copy answers/ }),
+                escape,
+              );
+              fireEvent.keyUp(document, escape);
+              await stabilize();
+            });
+            await popoverClosed();
+            assert.exists(screen.queryByRole("button", { name: "Now" }));
+            // The next one closes History
+            await act(async () => {
+              fireEvent.keyDown(document.body, escape);
+              await stabilize();
+            });
+            assert.isNull(screen.queryByRole("button", { name: "Now" }));
+          } finally {
+            if (last) {
+              await setPuzzleAnswers.callPromise({
+                puzzleId: last._id,
+                answers: last.answers,
+              });
+            }
+            if (realClipboard) {
+              Object.defineProperty(navigator, "clipboard", realClipboard);
+            } else {
+              delete (navigator as { clipboard?: Clipboard }).clipboard;
+            }
+          }
+        });
+
+        it("lets someone who can only view open a meta's feeders, and closes on a click outside", async function () {
+          this.timeout(30000);
+          await setHuntArchived.callPromise({ huntId, isArchived: true });
+          try {
+            const popover = await openFeeders();
+            await screen.findByText("Viewing only", {}, { timeout: 20000 });
+            const feeders = await feedersInBoardOrder();
+            assert.deepEqual(
+              rowTitles(popover),
+              feeders.map((p) => p.title),
+            );
+
+            // A click anywhere else closes it
+            act(() => {
+              fireEvent.click(document.body);
+            });
+            await popoverClosed();
+          } finally {
+            await setHuntArchived.callPromise({ huntId, isArchived: false });
+          }
+        });
+
+        it("opens a meta's feeders with a tap on a phone", async function () {
+          this.timeout(30000);
+          const phone = simulatePhone();
+          try {
+            const popover = await openFeeders();
+            await screen.findByText(
+              "Editing needs a wider screen. You can still comment.",
+              {},
+              { timeout: 20000 },
+            );
+            const feeders = await feedersInBoardOrder();
+            assert.deepEqual(
+              rowTitles(popover),
+              feeders.map((p) => p.title),
+            );
+            act(() => {
+              fireEvent.click(document.body);
+            });
+            await popoverClosed();
+          } finally {
+            phone.restore();
+          }
+        });
+
+        it("keeps the viewer's order from one meta's feeders to another's", async function () {
+          this.timeout(30000);
+          let other: { _id: string; title: string } | undefined;
+          try {
+            let popover = await openFeeders();
+            [other] = await feedersInBoardOrder();
+            assert.ok(other);
+            // A second meta on the board: a bare is:meta, fed by the rest
+            // of its round
+            await addPuzzleTag.callPromise({
+              puzzleId: other._id,
+              tagName: "is:meta",
+            });
+            act(() => {
+              fireEvent.click(within(popover).getByLabelText("By solve time"));
+            });
+            await waitFor(() =>
+              assert.isTrue(
+                within(popover).getByLabelText<HTMLInputElement>(
+                  "By solve time",
+                ).checked,
+              ),
+            );
+            act(() => {
+              fireEvent.click(document.body);
+            });
+            await popoverClosed();
+
+            popover = await clickFeeders(other.title);
+            assert.notInclude(rowTitles(popover), other.title);
+            assert.isTrue(
+              within(popover).getByLabelText<HTMLInputElement>("By solve time")
+                .checked,
+            );
+          } finally {
+            if (other) {
+              const tag = await Tags.findOneAsync({
+                hunt: huntId,
+                name: "is:meta",
+              });
+              if (tag) {
+                await removePuzzleTag.callPromise({
+                  puzzleId: other._id,
+                  tagId: tag._id,
+                });
+              }
+            }
+          }
+        });
+      });
     });
 
     describe("edit policy", function () {

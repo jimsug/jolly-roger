@@ -6,6 +6,7 @@ import type {
   WhiteboardColor,
   WhiteboardStrokeWidth,
 } from "../../lib/models/WhiteboardNodes";
+import type { FeederOrder } from "../../lib/whiteboard/feeders";
 import type { LineStyle } from "../../lib/whiteboard/lineStyle";
 
 export type AppThemeState = "dark" | "light" | "auto";
@@ -320,6 +321,16 @@ export const useWhiteboardViewport = (boardId: string) => {
 
 export const useWhiteboardFeederArrows = () => {
   return useBestEffortLocalStorage("whiteboard:feederArrows", true);
+};
+
+// How a meta card's Feeders popover orders its list. Anything saved that
+// isn't an order reads as board order.
+export const useWhiteboardFeederOrder = () => {
+  const [order, setOrder] = useBestEffortLocalStorage<FeederOrder>(
+    "whiteboard:feederOrder",
+    "board",
+  );
+  return [order === "solveTime" ? "solveTime" : "board", setOrder] as const;
 };
 
 export const useWhiteboardPenColor = () => {

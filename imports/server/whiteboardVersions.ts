@@ -20,6 +20,7 @@ import type {
   WhiteboardVersionType,
 } from "../lib/models/WhiteboardVersions";
 import WhiteboardVersions from "../lib/models/WhiteboardVersions";
+import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import {
   MAX_BATCH,
   MAX_VERSION_BYTES_PER_BOARD,
@@ -741,7 +742,9 @@ async function writeRestorePlan(
 
 // Puts the board back as a version has it, recording the board as it is
 // first. Comments stay, coming off nodes the restore takes away and going
-// back on nodes it brings back. Who may edit the board isn't changed.
+// back on nodes it brings back. Who may edit the board isn't changed, and
+// unless the caller is an operator neither is who holds a lock: every node
+// keeps the lock it has, and nodes the restore brings back come unlocked.
 export async function restoreVersion(
   userId: string,
   boardId: string,
@@ -757,13 +760,19 @@ export async function restoreVersion(
 
   await withBoardLock(boardId, async (renew) => {
     // Anything may have changed while this waited for the lock
-    const { board: current } = await assertMayEditBoard(userId, boardId);
+    const {
+      board: current,
+      hunt,
+      user,
+    } = await assertMayEditBoard(userId, boardId);
     await assertHistoryEnabled();
     const target = await readVersionLocked(version, renew);
 
     const live = await readBoard(boardId);
     await renew();
-    const result = planRestore(live, target);
+    const result = planRestore(live, target, {
+      keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
+    });
     if (!result.ok) {
       throw new Meteor.Error(
         409,

@@ -25,7 +25,9 @@ import useTagSynonyms from "../../hooks/useTagSynonyms";
 import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import AvatarStack from "../AvatarStack";
 import PuzzleAnswer from "../PuzzleAnswer";
+import PuzzleAnswers from "../PuzzleAnswers";
 import { LOCATION_TAG_COLOR, NEEDS_TAG_COLOR } from "../tagColors";
+import FeedersButton from "./FeedersButton";
 import { CornerLockBadge } from "./LockBadge";
 import NodeHandles from "./NodeHandles";
 import PeopleContext from "./PeopleContext";
@@ -289,12 +291,7 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
   const locked = !!puzzle.locked && !!hunt?.allowUnlockablePuzzles;
   const answers =
     puzzle.answers.length > 0 ? (
-      puzzle.answers.map((answer, i) => (
-        <React.Fragment key={answer}>
-          {i > 0 && ", "}
-          <PuzzleAnswer answer={answer} />
-        </React.Fragment>
-      ))
+      <PuzzleAnswers answers={puzzle.answers} />
     ) : (
       <span>—</span>
     );
@@ -326,6 +323,14 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
             <MetaBadge>
               <FontAwesomeIcon icon={faStar} /> {metaKind}
             </MetaBadge>
+          )}
+          {metaKind && (
+            <FeedersButton
+              puzzleId={puzzle._id}
+              huntId={puzzle.hunt}
+              boardId={data.doc.board}
+              showLocks={!!hunt?.allowUnlockablePuzzles}
+            />
           )}
           {status.chips.length > 0 && (
             <Chips>

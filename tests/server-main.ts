@@ -37,6 +37,7 @@ import "./unit/imports/lib/whiteboard-comments";
 import "./unit/imports/lib/whiteboard-connectors";
 import "./unit/imports/lib/whiteboard-contributors";
 import "./unit/imports/lib/whiteboard-feederFocus";
+import "./unit/imports/lib/whiteboard-feeders";
 import "./unit/imports/lib/whiteboard-ink";
 import "./unit/imports/lib/whiteboard-layout";
 import "./unit/imports/lib/whiteboard-links";

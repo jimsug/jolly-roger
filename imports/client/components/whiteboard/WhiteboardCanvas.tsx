@@ -3926,7 +3926,8 @@ const CanvasInner = ({
       // leaves a preview, then closes History; then it drops a comment being
       // started, a line being drawn or joined, or an erase, and goes back to
       // Select. The thread's panel closes itself on Escape from inside it,
-      // and the restore confirmation does the same.
+      // and the restore confirmation does the same. An open Feeders popover
+      // takes Escape before any of this (FeedersButton).
       if (event.key === "Escape" && !isTyping(event.target)) {
         if (confirmingRestore) return;
         if (openThreadId) {
@@ -4252,7 +4253,8 @@ const CanvasInner = ({
 
   // In a preview, the board as it is now, so what the version has
   // differently can be marked. Nodes and lines are matched by what they are,
-  // as a restore matches them.
+  // as a restore matches them. A lock is only marked for an operator, since
+  // only their Restore this version changes locks.
   const liveBoard = useTracker(
     () =>
       preview
@@ -4266,9 +4268,9 @@ const CanvasInner = ({
   const changed = useMemo(
     () =>
       preview && liveBoard
-        ? versionDifferences(liveBoard, preview)
+        ? versionDifferences(liveBoard, preview, { locks: isOperator })
         : NO_CHANGES,
-    [preview, liveBoard],
+    [preview, liveBoard, isOperator],
   );
   const shownNodes = useMemo(
     () =>

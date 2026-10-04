@@ -14,6 +14,7 @@ files:
   - imports/client/components/whiteboard/EditPolicyModal.tsx
   - imports/client/components/whiteboard/EditableText.tsx
   - imports/client/components/whiteboard/FeederFocusContext.ts
+  - imports/client/components/whiteboard/FeedersButton.tsx
   - imports/client/components/whiteboard/FrameLabelLayer.tsx
   - imports/client/components/whiteboard/FrameNode.tsx
   - imports/client/components/whiteboard/HistoryPanel.tsx
@@ -50,6 +51,7 @@ files:
   - imports/lib/whiteboard/collapse.ts
   - imports/lib/whiteboard/comments.ts
   - imports/lib/whiteboard/feederFocus.ts
+  - imports/lib/whiteboard/feeders.ts
   - imports/lib/whiteboard/layout.ts
   - imports/lib/whiteboard/limits.ts
   - imports/lib/whiteboard/links.ts
@@ -410,7 +412,7 @@ tooltip shows its key.
 | N | Go to the next comment thread with something unread (see Comments) | |
 | 1, 2, 3 | Thin, medium or thick pen | edit |
 | Ctrl+A (Cmd+A on a Mac) | Select everything but frames (a selected frame carries its contents anyway) and no lines, switching to Select | edit |
-| Escape | Close an open comment thread, then the Comments list, then leave a preview, then close History; with none of those open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
+| Escape | Close an open Feeders popover, then an open comment thread, then the Comments list, then leave a preview, then close History; with none of those open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
 | / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
 | Delete or Backspace | Delete the selection, leaving out anything locked (see Locks) | edit |
 | Ctrl+L (Cmd+L) | Lock the selection, or unlock it if it's all locked (see Locks), only with the Select tool; with nothing selected or another tool it's the browser's own | edit |
@@ -641,13 +643,21 @@ Some things still move locked nodes: placement from puzzle hooks, which
 isn't a person's edit, puts new cards into a locked frame and grows it, and
 moves a locked card that isn't marked as moved by hand when its tags change;
 Reset layout lays out locked cards and frames like any others, keeping
-their locks; restoring a whole version puts each node back as the version
-had it, lock included, so it can unlock or lock nodes (the preview marks a
-node whose lock differs). Both record a version first. Place by tags on a
-locked card is refused ("That's locked"), and so is Restore this item when
-it would change anything a lock covers, or the lock itself, on a node that's
-locked on the board (`restoreItems`), since both are a person's edit to
-chosen things. Whoever locked it, or an operator, unlocks it first.
+their locks; restoring a whole version puts each node back where the version
+had it. Both record a version first. An operator's Restore this version
+puts back the version's locks too, so it can unlock or lock nodes, and for
+an operator the preview marks a node whose lock, or who holds it, differs.
+Anyone else's Restore this version changes the layout but never who holds a
+lock: every node keeps the lock it has on the board, and nodes the restore
+brings back come back unlocked. For them the preview doesn't mark lock
+differences, since their restore won't change any, though it still shows
+the version's padlocks. Place by tags on a locked card is refused ("That's
+locked"), and so is Restore this item when it would change anything a lock
+covers, or the lock itself, on a node that's locked on the board
+(`restoreItems`), since both are a person's edit to chosen things. Whoever
+locked it, or an operator, unlocks it first. Restore this item on a node
+that's unlocked on the board, or one the board no longer has, puts it back
+as the version has it, lock included, whoever asks.
 
 #### Lock layout
 
@@ -768,8 +778,9 @@ this version" and "Back to now". Nodes and lines the version has differently
 from the board as it is now get a pink outline (`versionDifferences` in
 `imports/lib/whiteboard/versions.ts`): ones the board no longer has, and ones
 with a different place, frame, size, text, label, colour, ends, line style, or
-hidden or collapsed state. They're matched by what they are, as a restore
-matches them, so a card that has only changed id isn't marked. The outline
+hidden or collapsed state, and for an operator a different lock or locker
+(see Locks). They're matched by what they are, as a restore matches them, so
+a card that has only changed id isn't marked. The outline
 follows the live board, so it goes from anything that's put back. Nodes can be
 selected in a preview, though nothing can be moved, and a single selected node,
 or a whole ink stroke, offers "Restore this item" (see below). Opening,
@@ -814,7 +825,11 @@ Only after that does it record the board as it is (a version of kind
 - Comments on nodes the restore removes or hides become free pins where they
   were, remembering the node in `comment.detachedFrom`. Deleting a node does
   the same.
-- Everything else is put back as the version has it.
+- Everything else is put back as the version has it, locks included for an
+  operator (`userMayWritePuzzlesForHunt`). For anyone else `planRestore`
+  takes `keepLocks`: each node keeps the `locked` and `lockedBy` it has on
+  the board, and nodes the restore inserts come back unlocked, so a whole
+  restore changes the layout but not who holds a lock.
 - Free pins that came off a node the restore brings back or unhides go back
   on it.
 - The board's `lastRewrittenAt` is set.
@@ -1046,8 +1061,9 @@ and the hunt's presence, and writes nothing.
 A card shows less as the board zooms out (`useWhiteboardDetail`):
 
 - **Full** (zoom 0.6 and up): a lock on a locked puzzle, the Meta or Metameta
-  badge, any `needs:` and location (`where:`, `loc:` or `location:`) tags as
-  small chips in the puzzle list's tag colours (shared through
+  badge with its Feeders chevron (see Feeders below), any `needs:` and
+  location (`where:`, `loc:` or `location:`) tags as small chips in the
+  puzzle list's tag colours (shared through
   `imports/client/components/tagColors.ts`), then at the right a priority icon (a red double chevron for
   `priority:high`, a single one for `priority:low`), the stuck flag (🤷, for
   `stuck` or `is:stuck`) and the link that opens the puzzle. Below them come
@@ -1100,6 +1116,43 @@ synonyms off. The helpers take the table as an argument: components get it from
 `useTagSynonyms`, and server code (placing cards, a reset's seed layout) from
 `currentTagSynonyms` in `imports/server/tagSynonyms.ts`, which follows the
 setting.
+
+### Feeders
+
+At full zoom a meta's card (Meta or Metameta badge) has a chevron beside its
+badge, "Feeders", that opens a popover listing the puzzles that feed it
+(`FeedersButton`). For a `meta-for:X` card they're the puzzles tagged
+`group:X`, as feeder arrows pair them; for a metameta without a `meta-for:`
+tag, the hunt's round metas (`is:meta` or `meta-for:`, but not other
+metametas); and for a bare `is:meta` card, the other puzzles in its own
+rounds. Tags are read through the synonym table. The header counts them, "5
+of 8 solved", leaving out puzzles with nothing to solve. Each row is the
+puzzle's title and its answers on its solvedness colour, unsolved rows
+greyed, a locked puzzle (in a hunt that has them) with its padlock and locked
+summary, and links to the puzzle's page.
+
+The list is in board order: frame by frame, then by slot row inside the
+frame, then left to right. Frames go top to bottom in rows a card's height
+apart, so frames side by side read left to right even when one sits a little
+higher, and a frame inside a round is read in place among the round's own
+cards. A card at the top level counts as a frame of its own, and puzzles
+without a card on show go last. "By solve time" puts the most recently
+answered first, going by when the puzzle last changed, then the rest in
+board order. Puzzles don't record when each answer came in, so any later
+change to an answered puzzle moves it up too: a retag, an unlock, or a note
+posted from its sheet. The choice is each viewer's own, kept in local
+storage (`whiteboard:feederOrder`) and read each time a popover opens.
+"Copy answers" copies a line per feeder in the order shown, its answers
+joined by commas, or a blank line for one without an answer, ready to paste
+into a sheet.
+
+The popover is read-only, so viewers and phones get it too (a tap opens it).
+Escape or a click outside closes it, and Escape closes only the popover:
+the board's own Escape (closing a thread or History, leaving a preview)
+waits for the next press. It reads the hunt's puzzles and tags and the
+board's cards from what the page already has, only while it's open;
+`feedersOf`, `feederCounts` and `feederAnswersText` in
+`imports/lib/whiteboard/feeders.ts` pick, order and copy them.
 
 ### Rounds
 

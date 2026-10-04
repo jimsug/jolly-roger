@@ -375,6 +375,20 @@ function renaming(
   return { idOf, targetIds };
 }
 
+// A node with the lock its live counterpart has, or with none when it has no
+// live counterpart.
+function withLiveLock(
+  node: WhiteboardNodeType,
+  live: WhiteboardNodeType | undefined,
+): WhiteboardNodeType {
+  const { locked: _locked, lockedBy: _lockedBy, ...rest } = node;
+  return {
+    ...rest,
+    ...(live?.locked !== undefined ? { locked: live.locked } : {}),
+    ...(live?.lockedBy !== undefined ? { lockedBy: live.lockedBy } : {}),
+  };
+}
+
 // How to turn the live board (current) into the one a version holds
 // (target). Documents are matched by what they are rather than by id, and a
 // target document that matches a live one takes the live one's id, with the
@@ -382,10 +396,13 @@ function renaming(
 // that are missing or would make a loop are dropped (the node goes to the top
 // level), as are lines with a missing end and free ends no line uses. Cards
 // for puzzles the version doesn't have stay, moved to the top level and no
-// longer manual, so placement can put them back in their rounds.
+// longer manual, so placement can put them back in their rounds. With
+// keepLocks, every node keeps the lock it has on the board, and nodes the
+// restore inserts come back unlocked.
 export function planRestore(
   current: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
   target: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
+  { keepLocks = false }: { keepLocks?: boolean } = {},
 ): RestoreResult {
   const liveNodes = new Map(current.nodes.map((n) => [n._id, n]));
   const { idOf, targetIds } = renaming(
@@ -398,7 +415,8 @@ export function planRestore(
     const _id = idOf.get(n._id)!;
     if (wanted.has(_id)) return;
     const parent = n.parent ? idOf.get(n.parent) : undefined;
-    wanted.set(_id, { ...n, _id, parent });
+    const node = { ...n, _id, parent };
+    wanted.set(_id, keepLocks ? withLiveLock(node, liveNodes.get(_id)) : node);
   });
 
   // Parents must be frames in the version, and not make a loop
@@ -672,7 +690,9 @@ const NODE_FIELDS = [
   "hidden",
   "collapsed",
   "locked",
+  "lockedBy",
 ] as const;
+const LOCK_FIELDS: ReadonlySet<string> = new Set(["locked", "lockedBy"]);
 const EDGE_FIELDS = [
   "label",
   "color",
@@ -685,11 +705,17 @@ const EDGE_FIELDS = [
 // The ids of a version's nodes and lines that aren't as they are on the live
 // board, matched by what they are as a restore matches them: missing from
 // it, or with a different place, frame, size, text, label, colour, ends,
-// style, or hidden, collapsed or locked state.
+// style, or hidden or collapsed state, and with locks, a different lock or
+// locker. Only an operator's restore changes locks, so only they need them
+// marked.
 export function versionDifferences(
   live: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
   version: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
+  { locks = true }: { locks?: boolean } = {},
 ): Set<string> {
+  const nodeFields = locks
+    ? NODE_FIELDS
+    : NODE_FIELDS.filter((field) => !LOCK_FIELDS.has(field));
   const matched = matchByIdentity(live.nodes, version.nodes, nodeKey);
   const liveId = (id: string | undefined) =>
     id === undefined ? undefined : (matched.get(id)?._id ?? `missing:${id}`);
@@ -700,7 +726,7 @@ export function versionDifferences(
     if (
       !current ||
       liveId(n.parent) !== current.parent ||
-      NODE_FIELDS.some(
+      nodeFields.some(
         (field) => !EJSON.equals(n[field] as never, current[field] as never),
       )
     ) {
