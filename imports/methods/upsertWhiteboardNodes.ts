@@ -21,7 +21,7 @@ export type WhiteboardNodeInput = {
   collapsed?: boolean;
   text?: string | null;
   label?: string | null;
-  color?: WhiteboardColor;
+  color?: WhiteboardColor | null;
   points?: [number, number, number][];
   strokeWidth?: WhiteboardStrokeWidth;
   stroke?: string;

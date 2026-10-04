@@ -45,6 +45,7 @@ import "./unit/imports/lib/whiteboard-minimap";
 import "./unit/imports/lib/whiteboard-reset";
 import "./unit/imports/lib/whiteboard-rounds";
 import "./unit/imports/lib/whiteboard-search";
+import "./unit/imports/lib/whiteboard-undo";
 import "./unit/imports/lib/whiteboard-versions";
 import "./unit/imports/Logger";
 

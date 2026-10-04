@@ -8,7 +8,10 @@ import type {
   WhiteboardEdgeType,
 } from "../../lib/models/WhiteboardEdges";
 import WhiteboardEdges from "../../lib/models/WhiteboardEdges";
-import type { WhiteboardNodeType } from "../../lib/models/WhiteboardNodes";
+import type {
+  WhiteboardColor,
+  WhiteboardNodeType,
+} from "../../lib/models/WhiteboardNodes";
 import WhiteboardNodes from "../../lib/models/WhiteboardNodes";
 import {
   ancestorsOf,
@@ -54,10 +57,13 @@ interface PendingChange {
   at: number;
 }
 
-// The same for a line: its ends and look.
+// The same for a line: its ends and look. A null label or colour clears it.
 type PendingEdgeChange = Partial<
-  Pick<WhiteboardEdgeType, "source" | "target" | LineStyleField>
-> & { label?: string | null; at: number };
+  Pick<
+    WhiteboardEdgeType,
+    "source" | "target" | Exclude<LineStyleField, "color">
+  >
+> & { label?: string | null; color?: WhiteboardColor | null; at: number };
 
 const PENDING_TIMEOUT = 10_000;
 
@@ -130,11 +136,12 @@ function withPendingEdge(
   saved: WhiteboardEdgeType,
   change: PendingEdgeChange,
 ): WhiteboardEdgeType {
-  const { at: _at, label, ...rest } = change;
+  const { at: _at, label, color, ...rest } = change;
   return {
     ...saved,
     ...rest,
     ...(label !== undefined ? { label: label ?? undefined } : {}),
+    ...(color !== undefined ? { color: color ?? undefined } : {}),
   };
 }
 

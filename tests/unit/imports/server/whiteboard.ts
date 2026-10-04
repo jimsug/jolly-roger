@@ -826,6 +826,17 @@ describe("whiteboard", function () {
       assert.equal(sticky.createdBy, member);
     });
 
+    it("clears a node's colour when sent null", async function () {
+      const _id = Random.id();
+      await upsertNodes(member, boardId, [
+        { _id, type: "text", position: { x: 0, y: 0 }, color: "red" },
+      ]);
+      await upsertNodes(member, boardId, [{ _id, color: null }]);
+      const text = (await WhiteboardNodes.findOneAsync(_id))!;
+      assert.isUndefined(text.color);
+      assert.lengthOf(text.contributors, 2);
+    });
+
     it("ignores contributors sent by the client", async function () {
       const _id = Random.id();
       await upsertNodes(member, boardId, [
@@ -1575,6 +1586,17 @@ describe("whiteboard", function () {
     };
     const exists = async (id: string) =>
       !!(await WhiteboardNodes.findOneAsync(id));
+
+    it("clears a line's colour when sent null", async function () {
+      const a = await sticky(0);
+      const b = await sticky(300);
+      const line = Random.id();
+      await upsertEdges(member, boardId, [
+        { _id: line, source: a, target: b, color: "red" },
+      ]);
+      await upsertEdges(member, boardId, [{ _id: line, color: null }]);
+      assert.isUndefined((await WhiteboardEdges.findOneAsync(line))?.color);
+    });
 
     it("keeps a free end small whatever size is asked for", async function () {
       const p = await point(0, 500);

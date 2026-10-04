@@ -246,8 +246,15 @@ async function updateNode(
   if (existing.type === "frame") {
     setContent("label", input.label);
   }
-  if (input.color !== undefined && input.color !== existing.color) {
-    $set.color = input.color;
+  if (
+    input.color !== undefined &&
+    (input.color ?? undefined) !== existing.color
+  ) {
+    if (input.color === null) {
+      $unset.color = "";
+    } else {
+      $set.color = input.color;
+    }
     contentChanged = true;
   }
 
@@ -328,7 +335,7 @@ async function insertNode(
     label: input.type === "frame" ? label : undefined,
     collapsed: input.type === "frame" && input.collapsed ? true : undefined,
     text: input.type === "sticky" || input.type === "text" ? text : undefined,
-    color: input.type === "point" ? undefined : input.color,
+    color: input.type === "point" ? undefined : (input.color ?? undefined),
     points: input.type === "ink" ? input.points : undefined,
     strokeWidth: input.type === "ink" ? input.strokeWidth : undefined,
     stroke: input.type === "ink" ? input.stroke : undefined,
@@ -587,21 +594,27 @@ export async function upsertEdges(
         throw badRequest("A line needs two different ends");
 
       const $set: Record<string, unknown> = {};
+      const $unset: Record<string, ""> = {};
       if (input.source) $set.source = input.source;
       if (input.target) $set.target = input.target;
       // Restyling or relabelling is authorship; moving an end isn't.
       let contentChanged = false;
       LINE_STYLE_FIELDS.forEach((field) => {
-        if (input[field] !== undefined && input[field] !== existing[field]) {
-          $set[field] = input[field];
-          contentChanged = true;
+        const value = input[field];
+        if (value === undefined || (value ?? undefined) === existing[field]) {
+          return;
         }
+        if (value === null) {
+          $unset[field] = "";
+        } else {
+          $set[field] = value;
+        }
+        contentChanged = true;
       });
       if (label && label !== existing.label) {
         $set.label = label;
         contentChanged = true;
       }
-      const $unset: Record<string, ""> = {};
       if (input.label !== undefined && !label && !!existing.label) {
         $unset.label = "";
         contentChanged = true;
@@ -637,7 +650,7 @@ export async function upsertEdges(
         label,
         pathStyle: input.pathStyle,
         arrowHead: input.arrowHead,
-        color: input.color,
+        color: input.color ?? undefined,
         dashed: input.dashed,
         contributors: appendContributor([], userId),
         createdBy: userId,

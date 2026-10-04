@@ -25,6 +25,7 @@ files:
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
   - imports/client/components/whiteboard/WhiteboardCanvas.tsx
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
+  - imports/client/components/whiteboard/boardWrites.ts
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useKeyboardInset.ts
   - imports/client/hooks/usePuzzleViewers.ts
@@ -32,6 +33,7 @@ files:
   - imports/client/hooks/useRoundStates.ts
   - imports/client/hooks/useTagSynonyms.ts
   - imports/client/hooks/useWhiteboardSync.ts
+  - imports/client/hooks/useWhiteboardUndo.ts
   - imports/lib/chatMessagePath.ts
   - imports/lib/models/WhiteboardEdges.ts
   - imports/lib/models/WhiteboardNodes.ts
@@ -51,6 +53,7 @@ files:
   - imports/lib/whiteboard/reset.ts
   - imports/lib/whiteboard/rounds.ts
   - imports/lib/whiteboard/search.ts
+  - imports/lib/whiteboard/undo.ts
   - imports/lib/whiteboard/versions.ts
   - imports/methods/fetchWhiteboardVersion.ts
   - imports/methods/placeWhiteboardCardsByTags.ts
@@ -382,10 +385,11 @@ on the board.
 
 ### Keyboard
 
-The tool keys, 1 to 3, N and Ctrl+A only work while the board has focus (the
-last press or focus was on it) and nothing is being typed: not in a text box,
-a note being edited, the comment composer or the search field. Each tool's
-tooltip shows its key.
+The tool keys, 1 to 3, N, Ctrl+A and the undo and redo keys only work while
+the board has focus (the last press or focus was on it) and nothing is being
+typed: not in a text box, a note being edited, the comment composer or the
+search field, where Ctrl+Z is the browser's own. Each tool's tooltip shows its
+key.
 
 | Key | Does | Needs |
 |---|---|---|
@@ -405,7 +409,8 @@ tooltip shows its key.
 | Delete or Backspace | Delete the selection | edit |
 | Arrow keys | Move the selection 5 units, 20 with Shift; it joins or leaves a frame as a drop would | edit |
 | Enter | Start editing a focused sticky note or text box | edit |
-| Ctrl+Z (Cmd+Z) | Take back your own last stroke from this visit | edit |
+| Ctrl+Z (Cmd+Z) | Undo your own last edit from this visit (see Undo and redo) | edit |
+| Ctrl+Shift+Z (Cmd+Shift+Z) or Ctrl+Y | Redo the last edit undone | edit |
 | Space (held) | Pan while a drawing tool is picked | |
 | Shift (while drawing a line) | Snap a free end to 15° steps | |
 
@@ -474,17 +479,90 @@ are hidden through `deleteEdges`, and only feeder arrows are hidden rather
 than deleted. A seeded frame comes back through `upsertNodes` with
 `hidden: false`, as cards do.
 
+### Undo and redo
+
+Ctrl+Z (Cmd+Z on a Mac) undoes the viewer's own last edit to the board, and
+Ctrl+Shift+Z (Cmd+Shift+Z) or Ctrl+Y redoes it. The toolbar has Undo and Redo
+buttons beside the note tools, disabled when there's nothing to undo or redo,
+titled "Undo your last change [Ctrl/⌘+Z]" and "Redo what you last undid
+[Ctrl/⌘+Shift+Z or Ctrl+Y]". Both need edit access; the read-only toolbar
+doesn't have them.
+
+It covers the viewer's own edits this visit, up to the last 100:
+
+- moves, resizes and moves into or out of a frame, including a whole drag,
+  align or distribute, a burst of arrow-key nudges, and Place by tags, each as
+  one step. Undoing a move puts the node back where it was and leaves it
+  marked as moved by hand, as any move does;
+- text, frame labels, line labels and colours, which go back to what they
+  were, or to none;
+- creating something (a note, text, frame, line or ink stroke), which undo
+  deletes;
+- deleting something made on the board (a note, text, frame, ink stroke,
+  line or a line's free end), which undo puts back with the same id and
+  fields, along with the lines that went with it and whatever was in a
+  deleted frame, back in it;
+- deleting a card, a round's frame or a feeder arrow, which only hid it, so
+  undo shows it again, and putting one back from "Not on the board", which
+  undo takes away again;
+- moving a line's end and restyling a line, which go back to the old end
+  (bringing back a free end the move removed) and the old style;
+- collapsing or expanding a frame for everyone, including Collapse finished
+  rounds.
+
+An ink stroke is one step however many segments it was saved in, and a
+selection deleted in one go is one step. Edits to the same thing made before
+the first of them is saved (two quick colour clicks on a note, say) are one
+step too, since the board the client has doesn't show the first yet.
+
+Undo and redo wait for the viewer's own saves that are still on their way,
+and save arrow-key nudges at once rather than after the usual pause, so they
+always take the latest edit. A new edit made while an undo is on its way
+leaves nothing to redo, as any new edit does, and drops undo and redo
+presses still waiting.
+
+It leaves out comments (they have their own delete rules), anyone else's
+edits, Reset layout and restoring from History (which History undoes), and
+anything from before the page was opened. Undoing a deletion doesn't put
+comments back on what it brings back: they stay where they were left when it
+was deleted. What it brings back goes through `upsertNodes` and
+`upsertEdges` as a new insert, so it lists the person who undid the deletion
+as its creator and only contributor. Restore this item, in History, keeps the
+original authorship.
+
+Each step remembers when everything it touches was last changed (its
+`updatedAt`). If someone else has changed any of it since, or deleted it,
+undo doesn't apply the step: it drops it and says "Changed by someone else
+since, so it wasn't undone" (for redo, "...so it wasn't redone"). The same
+goes when something the step needs but doesn't write has gone: the frame a
+node goes back into, or a node at either end of a line it puts back. The
+viewer's own later edits don't count, so undoing several steps in a row
+works. Both stacks are cleared when the board is restored from History or its
+layout is reset (an open board sees its `lastRewrittenAt` change), since what
+they would put back describes a board that's gone, and when the viewer loses
+edit access. Going offline or to a phone-sized screen doesn't clear them.
+
+Undo and redo send their changes through the same methods as any edit, so
+they count towards History's versions, and a refusal shows in the usual
+"Couldn't save" alert and drops the step. The stack logic is in
+`imports/lib/whiteboard/undo.ts`; `inverseOf` in
+`imports/client/components/whiteboard/boardWrites.ts` works out each step's
+reverse from the documents the client has just before the save, and
+`useWhiteboardUndo` keeps the stacks, joins saves still on their way, and
+sends the steps. So that a colour can go back to none, `upsertNodes` and
+`upsertEdges` take `color: null` to clear it.
+
 ### When a save is refused
 
 Every write the board makes (nodes, lines, comments, replies, resolving,
-deleting and Place by tags) reports a refusal from the server in a
-dismissible alert under the toolbar, "Couldn't save: " and the server's own
-reason, until it's dismissed or the next refusal replaces it. The board goes
-back to what the server has, except for text: a sticky note, text box, frame
-label or line label whose edit was refused keeps what was typed, with a Retry
-button. Retry sends it again; editing it back to what's saved drops it. Text
-being typed when the viewer loses edit rights is kept the same way, marked
-"Not saved" until they can edit again, when it gets the Retry button. A
+deleting, Place by tags, and undo and redo) reports a refusal from the server
+in a dismissible alert under the toolbar, "Couldn't save: " and the server's
+own reason, until it's dismissed or the next refusal replaces it. The board
+goes back to what the server has, except for text: a sticky note, text box,
+frame label or line label whose edit was refused keeps what was typed, with a
+Retry button. Retry sends it again; editing it back to what's saved drops it.
+Text being typed when the viewer loses edit rights is kept the same way,
+marked "Not saved" until they can edit again, when it gets the Retry button. A
 refused comment or reply goes back in the composer, unless something new has
 been written there since, and a new comment's panel stays open until the
 server has taken it.
@@ -643,23 +721,24 @@ is busy" below). Pins that came off a node before this feature have no
 "Restore this item", on a node selected in a preview, puts back just that
 node, for when someone deleted a sticky and nobody wants to roll back
 everyone else's work. Selecting part of an ink stroke selects all of it, and
-the button then puts back the whole stroke. On a frame it reads "Restore this
-frame and everything in it as it was at 14:20", since the frame brings
-everything inside it back too, undoing later edits to those by anyone. On
-success the board's notice says "Put back as it was at 14:20." (or "That's
-already as it was at 14:20." when nothing differed) and the preview stays
-open; a refusal shows in the usual "Couldn't save" alert.
+the button then puts back the whole stroke; the server does the same for any
+one segment it's sent, as deleting one deletes them all. On a frame it reads
+"Restore this frame and everything in it as it was at 14:20", since the
+frame brings everything inside it back too, undoing later edits to those by
+anyone. On success the board's notice says "Put back as it was at 14:20."
+(or "That's already as it was at 14:20." when nothing differed) and the
+preview stays open; a refusal shows in the usual "Couldn't save" alert.
 
 `Whiteboards.methods.restoreItems` (`restoreItems` in
 `imports/server/whiteboardVersions.ts`) takes 1 to 100 node ids from one
 version and returns whether anything on the board changed. It needs edit
 access and history turned on, and the version must be this board's. Under the
 board's lock it checks those again and reads the version as a whole restore
-does. `restoreItemSet` adds everything inside a frame (in the version), the
-lines touching any of it and those lines' free ends. If that comes to more
-than 100 nodes or 100 lines it refuses with "That's too much to restore at
-once", and the button is disabled with that reason when the client can see it
-coming.
+does. `restoreItemSet` adds every segment of an ink stroke, everything inside
+a frame (in the version), the lines touching any of it and those lines' free
+ends. If that comes to more than 100 nodes or 100 lines it refuses with
+"That's too much to restore at once", and the button is disabled with that
+reason when the client can see it coming.
 
 `planItemRestore` matches documents the way `planRestore` does, so a card
 whose puzzle now has a card under another id, or a frame whose tag now has
@@ -675,9 +754,10 @@ full".
 
 It's an edit, not a rewrite: it records a version of kind `edits` through
 `recordVersionLocked`, which coalesces with the same person's other edits
-like any save (even when nothing in the set differs, as other edits do), and
-it doesn't set `lastRewrittenAt`. Comments come off nodes it hides and go
-back on nodes it brings back, as for a whole restore. After the lock, a
+like any save, and it doesn't set `lastRewrittenAt`. When nothing in the set
+differs from the board there's nothing to write, so it records nothing and
+returns false. Comments come off nodes it hides and go back on nodes it
+brings back, as for a whole restore. After the lock, a
 placement sync of any cards it touched puts them back in step with their
 rounds.
 
@@ -713,18 +793,18 @@ them and an archived hunt refuses them, and both go through history.
 
 ### Place by tags
 
-Selecting cards with the Select tool, on a board the viewer can edit, shows
-a "Place by tags" button above them, titled "Move back to where its tags put
-it, and keep it in step from now on". It doesn't ask first; History undoes
-it. It calls `Whiteboards.methods.placeByTags` (`placeByTags` in
-`imports/server/whiteboardReset.ts`) with the selected cards' node ids, in
+Selecting cards with the Select tool, on a board the viewer can edit, shows a
+"Place by tags" button above them, titled "Move back to where its tags put it,
+and keep it in step from now on". It doesn't ask first; undo (Ctrl+Z) or
+History reverses it. It calls `Whiteboards.methods.placeByTags` (`placeByTags`
+in `imports/server/whiteboardReset.ts`) with the selected cards' node ids, in
 batches of `MAX_BATCH`. Anything that isn't a card on show on this board is
 refused ("Only cards on this board can be placed by tags"). Otherwise it
 records a version like any edit, clears `manual` on the cards, and runs a
-placement sync of their puzzles under the board's lock. A card already in
-the frame its tags choose stays where it is, but follows its tags from now
-on; one anywhere else moves to the first free slot of that frame, which
-grows to fit. Its comments and lines go with it, since its id is kept.
+placement sync of their puzzles under the board's lock. A card already in the
+frame its tags choose stays where it is, but follows its tags from now on; one
+anywhere else moves to the first free slot of that frame, which grows to fit.
+Its comments and lines go with it, since its id is kept.
 
 ### Reset layout
 

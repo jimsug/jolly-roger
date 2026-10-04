@@ -834,20 +834,28 @@ export async function restoreItems(
     const result = planItemRestore(live, target, items);
     if (!result.ok) throw new Meteor.Error(400, "This board is full");
     const { plan } = result;
+    const restored =
+      plan.nodes.change.length > 0 ||
+      plan.nodes.insert.length > 0 ||
+      plan.edges.change.length > 0 ||
+      plan.edges.insert.length > 0;
+    // Nothing to write is no edit, so it isn't recorded either.
+    if (
+      !restored &&
+      plan.nodes.remove.length === 0 &&
+      plan.edges.remove.length === 0 &&
+      plan.detach.length === 0 &&
+      plan.reattach.length === 0
+    ) {
+      return { puzzles: result.puzzles, restored };
+    }
 
     // Nothing has been written yet, so a failure here leaves the board as
     // it was.
     await recordVersionLocked(current, userId, "edits", renew);
     await renew();
     await writeRestorePlan(current, live.nodes, plan, renew);
-    return {
-      puzzles: result.puzzles,
-      restored:
-        plan.nodes.change.length > 0 ||
-        plan.nodes.insert.length > 0 ||
-        plan.edges.change.length > 0 ||
-        plan.edges.insert.length > 0,
-    };
+    return { puzzles: result.puzzles, restored };
   });
 
   // Puts restored cards that placement looks after into their rounds, and

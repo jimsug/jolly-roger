@@ -15,6 +15,8 @@ import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faObjectGroup } from "@fortawesome/free-solid-svg-icons/faObjectGroup";
 import { faPen } from "@fortawesome/free-solid-svg-icons/faPen";
+import { faRotateLeft } from "@fortawesome/free-solid-svg-icons/faRotateLeft";
+import { faRotateRight } from "@fortawesome/free-solid-svg-icons/faRotateRight";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type {
   AriaLabelConfig,
@@ -186,10 +188,13 @@ import type {
 import useWhiteboardSync, {
   selectionUnits,
 } from "../../hooks/useWhiteboardSync";
+import useWhiteboardUndo from "../../hooks/useWhiteboardUndo";
 import WhiteboardPresence from "../../WhiteboardPresence";
 import CopyToClipboardButton from "../CopyToClipboardButton";
 import ArrangeIcon from "./ArrangeIcon";
 import BoardSearch from "./BoardSearch";
+import type { Done } from "./boardWrites";
+import { callAll, chunks } from "./boardWrites";
 import ChatLoadedContext from "./ChatLoadedContext";
 import type { CollapseActions, FoldSummary } from "./CollapseContext";
 import CollapseContext from "./CollapseContext";
@@ -608,14 +613,6 @@ const sameDrags = (a: LiveDrag[], b: LiveDrag[]) =>
       (drag.parent ?? null) === (other.parent ?? null)
     );
   });
-
-function chunks<T>(items: T[], size: number): T[][] {
-  const result: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    result.push(items.slice(i, i + size));
-  }
-  return result;
-}
 
 // The dashed outline around something a line end will attach to. It follows
 // the node through React Flow's store, so it keeps up as the node moves.
@@ -1164,7 +1161,6 @@ const CanvasInner = ({
   const [localStroke, setLocalStroke] = useState<
     Pick<Drawing, "color" | "strokeWidth"> & { points: InkPoint[] }
   >();
-  const myStrokes = useRef<string[]>([]);
   const spaceHeld = useRef(false);
   // The last save the server refused, shown until dismissed or replaced.
   const [saveError, setSaveError] = useState<{ id: number; reason: string }>();
@@ -1173,6 +1169,82 @@ const CanvasInner = ({
     setSaveError({ id: Date.now(), reason: error.reason ?? error.message });
   }, []);
   const dismissSaveError = useCallback(() => setSaveError(undefined), []);
+
+  // A short message under the toolbar, gone after a while: a link that
+  // couldn't be followed, a version that couldn't be loaded, an undo that
+  // someone else's edit got in the way of, or a restore or reset that worked.
+  // It can carry a button for what to do next.
+  const [notice, setNotice] = useState<{
+    id: number;
+    text: string;
+    variant: "warning" | "success";
+    action?: { label: string; onClick: () => void };
+  }>();
+  const showNotice = useCallback(
+    (
+      text: string,
+      variant: "warning" | "success" = "warning",
+      action?: { label: string; onClick: () => void },
+    ) => {
+      const id = Date.now();
+      setNotice({ id, text, variant, action });
+      tidyLater(
+        () =>
+          setNotice((current) => (current?.id === id ? undefined : current)),
+        NOTICE_MS,
+      );
+    },
+    [tidyLater],
+  );
+  const dismissNotice = useCallback(() => setNotice(undefined), []);
+  const followNotice = useCallback(() => {
+    setNotice(undefined);
+    notice?.action?.onClick();
+  }, [notice]);
+
+  // The viewer's own edits this visit, to undo and redo.
+  const undoStale = useCallback(
+    (action: "undo" | "redo") =>
+      showNotice(
+        action === "undo"
+          ? t(
+              "whiteboard.undo.stale",
+              "Changed by someone else since, so it wasn't undone",
+            )
+          : t(
+              "whiteboard.undo.staleRedo",
+              "Changed by someone else since, so it wasn't redone",
+            ),
+      ),
+    [showNotice, t],
+  );
+  // Losing edit access clears both stacks, but a spell offline or on a
+  // phone-sized screen doesn't.
+  const {
+    record: recordEdit,
+    undo: undoLast,
+    redo: redoLast,
+    canUndo,
+    canRedo,
+  } = useWhiteboardUndo(boardId, {
+    editable: mayEdit || unannounced(accessReason),
+    onRefused: reportRefusal,
+    onStale: undoStale,
+  });
+  // Arrow-key nudges not yet saved are the latest edit, so they're saved
+  // first, to be undone before anything older.
+  const saveNudgesNow = useCallback(() => {
+    window.clearTimeout(nudgeTimer.current);
+    saveNudgesRef.current?.();
+  }, []);
+  const undo = useCallback(() => {
+    saveNudgesNow();
+    undoLast();
+  }, [saveNudgesNow, undoLast]);
+  const redo = useCallback(() => {
+    saveNudgesNow();
+    redoLast();
+  }, [saveNudgesNow, redoLast]);
   // Collapsed frames this viewer has opened for themselves, and the nodes
   // they're dragging, resizing or typing in, which keep the frames around
   // them open (see useWhiteboardSync).
@@ -1294,27 +1366,32 @@ const CanvasInner = ({
     (
       inputs: WhiteboardNodeInput[],
       onDone?: (error?: Meteor.Error) => void,
+      // Saves in the same group, one straight after another, undo as one.
+      group?: string,
     ) => {
       if (inputs.length === 0) {
         onDone?.();
         return;
       }
-      const batches = chunks(inputs, MAX_BATCH);
-      let outstanding = batches.length;
-      let refused: Meteor.Error | undefined;
-      batches.forEach((batch) => {
-        upsertWhiteboardNodes.call({ boardId, nodes: batch }, (error) => {
-          if (error) {
-            clearPending(batch.map((n) => n._id));
-            reportRefusal(error);
-            refused ??= error;
-          }
-          outstanding -= 1;
-          if (outstanding === 0) onDone?.(refused);
-        });
-      });
+      const settled = recordEdit({ upsertNodes: inputs }, group);
+      callAll(
+        chunks(inputs, MAX_BATCH).map(
+          (batch) => (done) =>
+            upsertWhiteboardNodes.call({ boardId, nodes: batch }, (error) => {
+              if (error) {
+                clearPending(batch.map((n) => n._id));
+                reportRefusal(error);
+              }
+              done(error);
+            }),
+        ),
+        (refused) => {
+          settled(refused);
+          onDone?.(refused);
+        },
+      );
     },
-    [boardId, clearPending, reportRefusal],
+    [boardId, clearPending, reportRefusal, recordEdit],
   );
 
   // Collapses or expands frames for everyone, showing it at once.
@@ -1331,13 +1408,36 @@ const CanvasInner = ({
     [setFramesCollapsed],
   );
 
-  const deleteNodes = useCallback(
-    (ids: string[]) => {
-      chunks(ids, MAX_BATCH).forEach((batch) => {
-        deleteWhiteboardNodes.call({ boardId, nodeIds: batch }, reportRefusal);
+  // Deletes nodes and lines, as one edit to undo.
+  const deleteItems = useCallback(
+    (nodeIds: string[], edgeIds: string[]) => {
+      if (nodeIds.length === 0 && edgeIds.length === 0) return;
+      const settled = recordEdit({
+        deleteNodes: nodeIds,
+        deleteEdges: edgeIds,
       });
+      callAll(
+        [
+          ...chunks(nodeIds, MAX_BATCH).map(
+            (batch) => (done: Done) =>
+              deleteWhiteboardNodes.call({ boardId, nodeIds: batch }, done),
+          ),
+          ...chunks(edgeIds, MAX_BATCH).map(
+            (batch) => (done: Done) =>
+              deleteWhiteboardEdges.call({ boardId, edgeIds: batch }, done),
+          ),
+        ],
+        (refused) => {
+          settled(refused);
+          reportRefusal(refused);
+        },
+      );
     },
-    [boardId, reportRefusal],
+    [boardId, reportRefusal, recordEdit],
+  );
+  const deleteNodes = useCallback(
+    (ids: string[]) => deleteItems(ids, []),
+    [deleteItems],
   );
 
   // Shows moved nodes in their new places (and frames) straight away, rather
@@ -1367,7 +1467,9 @@ const CanvasInner = ({
         const { _id, ...change } = input;
         markEdgePending(_id, change);
       }
+      const settled = recordEdit({ upsertEdges: [input] });
       upsertWhiteboardEdges.call({ boardId, edges: [input] }, (error) => {
+        settled(error);
         if (error) {
           if (existing) clearEdgePending([input._id]);
           reportRefusal(error);
@@ -1375,7 +1477,14 @@ const CanvasInner = ({
         onDone?.(error);
       });
     },
-    [boardId, flow, markEdgePending, clearEdgePending, reportRefusal],
+    [
+      boardId,
+      flow,
+      markEdgePending,
+      clearEdgePending,
+      reportRefusal,
+      recordEdit,
+    ],
   );
 
   // After a resize, save the node's new box and any of its children whose
@@ -1541,20 +1650,13 @@ const CanvasInner = ({
   const onBeforeDelete: OnBeforeDelete<WhiteboardFlowNode, WhiteboardFlowEdge> =
     useCallback(
       ({ nodes: doomedNodes, edges: doomedEdges }) => {
-        const nodeIds = doomedNodes.filter((n) => n.selected).map((n) => n.id);
-        const edgeIds = doomedEdges.filter((e) => e.selected).map((e) => e.id);
-        if (nodeIds.length > 0) deleteNodes(nodeIds);
-        if (edgeIds.length > 0) {
-          chunks(edgeIds, MAX_BATCH).forEach((batch) =>
-            deleteWhiteboardEdges.call(
-              { boardId, edgeIds: batch },
-              reportRefusal,
-            ),
-          );
-        }
+        deleteItems(
+          doomedNodes.filter((n) => n.selected).map((n) => n.id),
+          doomedEdges.filter((e) => e.selected).map((e) => e.id),
+        );
         return Promise.resolve(false);
       },
-      [boardId, deleteNodes, reportRefusal],
+      [deleteItems],
     );
 
   const absoluteRect = useCallback(
@@ -1929,23 +2031,34 @@ const CanvasInner = ({
         target: idFor(to),
         ...lineStyle,
       };
+      const settled = recordEdit({ upsertNodes: points, upsertEdges: [edge] });
       // The server runs one client's calls in order, so the line can follow
       // its free ends without waiting for them.
-      if (points.length > 0) {
-        upsertWhiteboardNodes.call({ boardId, nodes: points }, reportRefusal);
-      }
-      upsertWhiteboardEdges.call({ boardId, edges: [edge] }, (error) => {
-        if (!error) return;
-        reportRefusal(error);
-        if (points.length > 0) {
-          deleteWhiteboardNodes.call({
-            boardId,
-            nodeIds: points.map((p) => p._id),
-          });
-        }
-      });
+      callAll(
+        [
+          ...(points.length > 0
+            ? [
+                (done: Done) =>
+                  upsertWhiteboardNodes.call({ boardId, nodes: points }, done),
+              ]
+            : []),
+          (done: Done) =>
+            upsertWhiteboardEdges.call({ boardId, edges: [edge] }, done),
+        ],
+        (error) => {
+          settled(error);
+          if (!error) return;
+          reportRefusal(error);
+          if (points.length > 0) {
+            deleteWhiteboardNodes.call({
+              boardId,
+              nodeIds: points.map((p) => p._id),
+            });
+          }
+        },
+      );
     },
-    [boardId, lineStyle, pointPlacement, reportRefusal],
+    [boardId, lineStyle, pointPlacement, reportRefusal, recordEdit],
   );
 
   // Moves one end of an existing line: onto something, or to a free spot.
@@ -1980,20 +2093,28 @@ const CanvasInner = ({
       // The server runs one client's calls in order, so the line can follow
       // its new free end without waiting for it.
       const _id = Random.id();
-      upsertWhiteboardNodes.call(
-        {
-          boardId,
-          nodes: [{ _id, type: "point", ...pointPlacement(endpoint) }],
-        },
-        reportRefusal,
-      );
-      upsertWhiteboardEdges.call(
-        { boardId, edges: [{ _id: edgeId, [end]: _id }] },
-        (edgeError) => {
-          if (edgeError) {
-            reportRefusal(edgeError);
-            deleteWhiteboardNodes.call({ boardId, nodeIds: [_id] });
-          }
+      const point: WhiteboardNodeInput = {
+        _id,
+        type: "point",
+        ...pointPlacement(endpoint),
+      };
+      const moved: WhiteboardEdgeInput = { _id: edgeId, [end]: _id };
+      const settled = recordEdit({
+        upsertNodes: [point],
+        upsertEdges: [moved],
+      });
+      callAll(
+        [
+          (done: Done) =>
+            upsertWhiteboardNodes.call({ boardId, nodes: [point] }, done),
+          (done: Done) =>
+            upsertWhiteboardEdges.call({ boardId, edges: [moved] }, done),
+        ],
+        (error) => {
+          settled(error);
+          if (!error) return;
+          reportRefusal(error);
+          deleteWhiteboardNodes.call({ boardId, nodeIds: [_id] });
         },
       );
     },
@@ -2006,6 +2127,7 @@ const CanvasInner = ({
       updateEdge,
       updateNodes,
       reportRefusal,
+      recordEdit,
     ],
   );
 
@@ -2092,18 +2214,26 @@ const CanvasInner = ({
   );
   const [placingByTags, setPlacingByTags] = useState(false);
   const placeSelectedByTags = useCallback(() => {
-    const batches = chunks(selectedCards, MAX_BATCH);
-    let waiting = batches.length;
-    if (waiting === 0) return;
+    if (selectedCards.length === 0) return;
     setPlacingByTags(true);
-    batches.forEach((batch) => {
-      placeWhiteboardCardsByTags.call({ boardId, nodeIds: batch }, (error) => {
-        reportRefusal(error);
-        waiting -= 1;
-        if (waiting === 0) setPlacingByTags(false);
-      });
-    });
-  }, [selectedCards, boardId, reportRefusal]);
+    const settled = recordEdit({ placeByTags: selectedCards });
+    callAll(
+      chunks(selectedCards, MAX_BATCH).map(
+        (batch) => (done: Done) =>
+          placeWhiteboardCardsByTags.call(
+            { boardId, nodeIds: batch },
+            (error) => {
+              reportRefusal(error);
+              done(error);
+            },
+          ),
+      ),
+      (refused) => {
+        setPlacingByTags(false);
+        settled(refused);
+      },
+    );
+  }, [selectedCards, boardId, reportRefusal, recordEdit]);
   // The first selected line's look, for the restyling controls.
   const selectedLineStyle = useMemo((): LineStyle => {
     const doc = selectedLines[0]?.data?.doc;
@@ -2118,21 +2248,25 @@ const CanvasInner = ({
     (patch: Partial<LineStyle>) => {
       if (selectedLines.length === 0) return;
       const lines = selectedLines.slice(0, MAX_BATCH);
+      const inputs = lines.map((e) => ({ _id: e.id, ...patch }));
       lines.forEach((e) => markEdgePending(e.id, patch));
-      upsertWhiteboardEdges.call(
-        {
-          boardId,
-          edges: lines.map((e) => ({ _id: e.id, ...patch })),
-        },
-        (error) => {
-          if (error) {
-            clearEdgePending(lines.map((e) => e.id));
-            reportRefusal(error);
-          }
-        },
-      );
+      const settled = recordEdit({ upsertEdges: inputs });
+      upsertWhiteboardEdges.call({ boardId, edges: inputs }, (error) => {
+        settled(error);
+        if (error) {
+          clearEdgePending(lines.map((e) => e.id));
+          reportRefusal(error);
+        }
+      });
     },
-    [boardId, selectedLines, markEdgePending, clearEdgePending, reportRefusal],
+    [
+      boardId,
+      selectedLines,
+      markEdgePending,
+      clearEdgePending,
+      reportRefusal,
+      recordEdit,
+    ],
   );
   const updateLineStyle = useCallback(
     (patch: Partial<LineStyle>) =>
@@ -2335,6 +2469,9 @@ const CanvasInner = ({
               position,
               width: CARD_WIDTH,
               height: CARD_HEIGHT,
+              // Does nothing on insert. Undo only hides a card, so a redo
+              // resends this to show it again.
+              hidden: false,
             },
       ]);
       return _id;
@@ -2371,17 +2508,20 @@ const CanvasInner = ({
   // Brings back removed feeder arrows.
   const putBackArrows = useCallback(
     (ids: string[]) => {
-      chunks(ids, MAX_BATCH).forEach((batch) => {
-        upsertWhiteboardEdges.call(
-          {
-            boardId,
-            edges: batch.map((_id) => ({ _id, hidden: false })),
-          },
-          reportRefusal,
-        );
-      });
+      const inputs = ids.map((_id) => ({ _id, hidden: false }));
+      const settled = recordEdit({ upsertEdges: inputs });
+      callAll(
+        chunks(inputs, MAX_BATCH).map(
+          (batch) => (done: Done) =>
+            upsertWhiteboardEdges.call({ boardId, edges: batch }, done),
+        ),
+        (refused) => {
+          settled(refused);
+          reportRefusal(refused);
+        },
+      );
     },
-    [boardId, reportRefusal],
+    [boardId, reportRefusal, recordEdit],
   );
   const putBackArrow = useCallback(
     (arrow: HiddenArrow) => putBackArrows([arrow.id]),
@@ -2401,23 +2541,27 @@ const CanvasInner = ({
       const size = STROKE_SIZES[state.strokeWidth];
       const bounds = inkBounds(points, size);
       const parentRect = state.parent ? absoluteRect(state.parent) : undefined;
-      updateNodes([
-        {
-          _id: Random.id(),
-          type: "ink",
-          position: {
-            x: bounds.x - (parentRect?.x ?? 0),
-            y: bounds.y - (parentRect?.y ?? 0),
+      updateNodes(
+        [
+          {
+            _id: Random.id(),
+            type: "ink",
+            position: {
+              x: bounds.x - (parentRect?.x ?? 0),
+              y: bounds.y - (parentRect?.y ?? 0),
+            },
+            width: Math.max(1, bounds.width),
+            height: Math.max(1, bounds.height),
+            parent: state.parent ?? null,
+            points: relativeTo(points, bounds),
+            strokeWidth: state.strokeWidth,
+            color: state.color,
+            stroke: state.stroke,
           },
-          width: Math.max(1, bounds.width),
-          height: Math.max(1, bounds.height),
-          parent: state.parent ?? null,
-          points: relativeTo(points, bounds),
-          strokeWidth: state.strokeWidth,
-          color: state.color,
-          stroke: state.stroke,
-        },
-      ]);
+        ],
+        undefined,
+        `stroke:${state.stroke}`,
+      );
       state.committed += 1;
     },
     [absoluteRect, updateNodes],
@@ -2841,37 +2985,6 @@ const CanvasInner = ({
     });
     return Meteor.absoluteUrl(`hunts/${huntId}/whiteboard?${query}`);
   }, [flow, paneCenter, huntId]);
-
-  // A short message under the toolbar, gone after a while: a link that
-  // couldn't be followed, a version that couldn't be loaded, or a restore or
-  // reset that worked. It can carry a button for what to do next.
-  const [notice, setNotice] = useState<{
-    id: number;
-    text: string;
-    variant: "warning" | "success";
-    action?: { label: string; onClick: () => void };
-  }>();
-  const showNotice = useCallback(
-    (
-      text: string,
-      variant: "warning" | "success" = "warning",
-      action?: { label: string; onClick: () => void },
-    ) => {
-      const id = Date.now();
-      setNotice({ id, text, variant, action });
-      tidyLater(
-        () =>
-          setNotice((current) => (current?.id === id ? undefined : current)),
-        NOTICE_MS,
-      );
-    },
-    [tidyLater],
-  );
-  const dismissNotice = useCallback(() => setNotice(undefined), []);
-  const followNotice = useCallback(() => {
-    setNotice(undefined);
-    notice?.action?.onClick();
-  }, [notice]);
 
   // Once the board's chat has loaded, a thread that isn't in it is gone.
   const commentsLoaded = useContext(ChatLoadedContext);
@@ -3436,7 +3549,6 @@ const CanvasInner = ({
       drawing.current = undefined;
       const rest = state.segmenter.finish(state.committed > 0);
       if (rest) commitSegment(state, rest);
-      myStrokes.current.push(state.stroke);
       setLocalStroke(undefined);
       live.setStroke(null);
     },
@@ -3829,22 +3941,25 @@ const CanvasInner = ({
         setEditOnAppear(note.dataset.id);
         return;
       }
+      // Ctrl+Z (Cmd+Z) undoes the viewer's own last edit, and Ctrl+Shift+Z
+      // (Cmd+Shift+Z) or Ctrl+Y redoes it, while the board has focus and
+      // nothing is being typed. Text being typed has the browser's own.
       if (
         !readOnly &&
-        (event.ctrlKey || event.metaKey) &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "z" &&
+        modified &&
+        !event.altKey &&
+        canvasActive.current &&
         !isTyping(event.target)
       ) {
-        // Undo is limited to taking back your own strokes from this visit.
-        const stroke = myStrokes.current.pop();
-        if (!stroke) return;
-        event.preventDefault();
-        const ids = flow
-          .getNodes()
-          .filter((n) => n.data.doc.stroke === stroke)
-          .map((n) => n.id);
-        if (ids.length > 0) deleteNodes(ids);
+        const key = event.key.toLowerCase();
+        if (key === "z" || (key === "y" && event.ctrlKey && !event.shiftKey)) {
+          event.preventDefault();
+          if (key === "z" && !event.shiftKey) {
+            undo();
+          } else {
+            redo();
+          }
+        }
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -3860,8 +3975,8 @@ const CanvasInner = ({
     readOnly,
     canComment,
     tool,
-    flow,
-    deleteNodes,
+    undo,
+    redo,
     openThreadId,
     commentListShown,
     confirmingRestore,
@@ -4826,6 +4941,34 @@ const CanvasInner = ({
                           >
                             <FontAwesomeIcon icon={faObjectGroup} />
                           </ToolButton>
+                        </ButtonGroup>
+                        <ButtonGroup size="sm">
+                          <Button
+                            variant="outline-secondary"
+                            onClick={undo}
+                            disabled={!canUndo}
+                            title={t(
+                              "whiteboard.toolbar.undoKeys",
+                              "Undo your last change [Ctrl/⌘+Z]",
+                            )}
+                            aria-label={t("whiteboard.toolbar.undo", "Undo")}
+                            aria-keyshortcuts="Control+Z Meta+Z"
+                          >
+                            <FontAwesomeIcon icon={faRotateLeft} />
+                          </Button>
+                          <Button
+                            variant="outline-secondary"
+                            onClick={redo}
+                            disabled={!canRedo}
+                            title={t(
+                              "whiteboard.toolbar.redoKeys",
+                              "Redo what you last undid [Ctrl/⌘+Shift+Z or Ctrl+Y]",
+                            )}
+                            aria-label={t("whiteboard.toolbar.redo", "Redo")}
+                            aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
+                          >
+                            <FontAwesomeIcon icon={faRotateRight} />
+                          </Button>
                         </ButtonGroup>
                         <ButtonGroup size="sm">
                           <CommentToolButton

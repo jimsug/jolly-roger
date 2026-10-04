@@ -15,7 +15,7 @@ const EdgeInputPattern = {
   label: Match.Optional(Match.OneOf(String, null)),
   pathStyle: Match.Optional(Match.OneOf(...WhiteboardPathStyles)),
   arrowHead: Match.Optional(Match.OneOf(...WhiteboardArrowHeads)),
-  color: Match.Optional(Match.OneOf(...WhiteboardColors)),
+  color: Match.Optional(Match.OneOf(...WhiteboardColors, null)),
   dashed: Match.Optional(Boolean),
   hidden: Match.Optional(Boolean),
 };

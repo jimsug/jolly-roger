@@ -536,7 +536,7 @@ describe("whiteboard versions", function () {
   });
 
   describe("restoreItemSet", function () {
-    it("brings a frame's contents, their lines and the lines' free ends", function () {
+    it("brings a frame's contents, a stroke's other segments, their lines and the lines' free ends", function () {
       const target = {
         nodes: [
           frame("round"),
@@ -556,7 +556,7 @@ describe("whiteboard versions", function () {
       const items = restoreItemSet(target, ["round", "ink1"]);
       assert.sameMembers(
         [...(items?.nodes ?? [])],
-        ["round", "inner", "deep", "ink1", "loose"],
+        ["round", "inner", "deep", "ink1", "ink2", "loose"],
       );
       assert.sameMembers([...(items?.edges ?? [])], ["toLoose"]);
     });

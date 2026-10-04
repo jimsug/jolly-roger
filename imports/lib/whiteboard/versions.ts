@@ -506,6 +506,7 @@ export function pickToRestore(
 }
 
 // The version's nodes and lines that restoring the nodes ids brings back:
+// every segment of an ink stroke (as deleting one deletes them all),
 // everything inside a frame, the lines touching any of them and those lines'
 // free ends. Undefined if an id isn't in the version.
 export function restoreItemSet(
@@ -515,7 +516,13 @@ export function restoreItemSet(
   const byId = new Map(target.nodes.map((n) => [n._id, n]));
   if (ids.some((id) => !byId.has(id))) return undefined;
 
-  const nodes = new Set(ids);
+  const strokes = new Set(ids.flatMap((id) => byId.get(id)?.stroke ?? []));
+  const nodes = new Set([
+    ...ids,
+    ...target.nodes
+      .filter((n) => n.stroke && strokes.has(n.stroke))
+      .map((n) => n._id),
+  ]);
   const children = new Map<string, string[]>();
   target.nodes.forEach((n) => {
     if (n.parent) {

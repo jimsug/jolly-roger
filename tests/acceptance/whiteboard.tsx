@@ -1628,6 +1628,15 @@ if (Meteor.isClient) {
           assert.isNull(screen.queryByLabelText("Who can edit"));
         });
 
+        it("offers a non-editor no undo", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          await screen.findByText("Viewing only", {}, { timeout: 20000 });
+          assert.isNull(screen.queryByRole("button", { name: "Undo" }));
+          assert.isNull(screen.queryByRole("button", { name: "Redo" }));
+        });
+
         it("gives a non-editor the Comment key and no other", async function () {
           this.timeout(30000);
           render(<TestApp />);
@@ -3148,6 +3157,465 @@ if (Meteor.isClient) {
           forgetView();
           await removeNodes([sticky, frame]);
         }
+      });
+
+      describe("undo and redo", function () {
+        const undoButton = () =>
+          screen.getByRole<HTMLButtonElement>("button", { name: "Undo" });
+        const redoButton = () =>
+          screen.getByRole<HTMLButtonElement>("button", { name: "Redo" });
+        const undoKey = () => press(pane(), { key: "z", ctrlKey: true });
+        const redoKey = () =>
+          press(pane(), { key: "Z", ctrlKey: true, shiftKey: true });
+        // Anything a key sent is back once a later call is, as the server
+        // runs one client's calls in order.
+        const serverCaughtUp = () =>
+          clearPuzzleSubscribers.callPromise({ userIds: [] });
+        const STALE_NOTICE =
+          "Changed by someone else since, so it wasn't undone";
+        // An edit is on the undo stack once its save is back.
+        const canUndo = () =>
+          waitFor(() => assert.isFalse(undoButton().disabled), {
+            timeout: 10000,
+          });
+        const canRedo = () =>
+          waitFor(() => assert.isFalse(redoButton().disabled), {
+            timeout: 10000,
+          });
+        const sticky = async (
+          base: { x: number; y: number },
+          text?: string,
+        ) => {
+          const _id = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id,
+                type: "sticky",
+                position: base,
+                width: 160,
+                height: 120,
+                text,
+              },
+            ],
+          });
+          return _id;
+        };
+        const nudgeRight = async (id: string) => {
+          await select(id);
+          const node = await nodeShown(id);
+          await press(node, { key: "ArrowRight", shiftKey: true });
+          await press(node, { key: "ArrowRight", shiftKey: true });
+        };
+        const positionOf = async (id: string) =>
+          (await savedNode(id))?.position;
+
+        it("undoes a move and redoes it", async function () {
+          this.timeout(30000);
+          const base = { x: 27000, y: 27000 };
+          const id = await sticky(base);
+          lookAt(base);
+          try {
+            await openBoard();
+            assert.isTrue(undoButton().disabled);
+            assert.isTrue(redoButton().disabled);
+            assert.include(undoButton().title, "Ctrl/⌘+Z");
+            await nudgeRight(id);
+            await waitFor(
+              async () => assert.notDeepEqual(await positionOf(id), base),
+              { timeout: 10000 },
+            );
+            const moved = await positionOf(id);
+            await canUndo();
+
+            await pressBoard();
+            await undoKey();
+            await waitFor(
+              async () => {
+                const node = await savedNode(id);
+                assert.deepEqual(node?.position, base);
+                assert.isTrue(node?.manual);
+              },
+              { timeout: 10000 },
+            );
+            await canRedo();
+            assert.isTrue(undoButton().disabled);
+
+            await redoKey();
+            await waitFor(
+              async () => assert.deepEqual(await positionOf(id), moved),
+              { timeout: 10000 },
+            );
+            await canUndo();
+            assert.isTrue(redoButton().disabled);
+          } finally {
+            forgetView();
+            await removeNodes([id]);
+          }
+        });
+
+        it("puts a deleted sticky back, and undoes and redoes a text edit", async function () {
+          this.timeout(30000);
+          const base = { x: 27500, y: 27000 };
+          const id = await sticky(base, "Before");
+          lookAt(base);
+          try {
+            await openBoard();
+            await select(id);
+            await press(document.body, { key: "Delete" });
+            await waitFor(async () => assert.isUndefined(await savedNode(id)), {
+              timeout: 10000,
+            });
+            await canUndo();
+            await pressBoard();
+            await undoKey();
+            await waitFor(
+              async () => {
+                const node = await savedNode(id);
+                assert.equal(node?.text, "Before");
+                assert.deepEqual(node?.position, base);
+              },
+              { timeout: 10000 },
+            );
+            await canRedo();
+
+            const node = await nodeShown(id);
+            await act(async () => {
+              fireEvent.doubleClick(within(node).getByText("Before"));
+              await stabilize();
+            });
+            const editor = within(node).getByRole("textbox");
+            await act(async () => {
+              fireEvent.change(editor, { target: { value: "After" } });
+              fireEvent.blur(editor);
+              await stabilize();
+            });
+            await waitFor(
+              async () => assert.equal((await savedNode(id))?.text, "After"),
+              { timeout: 10000 },
+            );
+            // A new edit leaves nothing to redo
+            await waitFor(() => assert.isTrue(redoButton().disabled), {
+              timeout: 10000,
+            });
+
+            await pressBoard();
+            await undoKey();
+            await waitFor(
+              async () => assert.equal((await savedNode(id))?.text, "Before"),
+              { timeout: 10000 },
+            );
+            await canRedo();
+            await redoKey();
+            await waitFor(
+              async () => assert.equal((await savedNode(id))?.text, "After"),
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            await removeNodes([id]);
+          }
+        });
+
+        it("undoes collapsing a frame", async function () {
+          this.timeout(30000);
+          const base = { x: 28000, y: 27000 };
+          const frame = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: frame,
+                type: "frame",
+                position: base,
+                width: 400,
+                height: 300,
+                label: "Fold me",
+              },
+            ],
+          });
+          lookAt(base);
+          const collapsed = async () => !!(await savedNode(frame))?.collapsed;
+          try {
+            await openBoard();
+            const node = await nodeShown(frame);
+            await act(async () => {
+              fireEvent.click(
+                within(node).getByRole("button", {
+                  name: "Collapse for everyone",
+                }),
+              );
+              await stabilize();
+            });
+            await waitFor(async () => assert.isTrue(await collapsed()), {
+              timeout: 10000,
+            });
+            await canUndo();
+            await pressBoard();
+            await undoKey();
+            await waitFor(async () => assert.isFalse(await collapsed()), {
+              timeout: 10000,
+            });
+            await canRedo();
+            await press(pane(), { key: "y", ctrlKey: true });
+            await waitFor(async () => assert.isTrue(await collapsed()), {
+              timeout: 10000,
+            });
+          } finally {
+            forgetView();
+            await removeNodes([frame]);
+          }
+        });
+
+        it("undoes a drawn stroke and redoes it", async function () {
+          this.timeout(30000);
+          const base = { x: 28500, y: 27000 };
+          const screenAt = lookAt(base);
+          const before = new Set(
+            (
+              await WhiteboardNodes.find({
+                board: boardId,
+                type: "ink",
+              }).fetchAsync()
+            ).map((n) => n._id),
+          );
+          const drawn = async () =>
+            (
+              await WhiteboardNodes.find({
+                board: boardId,
+                type: "ink",
+              }).fetchAsync()
+            ).filter((n) => !before.has(n._id));
+          let ids: string[] = [];
+          try {
+            await openBoard();
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: /^Draw/ }));
+              await stabilize();
+            });
+            const point = (dx: number) => ({
+              button: 0,
+              buttons: 1,
+              pointerId: 1,
+              ...screenAt(base.x + dx, base.y + dx / 2),
+            });
+            await act(async () => {
+              fireEvent.pointerDown(pane(), point(0));
+              await stabilize();
+            });
+            for (const dx of [20, 40, 60, 80]) {
+              await act(async () => {
+                fireEvent.pointerMove(pane(), point(dx));
+                await stabilize();
+              });
+            }
+            await act(async () => {
+              fireEvent.pointerUp(pane(), { ...point(80), buttons: 0 });
+              await stabilize();
+            });
+            ids = await waitFor(
+              async () => {
+                const segments = await drawn();
+                assert.isNotEmpty(segments);
+                return segments.map((n) => n._id);
+              },
+              { timeout: 10000 },
+            );
+            await canUndo();
+
+            await undoKey();
+            await waitFor(async () => assert.isEmpty(await drawn()), {
+              timeout: 10000,
+            });
+            await canRedo();
+            await redoKey();
+            await waitFor(
+              async () =>
+                assert.sameMembers(
+                  (await drawn()).map((n) => n._id),
+                  ids,
+                ),
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            ids = [...ids, ...(await drawn()).map((n) => n._id)];
+            if (ids.length > 0) await removeNodes(ids);
+          }
+        });
+
+        it("won't undo a move someone else has changed since", async function () {
+          this.timeout(30000);
+          const base = { x: 29000, y: 27000 };
+          const id = await sticky(base);
+          lookAt(base);
+          const elsewhere = { x: base.x + 500, y: base.y + 500 };
+          try {
+            await openBoard();
+            await nudgeRight(id);
+            await canUndo();
+            // Moved from outside this board's own edits, as by someone else
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: id, position: elsewhere }],
+            });
+            await waitFor(
+              async () => assert.deepEqual(await positionOf(id), elsewhere),
+              { timeout: 10000 },
+            );
+
+            await pressBoard();
+            await undoKey();
+            await screen.findByText(STALE_NOTICE);
+            assert.deepEqual(await positionOf(id), elsewhere);
+            assert.isTrue(undoButton().disabled);
+            assert.isTrue(redoButton().disabled);
+          } finally {
+            forgetView();
+            await removeNodes([id]);
+          }
+        });
+
+        it("forgets what could be undone once the layout is reset", async function () {
+          this.timeout(30000);
+          const base = { x: 29500, y: 27000 };
+          const id = await sticky(base);
+          lookAt(base);
+          try {
+            await openBoard();
+            await nudgeRight(id);
+            await canUndo();
+            const moved = await positionOf(id);
+            await resetWhiteboardLayout.callPromise({
+              boardId,
+              putBack: false,
+            });
+            await waitFor(() => assert.isTrue(undoButton().disabled), {
+              timeout: 10000,
+            });
+
+            await pressBoard();
+            await undoKey();
+            await serverCaughtUp();
+            assert.deepEqual(await positionOf(id), moved);
+          } finally {
+            forgetView();
+            await removeNodes([id]);
+          }
+        });
+
+        it("forgets what could be undone when edit access goes", async function () {
+          this.timeout(30000);
+          const base = { x: 30000, y: 27000 };
+          const id = await sticky(base);
+          lookAt(base);
+          try {
+            await openBoard();
+            await nudgeRight(id);
+            await canUndo();
+            await setHuntArchived.callPromise({ huntId, isArchived: true });
+            try {
+              await waitFor(
+                () =>
+                  assert.isNull(screen.queryByRole("button", { name: "Undo" })),
+                { timeout: 10000 },
+              );
+            } finally {
+              await setHuntArchived.callPromise({ huntId, isArchived: false });
+            }
+            await waitFor(() => assert.isTrue(undoButton().disabled), {
+              timeout: 10000,
+            });
+          } finally {
+            forgetView();
+            await removeNodes([id]);
+          }
+        });
+
+        it("leaves Ctrl+Z to the text being typed", async function () {
+          this.timeout(30000);
+          const base = { x: 30500, y: 27000 };
+          const id = await sticky(base, "Words");
+          lookAt(base);
+          try {
+            await openBoard();
+            await nudgeRight(id);
+            await waitFor(
+              async () => assert.notDeepEqual(await positionOf(id), base),
+              { timeout: 10000 },
+            );
+            const moved = await positionOf(id);
+            await canUndo();
+
+            const node = await nodeShown(id);
+            await act(async () => {
+              fireEvent.doubleClick(within(node).getByText("Words"));
+              await stabilize();
+            });
+            await press(within(node).getByRole("textbox"), {
+              key: "z",
+              ctrlKey: true,
+            });
+            await serverCaughtUp();
+            assert.deepEqual(await positionOf(id), moved);
+            assert.isFalse(undoButton().disabled);
+          } finally {
+            forgetView();
+            await removeNodes([id]);
+          }
+        });
+
+        it("undoes colour changes made before the first is saved as one step", async function () {
+          this.timeout(30000);
+          const base = { x: 31000, y: 27000 };
+          const id = await sticky(base);
+          lookAt(base);
+          try {
+            await openBoard();
+            await select(id);
+            const toolbar = await waitFor(() => {
+              const found = document.querySelector<HTMLElement>(
+                ".react-flow__node-toolbar",
+              );
+              assert.exists(found);
+              return found;
+            });
+            const red = within(toolbar).getByRole("button", { name: "Red" });
+            const blue = within(toolbar).getByRole("button", { name: "Blue" });
+            // Both are sent before either save is back
+            await act(async () => {
+              fireEvent.click(red);
+              fireEvent.click(blue);
+              await stabilize();
+            });
+            await waitFor(
+              async () => assert.equal((await savedNode(id))?.color, "blue"),
+              { timeout: 10000 },
+            );
+            await canUndo();
+
+            await pressBoard();
+            await undoKey();
+            await waitFor(
+              async () => assert.isUndefined((await savedNode(id))?.color),
+              { timeout: 10000 },
+            );
+            await canRedo();
+            assert.isTrue(undoButton().disabled);
+            assert.isNull(screen.queryByText(STALE_NOTICE));
+
+            await redoKey();
+            await waitFor(
+              async () => assert.equal((await savedNode(id))?.color, "blue"),
+              { timeout: 10000 },
+            );
+            await canUndo();
+          } finally {
+            forgetView();
+            await removeNodes([id]);
+          }
+        });
       });
 
       it("switches between the board and chat on a narrow screen", async function () {

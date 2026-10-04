@@ -1160,6 +1160,67 @@ describe("whiteboard versions", function () {
       assert.equal(after._id, recorded._id);
       assert.equal(after.changeCount, 2);
     });
+
+    it("records no version when there's nothing to restore", async function () {
+      const id = await sticky(member, { x: 300, y: 40 });
+      await nextWindow();
+      await sticky(member, { x: 900, y: 40 });
+      const version = await newest();
+      // Far enough on that any edit would start a version of its own
+      await nextWindow();
+      const before = (await versions()).map((v) => [v._id, v.changeCount]);
+
+      const restored = await restoreItems(member, boardId, version._id, [id]);
+
+      assert.isFalse(restored);
+      assert.sameDeepMembers(
+        (await versions()).map((v) => [v._id, v.changeCount]),
+        before,
+      );
+    });
+
+    it("restores every segment of an ink stroke from one of them", async function () {
+      const stroke = Random.id();
+      const segments = [Random.id(), Random.id()];
+      await upsertNodes(
+        member,
+        boardId,
+        segments.map((_id, i) => ({
+          _id,
+          type: "ink" as const,
+          position: { x: 400 + i * 50, y: 400 },
+          width: 50,
+          height: 10,
+          points: [
+            [0, 0, 0.5],
+            [50, 10, 0.5],
+          ],
+          strokeWidth: "medium" as const,
+          stroke,
+        })),
+      );
+      await nextWindow();
+      await deleteNodes(member, boardId, [segments[0]!]);
+      assert.equal(
+        await WhiteboardNodes.find({ _id: { $in: segments } }).countAsync(),
+        0,
+      );
+      const version = await newest();
+
+      const restored = await restoreItems(member, boardId, version._id, [
+        segments[1]!,
+      ]);
+
+      assert.isTrue(restored);
+      const back = await WhiteboardNodes.find({
+        _id: { $in: segments },
+      }).fetchAsync();
+      assert.sameMembers(
+        back.map((n) => n._id),
+        segments,
+      );
+      assert.isTrue(back.every((n) => n.stroke === stroke));
+    });
   });
 
   describe("pruneWhiteboardVersions", function () {

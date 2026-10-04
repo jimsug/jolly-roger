@@ -20,7 +20,7 @@ const NodeInputPattern = {
   collapsed: Match.Optional(Boolean),
   text: Match.Optional(Match.OneOf(String, null)),
   label: Match.Optional(Match.OneOf(String, null)),
-  color: Match.Optional(Match.OneOf(...WhiteboardColors)),
+  color: Match.Optional(Match.OneOf(...WhiteboardColors, null)),
   points: Match.Optional([InkPointPattern]),
   strokeWidth: Match.Optional(Match.OneOf(...WhiteboardStrokeWidths)),
   stroke: Match.Optional(String),

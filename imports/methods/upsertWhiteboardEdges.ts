@@ -12,7 +12,8 @@ export type WhiteboardEdgeInput = {
   label?: string | null;
   pathStyle?: WhiteboardPathStyle;
   arrowHead?: WhiteboardArrowHead;
-  color?: WhiteboardColor;
+  // null clears it, back to the theme's text colour.
+  color?: WhiteboardColor | null;
   dashed?: boolean;
   // Only false, which puts back a feeder arrow someone deleted. Nothing else
   // can be hidden or unhidden from here.
