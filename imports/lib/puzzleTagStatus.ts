@@ -1,3 +1,11 @@
+import {
+  canonicalTagName,
+  isStuckTag,
+  type TagKind,
+  tagKind,
+  tagPrefixValue,
+} from "./tagNames";
+
 // What a puzzle's tags say about it beyond grouping, as the puzzle list and
 // the whiteboard's cards show it: a meta badge, a priority icon and a stuck
 // flag in place of those tags' chips.
@@ -12,56 +20,52 @@ export interface PuzzleTagStatus {
   shownAsStatus: Set<string>;
 }
 
-const LOCATION_PREFIXES = ["location:", "loc:", "where:"];
-const CHIP_PREFIXES = ["needs:", ...LOCATION_PREFIXES];
-
-// location:, loc: and where: all say where a puzzle is, and look the same.
-export function isLocationTag(name: string): boolean {
-  return LOCATION_PREFIXES.some((prefix) => name.startsWith(prefix));
-}
-
 export function puzzleStatusFromTags(
   tagNames: Iterable<string | undefined>,
 ): PuzzleTagStatus {
-  const names = new Set(
-    [...tagNames].filter((name): name is string => name !== undefined),
-  );
+  const names = [
+    ...new Set(
+      [...tagNames].filter((name): name is string => name !== undefined),
+    ),
+  ];
+  const ofKind = (...kinds: TagKind[]) =>
+    names.filter((name) => kinds.includes(tagKind(name)));
+  const canonicalNames = new Set(names.map((name) => canonicalTagName(name)));
 
   let meta: PuzzleTagStatus["meta"];
-  if (names.has("is:metameta")) {
+  if (ofKind("metameta").length > 0) {
     meta = "metameta";
-  } else if (
-    names.has("is:meta") ||
-    [...names].some((name) => name.startsWith("meta-for:"))
-  ) {
+  } else if (ofKind("meta", "metaFor").length > 0) {
     meta = "meta";
   }
 
   let priority: PuzzleTagStatus["priority"];
-  if (names.has("priority:high")) {
+  if (canonicalNames.has("priority:high")) {
     priority = "high";
-  } else if (names.has("priority:low")) {
+  } else if (canonicalNames.has("priority:low")) {
     priority = "low";
   }
 
-  const stuck = names.has("stuck") || names.has("is:stuck");
+  const stuckNames = names.filter(isStuckTag);
+  const stuck = stuckNames.length > 0;
 
   const shownAsStatus = new Set<string>();
   if (meta === "metameta") {
-    shownAsStatus.add("is:metameta");
+    ofKind("metameta").forEach((name) => shownAsStatus.add(name));
   } else if (meta === "meta") {
-    shownAsStatus.add("is:meta");
+    // meta-for: stays a chip, since it says which round.
+    ofKind("meta").forEach((name) => shownAsStatus.add(name));
   }
-  if (priority) shownAsStatus.add(`priority:${priority}`);
-  if (stuck) {
-    shownAsStatus.add("stuck");
-    shownAsStatus.add("is:stuck");
+  if (priority) {
+    names
+      .filter((name) => canonicalTagName(name) === `priority:${priority}`)
+      .forEach((name) => shownAsStatus.add(name));
   }
+  stuckNames.forEach((name) => shownAsStatus.add(name));
 
-  const chips = [...names].filter((name) =>
-    CHIP_PREFIXES.some(
-      (prefix) => name.startsWith(prefix) && name.length > prefix.length,
-    ),
+  // A bare prefix ("needs:") says nothing worth a chip.
+  const chips = ofKind("needs", "location").filter(
+    (name) => tagPrefixValue(name) !== "",
   );
 
   return { meta, priority, stuck, chips, shownAsStatus };

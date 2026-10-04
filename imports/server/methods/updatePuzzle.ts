@@ -11,7 +11,7 @@ import updatePuzzle from "../../methods/updatePuzzle";
 import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import GlobalHooks from "../GlobalHooks";
 import { ensureDocument, puzzleDocumentName, renameDocument } from "../gdrive";
-import getOrCreateTagByName from "../getOrCreateTagByName";
+import { getOrCreateTagsByName } from "../getOrCreateTagByName";
 import defineMethod from "./defineMethod";
 
 type OptionalPuzzleField = "url" | "completedWithNoAnswer" | "lockedSummary";
@@ -73,11 +73,7 @@ defineMethod(updatePuzzle, {
     }
 
     // Look up each tag by name and map them to tag IDs.
-    const tagIds = await Promise.all(
-      tags.map((tagName) => {
-        return getOrCreateTagByName(oldPuzzle.hunt, tagName);
-      }),
-    );
+    const tagIds = await getOrCreateTagsByName(oldPuzzle.hunt, tags);
 
     Logger.info("Updating a puzzle", {
       hunt: oldPuzzle.hunt,
@@ -92,7 +88,7 @@ defineMethod(updatePuzzle, {
       $set: {
         title,
         expectedAnswerCount,
-        tags: [...new Set(tagIds)],
+        tags: tagIds,
       },
     };
     // Every cleared optional field lands in the one $unset, so clearing

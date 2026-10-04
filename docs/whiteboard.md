@@ -33,6 +33,7 @@ files:
   - imports/lib/models/Whiteboards.ts
   - imports/lib/permission_stubs.ts
   - imports/lib/puzzleTagStatus.ts
+  - imports/lib/tagNames.ts
   - imports/lib/whiteboard/comments.ts
   - imports/lib/whiteboard/feederFocus.ts
   - imports/lib/whiteboard/layout.ts
@@ -792,7 +793,10 @@ A card shows less as the board zooms out (`useWhiteboardDetail`):
 The badge, icons and chips come from `puzzleStatusFromTags` in
 `imports/lib/puzzleTagStatus.ts`, which the puzzle list's rows use too, so the
 two agree on which tags make a meta, a priority or a stuck puzzle. The list
-leaves those tags out of its chips (`shownAsStatus`).
+leaves those tags out of its chips (`shownAsStatus`). Both read tags through
+the tag vocabulary in `imports/lib/tagNames.ts` (`tagKind`), where `loc:` and
+`location:` are synonyms for `where:` and `stuck` for `is:stuck`; the
+whiteboard's layout finds metas with its `isMetaForTag` too.
 
 ### Rounds
 

@@ -147,4 +147,58 @@ describe("getOrCreateTagByName", function () {
     });
     assert.isDefined(twin);
   });
+
+  it("creates a tag named by a synonym under its canonical name", async function () {
+    const tagId = await asUser(userId, () =>
+      getOrCreateTagByName(huntId, "loc:atrium"),
+    );
+    assert.equal((await Tags.findOneAsync(tagId))?.name, "where:atrium");
+    assert.isUndefined(
+      await Tags.findOneAsync({ hunt: huntId, name: "loc:atrium" }),
+    );
+
+    const stuckId = await asUser(userId, () =>
+      getOrCreateTagByName(huntId, " stuck "),
+    );
+    assert.equal((await Tags.findOneAsync(stuckId))?.name, "is:stuck");
+  });
+
+  it("matches an existing canonical tag by a synonym", async function () {
+    const hunt = huntId;
+    const whereId = await asUser(userId, () =>
+      getOrCreateTagByName(hunt, "where:library"),
+    );
+    for (const name of ["loc:library", "location:library", "loc:Library"]) {
+      assert.equal(
+        await asUser(userId, () => getOrCreateTagByName(hunt, name)),
+        whereId,
+        name,
+      );
+    }
+    assert.equal(
+      await Tags.find({ hunt: huntId, name: /library/i }).countAsync(),
+      1,
+    );
+  });
+
+  it("matches an existing tag still named by a synonym", async function () {
+    const hunt = huntId;
+    const legacyId = await asUser(userId, () =>
+      Tags.insertAsync({ hunt, name: "loc:basement" }),
+    );
+    for (const name of [
+      "loc:basement",
+      "where:basement",
+      "location:basement",
+    ]) {
+      assert.equal(
+        await asUser(userId, () => getOrCreateTagByName(hunt, name)),
+        legacyId,
+        name,
+      );
+    }
+    assert.isUndefined(
+      await Tags.findOneAsync({ hunt: huntId, name: "where:basement" }),
+    );
+  });
 });

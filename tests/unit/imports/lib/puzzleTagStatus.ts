@@ -1,8 +1,5 @@
 import { assert } from "chai";
-import {
-  isLocationTag,
-  puzzleStatusFromTags,
-} from "../../../../imports/lib/puzzleTagStatus";
+import { puzzleStatusFromTags } from "../../../../imports/lib/puzzleTagStatus";
 
 describe("puzzleStatusFromTags", function () {
   it("finds nothing in no tags", function () {
@@ -35,8 +32,10 @@ describe("puzzleStatusFromTags", function () {
     for (const tag of ["stuck", "is:stuck"]) {
       const status = puzzleStatusFromTags([tag]);
       assert.isTrue(status.stuck, tag);
-      assert.sameMembers([...status.shownAsStatus], ["stuck", "is:stuck"]);
+      assert.sameMembers([...status.shownAsStatus], [tag]);
     }
+    const both = puzzleStatusFromTags(["stuck", "is:stuck"]);
+    assert.sameMembers([...both.shownAsStatus], ["stuck", "is:stuck"]);
   });
 
   it("makes a meta of is:meta or meta-for:", function () {
@@ -44,7 +43,11 @@ describe("puzzleStatusFromTags", function () {
     const metaFor = puzzleStatusFromTags(["meta-for:A"]);
     assert.equal(metaFor.meta, "meta");
     // meta-for: stays a chip in the list; it says which round.
-    assert.sameMembers([...metaFor.shownAsStatus], ["is:meta"]);
+    assert.equal(metaFor.shownAsStatus.size, 0);
+    assert.sameMembers(
+      [...puzzleStatusFromTags(["is:meta", "meta-for:A"]).shownAsStatus],
+      ["is:meta"],
+    );
   });
 
   it("prefers metameta to meta", function () {
@@ -69,14 +72,5 @@ describe("puzzleStatusFromTags", function () {
       "loc:atrium",
       "location:basement",
     ]);
-  });
-
-  it("treats location:, loc: and where: as location tags", function () {
-    for (const name of ["location:a", "loc:a", "where:a"]) {
-      assert.isTrue(isLocationTag(name), name);
-    }
-    for (const name of ["needs:a", "locale:a", "group:where:a"]) {
-      assert.isFalse(isLocationTag(name), name);
-    }
   });
 });

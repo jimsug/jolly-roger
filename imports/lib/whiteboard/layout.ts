@@ -4,6 +4,7 @@ import type { TagType } from "../models/Tags";
 import type { WhiteboardFrameKind } from "../models/WhiteboardNodes";
 import type { PuzzleGroup } from "../puzzle-sort-and-group";
 import { puzzleGroupsByRelevance } from "../puzzle-sort-and-group";
+import { isMetaForTag as isMetaForTagName } from "../tagNames";
 import isWhiteboardPuzzle from "./isWhiteboardPuzzle";
 
 // All layout is in flow (canvas) units and never depends on anyone's screen,
@@ -65,7 +66,7 @@ const META_FOR_PREFIX = "meta-for:";
 
 // Whether a tag marks its puzzle as a meta for a round (meta-for:X).
 export function isMetaForTag(tag: Pick<TagType, "name">): boolean {
-  return tag.name.startsWith(META_FOR_PREFIX);
+  return isMetaForTagName(tag.name);
 }
 
 function isFrameTag(tag: Pick<TagType, "name">): boolean {

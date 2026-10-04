@@ -24,6 +24,7 @@ import "./unit/imports/lib/puzzleViewers";
 import "./unit/imports/lib/relativeTimeFormat";
 import "./unit/imports/lib/safeHref";
 import "./unit/imports/lib/scrubTelemetry";
+import "./unit/imports/lib/shareableUrl";
 import "./unit/imports/lib/solvedness";
 import "./unit/imports/lib/sortUsersByDisplayName";
 import "./unit/imports/lib/summarizeUserStatuses";

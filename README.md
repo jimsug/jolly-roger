@@ -137,7 +137,10 @@ on.
 
 Renaming a tag can keep the old name as an alias, so adding a tag by either
 name finds the same tag, and renaming a tag to another tag's name merges the
-two. `where:` tags record a puzzle's location. `group:`, `meta-for:` and
+two. `where:` tags record a puzzle's location. A new tag named with `loc:` or
+`location:` is filed under `where:`, and a bare `stuck` under `is:stuck`, so
+the different spellings end up as one tag. Renaming a tag to one of those
+spellings files it the same way. `group:`, `meta-for:` and
 `where:` tags show an icon in place of their prefix (the puzzle list has a
 legend), and each row of the puzzle list has a column for priority and stuck
 markers and one for a meta or metameta badge. Server admins can set the tags new

@@ -17,6 +17,7 @@ import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import nodeIsText from "../../lib/nodeIsText";
 import { computeSolvedness } from "../../lib/solvedness";
+import { type TagKind, tagKind, tagPrefixValue } from "../../lib/tagNames";
 import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import { DiscordBot } from "../discord";
 import { serverLanguage } from "../lang";
@@ -48,17 +49,21 @@ function escapeDiscordMarkdown(text: string): string {
   return text.replaceAll(/[\\`*_~|[\]()<>#-]/g, "\\$&");
 }
 
+// The kinds of tag whose prefix an embed shows as an emoji, matching the
+// icons on the puzzle list's chips.
+const TAG_KIND_EMOJI: Partial<Record<TagKind, string>> = {
+  group: "📂",
+  metaFor: "⭐️",
+  location: "📍",
+};
+
 // Prefixed tags show an icon in place of the prefix so a long tag list stays
-// readable in an embed.
+// readable in an embed. A synonym ("loc:") shows as its canonical kind.
 export function formatTagForDiscord(tagName: string): string {
-  if (tagName.startsWith("group:")) {
-    return `📂 ${escapeDiscordMarkdown(tagName.slice("group:".length))}`;
-  }
-  if (tagName.startsWith("meta-for:")) {
-    return `⭐️ ${escapeDiscordMarkdown(tagName.slice("meta-for:".length))}`;
-  }
-  if (tagName.startsWith("where:")) {
-    return `📍 ${escapeDiscordMarkdown(tagName.slice("where:".length))}`;
+  const emoji = TAG_KIND_EMOJI[tagKind(tagName)];
+  const value = tagPrefixValue(tagName);
+  if (emoji && value !== undefined) {
+    return `${emoji} ${escapeDiscordMarkdown(value)}`;
   }
   return escapeDiscordMarkdown(tagName);
 }

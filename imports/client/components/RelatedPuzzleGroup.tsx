@@ -159,8 +159,7 @@ const RelatedPuzzleGroup = ({
         {sharedTag ? (
           <>
             <Tag tag={sharedTag} linkToSearch={false} popoverRelated={false} />
-            {/* Only worth flagging while the group is mostly unsolved. */}
-            {unsolvedCount > 0 && unsolvedCount > solvedCount && (
+            {unsolvedCount + solvedCount > 0 && (
               <UnsolvedCountBadge bg="secondary">
                 {t(
                   "puzzleList.unsolvedInGroup",

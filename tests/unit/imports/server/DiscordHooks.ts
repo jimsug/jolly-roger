@@ -10,6 +10,12 @@ describe("DiscordHooks", function () {
       assert.equal(formatTagForDiscord("needs:extraction"), "needs:extraction");
     });
 
+    it("shows a synonym prefix as its canonical kind", function () {
+      assert.equal(formatTagForDiscord("loc:atrium"), "📍 atrium");
+      assert.equal(formatTagForDiscord("location:atrium"), "📍 atrium");
+      assert.equal(formatTagForDiscord("stuck"), "stuck");
+    });
+
     it("escapes markdown so a tag name can't smuggle a link into the embed", function () {
       assert.equal(
         formatTagForDiscord("[Hunt voice chat](https://evil.example)"),

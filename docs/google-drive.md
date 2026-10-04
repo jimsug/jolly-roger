@@ -46,7 +46,7 @@ files:
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-04T11:56:12Z
+updated: 2026-10-05T09:00:00Z
 ---
 
 # Google Drive Integration
@@ -178,7 +178,8 @@ empty), so a trickle of puzzle creations doesn't cost a Drive round trip each.
 Refills run when a puzzle is created or solved (`DocumentCacheHooks`), when a
 hunt is created, and from a background sweep
 (`imports/server/daemons/documentCache.ts`) at startup and every 13 minutes
-thereafter. The sweep only tops up hunts with a puzzle created or changed in
+thereafter (a prime, so the sweep doesn't keep lining up with other periodic
+work). The sweep only tops up hunts with a puzzle created or changed in
 the last 30 days: a hunt without any puzzles is either brand new (hunt creation
 pre-fills it) or has been purged, and the sweep shouldn't undo a purge, while a
 hunt that has gone quiet is over whether or not it has been archived. The
@@ -188,6 +189,15 @@ runs, so that multiple servers don't double up even when Drive is slow; it
 pauses between creations to stay under Drive's rate limits, skips archived and
 deleted hunts, and does nothing at all when the Drive client isn't configured
 or the `disable.google` feature flag is set.
+
+A failed creation ends that type's refill and starts a backoff for that hunt
+and type (`documentCacheBackoffMs`): no refill, from the sweep or the hooks,
+tries it again for one sweep interval, then twice that after the next failure,
+doubling up to four hours. Failing to make the hunt's Drive folder counts as a
+failed creation for every type that was due. The first failure is logged as an
+error and the repeats as warnings, and the next successful creation clears the
+backoff. The backoff lives in each server's memory, so a restart forgets it, and new puzzles
+still get a file created on the spot while their hunt's cache is empty.
 
 The `disable.gdrive_document_cache` circuit breaker switches off the document
 cache alone: refills stop, and new puzzles get a file created on the spot
@@ -206,6 +216,20 @@ cached documents from Drive and removes the rows. While the hunt has had puzzle
 activity in the last 30 days and isn't archived, the cache refills on the next
 pass, so this is mostly for archived hunts. Archiving a hunt stops refills but
 leaves whatever is already cached in place.
+
+Changing or clearing the spreadsheet or document template on the Setup page
+(`configureGdriveTemplates`) drops every hunt's unclaimed cached documents of
+that type, since they were copied from the old template and new puzzles should
+get the new one (`dropCachedDocumentsOfType`). The rows go under each hunt's
+cache lock, so a refill already running on that server finishes first and its
+copies go too; the server logs how many were dropped. The change also clears
+that server's backoffs for the type, since a broken template is the likeliest
+reason for them (other servers wait theirs out). The templates are saved
+before anything is dropped, so a failed drop is logged and the save still
+stands. The files are then deleted from Drive in
+the background (left behind with `disable.google` set), and the caches refill
+from the new template on the next sweep or puzzle. Saving the same templates
+again drops nothing.
 
 ## File permissions
 
@@ -274,7 +298,7 @@ bucket.
 When an edit can be attributed to a Jolly Roger user, the fetcher also records
 it as that user's most recent puzzle interaction in the `UserStatuses` model
 (`imports/server/recordPuzzleStatus.ts`), which feeds the hunter list's "last
-active on" button and the puzzle list's solver column. That happens once per
+active on" button and the puzzle list's viewers column. That happens once per
 activity bucket, when the `DocumentActivities` record is first inserted: every
 poll re-reads the same trailing window, and each status write is published to
 everyone with those lists open. Edits more than a few minutes old (a backfill

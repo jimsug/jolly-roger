@@ -16,12 +16,10 @@ import Hunts from "../../../lib/models/Hunts";
 import Puzzles from "../../../lib/models/Puzzles";
 import Tags from "../../../lib/models/Tags";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
-import {
-  isLocationTag,
-  puzzleStatusFromTags,
-} from "../../../lib/puzzleTagStatus";
+import { puzzleStatusFromTags } from "../../../lib/puzzleTagStatus";
 import type { Solvedness } from "../../../lib/solvedness";
 import { computeSolvedness } from "../../../lib/solvedness";
+import { isLocationTag } from "../../../lib/tagNames";
 import useAvatarUsers from "../../hooks/useAvatarUsers";
 import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import AvatarStack from "../AvatarStack";

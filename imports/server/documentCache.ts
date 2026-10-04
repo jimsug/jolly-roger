@@ -52,6 +52,71 @@ export function cachedDocumentName(type: GdriveMimeTypesType) {
   );
 }
 
+// How often every server sweeps the active hunts' caches (see
+// replenishAllDocumentCaches). 13 minutes is a prime, so the sweep doesn't
+// keep lining up with other periodic work.
+export const DOCUMENT_CACHE_SWEEP_INTERVAL_MS = 13 * 60 * 1000;
+
+// The longest a hunt and document type wait after a failed creation.
+const MAX_BACKOFF_MS = 4 * 60 * 60 * 1000;
+
+// How long to leave a hunt and document type alone after this many failed
+// creations in a row: one sweep interval, doubling with each failure up to
+// MAX_BACKOFF_MS.
+export function documentCacheBackoffMs(failures: number): number {
+  if (failures < 1) {
+    return 0;
+  }
+  return Math.min(
+    DOCUMENT_CACHE_SWEEP_INTERVAL_MS * 2 ** (failures - 1),
+    MAX_BACKOFF_MS,
+  );
+}
+
+// Where the backoff reads the time. Tests move it along.
+export const documentCacheClock = { now: () => Date.now() };
+
+// Failed creations per hunt and type in this process, so a hunt whose Drive
+// folder or template is broken isn't retried on every pass. A failure to make
+// the hunt's folder counts against every type that was due. Cleared by the
+// next success, and for a type whose template changes (see
+// dropCachedDocumentsOfType).
+const backoffs = new Map<string, { failures: number; until: number }>();
+
+function backoffKey(huntId: string, type: GdriveMimeTypesType) {
+  return `${huntId}:${type}`;
+}
+
+function isBackingOff(huntId: string, type: GdriveMimeTypesType) {
+  const backoff = backoffs.get(backoffKey(huntId, type));
+  return backoff !== undefined && documentCacheClock.now() < backoff.until;
+}
+
+function recordFailure(
+  huntId: string,
+  type: GdriveMimeTypesType,
+  error: unknown,
+) {
+  const key = backoffKey(huntId, type);
+  const failures = (backoffs.get(key)?.failures ?? 0) + 1;
+  const retryAfterMs = documentCacheBackoffMs(failures);
+  backoffs.set(key, {
+    failures,
+    until: documentCacheClock.now() + retryAfterMs,
+  });
+  const details = { huntId, type, failures, retryAfterMs, error };
+  if (failures === 1) {
+    Logger.error("Failed to replenish document cache", details);
+  } else {
+    Logger.warn("Failed to replenish document cache again", details);
+  }
+}
+
+// Forgets every failure, so each test starts without a backoff. For tests.
+export function resetDocumentCacheBackoffs() {
+  backoffs.clear();
+}
+
 function needsRefill(available: number, target: number) {
   return (
     available < target - REFILL_SLACK ||
@@ -83,10 +148,28 @@ async function replenishOnce(huntId: string) {
       return;
     }
 
+    const due = [...DOCUMENT_CACHE_TARGETS.keys()].filter(
+      (type) => !isBackingOff(huntId, type),
+    );
+    if (due.length === 0) {
+      return;
+    }
+
     await withRenewedLock(lockName(huntId), async (preempted) => {
-      const folderId = await ensureHuntFolder(hunt);
+      let folderId: string;
+      try {
+        folderId = await ensureHuntFolder(hunt);
+      } catch (error) {
+        for (const type of due) {
+          recordFailure(huntId, type, error);
+        }
+        return;
+      }
 
       for (const [type, target] of DOCUMENT_CACHE_TARGETS) {
+        if (isBackingOff(huntId, type)) {
+          continue;
+        }
         const available = await CachedDocuments.find({
           hunt: huntId,
           status: "available",
@@ -117,12 +200,9 @@ async function replenishOnce(huntId: string) {
               provider: "google",
               value: { type, id, folder: folderId },
             });
+            backoffs.delete(backoffKey(huntId, type));
           } catch (error) {
-            Logger.error("Failed to replenish document cache", {
-              huntId,
-              type,
-              error,
-            });
+            recordFailure(huntId, type, error);
             break;
           }
           await setTimeout(documentCacheSettings.creationDelayMs);
@@ -144,7 +224,8 @@ const rerunRequested = new Set<string>();
 // rejects: failures are logged, since callers are hooks and timers with
 // nowhere to report them. Does nothing without a configured Drive client,
 // with the disable.google or disable.gdrive_document_cache flag set, or for
-// archived or deleted hunts.
+// archived or deleted hunts, and skips a type that is backing off after a
+// failed creation (see documentCacheBackoffMs).
 export function replenishDocumentCache(huntId: string): Promise<void> {
   const current = inFlight.get(huntId);
   if (current) {
@@ -202,10 +283,14 @@ export async function replenishAllDocumentCaches() {
   }
 }
 
-// Resolves once no replenishment pass is running in this process. For tests.
+// Deletions of dropped cached documents still running in the background.
+const pendingDeletions = new Set<Promise<void>>();
+
+// Resolves once no replenishment pass or background deletion is running in
+// this process. For tests.
 export async function waitForDocumentCacheIdle() {
-  while (inFlight.size > 0) {
-    await Promise.all(inFlight.values());
+  while (inFlight.size > 0 || pendingDeletions.size > 0) {
+    await Promise.all([...inFlight.values(), ...pendingDeletions]);
   }
 }
 
@@ -264,4 +349,95 @@ export async function purgeDocumentCache(
       await onProgress?.(completed, cached.length);
     }
   });
+}
+
+async function deleteDroppedDocuments(
+  type: GdriveMimeTypesType,
+  ids: string[],
+) {
+  if (!(await isGoogleAvailable())) {
+    Logger.warn("Dropped cached documents remain in Drive: Google is off", {
+      type,
+      count: ids.length,
+    });
+    return;
+  }
+  for (const fileId of ids) {
+    try {
+      await deleteDocument(fileId);
+    } catch (error) {
+      Logger.error("Failed to delete cached document; it remains in Drive", {
+        fileId,
+        error,
+      });
+    }
+    await setTimeout(documentCacheSettings.deletionDelayMs);
+  }
+}
+
+// Drops every hunt's unclaimed cached documents of one type, for when the
+// Drive template for that type changes: they were copied from the old one,
+// and new puzzles should get the new one. Each hunt's rows go under its
+// cache lock, so a refill already running on this server finishes (and its
+// copies are dropped too) first. This server's backoffs for the type are
+// cleared, since a broken template is the likeliest reason for them. The
+// files are deleted from Drive in the background; the caches refill from the
+// new template on the next sweep or puzzle. Resolves with how many were
+// dropped.
+export async function dropCachedDocumentsOfType(
+  type: GdriveMimeTypesType,
+): Promise<number> {
+  for (const [key] of backoffs) {
+    if (key.endsWith(`:${type}`)) {
+      backoffs.delete(key);
+    }
+  }
+
+  const hunts = new Set<string>(inFlight.keys());
+  await CachedDocuments.find(
+    { "value.type": type, status: "available" },
+    { projection: { hunt: 1 } },
+  ).forEachAsync((doc) => {
+    hunts.add(doc.hunt);
+  });
+
+  const dropped: string[] = [];
+  for (const huntId of hunts) {
+    await withRenewedLock(lockName(huntId), async () => {
+      const cached = await CachedDocuments.find({
+        hunt: huntId,
+        status: "available",
+        "value.type": type,
+      }).fetchAsync();
+      for (const doc of cached) {
+        const removed = await CachedDocuments.removeAsync({
+          _id: doc._id,
+          status: "available",
+        });
+        if (removed > 0) {
+          dropped.push(doc.value.id);
+        }
+      }
+    });
+  }
+
+  Logger.info("Dropped cached documents copied from an old template", {
+    type,
+    dropped: dropped.length,
+  });
+  if (dropped.length > 0) {
+    const deletion = deleteDroppedDocuments(type, dropped)
+      .catch((error) => {
+        Logger.error("Failed to delete dropped cached documents", {
+          type,
+          count: dropped.length,
+          error,
+        });
+      })
+      .finally(() => {
+        pendingDeletions.delete(deletion);
+      });
+    pendingDeletions.add(deletion);
+  }
+  return dropped.length;
 }

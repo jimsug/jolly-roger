@@ -1,9 +1,5 @@
-import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
-import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faAlignJustify } from "@fortawesome/free-solid-svg-icons/faAlignJustify";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
-import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
-import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Modifier, ModifierArguments, Padding } from "@popperjs/core";
@@ -26,12 +22,18 @@ import { indexedById } from "../../lib/listUtils";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import { sortPuzzlesByRelevanceWithinPuzzleGroup } from "../../lib/puzzle-sort-and-group";
-import { isLocationTag } from "../../lib/puzzleTagStatus";
+import {
+  GROUP_TAG_PREFIX,
+  isMetaForTag,
+  tagKind,
+  tagPrefixValue,
+} from "../../lib/tagNames";
 import useIsOffsite from "../hooks/useIsOffsite";
 import CopyToClipboardButton from "./CopyToClipboardButton";
 import { removePunctuation } from "./PuzzleAnswer";
 import RelatedPuzzleTable from "./RelatedPuzzleTable";
 import { LOCATION_TAG_COLOR, NEEDS_TAG_COLOR } from "./tagColors";
+import { tagKindIcon } from "./tagKindIcons";
 
 const RemoveTagButton: FC<ComponentPropsWithRef<typeof Button>> = styled(
   Button,
@@ -169,8 +171,8 @@ const PopoverPadding = {
 // Calculate the tag name to use when determining related puzzles
 // There may be more cases here in the future
 function getRelatedPuzzlesSharedTagName(name: string) {
-  if (name.lastIndexOf("meta-for:", 0) === 0) {
-    return `group:${name.slice("meta-for:".length)}`;
+  if (isMetaForTag(name)) {
+    return `${GROUP_TAG_PREFIX}${tagPrefixValue(name)}`;
   }
   return name;
 }
@@ -332,24 +334,11 @@ const Tag = (props: TagProps) => {
   ]);
 
   const name = props.tag.name;
-  const isAdministrivia = name === "administrivia";
-  const isMeta = name === "is:meta" || name === "is:metameta";
-  const isGroup = name.startsWith("group:");
-  const isMetaFor = name.startsWith("meta-for:");
-  const isNeeds = name.startsWith("needs:");
-  const isPriority = name.startsWith("priority:");
-  const isLocation = isLocationTag(name);
+  const kind = tagKind(name);
 
   // Group, meta-for and location prefixes are drawn as an icon instead of the
   // prefix text (see the legend on the puzzle list).
-  let prefixIcon: IconDefinition | undefined;
-  if (isGroup) {
-    prefixIcon = faFolderOpen;
-  } else if (isMetaFor) {
-    prefixIcon = faStar;
-  } else if (isLocation) {
-    prefixIcon = faMapPin;
-  }
+  const prefixIcon = tagKindIcon(kind);
 
   // Browsers won't word-break on hyphens, so suggest
   // Use wbr instead of zero-width space to make copy-paste reasonable
@@ -395,13 +384,13 @@ const Tag = (props: TagProps) => {
       data-tag-name={props.tag.name}
       $popoverCapable={props.popoverRelated}
       $popoverOpen={showPopover}
-      $isAdministrivia={isAdministrivia}
-      $isMeta={isMeta}
-      $isGroup={isGroup}
-      $isMetaFor={isMetaFor}
-      $isNeeds={isNeeds}
-      $isPriority={isPriority}
-      $isLocation={isLocation}
+      $isAdministrivia={kind === "administrivia"}
+      $isMeta={kind === "meta" || kind === "metameta"}
+      $isGroup={kind === "group"}
+      $isMetaFor={kind === "metaFor"}
+      $isNeeds={kind === "needs"}
+      $isPriority={kind === "priority"}
+      $isLocation={kind === "location"}
     >
       {title}
       {props.onRemove && (

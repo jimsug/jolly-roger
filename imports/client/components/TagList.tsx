@@ -12,6 +12,7 @@ import ButtonGroup from "react-bootstrap/ButtonGroup";
 import styled from "styled-components";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
+import { compareTagNames, type TagKind, tagKind } from "../../lib/tagNames";
 import Tag from "./Tag";
 import TagEditor from "./TagEditor";
 
@@ -56,46 +57,31 @@ interface PopoverRelatedProps {
 type TagListProps = BaseTagListProps &
   (DoNotPopoverRelatedProps | PopoverRelatedProps);
 
-const soloTagInterestingness = (tag: TagType) => {
-  if (tag.name === "is:metameta") {
-    return -6;
-  } else if (tag.name === "is:meta") {
-    return -5;
-  } else if (tag.name.lastIndexOf("meta-for:", 0) === 0) {
-    return -4;
-  } else if (tag.name.lastIndexOf("group:", 0) === 0) {
-    return -3;
-  } else if (tag.name.lastIndexOf("needs:", 0) === 0) {
-    return -2;
-  } else if (
-    tag.name.lastIndexOf("priority:", 0) === 0 ||
-    tag.name.lastIndexOf("where:", 0) === 0
-  ) {
-    return -1;
-  } else {
-    return 0;
-  }
+// Where each kind of tag goes among a puzzle's tags, lowest first; anything
+// not listed comes last. Kinds in the same place sort A to Z.
+const KIND_ORDER: Partial<Record<TagKind, number>> = {
+  metameta: -6,
+  meta: -5,
+  metaFor: -4,
+  group: -3,
+  needs: -2,
+  priority: -1,
+  location: -1,
 };
 
-const sortedTagsForSinglePuzzle = (tags: TagType[]) => {
-  // The sort order for tags should probably be:
-  // * "is:metameta" first
-  // * then "is:meta"
-  // * "meta:*" comes next (sorted alphabetically, if multiple are present)
-  // * all other tags, sorted alphabetically
-  const sortedTags = tags.slice(0);
+const soloTagInterestingness = (tag: TagType) =>
+  KIND_ORDER[tagKind(tag.name)] ?? 0;
 
-  sortedTags.sort((a, b) => {
+const sortedTagsForSinglePuzzle = (tags: TagType[]) => {
+  return tags.toSorted((a, b) => {
     const ia = soloTagInterestingness(a);
     const ib = soloTagInterestingness(b);
     if (ia !== ib) {
       return ia - ib;
     } else {
-      return a.name.localeCompare(b.name);
+      return compareTagNames(a.name, b.name);
     }
   });
-
-  return sortedTags;
 };
 
 const TagList = React.memo((props: TagListProps) => {

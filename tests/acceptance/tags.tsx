@@ -163,6 +163,54 @@ if (Meteor.isClient) {
         sub.stop();
       });
 
+      it("files a rename to a synonym under its canonical name", async function () {
+        const { huntId, puzzleIds } = await setUpHunt("tags rename synonym", [
+          ["where:atrium"],
+          ["atrium"],
+          ["foyer"],
+        ]);
+        const sub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        const where = await Tags.findOneAsync({
+          hunt: huntId,
+          name: "where:atrium",
+        });
+        const atrium = await Tags.findOneAsync({
+          hunt: huntId,
+          name: "atrium",
+        });
+        const foyer = await Tags.findOneAsync({ hunt: huntId, name: "foyer" });
+        assert.isDefined(where);
+        assert.isDefined(atrium);
+        assert.isDefined(foyer);
+
+        // A synonym of an existing tag merges into it
+        await renameTag.callPromise({
+          tagId: atrium._id,
+          name: "loc:atrium",
+          keepOldNameAsAlias: false,
+        });
+        assert.isUndefined(await Tags.findOneAsync(atrium._id));
+        assert.sameMembers(
+          (await Puzzles.findOneAsync(puzzleIds[1]))?.tags ?? [],
+          [where._id],
+        );
+
+        // Otherwise the tag takes the canonical name
+        await renameTag.callPromise({
+          tagId: foyer._id,
+          name: "location:foyer",
+          keepOldNameAsAlias: false,
+        });
+        assert.equal((await Tags.findOneAsync(foyer._id))?.name, "where:foyer");
+        assert.sameMembers(
+          (await Tags.find({ hunt: huntId }).fetchAsync()).map((t) => t.name),
+          ["where:atrium", "where:foyer"],
+        );
+        sub.stop();
+      });
+
       it("rejects unknown tags and blank names", async function () {
         const { huntId } = await setUpHunt("tags rename errors", [["cryptic"]]);
         const sub = await typedSubscribe.async(puzzlesForPuzzleList, {
@@ -251,6 +299,63 @@ if (Meteor.isClient) {
     });
 
     describe("addPuzzleTag", function () {
+      it("files a tag named by a synonym under its canonical name", async function () {
+        const { huntId, puzzleIds } = await setUpHunt("tags add synonym", [
+          ["where:atrium"],
+          [],
+        ]);
+        const sub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        const where = await Tags.findOneAsync({
+          hunt: huntId,
+          name: "where:atrium",
+        });
+        assert.isDefined(where);
+
+        await addPuzzleTag.callPromise({
+          puzzleId: puzzleIds[1]!,
+          tagName: "loc:atrium",
+        });
+        await addPuzzleTag.callPromise({
+          puzzleId: puzzleIds[1]!,
+          tagName: "stuck",
+        });
+        const stuck = await Tags.findOneAsync({
+          hunt: huntId,
+          name: "is:stuck",
+        });
+        assert.isDefined(stuck);
+        assert.sameMembers(
+          (await Puzzles.findOneAsync(puzzleIds[1]))?.tags ?? [],
+          [where._id, stuck._id],
+        );
+        assert.sameMembers(
+          (await Tags.find({ hunt: huntId }).fetchAsync()).map((t) => t.name),
+          ["where:atrium", "is:stuck"],
+        );
+        sub.stop();
+      });
+
+      it("makes one tag for two synonyms named in one save", async function () {
+        const { huntId, puzzleIds } = await setUpHunt("tags save synonyms", [
+          ["loc:atrium", "where:atrium", "stuck", "is:stuck"],
+        ]);
+        const sub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        const tags = await Tags.find({ hunt: huntId }).fetchAsync();
+        assert.sameMembers(
+          tags.map((t) => t.name),
+          ["where:atrium", "is:stuck"],
+        );
+        assert.sameMembers(
+          (await Puzzles.findOneAsync(puzzleIds[0]))?.tags ?? [],
+          tags.map((t) => t._id),
+        );
+        sub.stop();
+      });
+
       it("rejects outsiders before anything is written", async function () {
         const { huntId, puzzleIds } = await setUpHunt("tags add permissions", [
           ["cryptic"],

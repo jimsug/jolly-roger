@@ -6,7 +6,8 @@ import EmojiPicker, {
 import { useCallback } from "react";
 import { useTheme } from "styled-components";
 
-// The reactions offered before the full list: ✅ ❎ ❗ ❓ ↔️
+// The reactions offered before the full list, an arbitrary starting set:
+// ✅ ❎ ❗ ❓ ↔️
 const QUICK_REACTIONS = ["2705", "274e", "2757", "2753", "2194-fe0f"];
 
 const PREVIEW_CONFIG = { showPreview: false };

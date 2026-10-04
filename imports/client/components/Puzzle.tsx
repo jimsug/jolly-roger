@@ -39,6 +39,11 @@ import { puzzleStatusFromTags } from "../../lib/puzzleTagStatus";
 import type { PuzzleViewers } from "../../lib/puzzleViewers";
 import type { Solvedness } from "../../lib/solvedness";
 import { computeSolvedness } from "../../lib/solvedness";
+import {
+  isGroupTag,
+  META_FOR_TAG_PREFIX,
+  tagPrefixValue,
+} from "../../lib/tagNames";
 import updatePuzzle from "../../methods/updatePuzzle";
 import { useOperatorActionsHiddenForHunt } from "../hooks/persisted-state";
 import usePuzzleInterest from "../hooks/usePuzzleInterest";
@@ -481,8 +486,10 @@ const Puzzle = React.memo(
     const suppressedMetaForNames = new Set(
       [...suppressedTagIds]
         .map((tagId) => tagIndex.get(tagId)?.name)
-        .filter((name): name is string => name?.startsWith("group:") ?? false)
-        .map((name) => `meta-for:${name.slice("group:".length)}`),
+        .filter(
+          (name): name is string => name !== undefined && isGroupTag(name),
+        )
+        .map((name) => `${META_FOR_TAG_PREFIX}${tagPrefixValue(name)}`),
     );
 
     const ownTags = puzzle.tags

@@ -84,6 +84,7 @@ import {
 import chatMessagesForPuzzle from "../../lib/publications/chatMessagesForPuzzle";
 import puzzleForPuzzlePage from "../../lib/publications/puzzleForPuzzlePage";
 import puzzleInterestsForHunt from "../../lib/publications/puzzleInterestsForHunt";
+import shareableUrl from "../../lib/shareableUrl";
 import { computeSolvedness } from "../../lib/solvedness";
 import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import addPuzzleAnswer from "../../methods/addPuzzleAnswer";
@@ -1625,7 +1626,9 @@ const DocumentCopyLinkButton = ({
   user: Meteor.User;
 }) => {
   const { t } = useTranslation();
-  const url = googleDocumentUrl(document, user);
+  // The copy goes to someone else, so it mustn't name this viewer's account
+  const embedUrl = googleDocumentUrl(document, user);
+  const url = embedUrl === undefined ? undefined : shareableUrl(embedUrl);
   let tooltipText: string;
   switch (document.value.type) {
     case "spreadsheet":

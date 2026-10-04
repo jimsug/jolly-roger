@@ -8,7 +8,9 @@ const dsn = process.env.SENTRY_DSN;
 if (dsn) {
   Sentry.init({
     dsn,
-    tracesSampleRate: 1,
+    // Every trace counts against the service's quota, so production sends
+    // a sample
+    tracesSampleRate: Meteor.isProduction ? 0.1 : 1,
     release: Meteor.gitCommitHash,
     environment: Meteor.isDevelopment ? "development" : "production",
     sendDefaultPii: false,

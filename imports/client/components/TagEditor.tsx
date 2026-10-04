@@ -3,6 +3,7 @@ import React, { Suspense, useCallback } from "react";
 import styled, { useTheme } from "styled-components";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
+import { compareTagNames } from "../../lib/tagNames";
 import Loading from "./Loading";
 
 // Casting away the React.lazy because otherwise we lose access to the generic parameter
@@ -43,9 +44,7 @@ const TagEditor = ({
     .map((t) => {
       return { value: t, label: t };
     })
-    .toSorted((a, b) =>
-      a.label.toLowerCase().localeCompare(b.label.toLowerCase()),
-    );
+    .toSorted((a, b) => compareTagNames(a.label, b.label));
 
   const theme = useTheme();
 

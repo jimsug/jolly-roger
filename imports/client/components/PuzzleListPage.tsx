@@ -6,7 +6,6 @@ import { faEyeSlash } from "@fortawesome/free-regular-svg-icons/faEyeSlash";
 import { faFolderOpen } from "@fortawesome/free-regular-svg-icons/faFolderOpen";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
-import { faMapPin } from "@fortawesome/free-solid-svg-icons/faMapPin";
 import { faPencilAlt } from "@fortawesome/free-solid-svg-icons/faPencilAlt";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
@@ -91,6 +90,7 @@ import RelatedPuzzleGroup, { PuzzleGroupDiv } from "./RelatedPuzzleGroup";
 import RelatedPuzzleList from "./RelatedPuzzleList";
 import ResponsiveToggleButtonGroup from "./styling/ResponsiveToggleButtonGroup";
 import { mediaBreakpointDown } from "./styling/responsive";
+import { TAG_KIND_ICONS } from "./tagKindIcons";
 import {
   HuntHasWhiteboardContext,
   useHuntHasWhiteboard,
@@ -699,9 +699,9 @@ const PuzzleListView = ({
                 defaults="<group /> = group; <metaFor /> = meta for; <where /> = where"
                 t={t}
                 components={{
-                  group: <FontAwesomeIcon icon={faFolderOpen} />,
-                  metaFor: <FontAwesomeIcon icon={faStar} />,
-                  where: <FontAwesomeIcon icon={faMapPin} />,
+                  group: <FontAwesomeIcon icon={TAG_KIND_ICONS.group} />,
+                  metaFor: <FontAwesomeIcon icon={TAG_KIND_ICONS.metaFor} />,
+                  where: <FontAwesomeIcon icon={TAG_KIND_ICONS.location} />,
                 }}
               />
             </div>
@@ -920,7 +920,7 @@ const PuzzleListView = ({
           </FormGroup>
         )}
         <FormGroup>
-          <FormLabel>{t("puzzleList.hunters", "Hunters")}</FormLabel>
+          <FormLabel>{t("puzzleList.viewers.label", "Viewers")}</FormLabel>
           <ButtonToolbar>
             <ResponsiveToggleButtonGroup
               type="radio"
@@ -935,14 +935,15 @@ const PuzzleListView = ({
                 value="hide"
               >
                 <FontAwesomeIcon icon={faEyeSlash} />{" "}
-                {t("common.hidden", "Hidden")}
+                {t("puzzleList.viewers.hide", "Hide")}
               </ToggleButton>
               <ToggleButton
                 id={`${idPrefix}-viewers-show-button`}
                 variant="outline-info"
                 value="show"
               >
-                <FontAwesomeIcon icon={faEye} /> {t("common.shown", "Shown")}
+                <FontAwesomeIcon icon={faEye} />{" "}
+                {t("puzzleList.viewers.show", "Show")}
               </ToggleButton>
             </ResponsiveToggleButtonGroup>
           </ButtonToolbar>
@@ -963,8 +964,8 @@ const PuzzleListView = ({
               placeholder={
                 viewersShown
                   ? t(
-                      "puzzleList.filterByPlaceholderWithSolvers",
-                      "Filter by title, answer, tag, or solver",
+                      "puzzleList.filterByPlaceholderWithViewers",
+                      "Filter by title, answer, tag, or viewer",
                     )
                   : t(
                       "puzzleList.filterByPlaceholder",

@@ -2,14 +2,21 @@ import { Meteor } from "meteor/meteor";
 import Logger from "../Logger";
 import Tags from "../lib/models/Tags";
 import {
+  canonicalTagName,
+  isGroupTag,
   MAX_TAG_NAME_LENGTH,
+  META_FOR_TAG_PREFIX,
   normalizeTagName,
-  tagNameMatcher,
+  tagPrefixValue,
+  tagSynonymMatcher,
 } from "../lib/tagNames";
 
 // Resolves a tag name to a tag id, creating the tag if needed. The name is
 // normalised (see normalizeTagName) and matched against existing tags and
 // their aliases ignoring case, so "  Group:Events " resolves to "group:events".
+// Synonyms (see TAG_SYNONYMS) match too: "loc:atrium" finds an existing
+// "where:atrium" and "where:atrium" an existing "loc:atrium". A new tag is
+// created under the canonical name.
 export default async function getOrCreateTagByName(
   huntId: string,
   name: string,
@@ -26,7 +33,18 @@ export default async function getOrCreateTagByName(
     return exactTag._id;
   }
 
-  const matcher = tagNameMatcher(cleanName);
+  const canonicalName = canonicalTagName(cleanName);
+  if (canonicalName !== cleanName) {
+    const canonicalTag = await Tags.findOneAsync({
+      hunt: huntId,
+      name: canonicalName,
+    });
+    if (canonicalTag) {
+      return canonicalTag._id;
+    }
+  }
+
+  const matcher = tagSynonymMatcher(cleanName);
   const existingTag = await Tags.findOneAsync({
     hunt: huntId,
     $or: [{ name: matcher }, { aliases: matcher }],
@@ -35,22 +53,39 @@ export default async function getOrCreateTagByName(
     return existingTag._id;
   }
 
-  if (cleanName.length > MAX_TAG_NAME_LENGTH) {
+  if (canonicalName.length > MAX_TAG_NAME_LENGTH) {
     throw new Meteor.Error(
       400,
       `Tag name must be at most ${MAX_TAG_NAME_LENGTH} characters`,
     );
   }
 
-  Logger.info("Creating a new tag", { hunt: huntId, name: cleanName });
-  const newTagId = await Tags.insertAsync({ hunt: huntId, name: cleanName });
+  Logger.info("Creating a new tag", { hunt: huntId, name: canonicalName });
+  const newTagId = await Tags.insertAsync({
+    hunt: huntId,
+    name: canonicalName,
+  });
 
   // When creating a `group:*` tag, also ensure a matching `meta-for:` tag exists.
-  if (cleanName.startsWith("group:")) {
-    const groupName = cleanName.slice("group:".length);
-    const metaTagName = `meta-for:${groupName}`;
-    await getOrCreateTagByName(huntId, metaTagName);
+  if (isGroupTag(canonicalName)) {
+    const groupName = tagPrefixValue(canonicalName) ?? "";
+    await getOrCreateTagByName(huntId, `${META_FOR_TAG_PREFIX}${groupName}`);
   }
 
   return newTagId;
+}
+
+// Resolves several tag names to their tags' ids, without repeats. The names
+// go one at a time: resolved side by side, two names for a tag that doesn't
+// exist yet (synonyms such as "loc:x" and "where:x", or a group: tag and its
+// meta-for: tag) would each create it.
+export async function getOrCreateTagsByName(
+  huntId: string,
+  names: readonly string[],
+): Promise<string[]> {
+  const tagIds = new Set<string>();
+  for (const name of names) {
+    tagIds.add(await getOrCreateTagByName(huntId, name));
+  }
+  return [...tagIds];
 }

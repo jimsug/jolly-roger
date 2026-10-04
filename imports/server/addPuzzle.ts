@@ -14,7 +14,7 @@ import {
   ensureDocument,
   isGoogleAvailable,
 } from "./gdrive";
-import getOrCreateTagByName from "./getOrCreateTagByName";
+import { getOrCreateTagsByName } from "./getOrCreateTagByName";
 import { deferSyncPuzzlesOnBoard } from "./whiteboard";
 import withLock from "./withLock";
 
@@ -39,18 +39,14 @@ async function createDocumentAndInsertPuzzle(
   lock: { locked: true; lockedSummary?: string } | undefined,
 ): Promise<string> {
   // Look up each tag by name and map them to tag IDs.
-  const tagIds = await Promise.all(
-    tags.map((tagName) => {
-      return getOrCreateTagByName(huntId, tagName);
-    }),
-  );
+  const tagIds = await getOrCreateTagsByName(huntId, tags);
 
   const fullPuzzle = {
     hunt: huntId,
     title,
     expectedAnswerCount,
     _id: Random.id(),
-    tags: [...new Set(tagIds)],
+    tags: tagIds,
     answers: [],
     url,
     completedWithNoAnswer,

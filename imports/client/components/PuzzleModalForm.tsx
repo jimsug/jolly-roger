@@ -27,6 +27,7 @@ import guessTitleFromUrl from "../../lib/guessTitleFromUrl";
 import Hunts from "../../lib/models/Hunts";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
+import { compareTagNames, isFunctionalTag } from "../../lib/tagNames";
 import LabelledRadioGroup from "./LabelledRadioGroup";
 import Loading from "./Loading";
 import type { ModalFormHandle } from "./ModalForm";
@@ -71,15 +72,8 @@ export type PuzzleModalFormHandle = {
   show: (prefill?: PuzzleModalFormPrefill) => void;
 };
 
-// "Functional" tags are any with a prefix (group:, meta-for:, priority:,
-// where:, or anything else before a colon); the rest describe the puzzle's
-// content. The form takes them in separate inputs.
-const isFunctionalTag = (name: string) => name.includes(":");
-
 const sortTagNames = (names: Iterable<string>) =>
-  [...new Set(names)]
-    .filter(Boolean)
-    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  [...new Set(names)].filter(Boolean).sort(compareTagNames);
 
 const PuzzleModalForm = ({
   huntId,
@@ -151,10 +145,9 @@ const PuzzleModalForm = ({
   const [lockedDirty, setLockedDirty] = useState(false);
   const [lockedSummaryDirty, setLockedSummaryDirty] = useState(false);
   // The title last guessed from the URL, so a later URL can replace it but a
-  // title someone typed is left alone.
-  const lastGuessedTitle = useRef(
-    puzzle?.url === undefined ? undefined : guessTitleFromUrl(puzzle.url),
-  );
+  // title someone typed is left alone. Editing a puzzle never replaces a
+  // title, so this only follows guesses made in this form.
+  const lastGuessedTitle = useRef<string | undefined>(undefined);
   // Whether the tags came from a prefill, which belongs to whatever opened
   // the form with it: the next show() without tags clears them.
   const tagsPrefilled = useRef(false);
@@ -384,8 +377,9 @@ const PuzzleModalForm = ({
     }
   }, [titleDirty, puzzle, title]);
 
-  // Fills in a title from the URL while the title is blank or still the one
-  // guessed from the previous URL.
+  // Fills in a title from the URL while the title is blank or, when adding a
+  // puzzle, still the one guessed from the previous URL. Editing a puzzle's
+  // URL leaves a title it has alone.
   const onUrlChange: NonNullable<FormControlProps["onChange"]> = useCallback(
     (event) => {
       const newUrl = event.currentTarget.value;
@@ -395,13 +389,16 @@ const PuzzleModalForm = ({
       if (guessed === undefined) {
         return;
       }
-      if (currentTitle === "" || currentTitle === lastGuessedTitle.current) {
+      if (
+        currentTitle === "" ||
+        (!puzzle && currentTitle === lastGuessedTitle.current)
+      ) {
         setTitle(guessed);
         setTitleDirty(true);
       }
       lastGuessedTitle.current = guessed;
     },
-    [currentTitle],
+    [currentTitle, puzzle],
   );
 
   const currentUrl = useMemo(() => {
@@ -659,7 +656,7 @@ const PuzzleModalForm = ({
               <Trans
                 i18nKey="puzzle.edit.functionalTagsHelp"
                 t={t}
-                defaults="Tags with a prefix, like <code>group:</code>, <code>meta-for:</code>, <code>priority:</code>, or <code>where:</code> (e.g. <code>priority:high</code>; <code>group:events</code>)"
+                defaults="Tags with a prefix, like <code>group:</code>, <code>meta-for:</code>, <code>priority:</code>, or <code>where:</code> (e.g. <code>priority:high</code>; <code>group:events</code>). A bare <code>stuck</code> counts as <code>is:stuck</code>."
                 components={{ code: <code /> }}
               />
             </FormText>

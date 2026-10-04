@@ -5,9 +5,11 @@ import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
 import {
+  canonicalTagName,
   MAX_TAG_NAME_LENGTH,
   normalizeTagName,
   tagNameMatcher,
+  tagSynonymMatcher,
 } from "../../lib/tagNames";
 import renameTag from "../../methods/renameTag";
 import { deferSyncPuzzlesOnBoard } from "../whiteboard";
@@ -42,7 +44,9 @@ defineMethod(renameTag, {
       );
     }
 
-    const newName = normalizeTagName(name);
+    // A synonym is stored under its canonical name, as for a new tag (see
+    // getOrCreateTagByName)
+    const newName = canonicalTagName(normalizeTagName(name));
     if (!newName) {
       throw new Meteor.Error(400, "Tag name must not be empty");
     }
@@ -60,12 +64,21 @@ defineMethod(renameTag, {
       { projection: { _id: 1 } },
     ).mapAsync((p) => p._id);
 
+    // Another tag answering to the new name, or to one of its synonyms,
+    // takes this one in. One named exactly that comes first.
     const matcher = tagNameMatcher(newName);
-    const target = await Tags.findOneAsync({
-      hunt: tag.hunt,
-      _id: { $ne: tagId },
-      $or: [{ name: matcher }, { aliases: matcher }],
-    });
+    const synonymMatcher = tagSynonymMatcher(newName);
+    const target =
+      (await Tags.findOneAsync({
+        hunt: tag.hunt,
+        _id: { $ne: tagId },
+        $or: [{ name: matcher }, { aliases: matcher }],
+      })) ??
+      (await Tags.findOneAsync({
+        hunt: tag.hunt,
+        _id: { $ne: tagId },
+        $or: [{ name: synonymMatcher }, { aliases: synonymMatcher }],
+      }));
 
     if (target) {
       // Another tag already answers to the new name: fold this one into it.

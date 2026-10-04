@@ -2,6 +2,16 @@ import { indexedById } from "./listUtils";
 import type { PuzzleType } from "./models/Puzzles";
 import type { TagType } from "./models/Tags";
 import { computeSolvedness } from "./solvedness";
+import {
+  canonicalTagName,
+  GROUP_TAG_PREFIX,
+  isGroupTag,
+  isMetametaTag,
+  isMetaTag,
+  META_FOR_TAG_PREFIX,
+  tagKind,
+  tagPrefixValue,
+} from "./tagNames";
 
 interface PuzzleGroup {
   sharedTag?: TagType;
@@ -20,7 +30,8 @@ interface InternalPuzzleGroup {
 }
 
 // Puzzles that can only be worked on in person, which sink to the bottom of
-// their group for people hunting remotely.
+// their group for people hunting remotely (by canonical name, so
+// loc:campus counts too).
 const ONSITE_ONLY_TAGS = new Set(["where:campus", "where:mit"]);
 
 function puzzleInterestingness(
@@ -33,7 +44,7 @@ function puzzleInterestingness(
   // we wish to sort a puzzle named 'meta-for:<something>' at the top.
   let desiredTagName: string | undefined;
   if (group) {
-    desiredTagName = `meta-for:${group}`;
+    desiredTagName = `${META_FOR_TAG_PREFIX}${group}`;
   }
   let isAdministrivia = false;
   let isGroup = false;
@@ -46,7 +57,7 @@ function puzzleInterestingness(
     if (!tag) {
       return;
     }
-    if (isOffsite && ONSITE_ONLY_TAGS.has(tag.name)) {
+    if (isOffsite && ONSITE_ONLY_TAGS.has(canonicalTagName(tag.name))) {
       minScore = Math.max(2, minScore);
     } else if (tag.name === "priority:low") {
       minScore = Math.max(1, minScore);
@@ -62,24 +73,21 @@ function puzzleInterestingness(
       // loads, so just pretend that tag doesn't exist if the join from id -> Tag object here
       // comes back undefined.
 
-      if (tag.name.lastIndexOf("group:", 0) === 0) {
+      if (isGroupTag(tag.name)) {
         isGroup = true;
       }
 
-      if (tag.name === "administrivia") {
+      if (tagKind(tag.name) === "administrivia") {
         // First comes any administrivia
         minScore = Math.min(-4, minScore);
         isAdministrivia = true;
       } else if (desiredTagName && tag.name === desiredTagName) {
         // Matching meta gets sorted top.
         minScore = Math.min(-3, minScore);
-      } else if (tag.name === "is:metameta") {
+      } else if (isMetametaTag(tag.name)) {
         // Metameta sorts above meta.
         minScore = Math.min(-2, minScore);
-      } else if (
-        tag.name === "is:meta" ||
-        tag.name.lastIndexOf("meta-for:", 0) === 0
-      ) {
+      } else if (isMetaTag(tag.name)) {
         // Meta sorts above non-meta.
         minScore = Math.min(-1, minScore);
       }
@@ -112,14 +120,14 @@ function interestingnessOfGroup(
   // Guarantees that if ia === ib, then sharedTag exists.
   if (!sharedTag) return 1;
 
-  if (sharedTag.name === "administrivia") {
+  if (tagKind(sharedTag.name) === "administrivia") {
     return -3;
   }
 
   // Look for a puzzle with meta-for:(this group's shared tag)
   let metaForTag: string | undefined;
-  if (sharedTag?.name.lastIndexOf("group:", 0) === 0) {
-    metaForTag = `meta-for:${sharedTag.name.slice("group:".length)}`;
+  if (isGroupTag(sharedTag.name)) {
+    metaForTag = `${META_FOR_TAG_PREFIX}${tagPrefixValue(sharedTag.name)}`;
   }
 
   let hasSolvedMetaForSharedGroup = false;
@@ -145,11 +153,7 @@ function interestingnessOfGroup(
           } else {
             hasUnsolvedMetaForSharedGroup = true;
           }
-        } else if (
-          (tag.name === "is:meta" ||
-            tag.name.lastIndexOf("meta-for:", 0) === 0) &&
-          solvedness === "unsolved"
-        ) {
+        } else if (isMetaTag(tag.name) && solvedness === "unsolved") {
           hasUnsolvedOtherMeta = true;
         }
       }
@@ -283,8 +287,7 @@ function puzzleGroupsByRelevance(
       // and that tag here will be undefined.  Handle this case gracefully.
       if (
         tag?.name &&
-        (tag.name === "administrivia" ||
-          tag.name.lastIndexOf("group:", 0) === 0)
+        (tagKind(tag.name) === "administrivia" || isGroupTag(tag.name))
       ) {
         grouped = true;
         if (!groupsMap.has(tag._id)) {
@@ -419,8 +422,8 @@ function sortPuzzlesByRelevanceWithinPuzzleGroup(
   isOffsite: boolean,
 ) {
   let group: string;
-  if (sharedTag?.name.lastIndexOf("group:", 0) === 0) {
-    group = sharedTag.name.slice("group:".length);
+  if (sharedTag && isGroupTag(sharedTag.name)) {
+    group = sharedTag.name.slice(GROUP_TAG_PREFIX.length);
   }
   const sortedPuzzles = puzzles.slice(0);
   sortedPuzzles.sort((a, b) => {
