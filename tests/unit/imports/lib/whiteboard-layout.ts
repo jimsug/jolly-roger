@@ -11,7 +11,9 @@ import {
   FRAME_PADDING,
   frameLabel,
   GAP,
+  isMetaForTag,
   placeIntoFrame,
+  roundMetas,
   type SeedNode,
   seedLayout,
   topLevelSlot,
@@ -299,11 +301,75 @@ describe("whiteboard placeIntoFrame", function () {
     assert.equal(result.frame.height, s1.y + CARD_HEIGHT + FRAME_PADDING);
   });
 
+  it("keeps a row that only metas are in for metas", function () {
+    const s0 = cardSlot(0);
+    const s4 = cardSlot(4);
+    const result = placeIntoFrame({ width: 2000, height: 400 }, [
+      { ...card(s0.x, s0.y), meta: true },
+      card(s4.x, s4.y),
+    ]);
+    assert.deepEqual(result.position, cardSlot(5));
+  });
+
+  it("fills a row a meta shares with a feeder, as on older boards", function () {
+    const s0 = cardSlot(0);
+    const s1 = cardSlot(1);
+    const result = placeIntoFrame({ width: 2000, height: 400 }, [
+      { ...card(s0.x, s0.y), meta: true },
+      card(s1.x, s1.y),
+    ]);
+    assert.deepEqual(result.position, cardSlot(2));
+  });
+
+  it("starts a new row below a frame of only metas", function () {
+    const s0 = cardSlot(0);
+    const result = placeIntoFrame({ width: 2000, height: 100 }, [
+      { ...card(s0.x, s0.y), meta: true },
+    ]);
+    assert.deepEqual(result.position, cardSlot(4));
+    assert.equal(
+      result.frame.height,
+      cardSlot(4).y + CARD_HEIGHT + FRAME_PADDING,
+    );
+  });
+
   it("puts new top-level nodes below everything", function () {
     assert.deepEqual(topLevelSlot([]), { x: 0, y: 0 });
     const slot = topLevelSlot([{ x: 10, y: 20, width: 100, height: 300 }]);
     assert.equal(slot.x, 0);
     assert.isAbove(slot.y, 320);
+  });
+});
+
+describe("whiteboard roundMetas", function () {
+  it("finds the puzzles tagged meta-for:X for a frame tagged group:X", function () {
+    const { tags, puzzles, puzzle, tag } = fixtures();
+    const meta = puzzle("Meta", ["meta-for:one", "group:one"]);
+    puzzle("Feeder", ["group:one"]);
+    puzzle("Other meta", ["meta-for:two"]);
+    assert.sameMembers(
+      [...roundMetas(tag("group:one")._id, tags, puzzles)],
+      [meta._id],
+    );
+    assert.equal(roundMetas(tag("group:one")._id, tags, []).size, 0);
+  });
+
+  it("finds none for a frame with no tag or a tag that isn't a round", function () {
+    const { tags, puzzles, puzzle, tag } = fixtures();
+    puzzle("Meta", ["meta-for:administrivia"]);
+    assert.equal(roundMetas(undefined, tags, puzzles).size, 0);
+    assert.equal(roundMetas(tag("administrivia")._id, tags, puzzles).size, 0);
+    assert.equal(roundMetas("gone", tags, puzzles).size, 0);
+  });
+});
+
+describe("whiteboard isMetaForTag", function () {
+  it("takes meta-for: tags only", function () {
+    assert.isTrue(isMetaForTag({ name: "meta-for:one" }));
+    assert.isTrue(isMetaForTag({ name: "meta-for:" }));
+    assert.isFalse(isMetaForTag({ name: "group:one" }));
+    assert.isFalse(isMetaForTag({ name: "is:meta" }));
+    assert.isFalse(isMetaForTag({ name: "" }));
   });
 });
 

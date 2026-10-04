@@ -118,7 +118,8 @@ const WhiteboardEdge = ({
   const gripScale = 1 / useStore((s) => (showGrips ? s.transform[2] : 1));
 
   const onLabel = useCallback(
-    (text: string) => updateEdge({ _id: id, label: text || null }),
+    (text: string, onSaved: (refused: boolean) => void) =>
+      updateEdge({ _id: id, label: text || null }, (error) => onSaved(!!error)),
     [id, updateEdge],
   );
 

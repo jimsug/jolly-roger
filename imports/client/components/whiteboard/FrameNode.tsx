@@ -131,7 +131,10 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
   }
 
   const onLabel = useCallback(
-    (text: string) => updateNodes([{ _id: id, label: text || null }]),
+    (text: string, onSaved: (refused: boolean) => void) =>
+      updateNodes([{ _id: id, label: text || null }], (error) =>
+        onSaved(!!error),
+      ),
     [id, updateNodes],
   );
   const fill = doc.color ? colors.fill[doc.color] : undefined;

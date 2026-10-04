@@ -24,9 +24,11 @@ import {
   computeFeederPairs,
   frameLabelForTag,
   growToContain,
+  isMetaForTag,
   MIN_FRAME_HEIGHT,
   MIN_FRAME_WIDTH,
   placeIntoFrame,
+  roundMetas,
   seedLayout,
   topLevelSlot,
 } from "../lib/whiteboard/layout";
@@ -125,11 +127,14 @@ async function insertTopLevelFrame(
 
 // Places one puzzle of a batch. nodesById is the board as the batch read it,
 // and is kept up to date with what this writes, for the puzzles after it.
+// metaPuzzles are the hunt's puzzles with a meta-for: tag, which tell which
+// cards in a frame are its round's metas.
 async function placePuzzle(
   board: WhiteboardType,
   puzzle: PuzzleType,
   tags: TagType[],
   nodesById: Map<string, WhiteboardNodeType>,
+  metaPuzzles: Pick<PuzzleType, "_id" | "tags">[],
 ) {
   const nodes = [...nodesById.values()];
   const card = nodes.find((n) => n.puzzle === puzzle._id);
@@ -183,9 +188,19 @@ async function placePuzzle(
 
   let position;
   if (frame) {
+    // A meta goes wherever there's room; anything else keeps out of a row
+    // that only the round's metas are in.
+    const placingMeta = roundMetas(frame.tag, tags, [puzzle]).has(puzzle._id);
+    const metas = placingMeta
+      ? new Set<string>()
+      : roundMetas(frame.tag, tags, metaPuzzles);
     const occupied = nodes
       .filter((n) => n.parent === frame._id && !n.hidden && n !== card)
-      .map(nodeRect);
+      .map((n) =>
+        Object.assign(nodeRect(n), {
+          meta: !!n.puzzle && metas.has(n.puzzle),
+        }),
+      );
     const placed = placeIntoFrame(
       {
         width: frame.width ?? MIN_FRAME_WIDTH,
@@ -341,12 +356,20 @@ export async function syncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
         ).fetchAsync()
       ).map((n) => [n._id, n]),
     );
+    const metaTags = tags.filter(isMetaForTag);
+    const metaPuzzles =
+      metaTags.length > 0
+        ? await Puzzles.find(
+            { hunt: huntId, tags: { $in: metaTags.map((t) => t._id) } },
+            { projection: { tags: 1 } },
+          ).fetchAsync()
+        : [];
     const batch: PuzzleType[] = [];
     for (const puzzleId of puzzleIds) {
       const puzzle = puzzlesById.get(puzzleId);
       if (!puzzle) continue;
       batch.push(puzzle);
-      await placePuzzle(board, puzzle, tags, nodesById);
+      await placePuzzle(board, puzzle, tags, nodesById, metaPuzzles);
       // A long batch (a renamed round) would otherwise outlast the lock and
       // let another sync place cards in the same slots.
       await renew();

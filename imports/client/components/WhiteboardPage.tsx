@@ -129,12 +129,18 @@ const WhiteboardPage = () => {
     };
   }, [huntId]);
   const disabled = useTracker(() => Flags.active("disable.whiteboard"), []);
+  const connected = useTracker(() => Meteor.status().connected, []);
   // PuzzlePage's own breakpoint; narrower than this the board can only be
   // commented on.
   const isDesktop = useMediaQuery(`(min-width: ${MinimumDesktopWidth}px)`);
   let access: WhiteboardAccess = policyAccess.access;
   let accessReason: WhiteboardAccessReason | undefined = policyAccess.reason;
-  if (access === "edit" && !isDesktop) {
+  if (access !== "none" && !connected) {
+    // Meteor would hold edits made while disconnected and send them
+    // whenever it reconnects, so the board is view-only until then.
+    access = "view";
+    accessReason = "offline";
+  } else if (access === "edit" && !isDesktop) {
     access = "comment";
     accessReason = "narrow";
   }

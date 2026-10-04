@@ -496,6 +496,17 @@ export async function upsertEdges(
     throw new Meteor.Error(403, "Edge belongs to another board");
   }
 
+  // Deleting a feeder arrow only hides it, so it can be put back; every
+  // other line is really deleted, and nothing is hidden from here.
+  if (
+    inputs.some(
+      (e) =>
+        e.hidden !== undefined && (e.hidden || !existingById.get(e._id)?.auto),
+    )
+  ) {
+    throw badRequest("Only a feeder arrow can be put back");
+  }
+
   const inserts = inputs.filter((e) => !existingById.has(e._id));
   if (inserts.length > 0) {
     const count = await WhiteboardEdges.find({ board: boardId }).countAsync();
@@ -540,16 +551,21 @@ export async function upsertEdges(
         $set.label = label;
         contentChanged = true;
       }
-      const unsetLabel =
-        input.label !== undefined && !label && !!existing.label;
-      if (unsetLabel) contentChanged = true;
+      const $unset: Record<string, ""> = {};
+      if (input.label !== undefined && !label && !!existing.label) {
+        $unset.label = "";
+        contentChanged = true;
+      }
+      if (input.hidden === false && existing.hidden) $unset.hidden = "";
       if (contentChanged && !existing.auto) {
         $set.contributors = appendContributor(existing.contributors, userId);
       }
-      if (Object.keys($set).length === 0 && !unsetLabel) continue;
+      if (Object.keys($set).length === 0 && Object.keys($unset).length === 0) {
+        continue;
+      }
       await WhiteboardEdges.updateAsync(existing._id, {
         ...(Object.keys($set).length > 0 ? { $set } : {}),
-        ...(unsetLabel ? { $unset: { label: "" } } : {}),
+        ...(Object.keys($unset).length > 0 ? { $unset } : {}),
       });
       // An end that moved off a free point leaves that point unused.
       await removeOrphanPoints(

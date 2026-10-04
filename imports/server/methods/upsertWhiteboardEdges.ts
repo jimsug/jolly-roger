@@ -17,6 +17,7 @@ const EdgeInputPattern = {
   arrowHead: Match.Optional(Match.OneOf(...WhiteboardArrowHeads)),
   color: Match.Optional(Match.OneOf(...WhiteboardColors)),
   dashed: Match.Optional(Boolean),
+  hidden: Match.Optional(Boolean),
 };
 
 defineMethod(upsertWhiteboardEdges, {

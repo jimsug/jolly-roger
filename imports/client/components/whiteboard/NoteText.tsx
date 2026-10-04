@@ -15,7 +15,10 @@ const NoteText = ({ id, text }: { id: string; text: string | undefined }) => {
   } = useWhiteboard();
   const { t } = useTranslation();
   const onText = useCallback(
-    (next: string) => updateNodes([{ _id: id, text: next || null }]),
+    (next: string, onSaved: (refused: boolean) => void) =>
+      updateNodes([{ _id: id, text: next || null }], (error) =>
+        onSaved(!!error),
+      ),
     [id, updateNodes],
   );
   return (

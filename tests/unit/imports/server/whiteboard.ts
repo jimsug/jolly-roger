@@ -27,6 +27,7 @@ import whiteboardPresence from "../../../../imports/lib/publications/whiteboardP
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
+  cardSlot,
   POINT_SIZE,
 } from "../../../../imports/lib/whiteboard/layout";
 import {
@@ -46,6 +47,7 @@ import setWhiteboardCommentResolved from "../../../../imports/methods/setWhitebo
 import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEditPolicy";
 import setWhiteboardLive from "../../../../imports/methods/setWhiteboardLive";
 import updatePuzzle from "../../../../imports/methods/updatePuzzle";
+import upsertWhiteboardEdges from "../../../../imports/methods/upsertWhiteboardEdges";
 import upsertWhiteboardNodes from "../../../../imports/methods/upsertWhiteboardNodes";
 import addPuzzle from "../../../../imports/server/addPuzzle";
 import GlobalHooks from "../../../../imports/server/GlobalHooks";
@@ -598,6 +600,52 @@ describe("whiteboard", function () {
       await syncPuzzlesOnBoard(huntId, [puzzle._id]);
       assert.isTrue((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
     });
+
+    it("keeps a new feeder out of a seeded round's meta row", async function () {
+      const frame = await frameFor(groupTag._id);
+      const metaRow = cardSlot(0).y;
+      const inMetaRow = await WhiteboardNodes.find({
+        board: boardId,
+        parent: frame._id,
+        "position.y": metaRow,
+      }).fetchAsync();
+      // The round's meta, with room beside it
+      assert.isNotEmpty(inMetaRow);
+      assert.isBelow(inMetaRow.length, 4);
+
+      const feeder = await newPuzzle("Late feeder", [groupTag._id]);
+      await syncPuzzlesOnBoard(huntId, [feeder]);
+      const card = await cardFor(feeder);
+      assert.equal(card.parent, frame._id);
+      assert.isAbove(card.position.y, metaRow);
+    });
+
+    it("puts a round's metas on a row of their own, and later feeders below", async function () {
+      const round = await Tags.insertAsync({
+        hunt: huntId,
+        name: "group:late-round",
+        createdBy: operator,
+      });
+      const metaFor = await Tags.insertAsync({
+        hunt: huntId,
+        name: "meta-for:late-round",
+        createdBy: operator,
+      });
+      const meta = await newPuzzle("Late meta", [round, metaFor]);
+      await syncPuzzlesOnBoard(huntId, [meta]);
+      assert.deepEqual((await cardFor(meta)).position, cardSlot(0));
+
+      const feeder = await newPuzzle("Late round feeder", [round]);
+      await syncPuzzlesOnBoard(huntId, [feeder]);
+      assert.deepEqual((await cardFor(feeder)).position, cardSlot(4));
+
+      // Another meta joins the first
+      const second = await newPuzzle("Second meta", [round, metaFor]);
+      await syncPuzzlesOnBoard(huntId, [second]);
+      assert.deepEqual((await cardFor(second)).position, cardSlot(1));
+      const frame = await frameFor(round);
+      assert.equal((await cardFor(second)).parent, frame._id);
+    });
   });
 
   describe("edits", function () {
@@ -1112,6 +1160,63 @@ describe("whiteboard", function () {
       const saved = (await WhiteboardEdges.findOneAsync(auto._id))!;
       assert.isTrue(saved.dashed);
       assert.lengthOf(saved.contributors, 0);
+    });
+
+    it("puts back a hidden feeder arrow, and hides or unhides nothing else", async function () {
+      const auto = (await WhiteboardEdges.findOneAsync({
+        board: boardId,
+        auto: true,
+      }))!;
+      await deleteEdges(member, boardId, [auto._id]);
+      assert.isTrue((await WhiteboardEdges.findOneAsync(auto._id))?.hidden);
+
+      // Hiding goes through deleteEdges, not here
+      await assert.isRejected(
+        asUser(member, () =>
+          upsertWhiteboardEdges.callPromise({
+            boardId,
+            edges: [{ _id: auto._id, hidden: true }],
+          }),
+        ),
+        /Only a feeder arrow can be put back/,
+      );
+
+      const [a, b] = [Random.id(), Random.id()];
+      await upsertNodes(member, boardId, [
+        { _id: a, type: "sticky", position: { x: 0, y: 0 } },
+        { _id: b, type: "sticky", position: { x: 300, y: 0 } },
+      ]);
+      const line = Random.id();
+      await upsertEdges(member, boardId, [{ _id: line, source: a, target: b }]);
+      await assert.isRejected(
+        upsertEdges(member, boardId, [{ _id: line, hidden: false }]),
+        /Only a feeder arrow can be put back/,
+      );
+      await assert.isRejected(
+        upsertEdges(member, boardId, [
+          { _id: Random.id(), source: a, target: b, hidden: false },
+        ]),
+        /Only a feeder arrow can be put back/,
+      );
+      // A refused batch writes nothing
+      await assert.isRejected(
+        upsertEdges(member, boardId, [
+          { _id: auto._id, hidden: false },
+          { _id: line, hidden: false },
+        ]),
+        /Only a feeder arrow can be put back/,
+      );
+      assert.isTrue((await WhiteboardEdges.findOneAsync(auto._id))?.hidden);
+
+      await asUser(member, () =>
+        upsertWhiteboardEdges.callPromise({
+          boardId,
+          edges: [{ _id: auto._id, hidden: false }],
+        }),
+      );
+      const restored = (await WhiteboardEdges.findOneAsync(auto._id))!;
+      assert.isUndefined(restored.hidden);
+      assert.lengthOf(restored.contributors, 0);
     });
   });
 

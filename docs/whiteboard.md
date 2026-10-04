@@ -3,19 +3,24 @@ files:
   - imports/client/components/WhiteboardPage.tsx
   - imports/client/components/tagColors.ts
   - imports/client/components/whiteboard/BoardSearch.tsx
+  - imports/client/components/whiteboard/CommentComposer.tsx
+  - imports/client/components/whiteboard/CommentPanel.tsx
   - imports/client/components/whiteboard/EditPolicyModal.tsx
+  - imports/client/components/whiteboard/EditableText.tsx
   - imports/client/components/whiteboard/FeederFocusContext.ts
   - imports/client/components/whiteboard/FrameLabelLayer.tsx
   - imports/client/components/whiteboard/FrameNode.tsx
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
   - imports/client/components/whiteboard/RoundStateContext.ts
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
+  - imports/client/components/whiteboard/WhiteboardCanvas.tsx
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
   - imports/client/hooks/useRoundStates.ts
   - imports/lib/chatMessagePath.ts
   - imports/lib/models/WhiteboardEdges.ts
   - imports/lib/models/WhiteboardNodes.ts
   - imports/lib/models/Whiteboards.ts
+  - imports/lib/permission_stubs.ts
   - imports/lib/puzzleTagStatus.ts
   - imports/lib/whiteboard/feederFocus.ts
   - imports/lib/whiteboard/layout.ts
@@ -25,6 +30,7 @@ files:
   - imports/lib/whiteboard/rounds.ts
   - imports/lib/whiteboard/search.ts
   - imports/methods/setWhiteboardEditPolicy.ts
+  - imports/methods/upsertWhiteboardEdges.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
   - imports/server/models/WhiteboardPresence.ts
   - imports/server/whiteboard.ts
@@ -168,12 +174,15 @@ on the board who lost them.
 passes it to the canvas, which treats anything below `edit` as read-only and
 anything from `comment` up as able to comment. Below the desktop breakpoint
 the page lowers `edit` to `comment` with the reason `narrow`. That is a layout
-choice, not a security boundary, and the server never sees it.
+choice, not a security boundary, and the server never sees it. While Meteor
+is disconnected the page also lowers any access to `view`, with the reason
+`offline` (see Offline).
 
 A read-only board's toolbar says "Viewing only", gives the reason on the line
 below, and keeps the Comment tool for anyone who can comment. When the
 viewer's edit rights come or go while the board is open, a notice says so,
-and a note being edited closes without saving. A screen narrowing past the
+and a note being edited closes, keeping what was typed as "Not saved" until
+it can be retried (see When a save is refused). A screen narrowing past the
 breakpoint isn't announced, and text being typed then is saved, since the
 server still takes it.
 
@@ -201,12 +210,12 @@ The results drop down under the field. Arrow keys move through them and Enter
 picks one, as does a click. Picking something pans the board to it, zooming in
 to at least 0.8 if it's further out, and marks it with a pulse for a couple of
 seconds; a line is marked at its middle. A puzzle whose card is hidden, or
-that has no card, is listed last as "Not on the board". Picking that row does
-nothing; anyone who can edit gets a "Put back" button on it, which puts the
-card back at the middle of the screen, so a search never moves a card by
-itself. The matching is
-`searchBoard` in `imports/lib/whiteboard/search.ts`. Hidden frames and hidden
-feeder arrows aren't found, since nothing can put them back yet.
+that has no card, and a round's frame that someone removed, are listed last
+as "Not on the board". Picking that row does nothing; anyone who can edit gets
+a "Put back" button on it, which puts the card or frame back at the middle of
+the screen, so a search never moves anything by itself. The matching is
+`searchBoard` in `imports/lib/whiteboard/search.ts`. Hidden feeder arrows
+aren't found; the "Not on the board" panel lists them.
 
 ### Links
 
@@ -259,6 +268,120 @@ colours are the theme's `miniMapSolvedness`, stronger than the card
 backgrounds so they show at that size, and frames take the strong version of
 their colour. Free line ends are left off, and everything else is grey
 (`miniMapColor` in `imports/lib/whiteboard/minimap.ts`).
+
+## Editing
+
+### Keyboard
+
+The tool keys, 1 to 3 and Ctrl+A only work while the board has focus (the
+last press or focus was on it) and nothing is being typed: not in a text box,
+a note being edited, the comment composer or the search field. Each tool's
+tooltip shows its key.
+
+| Key | Does | Needs |
+|---|---|---|
+| V | Select and move | edit |
+| P | Pen | edit |
+| E | Eraser | edit |
+| L | Line | edit |
+| S | Sticky note | edit |
+| T | Text | edit |
+| F | Frame | edit |
+| C | Comment | comment |
+| 1, 2, 3 | Thin, medium or thick pen | edit |
+| Ctrl+A (Cmd+A on a Mac) | Select everything but frames (a selected frame carries its contents anyway) and no lines, switching to Select | edit |
+| Escape | Close an open comment thread; with none open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
+| / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
+| Delete or Backspace | Delete the selection | edit |
+| Arrow keys | Move the selection 5 units, 20 with Shift; it joins or leaves a frame as a drop would | edit |
+| Enter | Start editing a focused sticky note or text box | edit |
+| Ctrl+Z (Cmd+Z) | Take back your own last stroke from this visit | edit |
+| Space (held) | Pan while a drawing tool is picked | |
+| Shift (while drawing a line) | Snap a free end to 15° steps | |
+
+In a text box being edited, Escape cancels, Enter saves a one-line label, and
+leaving the box saves. Escape anywhere in a comment thread's panel closes it,
+unless the composer's suggestions are open, when it closes those, or the
+composer has something written in it, when it does nothing, so a slip of the
+key doesn't throw the text away.
+
+A thread's panel is a dialog named after what the comment is on. Opening a
+thread moves focus to its reply box, or to the panel when the viewer can't
+comment. On a touch screen (`pointer: coarse`) an existing thread focuses
+the panel too, so the on-screen keyboard doesn't cover the board; a new
+comment still focuses its composer. Focus only moves when the panel opens,
+not when access changes while it's open. Closing it with its Close button or
+Escape puts focus back on its pin; deleting the thread puts focus on the node
+it was on, if any.
+
+### Lines from handles
+
+Each card, note, text box and frame has a handle on each side. Dragging from
+one draws a line to wherever it's let go. Clicking one instead starts a line
+that ends at the next handle clicked; until then the handle is ringed in the
+theme's primary colour and a dashed line runs from it to the pointer, so it's
+clear the next click joins something. Escape, or picking another tool, lets
+go of it.
+
+### Not on the board
+
+The toolbar's "Not on the board" button (with a count of everything in it)
+opens a panel in three parts, for anyone who can edit:
+
+- **Puzzles**: cards someone deleted, which only hides them, and live puzzles
+  with no card. "Put back" puts the card at the middle of the screen.
+- **Frames**: rounds' frames (seeded frames and Ungrouped) someone deleted,
+  which only hides them. Their contents moved out to the frame around them
+  when they went, so a frame comes back empty, at the top level, centred on
+  the screen. Placement puts new cards for that round in it again. Cards
+  that left with it and haven't been moved by hand since come back too, one
+  at a time: moving out with the frame doesn't mark a card as moved by hand,
+  so the next sync of its puzzle (a tag change, say) places it in the frame
+  again.
+- **Feeder arrows**: arrows someone deleted, which only hides them, named
+  "feeder → meta". "Put back" brings one back, and "Show all feeder arrows"
+  brings back every one the panel lists. Neither changes the toolbar's feeder
+  arrows toggle, so with it off the arrows come back unseen.
+
+`Whiteboards.methods.upsertEdges` takes `hidden: false` on a feeder arrow to
+put it back. Anything else to do with `hidden` on a line is refused: lines
+are hidden through `deleteEdges`, and only feeder arrows are hidden rather
+than deleted. A seeded frame comes back through `upsertNodes` with
+`hidden: false`, as cards do.
+
+### When a save is refused
+
+Every write the board makes (nodes, lines, comments, replies, resolving and
+deleting) reports a refusal from the server in a dismissible alert under the
+toolbar, "Couldn't save: " and the server's own reason, until it's dismissed
+or the next refusal replaces it. The board goes back to what the server has,
+except for text: a sticky note, text box, frame label or line label whose
+edit was refused keeps what was typed, with a Retry button. Retry sends it
+again; editing it back to what's saved drops it. Text being typed when the
+viewer loses edit rights is kept the same way, marked "Not saved" until they
+can edit again, when it gets the Retry button. A refused comment or reply
+goes back in the composer, unless something new has been written there
+since, and a new comment's panel stays open until the server has taken it.
+
+### Offline
+
+While Meteor reports the connection down, the board is view-only for that
+viewer, whatever their access: the page lowers it to `view` with the reason
+`offline`, the toolbar says "Viewing only", and a banner under it says
+"Offline: the board is view-only until you reconnect". Meteor would hold any
+edit made meanwhile and send it whenever it reconnected, which could be long
+after the board around it had changed. Live cursors stop. An open comment
+thread keeps its composer and whatever is written in it, with Send off until
+the connection is back. When it is, the viewer's access returns without the
+"You can now edit" notice, unless their edit rights changed while they were
+offline, which is announced as usual.
+
+### Deleting a comment
+
+Delete on a thread's panel asks first, in a dialog that says the comment and
+every reply to it go and that it can't be undone. Cancel leaves the thread as
+it was. Who may delete is unchanged: the author until someone else replies,
+and operators at any time.
 
 ## What cards and rounds show
 
@@ -341,10 +464,16 @@ arrows stand out and how.
 When a board is created, `seedLayout` puts each round's metas on their own
 row (or rows, past four) at the top of its frame, with the feeders starting
 on the row below, so the arrows have somewhere to run. A round without a meta
-is laid out four to a row as before. This only applies when a board is laid
-out: boards that already exist keep their cards where they are, and a puzzle
-added later goes in the first free slot of its frame, which may be beside a
-meta.
+is laid out four to a row as before.
+
+Placement keeps it that way. `placeIntoFrame` puts a card in the first free
+slot of its frame, but skips any row whose cards are all the round's metas
+(the puzzles tagged `meta-for:X` in a frame tagged `group:X`, from
+`roundMetas`), so a puzzle added during the hunt goes below the meta row
+rather than beside the meta. A new meta still takes the first free slot,
+which on a seeded round is in the meta row. Rows that also hold a feeder, as
+on boards seeded before metas had a row of their own, fill as they always
+did, so existing boards only change in where new cards land.
 
 ## Flags
 

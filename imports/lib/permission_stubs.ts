@@ -352,13 +352,15 @@ export function userMayWritePuzzlesForHunt(
 // What someone may do on a hunt's whiteboard. "edit" includes commenting,
 // and "comment" includes viewing.
 export type WhiteboardAccess = "edit" | "comment" | "view" | "none";
-// Why someone has less than "edit". "narrow" is only ever set by the client,
-// which keeps small screens to commenting.
+// Why someone has less than "edit". "narrow" and "offline" are only ever set
+// by the client, which keeps small screens to commenting and makes the board
+// view-only while it's disconnected.
 export type WhiteboardAccessReason =
   | "archived"
   | "operators"
   | "operatorsAndEditors"
-  | "narrow";
+  | "narrow"
+  | "offline";
 
 // Members only, admins included: every board publication is for members, so
 // letting anyone else through would let them write to a board they can't

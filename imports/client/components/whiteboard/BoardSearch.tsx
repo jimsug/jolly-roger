@@ -101,7 +101,8 @@ const BoardSearch = ({
   huntId: string;
   // The lines the board is drawing, by id.
   drawnEdges: ReadonlySet<string>;
-  // Whether a puzzle that isn't on the board can be put back from here.
+  // Whether a puzzle or frame that isn't on the board can be put back from
+  // here.
   canPutBack: boolean;
   inputRef: React.RefObject<HTMLInputElement | null>;
   onShow: (hit: BoardSearchHit) => void;
@@ -156,8 +157,9 @@ const BoardSearch = ({
     line: t("whiteboard.search.kind.line", "Line"),
   };
 
-  // Picking a puzzle that isn't on the board does nothing: it can only be
-  // put back with its own button, so a search never moves a card by itself.
+  // Picking a puzzle or frame that isn't on the board does nothing: it can
+  // only be put back with its own button, so a search never moves anything
+  // by itself.
   const pick = useCallback(
     (hit: BoardSearchHit | undefined) => {
       if (!hit || hit.notOnBoard) return;

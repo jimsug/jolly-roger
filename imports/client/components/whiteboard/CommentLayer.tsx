@@ -208,8 +208,11 @@ const CommentPinButton = ({
     <Pin
       type="button"
       className="nodrag nopan jr-comment-pin"
+      data-thread={pin.id}
       title={label}
       aria-label={label}
+      aria-haspopup="dialog"
+      aria-expanded={open}
       $open={open}
       $unread={pin.unread}
       $resolved={pin.resolved}

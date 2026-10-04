@@ -123,9 +123,21 @@ describe("whiteboard searchBoard", function () {
     );
   });
 
-  it("leaves out hidden frames, ink, and puzzles that aren't live", function () {
-    assert.deepEqual(search("hidden"), []);
+  it("leaves out ink, hidden notes, and puzzles that aren't live", function () {
     assert.deepEqual(search("lost", { puzzles: [crossword, maze] }), []);
+    assert.deepEqual(
+      search("meta ideas", {
+        nodes: nodes.map((n) => (n._id === "t1" ? { ...n, hidden: true } : n)),
+      }),
+      [],
+    );
+  });
+
+  it("flags a frame someone removed as not on the board", function () {
+    assert.deepEqual(
+      search("hidden").map((h) => [h.kind, h.node, h.notOnBoard]),
+      [["frame", "f3", true]],
+    );
   });
 
   it("flags puzzles whose card is hidden or missing, after everything else", function () {

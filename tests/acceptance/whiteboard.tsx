@@ -2,6 +2,7 @@ import { promisify } from "node:util";
 import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
+import { Tracker } from "meteor/tracker";
 import {
   act,
   fireEvent,
@@ -20,6 +21,7 @@ import {
   useLocation,
   useNavigate,
 } from "react-router";
+import sinon from "sinon";
 import FixtureHunt from "../../imports/FixtureHunt";
 import ChatMessages from "../../imports/lib/models/ChatMessages";
 import Hunts from "../../imports/lib/models/Hunts";
@@ -41,11 +43,13 @@ import addPuzzleTag from "../../imports/methods/addPuzzleTag";
 import createFixtureHunt from "../../imports/methods/createFixtureHunt";
 import createWhiteboard from "../../imports/methods/createWhiteboard";
 import deleteWhiteboardComment from "../../imports/methods/deleteWhiteboardComment";
+import deleteWhiteboardEdges from "../../imports/methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../imports/methods/deleteWhiteboardNodes";
 import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
 import removePuzzleTag from "../../imports/methods/removePuzzleTag";
 import sendChatMessage from "../../imports/methods/sendChatMessage";
+import setWhiteboardCommentResolved from "../../imports/methods/setWhiteboardCommentResolved";
 import setWhiteboardEditPolicy from "../../imports/methods/setWhiteboardEditPolicy";
 import TypedMethod from "../../imports/methods/TypedMethod";
 import upsertWhiteboardNodes from "../../imports/methods/upsertWhiteboardNodes";
@@ -209,6 +213,38 @@ if (Meteor.isClient) {
         box.top + box.height / 2,
       ),
     );
+  };
+
+  // Stands in for the server refusing a method, answering later as Meteor
+  // does, until restored.
+  const refuseCalls = (method: { call: (...args: never[]) => unknown }) =>
+    sinon.stub(method, "call").callsFake((...args: unknown[]) => {
+      const callback = args.at(-1);
+      if (typeof callback === "function") {
+        Meteor.defer(() =>
+          callback(new Meteor.Error(403, "Refused for the test")),
+        );
+      }
+    });
+
+  // Types into a Slate editor, which takes text from beforeinput at the
+  // selection focusing it set.
+  const typeInto = async (editor: HTMLElement, text: string) => {
+    await act(async () => {
+      editor.focus();
+      await stabilize();
+    });
+    await act(async () => {
+      editor.dispatchEvent(
+        new InputEvent("beforeinput", {
+          inputType: "insertText",
+          data: text,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await stabilize();
+    });
   };
 
   const linesBetween = (boardId: string, source: string, target: string) =>
@@ -783,6 +819,53 @@ if (Meteor.isClient) {
         }
       });
 
+      it("puts back a removed frame from the search", async function () {
+        this.timeout(30000);
+        // Any round's frame but Temperance's, whose card the other tests use
+        const frame = await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          type: "frame",
+          tag: { $exists: true },
+          hidden: { $ne: true },
+          parent: { $exists: false },
+          ...(cardHome.parent ? { _id: { $ne: cardHome.parent } } : {}),
+        });
+        assert.ok(frame);
+        const tag = await Tags.findOneAsync(frame.tag ?? "");
+        assert.ok(tag);
+        const label = tag.name.replace(/^group:/, "");
+        await deleteWhiteboardNodes.callPromise({
+          boardId,
+          nodeIds: [frame._id],
+        });
+        render(<TestApp />);
+        await goTo(boardPath);
+        await searchFor(label);
+        const option = await waitFor(() => {
+          const found = screen
+            .getAllByRole("option")
+            .find((o) => o.querySelector(`[title="${CSS.escape(label)}"]`));
+          assert.ok(found);
+          assert.include(found.textContent ?? "", "Not on the board");
+          return found;
+        });
+        await act(async () => {
+          fireEvent.click(
+            within(option).getByRole("button", { name: "Put back" }),
+          );
+          await stabilize();
+        });
+        await waitFor(
+          async () => {
+            const back = await WhiteboardNodes.findOneAsync(frame._id);
+            assert.ok(back);
+            assert.isNotOk(back.hidden);
+            assert.isUndefined(back.parent);
+          },
+          { timeout: 10000 },
+        );
+      });
+
       it("finds a hidden card on a read-only board, with no way to put it back", async function () {
         this.timeout(30000);
         await hideCard();
@@ -1343,6 +1426,58 @@ if (Meteor.isClient) {
           assert.isNull(screen.queryByLabelText("Who can edit"));
         });
 
+        it("gives a non-editor the Comment key and no other", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          await screen.findByText("Viewing only", {}, { timeout: 20000 });
+          await waitFor(
+            () =>
+              assert.isNotNull(
+                document.querySelector(".react-flow__node-puzzle"),
+              ),
+            { timeout: 20000 },
+          );
+          await act(async () => {
+            await stabilize();
+          });
+          const pane = document.querySelector(".react-flow__pane")!;
+          const box = pane.getBoundingClientRect();
+          const at = {
+            button: 0,
+            pointerId: 1,
+            clientX: box.left + box.width * 0.6,
+            clientY: box.top + box.height * 0.6,
+          };
+          await act(async () => {
+            fireEvent.pointerDown(pane, at);
+            fireEvent.pointerUp(pane, at);
+            await stabilize();
+          });
+          const key = async (init: KeyboardEventInit) => {
+            await act(async () => {
+              fireEvent.keyDown(pane, init);
+              await stabilize();
+            });
+          };
+          const commentPressed = () =>
+            screen
+              .getByRole("button", { name: /^Comment:/ })
+              .getAttribute("aria-pressed");
+
+          await key({ key: "a", ctrlKey: true });
+          assert.isNull(document.querySelector(".react-flow__node.selected"));
+          await key({ key: "c" });
+          assert.equal(commentPressed(), "true");
+          await key({ key: "p" });
+          assert.equal(commentPressed(), "true");
+          await key({ key: "Escape" });
+          assert.equal(commentPressed(), "false");
+          assert.isNull(
+            screen.queryByRole("button", { name: /^Not on the board/ }),
+          );
+        });
+
         it("lets a non-editor place a comment", async function () {
           this.timeout(30000);
           render(<TestApp />);
@@ -1413,6 +1548,650 @@ if (Meteor.isClient) {
             { timeout: 10000 },
           );
         });
+      });
+    });
+
+    describe("editing", function () {
+      let boardId: string;
+
+      before(async function () {
+        this.timeout(10000);
+        boardId = (await ensureBoard())._id;
+        subs.push(await typedSubscribe.async(whiteboardContents, { boardId }));
+      });
+
+      const pane = () => document.querySelector(".react-flow__pane")!;
+      const paneAt = (fx: number, fy: number) => {
+        const box = pane().getBoundingClientRect();
+        return {
+          button: 0,
+          pointerId: 1,
+          clientX: box.left + box.width * fx,
+          clientY: box.top + box.height * fy,
+        };
+      };
+      // A press on an empty part of the board, which gives it focus.
+      const pressBoard = async () => {
+        const at = paneAt(0.6, 0.6);
+        await act(async () => {
+          fireEvent.pointerDown(pane(), at);
+          fireEvent.pointerUp(pane(), at);
+          await stabilize();
+        });
+      };
+      const press = async (target: Element, init: KeyboardEventInit) => {
+        await act(async () => {
+          fireEvent.keyDown(target, init);
+          await stabilize();
+        });
+      };
+      const openBoard = async () => {
+        render(<TestApp />);
+        await goTo(boardPath);
+        await screen.findByRole(
+          "button",
+          { name: /^Select and move/ },
+          { timeout: 20000 },
+        );
+        // Lets the canvas's effects, which listen for the keys, run
+        await act(async () => {
+          await stabilize();
+        });
+      };
+      const pressed = (name: RegExp) =>
+        screen.getByRole("button", { name }).getAttribute("aria-pressed");
+      const panelText = () =>
+        document.querySelector(".react-flow__panel.top.right")?.textContent ??
+        "";
+
+      it("switches tools with their keys, but not while typing", async function () {
+        this.timeout(30000);
+        await openBoard();
+        await pressBoard();
+        await press(pane(), { key: "p" });
+        assert.equal(pressed(/^Draw/), "true");
+        assert.include(
+          screen.getByRole("button", { name: /^Draw/ }).title,
+          "[P]",
+        );
+        await press(pane(), { key: "1" });
+        assert.equal(
+          screen.getByRole<HTMLSelectElement>("combobox", {
+            name: "Pen width",
+          }).value,
+          "thin",
+        );
+        await press(pane(), { key: "2" });
+        await press(pane(), { key: "l" });
+        assert.equal(pressed(/^Line:/), "true");
+
+        // Typing in the search field leaves the tool alone
+        const search = screen.getByRole("combobox", {
+          name: "Search the board",
+        });
+        await act(async () => {
+          search.focus();
+          await stabilize();
+        });
+        await press(search, { key: "s" });
+        assert.equal(pressed(/^Line:/), "true");
+        assert.equal(pressed(/^Sticky note/), "false");
+
+        await pressBoard();
+        await press(pane(), { key: "v" });
+        assert.equal(pressed(/^Select and move/), "true");
+      });
+
+      it("selects everything but frames on Ctrl+A", async function () {
+        this.timeout(30000);
+        localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+        await openBoard();
+        await waitFor(
+          () =>
+            assert.isNotNull(
+              document.querySelector(".react-flow__node-puzzle"),
+            ),
+          { timeout: 20000 },
+        );
+        await pressBoard();
+        await press(pane(), { key: "a", ctrlKey: true });
+        await waitFor(() => {
+          const cards = document.querySelectorAll(".react-flow__node-puzzle");
+          assert.isAbove(cards.length, 0);
+          cards.forEach((card) =>
+            assert.isTrue(card.classList.contains("selected")),
+          );
+          assert.isNull(
+            document.querySelector(".react-flow__node-frame.selected"),
+          );
+        });
+      });
+
+      it("shows a click-to-connect line until Escape lets it go", async function () {
+        this.timeout(30000);
+        await ensureBoard();
+        const { a, b } = await sideBySideCards(boardId);
+        const before = await linesBetween(boardId, a._id, b._id);
+        await openBoard();
+        const from = await handleOf(a._id, "right");
+        const click = async (handle: Element) => {
+          const box = handle.getBoundingClientRect();
+          await act(async () => {
+            fireEvent.click(handle, {
+              clientX: box.left + box.width / 2,
+              clientY: box.top + box.height / 2,
+            });
+            await stabilize();
+          });
+        };
+        await click(from);
+        assert.isTrue(from.classList.contains("clickconnecting"));
+        const at = paneAt(0.8, 0.8);
+        await act(async () => {
+          fireEvent.pointerMove(pane(), at);
+          await stabilize();
+        });
+        await waitFor(() =>
+          assert.isNotNull(document.querySelector(".jr-click-connect line")),
+        );
+
+        await press(document.body, { key: "Escape" });
+        await waitFor(() => {
+          assert.isNull(document.querySelector(".jr-click-connect"));
+          assert.isFalse(from.classList.contains("clickconnecting"));
+        });
+        // The next handle clicked starts a line rather than ending one
+        const to = await handleOf(b._id, "left");
+        await click(to);
+        assert.isTrue(to.classList.contains("clickconnecting"));
+        await press(document.body, { key: "Escape" });
+        assert.equal(await linesBetween(boardId, a._id, b._id), before);
+      });
+
+      describe("comment threads", function () {
+        before(async function () {
+          this.timeout(10000);
+          const board = await ensureBoard();
+          await sendChatMessage.callPromise({
+            puzzleId: board.puzzle,
+            content: JSON.stringify({
+              type: "message",
+              children: [{ text: "Keyboard thread" }],
+            }),
+            comment: { x: 4321, y: 4321 },
+          });
+        });
+
+        // Opens the board at a comment, found once the board's chat has
+        // loaded.
+        const openAtComment = async (x: number) => {
+          await openBoard();
+          const id = await waitFor(
+            async () => {
+              const found = await ChatMessages.findOneAsync({
+                "comment.x": x,
+              });
+              assert.ok(found);
+              return found._id;
+            },
+            { timeout: 20000 },
+          );
+          await goTo(`${boardPath}?comment=${id}`);
+          return id;
+        };
+
+        it("moves focus into a thread, and back to its pin when Escape closes it", async function () {
+          this.timeout(30000);
+          const threadId = await openAtComment(4321);
+          const pin = () =>
+            document.querySelector<HTMLElement>(
+              `.jr-comment-pin[data-thread="${threadId}"]`,
+            );
+          const panel = await waitFor(
+            () => {
+              const found = document.querySelector("dialog[open]");
+              assert.ok(found);
+              assert.include(found.textContent ?? "", "Keyboard thread");
+              assert.equal(
+                found.getAttribute("aria-label"),
+                "Comment on the board",
+              );
+              return found;
+            },
+            { timeout: 20000 },
+          );
+          const editor = panel.querySelector("[data-slate-editor]")!;
+          await waitFor(() =>
+            assert.isTrue(editor.contains(document.activeElement)),
+          );
+          await press(document.activeElement!, { key: "Escape" });
+          await waitFor(() => {
+            assert.isNull(document.querySelector("dialog[open]"));
+            assert.equal(document.activeElement, pin());
+          });
+        });
+
+        it("keeps a thread open on Escape while its composer has text", async function () {
+          this.timeout(30000);
+          await openAtComment(4321);
+          const panel = await waitFor(
+            () => {
+              const found = document.querySelector<HTMLElement>("dialog[open]");
+              assert.ok(found);
+              assert.include(found.textContent ?? "", "Keyboard thread");
+              return found;
+            },
+            { timeout: 20000 },
+          );
+          const editor = panel.querySelector<HTMLElement>(
+            "[data-slate-editor]",
+          )!;
+          await typeInto(editor, "Not finished");
+          await press(editor, { key: "Escape" });
+          assert.isNotNull(document.querySelector("dialog[open]"));
+          assert.include(editor.textContent ?? "", "Not finished");
+        });
+
+        it("says when resolving a thread is refused", async function () {
+          this.timeout(30000);
+          const refuse = refuseCalls(setWhiteboardCommentResolved);
+          try {
+            await openAtComment(4321);
+            const panel = await waitFor(
+              () => {
+                const found =
+                  document.querySelector<HTMLElement>("dialog[open]");
+                assert.ok(found);
+                assert.include(found.textContent ?? "", "Keyboard thread");
+                return found;
+              },
+              { timeout: 20000 },
+            );
+            await act(async () => {
+              fireEvent.click(
+                within(panel).getByRole("button", { name: "Resolve" }),
+              );
+              await stabilize();
+            });
+            await screen.findByText("Couldn't save: Refused for the test");
+            assert.isTrue(refuse.calledOnce);
+          } finally {
+            refuse.restore();
+          }
+        });
+
+        it("keeps a refused new comment open with its text", async function () {
+          this.timeout(30000);
+          const refuse = refuseCalls(sendChatMessage);
+          try {
+            await openBoard();
+            await act(async () => {
+              fireEvent.click(
+                screen.getByRole("button", { name: /^Comment:/ }),
+              );
+              await stabilize();
+            });
+            const at = paneAt(0.6, 0.6);
+            await act(async () => {
+              fireEvent.pointerDown(pane(), at);
+              fireEvent.pointerUp(pane(), at);
+              await stabilize();
+            });
+            const panel = await waitFor(() => {
+              const found = document.querySelector<HTMLElement>("dialog[open]");
+              assert.ok(found);
+              assert.include(found.textContent ?? "", "New comment on");
+              return found;
+            });
+            await typeInto(
+              panel.querySelector<HTMLElement>("[data-slate-editor]")!,
+              "Refused words",
+            );
+            await act(async () => {
+              fireEvent.click(
+                within(panel).getByRole("button", { name: "Send" }),
+              );
+              await stabilize();
+            });
+            await screen.findByText("Couldn't save: Refused for the test");
+            await waitFor(() => {
+              const open = document.querySelector<HTMLElement>("dialog[open]");
+              assert.include(open?.textContent ?? "", "New comment on");
+              assert.include(
+                open?.querySelector("[data-slate-editor]")?.textContent ?? "",
+                "Refused words",
+              );
+            });
+          } finally {
+            refuse.restore();
+          }
+        });
+
+        it("closes an open thread on Escape, then drops a comment being started", async function () {
+          this.timeout(30000);
+          await openAtComment(4321);
+          await waitFor(() => assert.include(panelText(), "Keyboard thread"), {
+            timeout: 20000,
+          });
+          await press(document.body, { key: "Escape" });
+          await waitFor(() =>
+            assert.notInclude(panelText(), "Keyboard thread"),
+          );
+
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: /^Comment:/ }));
+            await stabilize();
+          });
+          const at = paneAt(0.6, 0.6);
+          await act(async () => {
+            fireEvent.pointerDown(pane(), at);
+            fireEvent.pointerUp(pane(), at);
+            await stabilize();
+          });
+          await waitFor(() => assert.include(panelText(), "New comment on"));
+          await press(document.body, { key: "Escape" });
+          await waitFor(() => assert.notInclude(panelText(), "New comment on"));
+          assert.equal(pressed(/^Select and move/), "true");
+        });
+
+        it("asks before deleting a comment, and leaves it on cancel", async function () {
+          this.timeout(30000);
+          const board = await ensureBoard();
+          await sendChatMessage.callPromise({
+            puzzleId: board.puzzle,
+            content: JSON.stringify({
+              type: "message",
+              children: [{ text: "Delete me" }],
+            }),
+            comment: { x: 5432, y: 5432 },
+          });
+          const doomed = await openAtComment(5432);
+          await waitFor(() => assert.include(panelText(), "Delete me"), {
+            timeout: 20000,
+          });
+          const deleteButton = () =>
+            within(
+              document.querySelector<HTMLElement>("dialog[open]")!,
+            ).getByRole("button", { name: "Delete" });
+          const modal = () => document.querySelector<HTMLElement>(".modal");
+
+          await act(async () => {
+            fireEvent.click(deleteButton());
+            await stabilize();
+          });
+          await screen.findByText(
+            "Delete this comment and every reply to it? This can't be undone.",
+          );
+          await act(async () => {
+            fireEvent.click(
+              within(modal()!).getByRole("button", { name: "Cancel" }),
+            );
+            await stabilize();
+          });
+          await waitFor(() => assert.isNull(modal()));
+          assert.exists(await ChatMessages.findOneAsync(doomed));
+          assert.include(panelText(), "Delete me");
+
+          await act(async () => {
+            fireEvent.click(deleteButton());
+            await stabilize();
+          });
+          await waitFor(() => assert.isNotNull(modal()));
+          await act(async () => {
+            fireEvent.click(
+              within(modal()!).getByRole("button", { name: "Delete" }),
+            );
+            await stabilize();
+          });
+          await waitFor(
+            async () =>
+              assert.isUndefined(await ChatMessages.findOneAsync(doomed)),
+            { timeout: 10000 },
+          );
+        });
+      });
+
+      it("puts back a removed frame and removed feeder arrows", async function () {
+        this.timeout(30000);
+        const frame = await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          type: "frame",
+          tag: { $exists: true },
+          hidden: { $ne: true },
+        });
+        assert.ok(frame);
+        const arrows = await WhiteboardEdges.find({
+          board: boardId,
+          auto: true,
+        }).fetchAsync();
+        assert.isAtLeast(arrows.length, 2);
+        const [first, second] = arrows;
+        await deleteWhiteboardNodes.callPromise({
+          boardId,
+          nodeIds: [frame._id],
+        });
+        await deleteWhiteboardEdges.callPromise({
+          boardId,
+          edgeIds: [first!._id, second!._id],
+        });
+
+        await openBoard();
+        const toggle = screen.getByRole("button", {
+          name: /^Not on the board/,
+        });
+        await act(async () => {
+          fireEvent.click(toggle);
+          await stabilize();
+        });
+        const sidePanel = () =>
+          document.querySelector<HTMLElement>(".react-flow__panel.top.right")!;
+        await waitFor(() => {
+          assert.include(sidePanel().textContent ?? "", "Frames");
+          assert.include(sidePanel().textContent ?? "", "Feeder arrows");
+        });
+        const rowFor = (text: string) => {
+          const label = within(sidePanel()).getByTitle(text);
+          return within(label.parentElement!).getByRole("button", {
+            name: "Put back",
+          });
+        };
+
+        const tag = await Tags.findOneAsync(frame.tag ?? "");
+        await act(async () => {
+          fireEvent.click(rowFor(tag!.name.replace(/^group:/, "")));
+          await stabilize();
+        });
+        await waitFor(
+          async () => {
+            const back = await WhiteboardNodes.findOneAsync(frame._id);
+            assert.isUndefined(back?.hidden);
+            assert.isUndefined(back?.parent);
+          },
+          { timeout: 10000 },
+        );
+
+        const title = async (id: string | undefined) =>
+          (await Puzzles.findOneAsync(id ?? ""))?.title;
+        const firstLabel = `${await title(first!.feeder)} → ${await title(first!.meta)}`;
+        await act(async () => {
+          fireEvent.click(rowFor(firstLabel));
+          await stabilize();
+        });
+        await waitFor(
+          async () => {
+            assert.isUndefined(
+              (await WhiteboardEdges.findOneAsync(first!._id))?.hidden,
+            );
+            assert.isTrue(
+              (await WhiteboardEdges.findOneAsync(second!._id))?.hidden,
+            );
+          },
+          { timeout: 10000 },
+        );
+
+        await act(async () => {
+          fireEvent.click(
+            within(sidePanel()).getByRole("button", {
+              name: "Show all feeder arrows",
+            }),
+          );
+          await stabilize();
+        });
+        await waitFor(
+          async () =>
+            assert.equal(
+              await WhiteboardEdges.find({
+                board: boardId,
+                hidden: true,
+              }).countAsync(),
+              0,
+            ),
+          { timeout: 10000 },
+        );
+      });
+
+      it("says when a save is refused, and keeps refused text to retry", async function () {
+        this.timeout(30000);
+        const sticky = Random.id();
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: sticky,
+              type: "sticky",
+              position: { x: 6000, y: 6000 },
+              width: 200,
+              height: 160,
+              text: "Original",
+            },
+          ],
+        });
+        localStorage.setItem(
+          `whiteboard:viewport:${boardId}`,
+          JSON.stringify({ x: -5800, y: -5800, zoom: 1 }),
+        );
+        const refuse = sinon
+          .stub(upsertWhiteboardNodes, "call")
+          .callsFake((...args: unknown[]) => {
+            const callback = args.at(-1);
+            if (typeof callback === "function") {
+              callback(
+                new Meteor.Error(
+                  403,
+                  "Only operators can edit this whiteboard",
+                ),
+              );
+            }
+          });
+        try {
+          await openBoard();
+          const note = await waitFor(
+            () => {
+              const found = nodeElement(sticky);
+              assert.isNotNull(found);
+              return found as HTMLElement;
+            },
+            { timeout: 20000 },
+          );
+          await act(async () => {
+            fireEvent.doubleClick(within(note).getByText("Original"));
+            await stabilize();
+          });
+          const editor = within(note).getByRole("textbox");
+          await act(async () => {
+            fireEvent.change(editor, { target: { value: "Changed" } });
+            fireEvent.blur(editor);
+            await stabilize();
+          });
+          await screen.findByText(
+            "Couldn't save: Only operators can edit this whiteboard",
+          );
+          within(note).getByText("Changed");
+          const retry = within(note).getByRole("button", { name: "Retry" });
+
+          refuse.restore();
+          await act(async () => {
+            fireEvent.click(retry);
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              assert.equal(
+                (await WhiteboardNodes.findOneAsync(sticky))?.text,
+                "Changed",
+              );
+              assert.isNull(
+                within(note).queryByRole("button", { name: "Retry" }),
+              );
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          refuse.restore();
+          localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+          await deleteWhiteboardNodes.callPromise({
+            boardId,
+            nodeIds: [sticky],
+          });
+        }
+      });
+
+      it("goes view-only while offline, and back without a notice", async function () {
+        this.timeout(30000);
+        let offline = false;
+        const connection = new Tracker.Dependency();
+        const realStatus = Meteor.status.bind(Meteor);
+        const status = sinon.stub(Meteor, "status").callsFake(() => {
+          connection.depend();
+          const real = realStatus();
+          return offline
+            ? { ...real, connected: false, status: "offline" as const }
+            : real;
+        });
+        const setOffline = async (value: boolean) => {
+          offline = value;
+          await act(async () => {
+            connection.changed();
+            Tracker.flush();
+            await stabilize();
+          });
+        };
+        try {
+          await openBoard();
+          await setOffline(true);
+          await screen.findByText(
+            "Offline: the board is view-only until you reconnect",
+          );
+          screen.getByText("Viewing only");
+          assert.isNull(
+            screen.queryByRole("button", { name: /^Select and move/ }),
+          );
+
+          await setOffline(false);
+          await screen.findByRole("button", { name: /^Select and move/ });
+          assert.isNull(
+            screen.queryByText(
+              "Offline: the board is view-only until you reconnect",
+            ),
+          );
+          assert.isNull(screen.queryByText("You can now edit this board."));
+          assert.isNull(
+            screen.queryByText("You can no longer edit this board."),
+          );
+
+          // Edit rights that go while offline are announced on reconnecting
+          await setOffline(true);
+          await setHuntArchived.callPromise({ huntId, isArchived: true });
+          await setOffline(false);
+          await screen.findByText(
+            "You can no longer edit this board.",
+            {},
+            { timeout: 10000 },
+          );
+        } finally {
+          status.restore();
+          await setHuntArchived.callPromise({ huntId, isArchived: false });
+        }
       });
     });
   });

@@ -10,12 +10,14 @@ export interface BoardSearchHit {
   key: string;
   label: string;
   // The node to show: the card, frame, sticky or text box. For a puzzle that
-  // isn't on the board, its hidden card if it has one.
+  // isn't on the board, its hidden card if it has one; for a frame that
+  // isn't, the hidden frame.
   node?: string;
   // The line to show, for a line's label.
   edge?: string;
   puzzle?: string;
-  // A puzzle whose card is hidden, or that has no card at all.
+  // A puzzle whose card is hidden or that has no card at all, or a frame
+  // someone removed.
   notOnBoard?: boolean;
 }
 
@@ -67,8 +69,8 @@ const KIND_ORDER: BoardSearchKind[] = [
 
 // What on the board matches a search: puzzles by title, answer or tag (as the
 // puzzle list finds them), frames by their label, sticky notes and text boxes
-// by their text, and drawn lines by their label. Puzzles not on the board are
-// included and flagged. Nothing matches an empty query.
+// by their text, and drawn lines by their label. Puzzles and frames not on
+// the board are included and flagged. Nothing matches an empty query.
 export function searchBoard<P extends { _id: string; title: string }>({
   query,
   nodes,
@@ -102,12 +104,13 @@ export function searchBoard<P extends { _id: string; title: string }>({
   });
 
   nodes.forEach((node) => {
-    // Hidden frames can't be put back from here, so they aren't found.
-    if (node.hidden) return;
     let label: string | undefined;
     if (node.type === "frame") {
       label = frameLabel(node, node.tag ? tagNames.get(node.tag) : undefined);
-    } else if (node.type === "sticky" || node.type === "text") {
+    } else if (
+      (node.type === "sticky" || node.type === "text") &&
+      !node.hidden
+    ) {
       label = node.text;
     } else {
       return;
@@ -118,6 +121,7 @@ export function searchBoard<P extends { _id: string; title: string }>({
       key: `node:${node._id}`,
       label,
       node: node._id,
+      ...(node.hidden ? { notOnBoard: true } : {}),
     });
   });
 

@@ -14,6 +14,9 @@ export type WhiteboardEdgeInput = {
   arrowHead?: WhiteboardArrowHead;
   color?: WhiteboardColor;
   dashed?: boolean;
+  // Only false, which puts back a feeder arrow someone deleted. Nothing else
+  // can be hidden or unhidden from here.
+  hidden?: boolean;
 };
 
 export default new TypedMethod<

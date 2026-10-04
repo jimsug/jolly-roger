@@ -63,6 +63,11 @@ interface SeedResult {
 const GROUP_PREFIX = "group:";
 const META_FOR_PREFIX = "meta-for:";
 
+// Whether a tag marks its puzzle as a meta for a round (meta-for:X).
+export function isMetaForTag(tag: Pick<TagType, "name">): boolean {
+  return tag.name.startsWith(META_FOR_PREFIX);
+}
+
 function isFrameTag(tag: Pick<TagType, "name">): boolean {
   return tag.name === "administrivia" || tag.name.startsWith(GROUP_PREFIX);
 }
@@ -114,17 +119,37 @@ export function growToContain(size: Size, rect: Rect): Size {
   };
 }
 
+// Something already in a frame. A meta is one of the round's metas, as the
+// card being placed sees it: a meta being placed treats every card as a
+// feeder.
+export interface Occupied extends Rect {
+  meta?: boolean;
+}
+
+// The band a row of card slots takes up.
+function slotRow(row: number): Rect {
+  return {
+    ...cardSlot(row * CARDS_PER_ROW),
+    width: CARDS_PER_ROW * CARD_WIDTH + (CARDS_PER_ROW - 1) * GAP,
+    height: CARD_HEIGHT,
+  };
+}
+
 // Finds the first card slot in a frame not covered by any existing child,
 // growing the frame if that slot falls outside it (e.g. because someone shrank
-// the frame).
+// the frame). A row holding only metas is left for metas, so a puzzle added
+// to a round later doesn't land beside its meta.
 export function placeIntoFrame(
   frame: Size,
-  occupied: Rect[],
+  occupied: Occupied[],
 ): { position: Point; frame: Size } {
   for (let i = 0; i < MAX_SLOTS; i++) {
     const position = cardSlot(i);
     const rect = { ...position, width: CARD_WIDTH, height: CARD_HEIGHT };
-    if (!occupied.some((o) => rectsOverlap(o, rect))) {
+    const row = slotRow(Math.floor(i / CARDS_PER_ROW));
+    const inRow = occupied.filter((o) => rectsOverlap(o, row));
+    const metaRow = inRow.length > 0 && inRow.every((o) => o.meta);
+    if (!metaRow && !occupied.some((o) => rectsOverlap(o, rect))) {
       return { position, frame: growToContain(frame, rect) };
     }
   }
@@ -184,6 +209,26 @@ export function computeFeederPairs(
   return pairs;
 }
 
+// A round's metas: the puzzles tagged meta-for:X, for a frame tagged
+// group:X. A frame for any other tag, or none, has none.
+export function roundMetas(
+  frameTag: string | undefined,
+  tags: Pick<TagType, "_id" | "name">[],
+  puzzles: Pick<PuzzleType, "_id" | "tags">[],
+): Set<string> {
+  const groupName = tags.find((t) => t._id === frameTag)?.name;
+  if (!groupName?.startsWith(GROUP_PREFIX)) return new Set();
+  const metaName = `${META_FOR_PREFIX}${groupName.slice(GROUP_PREFIX.length)}`;
+  const metaTags = new Set(
+    tags.filter((t) => t.name === metaName).map((t) => t._id),
+  );
+  return new Set(
+    puzzles
+      .filter((p) => p.tags.some((id) => metaTags.has(id)))
+      .map((p) => p._id),
+  );
+}
+
 interface FrameRef {
   id: string;
   tag?: string;
@@ -215,7 +260,7 @@ export function chooseFrameForPuzzle(
     .toSorted(byCreatedAt);
 
   for (const tag of puzzleTags) {
-    if (!tag.name.startsWith(META_FOR_PREFIX)) continue;
+    if (!isMetaForTag(tag)) continue;
     const groupTag = tagsByName.get(
       `${GROUP_PREFIX}${tag.name.slice(META_FOR_PREFIX.length)}`,
     );
@@ -383,7 +428,7 @@ export function seedLayout(
   puzzles.forEach((puzzle) => {
     const metaFrame = puzzle.tags
       .map((id) => tagsById.get(id))
-      .filter((t): t is TagType => !!t?.name.startsWith(META_FOR_PREFIX))
+      .filter((t): t is TagType => !!t && isMetaForTag(t))
       .toSorted(byCreatedAt)
       .map((t) =>
         tagsByName.get(
