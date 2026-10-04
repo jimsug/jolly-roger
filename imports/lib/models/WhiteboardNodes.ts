@@ -60,6 +60,9 @@ const WhiteboardNode = withCommon(
     // Set once a person has moved or reparented the node. Placement only ever
     // moves nodes that haven't been touched by hand.
     manual: z.boolean().optional(),
+    // A frame folded to its header for everyone. Its stored size stays the
+    // expanded one, so folding changes no geometry.
+    collapsed: z.boolean().optional(),
 
     // type: "puzzle"
     puzzle: foreignKey.optional(),

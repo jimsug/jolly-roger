@@ -1,8 +1,16 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useNodeId } from "@xyflow/react";
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import Button from "react-bootstrap/Button";
 import { useTranslation } from "react-i18next";
 import styled, { css } from "styled-components";
 import ChatMarkdown from "../ChatMarkdown";
+import WhiteboardContext from "./WhiteboardContext";
 
 const editorStyles = css`
   width: 100%;
@@ -139,6 +147,15 @@ const EditableText = ({
 }) => {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
+  // The node this text belongs to (none for a line's label), which counts
+  // as busy while it's being typed in.
+  const nodeId = useNodeId();
+  const onEditingChange = useContext(WhiteboardContext)?.onEditingChange;
+  useEffect(() => {
+    if (!editing || !nodeId || !onEditingChange) return undefined;
+    onEditingChange(nodeId, true);
+    return () => onEditingChange(nodeId, false);
+  }, [editing, nodeId, onEditingChange]);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<Pending | undefined>(undefined);
   const cancelled = useRef(false);

@@ -52,6 +52,10 @@ const TagSynonymRuleRow = ({
 
   const messages: Record<TagSynonymProblem, string> = {
     empty: t("serverSetup.tagSynonyms.problem.empty", "Fill in both names."),
+    structural: t(
+      "serverSetup.tagSynonyms.problem.structural",
+      "Rules can't rewrite into or out of group:, meta-for: or is:, which the puzzle list and whiteboard read as written.",
+    ),
     prefixColon: t(
       "serverSetup.tagSynonyms.problem.prefixColon",
       "A prefix rule's names both end in a colon, like loc: and where:.",

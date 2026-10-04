@@ -16,16 +16,30 @@ import {
   sortParentsFirst,
   withoutParentLoops,
 } from "../../lib/whiteboard/arrange";
+import {
+  COLLAPSED_FRAME_HEIGHT,
+  foldedInto,
+  foldLines,
+} from "../../lib/whiteboard/collapse";
 import { MAX_FRAME_DEPTH } from "../../lib/whiteboard/limits";
 import colors from "../components/whiteboard/colors";
 
 export type WhiteboardFlowNode = Node<
-  { doc: WhiteboardNodeType; erasing?: boolean },
+  {
+    doc: WhiteboardNodeType;
+    erasing?: boolean;
+    // A frame drawn folded to its header, hiding what's in it.
+    collapsed?: boolean;
+    // A frame collapsed for everyone, counting a change this viewer has
+    // just made, whether or not it's drawn folded for them.
+    collapsedForAll?: boolean;
+  },
   WhiteboardNodeType["type"]
 >;
 
 export type WhiteboardFlowEdge = Edge<
-  { doc: WhiteboardEdgeType },
+  // folded: drawn to a collapsed frame in place of one or both of its ends.
+  { doc: WhiteboardEdgeType; folded?: boolean },
   "whiteboard"
 >;
 
@@ -46,6 +60,13 @@ type PendingEdgeChange = Partial<
 > & { label?: string | null; at: number };
 
 const PENDING_TIMEOUT = 10_000;
+
+// A frame this viewer has just collapsed or expanded, shown that way until
+// the server echoes it or PENDING_TIMEOUT passes.
+interface PendingCollapse {
+  value: boolean;
+  at: number;
+}
 
 // Someone else's live drag, in the coordinates of the frame the node was in
 // when they sent it.
@@ -123,12 +144,14 @@ export interface LineLabels {
   feeder: string;
 }
 
-// A saved line as React Flow draws it.
+// A saved line as React Flow draws it, between `ends` when a collapsed frame
+// stands in for one of its own.
 function flowEdge(
   e: WhiteboardEdgeType,
   selected: boolean,
   lineColors: { text: string; muted: string },
   labels: LineLabels,
+  ends?: { source: string; target: string; folded: boolean },
 ): WhiteboardFlowEdge {
   const color = e.auto
     ? lineColors.muted
@@ -142,10 +165,10 @@ function flowEdge(
   const arrowHead = e.arrowHead ?? "end";
   return {
     id: e._id,
-    source: e.source,
-    target: e.target,
+    source: ends?.source ?? e.source,
+    target: ends?.target ?? e.target,
     type: "whiteboard",
-    data: { doc: e },
+    data: ends?.folded ? { doc: e, folded: true } : { doc: e },
     markerEnd: arrowHead === "none" ? undefined : marker,
     markerStart: arrowHead === "both" ? marker : undefined,
     selected,
@@ -160,6 +183,12 @@ const INK_STYLE = { pointerEvents: "none" } as const;
 
 const sameItems = <T>(a: T[], b: T[]) =>
   a.length === b.length && a.every((item, i) => item === b[i]);
+
+const sameFolds = (a: Map<string, string>, b: Map<string, string>) =>
+  a.size === b.size && [...a].every(([id, frame]) => b.get(id) === frame);
+
+const NO_FOLDS = new Map<string, string>();
+const NO_LINES: ReadonlySet<string> = new Set();
 
 // Minimongo hands back a fresh copy of every document whenever anything on
 // the board changes. This keeps the previous copy of each one that hasn't
@@ -240,12 +269,19 @@ export default function useWhiteboardSync({
   lineColors,
   lineLabels,
   override,
+  peeked,
+  busy,
 }: {
   boardId: string;
   livePuzzleIds: Set<string>;
   showFeederArrows: boolean;
   remoteDrags: Map<string, RemoteDrag>;
   erasingStrokes: Set<string>;
+  // Collapsed frames this viewer has opened for themselves.
+  peeked: Set<string>;
+  // Nodes this viewer is dragging, resizing or typing in. A frame someone
+  // else collapses stays open here while anything inside it is busy.
+  busy: Set<string>;
   // Theme colours for lines with no colour of their own, and feeder arrows.
   lineColors: { text: string; muted: string };
   lineLabels: LineLabels;
@@ -280,7 +316,15 @@ export default function useWhiteboardSync({
   const [nodes, setNodes] = useState<WhiteboardFlowNode[]>([]);
   const [edges, setEdges] = useState<WhiteboardFlowEdge[]>([]);
   const pending = useRef(new Map<string, PendingChange>());
+  const pendingCollapse = useRef(new Map<string, PendingCollapse>());
   const pendingEdges = useRef(new Map<string, PendingEdgeChange>());
+  // Each node a collapsed frame hides, mapped to the frame drawn in its
+  // place (see foldedInto). Worked out with the nodes, since pending changes
+  // count, and kept the same object until it changes, for the lines.
+  const [folded, setFolded] = useState(NO_FOLDS);
+  // The lines drawn, or that would be if every collapsed frame were open, by
+  // id: the ones the board's search can find.
+  const [shownLines, setShownLines] = useState(NO_LINES);
   // Bumped to force a rebuild from the server state, e.g. after a failed
   // write.
   const [generation, setGeneration] = useState(0);
@@ -292,20 +336,68 @@ export default function useWhiteboardSync({
   // generation forces a rebuild from the server's state after a failed write.
   useEffect(() => {
     const now = Date.now();
+    // Local changes the server has caught up with, or that have waited too
+    // long, give way to what it has.
+    shownDocs.forEach((doc) => {
+      const change = pending.current.get(doc._id);
+      if (
+        change &&
+        (pendingSatisfied(doc, change) || now - change.at > PENDING_TIMEOUT)
+      ) {
+        pending.current.delete(doc._id);
+      }
+      const collapse = pendingCollapse.current.get(doc._id);
+      if (
+        collapse &&
+        (!!doc.collapsed === collapse.value ||
+          now - collapse.at > PENDING_TIMEOUT)
+      ) {
+        pendingCollapse.current.delete(doc._id);
+      }
+    });
+
+    // What collapsed frames hide. A frame stays open for this viewer while
+    // they've peeked into it, or anything in it is busy or has a change on
+    // its way to the server.
+    const foldNodes = shownDocs.map((doc) => {
+      const change = pending.current.get(doc._id);
+      const collapse = pendingCollapse.current.get(doc._id);
+      return {
+        _id: doc._id,
+        parent:
+          change?.parent !== undefined
+            ? (change.parent ?? undefined)
+            : doc.parent,
+        collapsed: doc.type === "frame" && (collapse?.value ?? !!doc.collapsed),
+      };
+    });
+    const foldById = new Map(foldNodes.map((n) => [n._id, n]));
+    const open = new Set(peeked);
+    [...busy, ...pending.current.keys()].forEach((id) => {
+      ancestorsOf(foldById, id).forEach((frame) => open.add(frame));
+    });
+    const nextFolded = foldedInto(foldNodes, open);
+    setFolded((current) =>
+      sameFolds(current, nextFolded) ? current : nextFolded,
+    );
+
     setNodes((previous) => {
       const prevById = new Map(previous.map((n) => [n.id, n]));
       // A free end only shows while its line does: a line attached to a
-      // hidden card or frame takes its free end with it.
+      // hidden card or frame takes its free end with it, as does one inside a
+      // collapsed frame.
       const pointIds = new Set(
         shownDocs.filter((d) => d.type === "point").map((d) => d._id),
       );
       const shownIds = new Set(shownDocs.map((d) => d._id));
       const pointsInUse = new Set(
-        edgeDocs.flatMap((e) =>
-          !e.hidden && shownIds.has(e.source) && shownIds.has(e.target)
-            ? [e.source, e.target].filter((id) => pointIds.has(id))
-            : [],
-        ),
+        foldLines(
+          edgeDocs.filter(
+            (e) =>
+              !e.hidden && shownIds.has(e.source) && shownIds.has(e.target),
+          ),
+          nextFolded,
+        ).flatMap((e) => [e.source, e.target].filter((id) => pointIds.has(id))),
       );
       // Whatever was changed most recently draws on top of others at the
       // same level, the same for everyone.
@@ -313,7 +405,11 @@ export default function useWhiteboardSync({
         shownDocs.map((d) => [d._id, +(d.updatedAt ?? d.createdAt ?? 0)]),
       );
       const visible = shownDocs
-        .filter((d) => d.type !== "point" || pointsInUse.has(d._id))
+        .filter(
+          (d) =>
+            !nextFolded.has(d._id) &&
+            (d.type !== "point" || pointsInUse.has(d._id)),
+        )
         .toSorted(
           (a, b) =>
             stamps.get(a._id)! - stamps.get(b._id)! ||
@@ -338,15 +434,12 @@ export default function useWhiteboardSync({
       );
 
       const built = visible.map((doc): WhiteboardFlowNode => {
-        let change = pending.current.get(doc._id);
-        if (
-          change &&
-          (pendingSatisfied(doc, change) || now - change.at > PENDING_TIMEOUT)
-        ) {
-          pending.current.delete(doc._id);
-          change = undefined;
-        }
+        const change = pending.current.get(doc._id);
         const prev = prevById.get(doc._id);
+        const collapsedForAll =
+          doc.type === "frame" ? !!foldById.get(doc._id)?.collapsed : undefined;
+        // Folded to its header, with its stored size kept for when it opens.
+        const collapsed = !!collapsedForAll && !open.has(doc._id);
         const rawParent =
           change?.parent !== undefined
             ? (change.parent ?? undefined)
@@ -364,7 +457,9 @@ export default function useWhiteboardSync({
 
         let position = change?.position ?? remote ?? doc.position;
         let width = change?.width ?? doc.width;
-        let height = change?.height ?? doc.height;
+        let height = collapsed
+          ? COLLAPSED_FRAME_HEIGHT
+          : (change?.height ?? doc.height);
         const sameParent = prev?.parentId === parentId;
         if (prev?.dragging) {
           position = prev.position;
@@ -384,6 +479,10 @@ export default function useWhiteboardSync({
         } else if (
           !change &&
           prev &&
+          // Folding or opening a frame snaps: its height gliding while its
+          // contents come and go has React Flow's ResizeObserver report a
+          // loop.
+          !!prev.data.collapsed === collapsed &&
           (sameParent || !parentId || prevById.has(parentId))
         ) {
           // A change from elsewhere glides from where the node is now, in
@@ -440,6 +539,8 @@ export default function useWhiteboardSync({
           !glides.current.has(doc._id) &&
           prev?.data.doc === doc &&
           prev.data.erasing === erasing &&
+          prev.data.collapsed === collapsed &&
+          prev.data.collapsedForAll === collapsedForAll &&
           prev.parentId === parentId &&
           prev.position.x === position.x &&
           prev.position.y === position.y &&
@@ -453,7 +554,7 @@ export default function useWhiteboardSync({
           type: doc.type,
           position,
           parentId,
-          data: { doc, erasing },
+          data: { doc, erasing, collapsed, collapsedForAll },
           width,
           height,
           selected: prev?.selected ?? false,
@@ -469,7 +570,15 @@ export default function useWhiteboardSync({
       const next = withStacking(sortParentsFirst(withoutParentLoops(built)));
       return sameItems(next, previous) ? previous : next;
     });
-  }, [shownDocs, edgeDocs, remoteDrags, erasingStrokes, generation]);
+  }, [
+    shownDocs,
+    edgeDocs,
+    remoteDrags,
+    erasingStrokes,
+    peeked,
+    busy,
+    generation,
+  ]);
 
   // Steps any glides along, a frame at a time, until they've all arrived. A
   // node someone picks up, or changes locally, stops gliding.
@@ -567,42 +676,52 @@ export default function useWhiteboardSync({
       edgeLook.current?.colors === lineColors &&
       edgeLook.current.labels === lineLabels;
     edgeLook.current = { colors: lineColors, labels: lineLabels };
+    const nodeIds = new Set(shownDocs.map((d) => d._id));
+    const drawn = edgeDocs
+      .map((saved): WhiteboardEdgeType => {
+        const change = pendingEdges.current.get(saved._id);
+        if (!change) return saved;
+        if (edgeSatisfied(saved, change) || now - change.at > PENDING_TIMEOUT) {
+          pendingEdges.current.delete(saved._id);
+          return saved;
+        }
+        return withPendingEdge(saved, change);
+      })
+      .filter(
+        (e: WhiteboardEdgeType) =>
+          !e.hidden &&
+          nodeIds.has(e.source) &&
+          nodeIds.has(e.target) &&
+          (showFeederArrows || !e.auto),
+      );
+    setShownLines((current) =>
+      current.size === drawn.length && drawn.every((e) => current.has(e._id))
+        ? current
+        : new Set(drawn.map((e) => e._id)),
+    );
     setEdges((previous) => {
       const prevById = new Map(previous.map((e) => [e.id, e]));
-      const nodeIds = new Set(shownDocs.map((d) => d._id));
-      const next = edgeDocs
-        .map((saved): WhiteboardEdgeType => {
-          const change = pendingEdges.current.get(saved._id);
-          if (!change) return saved;
-          if (
-            edgeSatisfied(saved, change) ||
-            now - change.at > PENDING_TIMEOUT
-          ) {
-            pendingEdges.current.delete(saved._id);
-            return saved;
-          }
-          return withPendingEdge(saved, change);
-        })
-        .filter(
-          (e: WhiteboardEdgeType) =>
-            !e.hidden &&
-            nodeIds.has(e.source) &&
-            nodeIds.has(e.target) &&
-            (showFeederArrows || !e.auto),
-        )
-        .map((e) => {
-          const prev = prevById.get(e._id);
-          // A line that hasn't changed is handed back as it was, so React
-          // Flow skips it.
-          return sameLook && prev?.data?.doc === e
-            ? prev
-            : flowEdge(e, !!prev?.selected, lineColors, lineLabels);
-        });
+      // Ends inside a collapsed frame go to the frame; a line within one
+      // isn't drawn.
+      const next = foldLines(drawn, folded).map((ends) => {
+        const e = ends.line;
+        const prev = prevById.get(e._id);
+        // A line that hasn't changed is handed back as it was, so React
+        // Flow skips it.
+        return sameLook &&
+          prev?.data?.doc === e &&
+          prev.source === ends.source &&
+          prev.target === ends.target &&
+          !!prev.data.folded === ends.folded
+          ? prev
+          : flowEdge(e, !!prev?.selected, lineColors, lineLabels, ends);
+      });
       return sameItems(next, previous) ? previous : next;
     });
   }, [
     edgeDocs,
     shownDocs,
+    folded,
     showFeederArrows,
     lineColors,
     lineLabels,
@@ -618,7 +737,18 @@ export default function useWhiteboardSync({
   );
 
   const clearPending = useCallback((ids: string[]) => {
-    ids.forEach((id) => pending.current.delete(id));
+    ids.forEach((id) => {
+      pending.current.delete(id);
+      pendingCollapse.current.delete(id);
+    });
+    setGeneration((g) => g + 1);
+  }, []);
+
+  // Shows frames collapsed or expanded straight away, until the server
+  // echoes it or says no (clearPending).
+  const markCollapsed = useCallback((ids: string[], value: boolean) => {
+    const at = Date.now();
+    ids.forEach((id) => pendingCollapse.current.set(id, { value, at }));
     setGeneration((g) => g + 1);
   }, []);
 
@@ -640,6 +770,9 @@ export default function useWhiteboardSync({
                 !!e.selected,
                 lineColors,
                 lineLabels,
+                e.data.folded
+                  ? { source: e.source, target: e.target, folded: true }
+                  : undefined,
               )
             : e,
         ),
@@ -659,8 +792,11 @@ export default function useWhiteboardSync({
     edges,
     setEdges,
     nodeDocs,
+    folded,
+    shownLines,
     markPending,
     clearPending,
+    markCollapsed,
     markEdgePending,
     clearEdgePending,
   };

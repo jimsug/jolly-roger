@@ -215,6 +215,15 @@ async function updateNode(
     if (input.height !== undefined) $set.height = input.height;
   }
   if (input.hidden === false) $unset.hidden = "";
+  // Folding is a view of the frame, not an edit to it: it doesn't make the
+  // frame manual or name anyone as a contributor.
+  if (input.collapsed !== undefined) {
+    if (input.collapsed) {
+      $set.collapsed = true;
+    } else {
+      $unset.collapsed = "";
+    }
+  }
 
   let contentChanged = false;
   const setContent = (
@@ -317,6 +326,7 @@ async function insertNode(
     puzzle: input.type === "puzzle" ? input.puzzle : undefined,
     frameKind: input.type === "frame" ? "user" : undefined,
     label: input.type === "frame" ? label : undefined,
+    collapsed: input.type === "frame" && input.collapsed ? true : undefined,
     text: input.type === "sticky" || input.type === "text" ? text : undefined,
     color: input.type === "point" ? undefined : input.color,
     points: input.type === "ink" ? input.points : undefined,
@@ -352,6 +362,17 @@ export async function upsertNodes(
   if (inserts.some((n) => !n.type || !n.position)) {
     throw badRequest("New nodes need a type and a position");
   }
+  // Only frames fold: an existing node by its saved type, a new one by the
+  // type it's given.
+  if (
+    inputs.some(
+      (n) =>
+        n.collapsed !== undefined &&
+        (existingById.get(n._id)?.type ?? n.type) !== "frame",
+    )
+  ) {
+    throw badRequest("Only frames can be collapsed");
+  }
   if (inserts.length > 0) {
     const count = await WhiteboardNodes.find({ board: boardId }).countAsync();
     if (count + inserts.length > MAX_NODES_PER_BOARD) {
@@ -359,7 +380,14 @@ export async function upsertNodes(
     }
   }
 
-  await recordVersionBeforeEdit(board, userId);
+  // Folding or opening frames on its own doesn't start a version: it's
+  // undone the way it was done, and Collapse finished rounds sends a lot.
+  const collapseOnly = inputs.every(
+    (input) =>
+      input.collapsed !== undefined &&
+      Object.keys(input).every((key) => key === "_id" || key === "collapsed"),
+  );
+  if (!collapseOnly) await recordVersionBeforeEdit(board, userId);
   for (const input of inputs) {
     const existing = existingById.get(input._id);
     if (existing) {
@@ -463,7 +491,11 @@ export async function deleteNodes(
       (node.type === "frame" &&
         (node.tag !== undefined || node.frameKind === "ungrouped"));
     if (keep) {
-      await WhiteboardNodes.updateAsync(node._id, { $set: { hidden: true } });
+      // A seeded frame that's put back comes back open.
+      await WhiteboardNodes.updateAsync(node._id, {
+        $set: { hidden: true },
+        ...(node.type === "frame" ? { $unset: { collapsed: "" } } : {}),
+      });
     } else {
       await WhiteboardNodes.removeAsync(node._id);
       removed.push(node._id);

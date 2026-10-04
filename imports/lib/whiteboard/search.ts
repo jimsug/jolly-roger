@@ -31,10 +31,11 @@ export interface BoardSearchInput<P extends { _id: string; title: string }> {
   query: string;
   nodes: SearchNode[];
   edges: SearchEdge[];
-  // The lines the board is drawing, by id. A line it isn't drawing (hidden,
-  // a feeder arrow this viewer has turned off, or one to a card that's gone)
-  // can't be panned to, so its label isn't found.
-  drawnEdges: ReadonlySet<string>;
+  // The lines the board draws, counting those inside collapsed frames, by
+  // id. A line it doesn't draw (hidden, a feeder arrow this viewer has
+  // turned off, or one to a card that's gone) can't be panned to, so its
+  // label isn't found.
+  shownLines: ReadonlySet<string>;
   // The hunt's live puzzles, without the board's own.
   puzzles: P[];
   // Makes the test for whether a puzzle matches the query's keys, as the
@@ -75,7 +76,7 @@ export function searchBoard<P extends { _id: string; title: string }>({
   query,
   nodes,
   edges,
-  drawnEdges,
+  shownLines,
   puzzles,
   puzzleMatcher,
   tagNames,
@@ -126,7 +127,7 @@ export function searchBoard<P extends { _id: string; title: string }>({
   });
 
   edges.forEach(({ _id, label }) => {
-    if (!drawnEdges.has(_id) || !label || !textMatches(label, keys)) return;
+    if (!shownLines.has(_id) || !label || !textMatches(label, keys)) return;
     hits.push({ kind: "line", key: `edge:${_id}`, label, edge: _id });
   });
 

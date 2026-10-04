@@ -727,6 +727,23 @@ describe("whiteboard", function () {
       assert.deepEqual(saved.position, { x: 5, y: 5 });
     });
 
+    it("places a card into a collapsed frame and grows it", async function () {
+      const frame = await frameFor(groupTag._id);
+      await upsertNodes(member, boardId, [{ _id: frame._id, collapsed: true }]);
+      // More than a row's worth, so the frame needs another row
+      const ids = [];
+      for (const title of ["C1", "C2", "C3", "C4", "C5"]) {
+        ids.push(await newPuzzle(title, [groupTag._id]));
+      }
+      await syncPuzzlesOnBoard(huntId, ids);
+      for (const id of ids) {
+        assert.equal((await cardFor(id)).parent, frame._id);
+      }
+      const grown = (await WhiteboardNodes.findOneAsync(frame._id))!;
+      assert.isTrue(grown.collapsed);
+      assert.isAbove(grown.height!, frame.height!);
+    });
+
     it("doesn't bring back a hidden card", async function () {
       const puzzle = (await Puzzles.findOneAsync({
         hunt: huntId,
@@ -1354,6 +1371,178 @@ describe("whiteboard", function () {
       const restored = (await WhiteboardEdges.findOneAsync(auto._id))!;
       assert.isUndefined(restored.hidden);
       assert.lengthOf(restored.contributors, 0);
+    });
+
+    describe("collapsing frames", function () {
+      const seededFrame = async () =>
+        (await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          type: "frame",
+          tag: { $exists: true },
+        }))!;
+
+      it("collapses and expands a frame without making it manual", async function () {
+        const frame = await seededFrame();
+        assert.notOk(frame.manual);
+        await asUser(member, () =>
+          upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [{ _id: frame._id, collapsed: true }],
+          }),
+        );
+        const collapsed = (await WhiteboardNodes.findOneAsync(frame._id))!;
+        assert.isTrue(collapsed.collapsed);
+        assert.notOk(collapsed.manual);
+        assert.deepEqual(collapsed.contributors, frame.contributors);
+        assert.equal(collapsed.width, frame.width);
+        assert.equal(collapsed.height, frame.height);
+
+        await upsertNodes(member, boardId, [
+          { _id: frame._id, collapsed: false },
+        ]);
+        const expanded = (await WhiteboardNodes.findOneAsync(frame._id))!;
+        assert.notProperty(expanded, "collapsed");
+        assert.notOk(expanded.manual);
+      });
+
+      it("refuses collapsed on a sticky", async function () {
+        const sticky = Random.id();
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            {
+              _id: sticky,
+              type: "sticky",
+              position: { x: 0, y: 0 },
+              collapsed: true,
+            },
+          ]),
+          /Only frames can be collapsed/,
+        );
+        assert.notOk(await WhiteboardNodes.findOneAsync(sticky));
+        await upsertNodes(member, boardId, [
+          { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
+        ]);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [{ _id: sticky, collapsed: false }]),
+          /Only frames can be collapsed/,
+        );
+      });
+
+      it("refuses a batch with a non-frame collapse before writing any of it", async function () {
+        const frame = await seededFrame();
+        const sticky = Random.id();
+        await upsertNodes(member, boardId, [
+          { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
+        ]);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            { _id: frame._id, position: { x: 12345, y: 12345 } },
+            { _id: sticky, collapsed: true },
+          ]),
+          /Only frames can be collapsed/,
+        );
+        assert.deepEqual(
+          (await WhiteboardNodes.findOneAsync(frame._id))?.position,
+          frame.position,
+        );
+      });
+
+      it("refuses collapsing to someone who can't edit", async function () {
+        const frame = await seededFrame();
+        await Whiteboards.updateAsync(boardId, {
+          $set: { editPolicy: "operators" },
+        });
+        await assert.isRejected(
+          upsertNodes(member, boardId, [{ _id: frame._id, collapsed: true }]),
+          /Only operators/,
+        );
+        await assert.isRejected(
+          upsertNodes(outsider, boardId, [{ _id: frame._id, collapsed: true }]),
+          /member/,
+        );
+        assert.notOk(
+          (await WhiteboardNodes.findOneAsync(frame._id))?.collapsed,
+        );
+
+        await Whiteboards.updateAsync(boardId, { $unset: { editPolicy: 1 } });
+        await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+        await assert.isRejected(
+          upsertNodes(operator, boardId, [{ _id: frame._id, collapsed: true }]),
+          /archived/,
+        );
+      });
+
+      it("keeps collapsed when a frame is re-inserted", async function () {
+        const frame = Random.id();
+        await upsertNodes(member, boardId, [
+          {
+            _id: frame,
+            type: "frame",
+            position: { x: 0, y: 0 },
+            width: 400,
+            height: 300,
+            collapsed: true,
+          },
+        ]);
+        assert.isTrue((await WhiteboardNodes.findOneAsync(frame))?.collapsed);
+        const open = Random.id();
+        await upsertNodes(member, boardId, [
+          {
+            _id: open,
+            type: "frame",
+            position: { x: 500, y: 0 },
+            width: 400,
+            height: 300,
+            collapsed: false,
+          },
+        ]);
+        assert.notProperty(
+          (await WhiteboardNodes.findOneAsync(open))!,
+          "collapsed",
+        );
+      });
+
+      it("opens a seeded frame when it's taken off the board", async function () {
+        const frame = await seededFrame();
+        await upsertNodes(member, boardId, [
+          { _id: frame._id, collapsed: true },
+        ]);
+        await deleteNodes(member, boardId, [frame._id]);
+        const hidden = (await WhiteboardNodes.findOneAsync(frame._id))!;
+        assert.isTrue(hidden.hidden);
+        assert.notProperty(hidden, "collapsed");
+
+        await upsertNodes(member, boardId, [
+          { _id: frame._id, hidden: false, parent: null },
+        ]);
+        assert.notOk(
+          (await WhiteboardNodes.findOneAsync(frame._id))?.collapsed,
+        );
+      });
+
+      it("records no version for a collapse-only batch", async function () {
+        const frame = await seededFrame();
+        await WhiteboardVersions.removeAsync({ board: boardId });
+        await upsertNodes(member, boardId, [
+          { _id: frame._id, collapsed: true },
+        ]);
+        await upsertNodes(member, boardId, [
+          { _id: frame._id, collapsed: false },
+        ]);
+        assert.equal(
+          await WhiteboardVersions.find({ board: boardId }).countAsync(),
+          0,
+        );
+
+        // Anything else in the batch is an edit like any other
+        await upsertNodes(member, boardId, [
+          { _id: frame._id, collapsed: true, position: { x: 10, y: 10 } },
+        ]);
+        assert.equal(
+          await WhiteboardVersions.find({ board: boardId }).countAsync(),
+          1,
+        );
+      });
     });
   });
 
@@ -3053,11 +3242,12 @@ describe("whiteboard", function () {
       assert.ok((await Whiteboards.findOneAsync(boardId))?.lastRewrittenAt);
     });
 
-    it("keeps comment anchors through a reset", async function () {
+    it("keeps comment anchors and collapsed frames through a reset", async function () {
       const card = await angerCard();
       const angerFrame = await frameFor(anger._id);
       await upsertNodes(member, boardId, [
         { _id: card._id, parent: null, position: { x: 9000, y: 9000 } },
+        { _id: angerFrame._id, collapsed: true },
       ]);
       const onCard = await comment(card._id, "on the card");
       const onFrame = await comment(angerFrame._id, "on the frame");
@@ -3074,6 +3264,7 @@ describe("whiteboard", function () {
         x: 10,
         y: 20,
       });
+      assert.isTrue((await frameFor(anger._id)).collapsed);
     });
 
     it("records a reset version first and restores from it", async function () {

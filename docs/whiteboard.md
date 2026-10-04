@@ -6,6 +6,7 @@ files:
   - imports/client/components/WhiteboardPage.tsx
   - imports/client/components/tagColors.ts
   - imports/client/components/whiteboard/BoardSearch.tsx
+  - imports/client/components/whiteboard/CollapseContext.ts
   - imports/client/components/whiteboard/CommentComposer.tsx
   - imports/client/components/whiteboard/CommentLayer.tsx
   - imports/client/components/whiteboard/CommentList.tsx
@@ -16,6 +17,7 @@ files:
   - imports/client/components/whiteboard/FrameLabelLayer.tsx
   - imports/client/components/whiteboard/FrameNode.tsx
   - imports/client/components/whiteboard/HistoryPanel.tsx
+  - imports/client/components/whiteboard/NodeChrome.tsx
   - imports/client/components/whiteboard/PeopleContext.ts
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
   - imports/client/components/whiteboard/ResetLayoutModal.tsx
@@ -39,6 +41,7 @@ files:
   - imports/lib/puzzleTagStatus.ts
   - imports/lib/puzzleViewers.ts
   - imports/lib/tagNames.ts
+  - imports/lib/whiteboard/collapse.ts
   - imports/lib/whiteboard/comments.ts
   - imports/lib/whiteboard/feederFocus.ts
   - imports/lib/whiteboard/layout.ts
@@ -55,6 +58,7 @@ files:
   - imports/methods/restoreWhiteboardVersion.ts
   - imports/methods/setWhiteboardEditPolicy.ts
   - imports/methods/upsertWhiteboardEdges.ts
+  - imports/methods/upsertWhiteboardNodes.ts
   - imports/server/daemons/whiteboardVersions.ts
   - imports/server/methods/fetchWhiteboardVersion.ts
   - imports/server/methods/placeWhiteboardCardsByTags.ts
@@ -236,16 +240,18 @@ The search field at the start of the toolbar, there on read-only boards too,
 finds puzzles by title, answer or tag, using the puzzle list's own matcher
 (`compilePuzzleMatcher`, with the same tag synonyms) so a search finds the same
 puzzles in both places. It also finds frames by the label they show, sticky
-notes and text boxes by their contents, and the lines the board is drawing by
-their label (not a line to a hidden card, or a feeder arrow the viewer has
-turned off). `/` or Ctrl+F (Cmd+F on a Mac) jumps to it while the board has
+notes and text boxes by their contents, and the lines the board draws by
+their label, including those inside a collapsed frame (not a line to a
+hidden card, or a feeder arrow the viewer has turned off). `/` or Ctrl+F (Cmd+F on a Mac) jumps to it while the board has
 focus, meaning the last press or focus was on the board; anywhere else, and
 from the search field itself, Ctrl+F is the browser's own find.
 
 The results drop down under the field. Arrow keys move through them and Enter
 picks one, as does a click. Picking something pans the board to it, zooming in
 to at least 0.8 if it's further out, and marks it with a pulse for a couple of
-seconds; a line is marked at its middle. A puzzle whose card is hidden, or
+seconds; a line is marked at its middle. Something inside a collapsed frame,
+or a line with an end inside one, opens the frame for this viewer first (see
+Collapsed rounds) and is shown once it's drawn. A puzzle whose card is hidden, or
 that has no card, and a round's frame that someone removed, are listed last
 as "Not on the board". Picking that row does nothing; anyone who can edit gets
 a "Put back" button on it, which puts the card or frame back at the middle of
@@ -263,10 +269,14 @@ to load, shows what it names, and is then dropped from the address:
   waiting for ever, and one on something that has been hidden or deleted
   says "That isn't on the board any more." The canvas knows the thread is
   gone once the puzzle page's chat has loaded, which the page tells it through
-  `ChatLoadedContext`.
+  `ChatLoadedContext`. A thread on something inside a collapsed frame opens
+  the frame for this viewer first (see Collapsed rounds), and so does "Show
+  on board" from chat.
 - `?puzzle=<puzzleId>` pans to that puzzle's card and marks it, or says the
   puzzle isn't on the board.
-- `?node=<nodeId>` does the same for any node.
+- `?node=<nodeId>` does the same for any node. Either opens any collapsed
+  frame the node is in for this viewer first, as picking it in the search
+  does.
 - `?v=x,y,zoom` opens the view with board point (x, y) in the middle at that
   zoom. Anything that isn't three numbers on the board (within
   `MAX_COORDINATE`) at a zoom the board allows is ignored and dropped.
@@ -517,8 +527,10 @@ its edit policy, so a restore never changes who may edit.
 Node and line edits (`upsertNodes`, `deleteNodes`, `upsertEdges`,
 `deleteEdges` and `placeByTags`) call `recordVersionBeforeEdit` in
 `imports/server/whiteboardVersions.ts` after their checks and before their
-first write. Comments, live drags and strokes, and placement from puzzle
-hooks never record one. The rule for whether an edit records a version is
+first write. Comments, live drags and strokes, placement from puzzle hooks,
+and an `upsertNodes` batch that does nothing but collapse or expand frames
+never record one. Versions hold each frame's `collapsed` like any other
+field, so a restore brings it back. The rule for whether an edit records a version is
 `versionDecision` in `imports/lib/whiteboard/versions.ts`. Each version
 lists who edited after it and when each of them started:
 
@@ -739,8 +751,9 @@ On a phone the viewer can pan and pinch, open puzzles from cards, show and
 hide resolved pins, open a pin's thread, place a comment, reply, react,
 resolve and reopen, delete their own thread while nobody else has replied
 (operators can always), use search and the Comments list, copy a link to the
-view, and follow "Show on board" from chat. Nothing else: no tools, no
-moving, no who-can-edit button.
+view, follow "Show on board" from chat, and open a collapsed round for
+themselves ("Show (only for you)", see Collapsed rounds). Nothing else: no
+tools, no moving, no folding rounds for everyone, no who-can-edit button.
 
 The toolbar says "Viewing only" with "Editing needs a wider screen. You can
 still comment." under it, and its Comment, Comments and resolved buttons are
@@ -824,7 +837,16 @@ leaves those tags out of its chips (`shownAsStatus`). Both read tags through
 the tag vocabulary in `imports/lib/tagNames.ts` (`tagKind`), through the
 server-wide synonym table admins edit on the Setup page (by default `loc:` and
 `location:` are synonyms for `where:` and `stuck` for `is:stuck`); the
-whiteboard's layout finds metas with its `isMetaForTag` too. The helpers take
+whiteboard's layout finds metas with its `isMetaForTag` too. The table
+can't rewrite into or out of `group:`, `meta-for:` or `is:`
+(`tagSynonymRuleProblems` calls that `structural`), apart from the built-in
+`stuck` rule, so the tags that organise a hunt keep the names they're stored
+under: a round's state, for one, reads `group:` and `meta-for:` tags as
+written. Without that, a tag stored before a rule existed would mean one
+thing there and another through the table. "Use the built-in rules" on the
+Setup page drops a saved table (it's greyed out, with a line saying the
+built-in rules are in use, when there's none), and saving an empty one turns
+synonyms off. The helpers take
 the table as an argument: components get it from `useTagSynonyms`, and server
 code (placing cards, a reset's seed layout) from `currentTagSynonyms` in
 `imports/server/tagSynonyms.ts`, which follows the setting.
@@ -859,7 +881,8 @@ instead of 40%, and its label in the secondary text colour. The far-zoom pill
 keeps the count and gets the tick and the same grey. In a narrow frame the
 count and status are cut short before the round's name is. Nothing else about a finished round changes: its cards,
 lines and comments behave as before. `finishedFrames` lists the finished
-rounds on a board, for folding them later.
+rounds that aren't collapsed, from the states `roundStates` worked out, which
+is what "Collapse finished rounds" folds (see Collapsed rounds).
 
 The counts are worked out on the client once per board, in the canvas's
 `useTracker` (`useRoundStates` in `imports/client/hooks/useRoundStates.ts`),
@@ -894,6 +917,93 @@ which on a seeded round is in the meta row. Rows that also hold a feeder, as
 on boards seeded before metas had a row of their own, fill as they always
 did, so existing boards only change in where new cards land.
 
+## Collapsed rounds
+
+A frame can be folded to its header, hiding what's in it, so a round the
+team has finished stops taking up the board. Nothing folds on its own: it's
+done by hand, a frame at a time or every finished round at once, so nobody's
+view changes under them mid-solve.
+
+### For everyone, or just for you
+
+Folding a frame is shared: "Collapse for everyone" folds it on every
+screen, and "Expand for everyone" opens it again. Both need edit access.
+They're the chevron at the start of the frame's header, and a button beside
+the colour picker above a selected frame, which is there at every zoom
+(the header isn't drawn when the board is zoomed right out).
+
+Anyone who can see the board, editors included, can look inside a collapsed
+frame without changing it for anyone else: "Show (only for you)" opens it on
+their screen, and "Hide again" folds it back. For someone who can't fold it
+for everyone (a non-editor, an archived hunt, a phone) that's what the
+chevron does; editors get it as an eye button beside the chevron. A peek
+lasts until the viewer leaves the board, and goes once the frame is expanded
+for everyone, so folding it again later folds it for them too.
+
+A frame someone else folds stays open for this viewer while anything inside
+it is being dragged, resized or typed in by them, or has a change of theirs
+on its way to the server, so their work isn't folded away under them.
+
+### What a collapsed frame shows
+
+A collapsed frame is drawn as its header, 56 units tall
+(`COLLAPSED_FRAME_HEIGHT`), at its full width, with a dashed edge. Its stored
+size doesn't change, so it opens at the size it was, and it can't be resized
+while collapsed. The header shows "n/m solved" over every card inside it at
+any depth (puzzles with nothing to solve count neither way), or "N items"
+when it holds no puzzles; the edge is in the warning colour while an
+unsolved puzzle is inside; and "N comments", a button that opens the frame
+for the viewer, when it hides open comment threads. A finished round keeps
+its tick and "Finished". Zoomed right out, its label is sized to its width
+rather than its height and reads "label (n/m)".
+
+Lines with an end inside the frame are drawn to the frame instead, and a
+line with both ends inside isn't drawn. Feeder arrows that end up joining
+the same frame and meta are drawn once, so a folded round sends one arrow to
+its meta. A line drawn to a collapsed frame in place of something inside it
+has no grips, so its real end can't be dragged off it, and a line's free end
+inside the frame is hidden with it. Comment pins on anything inside aren't
+drawn; a new comment on the header is pinned to the frame. Someone else's
+live drag of something inside isn't shown.
+
+Nothing can be dropped into a collapsed frame: drags, arrow-key moves,
+placed notes and frames, and new ink land around it, as if it weren't there.
+Moving the frame moves what's in it (positions inside are relative to the
+frame) and the free ends of lines attached to it. Align and distribute treat
+it as the header it is. A collapse or expand snaps rather than gliding as
+other changes do.
+
+The folding is worked out on the client: `foldedInto` in
+`imports/lib/whiteboard/collapse.ts` maps each hidden node to the outermost
+collapsed frame above it that isn't open for this viewer, `foldLines` moves
+the lines' ends, and `collapsedAncestors` finds the frames to open for a
+link. `useWhiteboardSync` takes the viewer's peeked and busy nodes and does
+this as it builds the nodes, and the canvas passes each folded frame's
+counts to its header and far-zoom label through `CollapseContext`.
+
+### Collapse finished rounds
+
+With edit access, the toolbar has "Collapse finished rounds" beside Reset
+layout while any round is finished and still open, titled "Fold every round
+whose metas are solved". It folds them all at once, sending `collapsed: true`
+for each in batches of `MAX_BATCH`. Finished is as Rounds describes it.
+
+### On the server
+
+Folding goes through `Whiteboards.methods.upsertNodes` with `collapsed: true`
+or `false` on a frame, so it needs edit access like any edit, and an
+archived hunt refuses it. Anything but a frame is refused ("Only frames can
+be collapsed"), and a batch holding one is refused before any of it is
+written. `true` sets the field and `false` removes it. It doesn't mark
+the frame as moved by hand or name anyone as a contributor. A new frame can
+be created collapsed, so putting one back keeps it. Taking a seeded frame off
+the board opens it, so it comes back open. A batch that does nothing but
+collapse or expand frames records no version. Placement ignores the field: a
+new card goes into the frame's stored layout, the frame grows to fit, and its
+count shows it. Reset layout keeps every frame's id, so collapsed rounds stay
+collapsed, and a restore puts back each frame's `collapsed` as the version
+had it.
+
 ## Flags
 
 - `disable.whiteboard` turns the board off. Creating one, every node and line
@@ -923,7 +1033,8 @@ There is no flag for the edit policy: `members` is already the off position.
   set and a position relative to it. `hidden` marks a card or seeded frame
   someone removed, so placement doesn't put it back; `manual` marks a node
   someone has moved, so placement leaves it alone until Place by tags or a
-  reset clears it. `contributors` records who wrote or restyled it.
+  reset clears it. `collapsed` marks a frame folded for everyone (see
+  Collapsed rounds). `contributors` records who wrote or restyled it.
 - `WhiteboardEdges` (`jr_whiteboard_edges`): lines between nodes. Feeder arrows
   are `auto`, with `feeder` and `meta` puzzle ids, and follow the puzzles'
   tags.

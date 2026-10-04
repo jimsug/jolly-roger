@@ -85,9 +85,11 @@ export interface Theme {
     whiteboardCursorOutline: string;
     metaBadgeBackground: string;
     metaBadgeText: string;
-    // A stuck puzzle's card edge at mid zoom, and the tick on a finished round
+    // A stuck puzzle's card edge at mid zoom, the tick on a finished round,
+    // and the edge of a collapsed round with an unsolved puzzle in it
     whiteboardStuckEdge: string;
     whiteboardFinishedTick: string;
+    whiteboardUnsolvedInside: string;
     guess: {
       correct: {
         background: string;
@@ -209,6 +211,7 @@ export const lightTheme: Theme = {
     metaBadgeText: "#000",
     whiteboardStuckEdge: "var(--bs-danger)",
     whiteboardFinishedTick: "var(--bs-success)",
+    whiteboardUnsolvedInside: "var(--bs-warning)",
     guess: {
       correct: {
         background: "#f0fff0",
@@ -355,6 +358,7 @@ export const darkTheme: Theme = {
     metaBadgeText: "#000",
     whiteboardStuckEdge: "var(--bs-danger)",
     whiteboardFinishedTick: "var(--bs-success)",
+    whiteboardUnsolvedInside: "var(--bs-warning)",
     guess: {
       correct: {
         background: "#155724",

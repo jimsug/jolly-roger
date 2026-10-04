@@ -6,11 +6,19 @@ import { MAX_FRAME_DEPTH } from "../../../../imports/lib/whiteboard/limits";
 import {
   finishedFrames,
   roundState,
+  roundStates,
 } from "../../../../imports/lib/whiteboard/rounds";
 
 type Node = Pick<
   WhiteboardNodeType,
-  "_id" | "type" | "parent" | "puzzle" | "tag" | "hidden" | "frameKind"
+  | "_id"
+  | "type"
+  | "parent"
+  | "puzzle"
+  | "tag"
+  | "hidden"
+  | "collapsed"
+  | "frameKind"
 >;
 type Puzzle = Pick<
   PuzzleType,
@@ -328,23 +336,29 @@ describe("whiteboard roundState", function () {
 });
 
 describe("whiteboard finishedFrames", function () {
-  it("skips hidden, hand-made and ungrouped frames", function () {
+  it("skips hidden, collapsed, hand-made and ungrouped frames", function () {
     const b = board();
     const done = b.frame("done", { tag: "group:A" });
     b.card("a1", done, ["group:A"]);
     const hidden = b.frame("hidden", { tag: "group:B" });
     b.nodes.find((n) => n._id === hidden)!.hidden = true;
     b.card("b1", hidden, ["group:B"]);
+    const folded = b.frame("folded", { tag: "group:D" });
+    b.nodes.find((n) => n._id === folded)!.collapsed = true;
+    b.card("d1", folded, ["group:D"]);
     const mine = b.frame("mine");
     b.card("m1", mine, []);
     const ungrouped = b.frame("ungrouped", { kind: "ungrouped" });
     b.card("u1", ungrouped, []);
     const open = b.frame("open", { tag: "group:C" });
     b.card("c1", open, ["group:C"], b.unsolved);
-    assert.deepEqual(finishedFrames(b.nodes, b.puzzles, b.tags), [done]);
+    assert.deepEqual(
+      finishedFrames(b.nodes, roundStates(b.nodes, b.puzzles, b.tags)),
+      [done],
+    );
   });
 
   it("handles an empty board", function () {
-    assert.deepEqual(finishedFrames([], [], []), []);
+    assert.deepEqual(finishedFrames([], new Map()), []);
   });
 });

@@ -47,6 +47,7 @@ export const TAG_SYNONYMS: readonly TagSynonymRule[] = [
 
 export type TagSynonymProblem =
   | "empty"
+  | "structural"
   | "prefixColon"
   | "self"
   | "chain"
@@ -69,6 +70,23 @@ function ruleApplies(rule: TagSynonymRule, name: string): boolean {
     : name.startsWith(rule.match);
 }
 
+// Names the whiteboard and the puzzle list also read as written, so a rule
+// may not rewrite into or out of them: a tag stored before the rule existed
+// would mean one thing to those checks and another through the table.
+const STRUCTURAL_PREFIXES = ["group:", "meta-for:", "is:"];
+
+const isStructural = (rule: TagSynonymRule) =>
+  STRUCTURAL_PREFIXES.some(
+    (prefix) => rule.match.startsWith(prefix) || rule.to.startsWith(prefix),
+  ) &&
+  // The built-in rules (stuck is is:stuck) are allowed as they are.
+  !TAG_SYNONYMS.some(
+    (builtIn) =>
+      builtIn.kind === rule.kind &&
+      builtIn.match === rule.match &&
+      builtIn.to === rule.to,
+  );
+
 // What's wrong with each rule of a table, by index; a valid table has no
 // entries. No name a rule produces may be rewritten by a rule, so a name is
 // never more than one step from its canonical form. For a prefix rule that
@@ -83,6 +101,8 @@ export function tagSynonymRuleProblems(
     const key = `${rule.kind}\n${rule.match}`;
     if (rule.match === "" || rule.to === "") {
       problems.set(index, "empty");
+    } else if (isStructural(rule)) {
+      problems.set(index, "structural");
     } else if (
       rule.kind === "prefix" &&
       (!rule.match.endsWith(":") || !rule.to.endsWith(":"))

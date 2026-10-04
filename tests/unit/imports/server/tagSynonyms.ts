@@ -29,7 +29,7 @@ import waitForAssertion from "../../../lib/waitForAssertion";
 
 const ROOMS: TagSynonymRule[] = [
   { kind: "prefix", match: "room:", to: "where:" },
-  { kind: "tag", match: "wedged", to: "is:stuck" },
+  { kind: "tag", match: "wedged", to: "needs:help" },
 ];
 
 describe("tag synonyms", function () {
@@ -108,7 +108,7 @@ describe("tag synonyms", function () {
       const wedgedId = await asAdmin(() =>
         getOrCreateTagByName(huntId, "wedged"),
       );
-      assert.equal((await Tags.findOneAsync(wedgedId))?.name, "is:stuck");
+      assert.equal((await Tags.findOneAsync(wedgedId))?.name, "needs:help");
       // The built-in rules are gone with a table of its own
       const locId = await asAdmin(() =>
         getOrCreateTagByName(huntId, "loc:foyer"),
@@ -143,6 +143,17 @@ describe("tag synonyms", function () {
         [[{ kind: "prefix", match: "room", to: "where:" }], /end in ':'/],
         [[{ kind: "tag", match: "x", to: "x" }], /to itself/],
         [
+          [{ kind: "prefix", match: "round:", to: "group:" }],
+          /Rule 1 rewrites into or out of group:, meta-for: or is:/,
+        ],
+        [
+          [
+            { kind: "prefix", match: "room:", to: "where:" },
+            { kind: "tag", match: "is:meta", to: "meta" },
+          ],
+          /Rule 2 rewrites into or out of/,
+        ],
+        [
           [
             { kind: "prefix", match: "room:", to: "where:" },
             { kind: "prefix", match: "where:", to: "place:" },
@@ -170,6 +181,31 @@ describe("tag synonyms", function () {
       assert.deepEqual(
         (await Settings.findOneAsync({ name: "tag.synonyms" }))?.value,
         { rules: ROOMS },
+      );
+    });
+  });
+
+  describe("resetting to the built-in rules", function () {
+    it("removes the saved table, so the built-in one applies", async function () {
+      await configure([]);
+      await waitForTable([]);
+
+      await assert.isRejected(
+        asUser(hunterId, () =>
+          configureTagSynonyms.callPromise({ rules: [], reset: true }),
+        ),
+        /Must be admin/,
+      );
+      assert.ok(await Settings.findOneAsync({ name: "tag.synonyms" }));
+
+      await asAdmin(() =>
+        configureTagSynonyms.callPromise({ rules: ROOMS, reset: true }),
+      );
+      assert.isUndefined(await Settings.findOneAsync({ name: "tag.synonyms" }));
+      await waitForTable(TAG_SYNONYMS);
+      assert.equal(
+        canonicalTagName("loc:atrium", currentTagSynonyms()),
+        "where:atrium",
       );
     });
   });

@@ -746,6 +746,50 @@ if (Meteor.isClient) {
           { timeout: 10000 },
         );
       });
+
+      it("goes back to the built-in rules from the Setup page", async function () {
+        this.timeout(30000);
+        await setUpHunt("tag synonyms reset", []);
+        await configureTagSynonyms.callPromise({
+          rules: [{ kind: "prefix", match: "room:", to: "where:" }],
+        });
+
+        renderPage("/setup");
+        await act(async () => {
+          await stabilize();
+        });
+        const section = await synonymsSection();
+        await waitFor(() => {
+          assert.equal(
+            section.getByRole<HTMLInputElement>("textbox", {
+              name: "Synonym in rule 1",
+            }).value,
+            "room:",
+          );
+        });
+        fireEvent.click(
+          section.getByRole("button", { name: "Use the built-in rules" }),
+        );
+        await section.findByText("Saved changes.", {}, { timeout: 5000 });
+        assert.deepEqual(
+          TAG_SYNONYMS.map(
+            (_rule, i) =>
+              section.getByRole<HTMLInputElement>("textbox", {
+                name: `Synonym in rule ${i + 1}`,
+              }).value,
+          ),
+          TAG_SYNONYMS.map((rule) => rule.match),
+        );
+        // With no saved table there's nothing to go back from
+        await waitFor(() => {
+          assert.isTrue(
+            section
+              .getByRole("button", { name: "Use the built-in rules" })
+              .hasAttribute("disabled"),
+          );
+          section.getByText("This server is using the built-in rules.");
+        });
+      });
     });
 
     describe("tag dings", function () {

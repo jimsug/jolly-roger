@@ -363,6 +363,35 @@ describe("whiteboard versions", function () {
       assert.ok((await Whiteboards.findOneAsync(boardId))?.lastRewrittenAt);
     });
 
+    it("restores whether a frame is collapsed", async function () {
+      const frame = (await WhiteboardNodes.findOneAsync({
+        board: boardId,
+        type: "frame",
+      }))!;
+      const isCollapsed = async () =>
+        (await WhiteboardNodes.findOneAsync(frame._id))?.collapsed;
+      // Folding alone records nothing, so an edit after it records the board
+      // with the frame folded
+      await upsertNodes(member, boardId, [{ _id: frame._id, collapsed: true }]);
+      await nextWindow();
+      await sticky(member);
+      const folded = await newest();
+      await upsertNodes(member, boardId, [
+        { _id: frame._id, collapsed: false },
+      ]);
+      await nextWindow();
+      await sticky(member);
+      const open = await newest();
+      assert.notEqual(open._id, folded._id);
+      assert.isUndefined(await isCollapsed());
+
+      await restoreVersion(member, boardId, folded._id);
+      assert.isTrue(await isCollapsed());
+
+      await restoreVersion(member, boardId, open._id);
+      assert.isUndefined(await isCollapsed());
+    });
+
     it("restores a card whose id changed since", async function () {
       const card = (await WhiteboardNodes.findOneAsync({
         board: boardId,

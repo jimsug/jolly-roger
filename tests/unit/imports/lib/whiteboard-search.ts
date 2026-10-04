@@ -49,7 +49,7 @@ const search = (
     query,
     nodes,
     edges,
-    drawnEdges: new Set(["e1", "e2"]),
+    shownLines: new Set(["e1", "e2"]),
     puzzles: [crossword, maze, lost],
     puzzleMatcher: titleMatcher,
     tagNames: new Map([["round1", "group:Round One"]]),
@@ -118,7 +118,7 @@ describe("whiteboard searchBoard", function () {
       [["line", "e1"]],
     );
     assert.deepEqual(
-      search("arrow", { drawnEdges: new Set(["e3"]) }).map((h) => h.edge),
+      search("arrow", { shownLines: new Set(["e3"]) }).map((h) => h.edge),
       ["e3"],
     );
   });

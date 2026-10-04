@@ -1,5 +1,6 @@
 import { NodeResizer, NodeToolbar, Position } from "@xyflow/react";
 import React, { useCallback } from "react";
+import styled from "styled-components";
 import type { WhiteboardColor } from "../../../lib/models/WhiteboardNodes";
 import { CARD_HEIGHT } from "../../../lib/whiteboard/layout";
 import ColorPicker from "./ColorPicker";
@@ -13,8 +14,15 @@ export const MIN_SIZES = {
   frame: { width: CARD_HEIGHT, height: CARD_HEIGHT },
 };
 
+const ToolbarRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
 // What stickies, text boxes and frames all have: handles for lines and, while
-// the board can be edited, resize handles and a colour picker.
+// the board can be edited, resize handles and a colour picker, with anything
+// else the node offers beside it.
 const NodeChrome = ({
   id,
   kind,
@@ -22,6 +30,8 @@ const NodeChrome = ({
   color,
   palette,
   fallback,
+  resizable = true,
+  tools,
 }: {
   id: string;
   kind: keyof typeof MIN_SIZES;
@@ -29,6 +39,9 @@ const NodeChrome = ({
   color: WhiteboardColor | undefined;
   palette: Record<WhiteboardColor, string | undefined>;
   fallback?: string;
+  // Off for a collapsed frame, whose size on screen isn't its own.
+  resizable?: boolean;
+  tools?: React.ReactNode;
 }) => {
   const { readOnly, updateNodes, persistResize } = useWhiteboard();
   const onColor = useCallback(
@@ -40,19 +53,24 @@ const NodeChrome = ({
     <>
       {!readOnly && (
         <>
-          <NodeResizer
-            isVisible={selected}
-            minWidth={MIN_SIZES[kind].width}
-            minHeight={MIN_SIZES[kind].height}
-            onResizeEnd={onResizeEnd}
-          />
-          <NodeToolbar position={Position.Top}>
-            <ColorPicker
-              value={color}
-              palette={palette}
-              onChange={onColor}
-              fallback={fallback}
+          {resizable && (
+            <NodeResizer
+              isVisible={selected}
+              minWidth={MIN_SIZES[kind].width}
+              minHeight={MIN_SIZES[kind].height}
+              onResizeEnd={onResizeEnd}
             />
+          )}
+          <NodeToolbar position={Position.Top}>
+            <ToolbarRow>
+              <ColorPicker
+                value={color}
+                palette={palette}
+                onChange={onColor}
+                fallback={fallback}
+              />
+              {tools}
+            </ToolbarRow>
           </NodeToolbar>
         </>
       )}

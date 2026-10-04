@@ -92,7 +92,7 @@ const NoResults = styled.div`
 const BoardSearch = ({
   boardId,
   huntId,
-  drawnEdges,
+  shownLines,
   canPutBack,
   inputRef,
   onShow,
@@ -100,8 +100,9 @@ const BoardSearch = ({
 }: {
   boardId: string;
   huntId: string;
-  // The lines the board is drawing, by id.
-  drawnEdges: ReadonlySet<string>;
+  // The lines the board draws, counting those inside collapsed frames, by
+  // id.
+  shownLines: ReadonlySet<string>;
   // Whether a puzzle or frame that isn't on the board can be put back from
   // here.
   canPutBack: boolean;
@@ -141,7 +142,7 @@ const BoardSearch = ({
         { board: boardId, label: { $exists: true } },
         { projection: { label: 1 } },
       ).fetch(),
-      drawnEdges,
+      shownLines,
       puzzles: Puzzles.find({
         hunt: huntId,
         kind: { $ne: "whiteboard" },
@@ -150,7 +151,7 @@ const BoardSearch = ({
         compilePuzzleMatcher(tags, keys, undefined, tagSynonyms),
       tagNames: new Map(tags.map((tag) => [tag._id, tag.name])),
     });
-  }, [query, boardId, huntId, drawnEdges, tagSynonyms]);
+  }, [query, boardId, huntId, shownLines, tagSynonyms]);
 
   const kindNames: Record<BoardSearchKind, string> = {
     puzzle: t("whiteboard.search.kind.puzzle", "Puzzle"),

@@ -166,14 +166,20 @@ export function roundStates(
   );
 }
 
-// The rounds on the board that are finished. Hand-made and Ungrouped frames
-// have no tag, so they're never rounds.
+// The rounds on the board that are finished and not yet collapsed, for
+// Collapse finished rounds, from the states roundStates worked out. Hand-made
+// and Ungrouped frames have no tag, so they're never rounds.
 export function finishedFrames(
-  nodes: RoundNode[],
-  puzzles: RoundPuzzle[],
-  tags: RoundTag[],
+  nodes: Pick<WhiteboardNodeType, "_id" | "type" | "hidden" | "collapsed">[],
+  states: ReadonlyMap<string, RoundState>,
 ): string[] {
-  return [...roundStates(nodes, puzzles, tags)]
-    .filter(([, state]) => state.finished)
-    .map(([id]) => id);
+  return nodes
+    .filter(
+      (node) =>
+        node.type === "frame" &&
+        !node.hidden &&
+        !node.collapsed &&
+        !!states.get(node._id)?.finished,
+    )
+    .map((node) => node._id);
 }

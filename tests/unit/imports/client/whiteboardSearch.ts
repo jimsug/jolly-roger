@@ -46,7 +46,7 @@ const puzzlesFound = (query: string) =>
       { _id: "c2", type: "puzzle", puzzle: "maze" },
     ],
     edges: [],
-    drawnEdges: new Set(),
+    shownLines: new Set(),
     puzzles: [crossword, maze],
     puzzleMatcher: (keys) => compilePuzzleMatcher(tags, keys),
     tagNames: new Map(tags.map((t) => [t._id, t.name])),

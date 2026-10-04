@@ -30,6 +30,7 @@ import "./unit/imports/lib/summarizeUserStatuses";
 import "./unit/imports/lib/tagNames";
 import "./unit/imports/lib/ValidateShape";
 import "./unit/imports/lib/whiteboard-arrange";
+import "./unit/imports/lib/whiteboard-collapse";
 import "./unit/imports/lib/whiteboard-comments";
 import "./unit/imports/lib/whiteboard-connectors";
 import "./unit/imports/lib/whiteboard-contributors";

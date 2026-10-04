@@ -12,6 +12,7 @@ import useWhiteboardDetail, {
   useWhiteboardZoom,
 } from "../../hooks/useWhiteboardDetail";
 import type { WhiteboardFlowNode } from "../../hooks/useWhiteboardSync";
+import CollapseContext from "./CollapseContext";
 import RoundStateContext from "./RoundStateContext";
 
 const Label = styled.div`
@@ -78,6 +79,7 @@ const FrameLabelLayer = () => {
   );
   const { t } = useTranslation();
   const rounds = useContext(RoundStateContext);
+  const { summaries } = useContext(CollapseContext);
 
   if (detail !== "far") return null;
 
@@ -97,25 +99,61 @@ const FrameLabelLayer = () => {
         const width = frame.measured.width ?? frame.width ?? 0;
         const height = frame.measured.height ?? frame.height ?? 0;
         const { x, y } = frame.internals.positionAbsolute;
-        const fontSize = Math.min(28 / zoom, height / 4);
         const above = parents.has(frame.id);
         const round = rounds.get(frame.id);
-        const cardCount = round ? round.cards.solved + round.cards.unsolved : 0;
-        const count =
-          round && cardCount > 0
-            ? t("whiteboard.frame.solvedShort", "{{solved}}/{{total}}", {
-                solved: round.cards.solved,
-                total: cardCount,
-              })
-            : undefined;
-        const bandHeight = above
-          ? fontSize * 1.6
-          : Math.min(height, 160 / zoom);
+        const summary = frame.data.collapsed
+          ? summaries.get(frame.id)
+          : undefined;
+        let fontSize: number;
+        let bandHeight: number;
+        let text: React.ReactNode;
+        if (summary) {
+          // A collapsed frame is only a header high, so its label goes by
+          // its width, and carries its count at any depth.
+          fontSize = Math.min(28 / zoom, width / 6);
+          bandHeight = fontSize * 1.6;
+          const total = summary.solved + summary.unsolved;
+          text =
+            total > 0
+              ? t(
+                  "whiteboard.frame.collapsedLabel",
+                  "{{label}} ({{solved}}/{{total}})",
+                  {
+                    label,
+                    solved: summary.solved,
+                    total,
+                    // React escapes text, so i18next's escaping would only
+                    // show entities. Goes once both i18n inits stop escaping.
+                    interpolation: { escapeValue: false },
+                  },
+                )
+              : label;
+        } else {
+          fontSize = Math.min(28 / zoom, height / 4);
+          bandHeight = above ? fontSize * 1.6 : Math.min(height, 160 / zoom);
+          const cardCount = round
+            ? round.cards.solved + round.cards.unsolved
+            : 0;
+          const count =
+            round && cardCount > 0
+              ? t("whiteboard.frame.solvedShort", "{{solved}}/{{total}}", {
+                  solved: round.cards.solved,
+                  total: cardCount,
+                })
+              : undefined;
+          text = (
+            <>
+              {label}
+              {count && <Count> {count}</Count>}
+            </>
+          );
+        }
+        const top = above && !summary ? y - bandHeight : y;
         return (
           <Label
             key={frame.id}
             style={{
-              transform: `translate(${x}px, ${above ? y - bandHeight : y}px)`,
+              transform: `translate(${x}px, ${top}px)`,
               width,
               height: bandHeight,
               fontSize,
@@ -130,8 +168,7 @@ const FrameLabelLayer = () => {
                   </span>{" "}
                 </>
               )}
-              {label}
-              {count && <Count> {count}</Count>}
+              {text}
             </Pill>
           </Label>
         );

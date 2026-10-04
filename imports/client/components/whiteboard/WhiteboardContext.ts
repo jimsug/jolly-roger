@@ -33,6 +33,9 @@ export interface WhiteboardActions {
     end: "source" | "target",
     event: React.PointerEvent,
   ) => void;
+  // Says when text in a node is being typed, so a frame someone else
+  // collapses doesn't fold it away mid-edit.
+  onEditingChange: (nodeId: string, editing: boolean) => void;
   // A node that should open for editing as soon as it's showing: one this
   // client has just placed, or a note someone pressed Enter on.
   editOnAppear: string | undefined;

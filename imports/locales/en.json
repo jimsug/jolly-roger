@@ -79,8 +79,12 @@
       "replies_other": "{{count}} replies"
     },
     "frame": {
+      "comments_one": "{{count}} comment",
+      "comments_other": "{{count}} comments",
       "finishedUnsolved_one": "Finished, {{count}} unsolved",
-      "finishedUnsolved_other": "Finished, {{count}} unsolved"
+      "finishedUnsolved_other": "Finished, {{count}} unsolved",
+      "items_one": "{{count}} item",
+      "items_other": "{{count}} items"
     },
     "history": {
       "changes_one": "{{count}} change",

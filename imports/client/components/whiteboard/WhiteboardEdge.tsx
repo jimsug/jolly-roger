@@ -112,7 +112,9 @@ const WhiteboardEdge = ({
   const emphasis = auto
     ? feederArrowEmphasis({ source, target }, feederFocus)
     : undefined;
-  const showGrips = !auto && !!selected && !readOnly;
+  // A line drawn to a collapsed frame in place of something inside it has
+  // no grips, so its real end can't be dragged off by mistake.
+  const showGrips = !auto && !!selected && !readOnly && !data?.folded;
   // Grips stay the same size on screen whatever the zoom. Only a line showing
   // them follows the zoom, so zooming doesn't redraw every line.
   const gripScale = 1 / useStore((s) => (showGrips ? s.transform[2] : 1));

@@ -31,6 +31,7 @@ import discordGuildsAll from "../../lib/publications/discordGuildsAll";
 import settingsAll from "../../lib/publications/settingsAll";
 import {
   cleanTagSynonymRules,
+  TAG_SYNONYMS,
   type TagSynonymRule,
   tagSynonymRuleProblems,
 } from "../../lib/tagNames";
@@ -2863,6 +2864,10 @@ const TagSynonymsSection = () => {
   const { t } = useTranslation();
 
   const savedRules = useTagSynonyms();
+  const hasSavedTable = useTracker(
+    () => !!Settings.findOne({ name: "tag.synonyms" }),
+    [],
+  );
   const [rows, setRows] = useState(() => tagSynonymRows(savedRules));
   const [submitState, setSubmitState] = useState(SubmitState.IDLE);
   const [submitError, setSubmitError] = useState("");
@@ -2929,6 +2934,21 @@ const TagSynonymsSection = () => {
     [rules],
   );
 
+  // Drops the saved table, as a blank list of default tags does, so the
+  // built-in rules apply again.
+  const resetToBuiltIn = useCallback(() => {
+    setSubmitState(SubmitState.SUBMITTING);
+    configureTagSynonyms.call({ rules: [], reset: true }, (err) => {
+      if (err) {
+        setSubmitError(err.message);
+        setSubmitState(SubmitState.ERROR);
+      } else {
+        setRows(tagSynonymRows(TAG_SYNONYMS));
+        setSubmitState(SubmitState.SUCCESS);
+      }
+    });
+  }, []);
+
   const openApply = useCallback(() => {
     setApplyStarted(false);
     setApplyOpen(true);
@@ -2958,6 +2978,12 @@ const TagSynonymsSection = () => {
         {t(
           "serverSetup.tagSynonyms.rulesHelp",
           "A prefix rule rewrites the start of a name and a whole-tag rule the entire name; both match case exactly. Synonyms apply to every hunt on this server. A tag's aliases are different: they're the old names of one tag in one hunt, kept when it's renamed or merged.",
+        )}
+      </p>
+      <p>
+        {t(
+          "serverSetup.tagSynonyms.limitsHelp",
+          "Rules can't rewrite into or out of group:, meta-for: or is:, since the puzzle list and whiteboard read those as written; the built-in stuck rule is the exception. Saving an empty table turns synonyms off. “Use the built-in rules” goes back to the table Jolly Roger comes with.",
         )}
       </p>
       {submitState === SubmitState.SUCCESS ? (
@@ -2998,7 +3024,7 @@ const TagSynonymsSection = () => {
           <FormText as="p">
             {t(
               "serverSetup.tagSynonyms.empty",
-              "No rules, so tags are only matched by name and alias.",
+              "No rules. Saving an empty table turns synonyms off, so tags are only matched by name and alias.",
             )}
           </FormText>
         )}
@@ -3011,6 +3037,13 @@ const TagSynonymsSection = () => {
             {t("serverSetup.tagSynonyms.add", "Add rule")}
           </Button>
           <Button
+            variant="outline-secondary"
+            onClick={resetToBuiltIn}
+            disabled={shouldDisableForm || !hasSavedTable}
+          >
+            {t("serverSetup.tagSynonyms.useBuiltIn", "Use the built-in rules")}
+          </Button>
+          <Button
             variant="primary"
             type="submit"
             disabled={shouldDisableForm || problems.size > 0}
@@ -3018,6 +3051,14 @@ const TagSynonymsSection = () => {
             {t("common.save", "Save")}
           </Button>
         </ActionButtonRow>
+        {!hasSavedTable && (
+          <FormText as="p">
+            {t(
+              "serverSetup.tagSynonyms.usingBuiltIn",
+              "This server is using the built-in rules.",
+            )}
+          </FormText>
+        )}
       </form>
       <Subsection>
         <SubsectionHeader>

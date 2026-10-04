@@ -36,6 +36,7 @@ import type { WhiteboardEditPolicy } from "../../imports/lib/models/Whiteboards"
 import Whiteboards from "../../imports/lib/models/Whiteboards";
 import whiteboardContents from "../../imports/lib/publications/whiteboardContents";
 import whiteboardForHunt from "../../imports/lib/publications/whiteboardForHunt";
+import { COLLAPSED_FRAME_HEIGHT } from "../../imports/lib/whiteboard/collapse";
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
@@ -58,6 +59,7 @@ import setWhiteboardCommentResolved from "../../imports/methods/setWhiteboardCom
 import setWhiteboardEditPolicy from "../../imports/methods/setWhiteboardEditPolicy";
 import setWhiteboardLive from "../../imports/methods/setWhiteboardLive";
 import TypedMethod from "../../imports/methods/TypedMethod";
+import upsertWhiteboardEdges from "../../imports/methods/upsertWhiteboardEdges";
 import upsertWhiteboardNodes from "../../imports/methods/upsertWhiteboardNodes";
 import resetDatabase from "../lib/resetDatabase";
 import createTestUser from "./createTestUser";
@@ -4511,6 +4513,419 @@ if (Meteor.isClient) {
             boardId,
             nodes: [{ _id: a._id, parent: a.parent, position: a.position }],
           });
+        }
+      });
+    });
+    describe("collapsed rounds", function () {
+      // From the fixture hunt: The Robber is the meta of the Games Island
+      // round
+      const gamesIsland = "nPbTi6DPvjAkot94n";
+      const robber = "3zTi6pDY9mHJSbLoS";
+      let board: Awaited<ReturnType<typeof ensureBoard>>;
+      let boardId: string;
+
+      before(async function () {
+        this.timeout(10000);
+        board = await ensureBoard();
+        boardId = board._id;
+        subs.push(await typedSubscribe.async(whiteboardContents, { boardId }));
+      });
+
+      const pane = () => document.querySelector(".react-flow__pane")!;
+      const lookAt = (at: { x: number; y: number }) =>
+        localStorage.setItem(
+          `whiteboard:viewport:${boardId}`,
+          JSON.stringify({ x: 150 - at.x, y: 150 - at.y, zoom: 1 }),
+        );
+      const forgetView = () =>
+        localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+      const removeNodes = (nodeIds: string[]) =>
+        deleteWhiteboardNodes.callPromise({ boardId, nodeIds });
+      const nodeShown = (id: string) =>
+        waitFor(
+          () => {
+            const found = nodeElement(id);
+            assert.isNotNull(found);
+            return found as HTMLElement;
+          },
+          { timeout: 20000 },
+        );
+      const openBoard = async (search = "") => {
+        render(<TestApp />);
+        await goTo(`${boardPath}${search}`);
+        await waitFor(() => assert.isNotNull(pane()), { timeout: 20000 });
+        await act(async () => {
+          await stabilize();
+        });
+      };
+      const click = async (element: Element) => {
+        await act(async () => {
+          fireEvent.click(element);
+          await stabilize();
+        });
+      };
+      const isCollapsed = async (id: string) =>
+        !!(await WhiteboardNodes.findOneAsync(id))?.collapsed;
+
+      // A collapsed frame of our own at `base` with two notes in it, and a
+      // note outside it.
+      const collapsedFrame = async (base: { x: number; y: number }) => {
+        const ids = {
+          frame: Random.id(),
+          inside: Random.id(),
+          alsoInside: Random.id(),
+          outside: Random.id(),
+        };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: ids.frame,
+              type: "frame",
+              position: base,
+              width: 600,
+              height: 400,
+              label: "Folded round",
+            },
+            {
+              _id: ids.inside,
+              type: "sticky",
+              parent: ids.frame,
+              position: { x: 40, y: 100 },
+              width: 120,
+              height: 80,
+              text: "Inside",
+            },
+            {
+              _id: ids.alsoInside,
+              type: "sticky",
+              parent: ids.frame,
+              position: { x: 300, y: 100 },
+              width: 120,
+              height: 80,
+            },
+            {
+              _id: ids.outside,
+              type: "sticky",
+              position: { x: base.x + 800, y: base.y },
+              width: 120,
+              height: 80,
+            },
+          ],
+        });
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [{ _id: ids.frame, collapsed: true }],
+        });
+        return ids;
+      };
+
+      it("folds a frame's contents and moves its lines to the frame", async function () {
+        this.timeout(30000);
+        const base = { x: 40000, y: 40000 };
+        const ids = await collapsedFrame(base);
+        const out = Random.id();
+        const inside = Random.id();
+        await upsertWhiteboardEdges.callPromise({
+          boardId,
+          edges: [
+            { _id: out, source: ids.inside, target: ids.outside },
+            { _id: inside, source: ids.inside, target: ids.alsoInside },
+          ],
+        });
+        lookAt(base);
+        const drawnLine = (id: string) =>
+          document.querySelector(
+            `.react-flow__edge[data-id="${id}"] .react-flow__edge-path`,
+          );
+        try {
+          await openBoard();
+          const frame = await nodeShown(ids.frame);
+          await waitFor(
+            () => {
+              assert.equal(frame.style.height, "56px");
+              assert.isNull(nodeElement(ids.inside));
+              assert.isNull(nodeElement(ids.alsoInside));
+              assert.isNotNull(nodeElement(ids.outside));
+              assert.include(frame.textContent ?? "", "2 items");
+              // The line out of the frame now starts at it; the one inside
+              // isn't drawn
+              assert.isNotNull(drawnLine(out));
+              assert.isNull(drawnLine(inside));
+            },
+            { timeout: 10000 },
+          );
+
+          await click(
+            within(frame).getByRole("button", { name: "Expand for everyone" }),
+          );
+          await waitFor(
+            async () => {
+              assert.isFalse(await isCollapsed(ids.frame));
+              assert.isNotNull(nodeElement(ids.inside));
+              assert.isNotNull(drawnLine(inside));
+            },
+            { timeout: 10000 },
+          );
+          assert.equal(
+            within(nodeElement(ids.frame) as HTMLElement)
+              .getByRole("button", { name: "Collapse for everyone" })
+              .getAttribute("aria-expanded"),
+            "true",
+          );
+        } finally {
+          forgetView();
+          await removeNodes(Object.values(ids));
+        }
+      });
+
+      it("finds a line inside a collapsed frame and opens the frame for this viewer", async function () {
+        this.timeout(30000);
+        const base = { x: 42000, y: 42000 };
+        const ids = await collapsedFrame(base);
+        const line = Random.id();
+        await upsertWhiteboardEdges.callPromise({
+          boardId,
+          edges: [
+            {
+              _id: line,
+              source: ids.inside,
+              target: ids.alsoInside,
+              label: "Zebra crossing",
+            },
+          ],
+        });
+        lookAt({ x: base.x + 3000, y: base.y + 3000 });
+        try {
+          await openBoard();
+          const search = await screen.findByRole(
+            "combobox",
+            { name: "Search the board" },
+            { timeout: 20000 },
+          );
+          await act(async () => {
+            fireEvent.focus(search);
+            fireEvent.change(search, { target: { value: "zebra" } });
+            await stabilize();
+          });
+          await click(
+            await screen.findByRole(
+              "option",
+              { name: /^Zebra crossing/ },
+              { timeout: 10000 },
+            ),
+          );
+          await waitFor(
+            () => {
+              assert.isNotNull(nodeElement(ids.inside));
+              assert.isNotNull(
+                document.querySelector(
+                  `.react-flow__edge[data-id="${line}"] .react-flow__edge-path`,
+                ),
+              );
+              // The mark at the line's middle, rather than at a node
+              assert.isNotNull(
+                document.querySelector(".jr-node-pulse:not([data-node])"),
+              );
+            },
+            { timeout: 10000 },
+          );
+          assert.isTrue(await isCollapsed(ids.frame));
+        } finally {
+          forgetView();
+          await removeNodes(Object.values(ids));
+        }
+      });
+
+      it("collapses finished rounds from the toolbar", async function () {
+        this.timeout(30000);
+        const frameId = (await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          tag: gamesIsland,
+        }))!._id;
+        try {
+          await setPuzzleAnswers.callPromise({
+            puzzleId: robber,
+            answers: ["MONEY"],
+          });
+          await openBoard(`?node=${frameId}`);
+          await waitFor(
+            () => assert.include(nodeElement(frameId)?.textContent, "Finished"),
+            { timeout: 20000 },
+          );
+          const button = await screen.findByRole(
+            "button",
+            { name: "Collapse finished rounds" },
+            { timeout: 10000 },
+          );
+          assert.equal(button.title, "Fold every round whose metas are solved");
+          await click(button);
+          await waitFor(
+            async () => {
+              assert.isTrue(await isCollapsed(frameId));
+              assert.isNull(
+                screen.queryByRole("button", {
+                  name: "Collapse finished rounds",
+                }),
+              );
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          await setPuzzleAnswers.callPromise({ puzzleId: robber, answers: [] });
+          const collapsed = await WhiteboardNodes.find({
+            board: boardId,
+            collapsed: true,
+          }).fetchAsync();
+          if (collapsed.length > 0) {
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: collapsed.map((n) => ({ _id: n._id, collapsed: false })),
+            });
+          }
+        }
+      });
+
+      it("doesn't drop a card into a collapsed frame", async function () {
+        this.timeout(30000);
+        const base = { x: 44000, y: 44000 };
+        const ids = await collapsedFrame(base);
+        const { a } = await sideBySideCards(boardId);
+        // The card's middle is 20 past the frame's right edge, level with
+        // the middle of the strip, so the nudges below take it over the strip
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: a._id,
+              parent: null,
+              position: {
+                x: base.x + 620 - CARD_WIDTH / 2,
+                y: base.y + COLLAPSED_FRAME_HEIGHT / 2 - CARD_HEIGHT / 2,
+              },
+            },
+          ],
+        });
+        lookAt(base);
+        try {
+          await openBoard();
+          const card = await nodeShown(a._id);
+          await click(card);
+          for (let i = 0; i < 4; i++) {
+            await act(async () => {
+              fireEvent.keyDown(card, { key: "ArrowLeft", shiftKey: true });
+              await stabilize();
+            });
+          }
+          await waitFor(
+            async () => {
+              const moved = await WhiteboardNodes.findOneAsync(a._id);
+              assert.equal(moved?.position.x, base.x + 540 - CARD_WIDTH / 2);
+              assert.isUndefined(moved?.parent);
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await removeNodes(Object.values(ids));
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [{ _id: a._id, parent: a.parent, position: a.position }],
+          });
+        }
+      });
+
+      it("lets a viewer peek without changing the board", async function () {
+        this.timeout(30000);
+        const base = { x: 48000, y: 48000 };
+        const ids = await collapsedFrame(base);
+        lookAt(base);
+        await setHuntArchived.callPromise({ huntId, isArchived: true });
+        try {
+          await openBoard();
+          const frame = await nodeShown(ids.frame);
+          // Viewing only, so there's no folding it for everyone
+          assert.isNull(
+            within(frame).queryByRole("button", {
+              name: "Expand for everyone",
+            }),
+          );
+          const show = await within(frame).findByRole(
+            "button",
+            { name: "Show (only for you)" },
+            { timeout: 10000 },
+          );
+          assert.equal(show.getAttribute("aria-expanded"), "false");
+          await click(show);
+          await nodeShown(ids.inside);
+          assert.isTrue(await isCollapsed(ids.frame));
+
+          await click(
+            within(nodeElement(ids.frame) as HTMLElement).getByRole("button", {
+              name: "Hide again",
+            }),
+          );
+          await waitFor(() => assert.isNull(nodeElement(ids.inside)), {
+            timeout: 10000,
+          });
+          assert.isTrue(await isCollapsed(ids.frame));
+        } finally {
+          forgetView();
+          await setHuntArchived.callPromise({ huntId, isArchived: false });
+          await removeNodes(Object.values(ids));
+        }
+      });
+
+      it("shows a comment inside a collapsed frame from a ?comment= link", async function () {
+        this.timeout(30000);
+        const base = { x: 52000, y: 52000 };
+        const ids = await collapsedFrame(base);
+        await sendChatMessage.callPromise({
+          puzzleId: board.puzzle,
+          content: JSON.stringify({
+            type: "message",
+            children: [{ text: "Is this inside?" }],
+          }),
+          comment: { node: ids.inside, x: 10, y: 10 },
+        });
+        let commentId: string | undefined;
+        try {
+          await openBoard();
+          commentId = await waitFor(
+            async () => {
+              const found = await ChatMessages.findOneAsync({
+                "comment.node": ids.inside,
+              });
+              assert.ok(found);
+              return found._id;
+            },
+            { timeout: 20000 },
+          );
+          assert.isNull(nodeElement(ids.inside));
+          await goTo(`${boardPath}?comment=${commentId}`);
+          await waitFor(
+            () => {
+              assert.isNotNull(nodeElement(ids.inside));
+              assert.isNotNull(
+                document.querySelector(
+                  `.jr-comment-pin[data-thread="${commentId}"]`,
+                ),
+              );
+              assert.include(
+                document.querySelector(".react-flow__panel.top.right")
+                  ?.textContent ?? "",
+                "Is this inside?",
+              );
+              assert.equal(location.current?.search, "");
+            },
+            { timeout: 20000 },
+          );
+          assert.isTrue(await isCollapsed(ids.frame));
+        } finally {
+          if (commentId) {
+            await deleteWhiteboardComment.callPromise({ messageId: commentId });
+          }
+          await removeNodes(Object.values(ids));
         }
       });
     });

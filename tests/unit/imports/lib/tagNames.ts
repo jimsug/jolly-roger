@@ -310,12 +310,35 @@ describe("tagSynonymRuleProblems", function () {
     assert.deepEqual(problems([]), []);
     assert.deepEqual(
       problems([
-        { kind: "prefix", match: "round:", to: "group:" },
-        { kind: "prefix", match: "r:", to: "group:" },
-        { kind: "tag", match: "meta", to: "is:meta" },
+        { kind: "prefix", match: "room:", to: "where:" },
+        { kind: "prefix", match: "r:", to: "where:" },
+        { kind: "tag", match: "help", to: "needs:help" },
         { kind: "tag", match: "loc:", to: "where:" },
       ]),
       [],
+    );
+  });
+
+  it("refuses a rule that rewrites into or out of group:, meta-for: or is:", function () {
+    assert.deepEqual(
+      problems([
+        { kind: "prefix", match: "round:", to: "group:" },
+        { kind: "prefix", match: "group:", to: "round:" },
+        { kind: "prefix", match: "mf:", to: "meta-for:" },
+        { kind: "tag", match: "meta", to: "is:meta" },
+        { kind: "tag", match: "is:meta", to: "meta" },
+        { kind: "tag", match: "wedged", to: "is:stuck" },
+        // The built-in rule is allowed as it is
+        { kind: "tag", match: "stuck", to: "is:stuck" },
+      ]),
+      [
+        [0, "structural"],
+        [1, "structural"],
+        [2, "structural"],
+        [3, "structural"],
+        [4, "structural"],
+        [5, "structural"],
+      ],
     );
   });
 
@@ -358,8 +381,8 @@ describe("tagSynonymRuleProblems", function () {
     );
     assert.deepEqual(
       problems([
-        { kind: "tag", match: "stuck", to: "is:stuck" },
-        { kind: "tag", match: "is:stuck", to: "help" },
+        { kind: "tag", match: "wedged", to: "needs:help" },
+        { kind: "tag", match: "needs:help", to: "help" },
       ]),
       [[0, "chain"]],
     );

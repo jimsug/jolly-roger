@@ -17,6 +17,8 @@ export type WhiteboardNodeInput = {
   width?: number;
   height?: number;
   hidden?: boolean;
+  // Frames only: true folds the frame for everyone, false opens it.
+  collapsed?: boolean;
   text?: string | null;
   label?: string | null;
   color?: WhiteboardColor;

@@ -17,6 +17,7 @@ const NodeInputPattern = {
   width: Match.Optional(Number),
   height: Match.Optional(Number),
   hidden: Match.Optional(Boolean),
+  collapsed: Match.Optional(Boolean),
   text: Match.Optional(Match.OneOf(String, null)),
   label: Match.Optional(Match.OneOf(String, null)),
   color: Match.Optional(Match.OneOf(...WhiteboardColors)),
