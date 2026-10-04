@@ -40,8 +40,10 @@ import {
 import addPuzzleTag from "../../../../imports/methods/addPuzzleTag";
 import createWhiteboard from "../../../../imports/methods/createWhiteboard";
 import deleteWhiteboardComment from "../../../../imports/methods/deleteWhiteboardComment";
+import placeWhiteboardCardsByTags from "../../../../imports/methods/placeWhiteboardCardsByTags";
 import removePuzzleTag from "../../../../imports/methods/removePuzzleTag";
 import renameTag from "../../../../imports/methods/renameTag";
+import resetWhiteboardLayout from "../../../../imports/methods/resetWhiteboardLayout";
 import type { CommentAnchorInput } from "../../../../imports/methods/sendChatMessage";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import setWhiteboardCommentResolved from "../../../../imports/methods/setWhiteboardCommentResolved";
@@ -54,6 +56,7 @@ import addPuzzle from "../../../../imports/server/addPuzzle";
 import GlobalHooks from "../../../../imports/server/GlobalHooks";
 import { cleanupDeadServer } from "../../../../imports/server/garbage-collection";
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
+import Locks from "../../../../imports/server/models/Locks";
 import WhiteboardPresence from "../../../../imports/server/models/WhiteboardPresence";
 import WhiteboardVersionChunks from "../../../../imports/server/models/WhiteboardVersionChunks";
 import {
@@ -71,6 +74,10 @@ import {
   removePresence,
   setLive,
 } from "../../../../imports/server/whiteboardLive";
+import {
+  decodeVersion,
+  restoreVersion,
+} from "../../../../imports/server/whiteboardVersions";
 import asUser from "../../../lib/asUser";
 import resetDatabase from "../../../lib/resetDatabase";
 import runJob from "../../../lib/runJob";
@@ -2767,6 +2774,532 @@ describe("whiteboard", function () {
           close();
         }
       });
+    });
+  });
+
+  describe("reset and place by tags", function () {
+    let boardId: string;
+    const anger = FixtureHunt.tags.find((t) => t.name === "group:anger")!;
+    const joy = FixtureHunt.tags.find((t) => t.name === "group:joy")!;
+    const angerMeta = FixtureHunt.tags.find(
+      (t) => t.name === "meta-for:anger",
+    )!;
+
+    beforeEach(async function () {
+      boardId = await ensureWhiteboard(operator, huntId);
+    });
+
+    const frameFor = async (tagId: string) =>
+      (await WhiteboardNodes.findOneAsync({ board: boardId, tag: tagId }))!;
+    const cardFor = async (puzzleId: string) =>
+      (await WhiteboardNodes.findOneAsync({
+        board: boardId,
+        puzzle: puzzleId,
+      }))!;
+    // A card in the anger round that isn't its meta
+    const angerCard = async () => {
+      const puzzle = (await Puzzles.findOneAsync({
+        hunt: huntId,
+        tags: { $all: [anger._id], $nin: [angerMeta._id] },
+      }))!;
+      return cardFor(puzzle._id);
+    };
+    const placeByTags = (userId: string, nodeIds: string[]) =>
+      asUser(userId, () =>
+        placeWhiteboardCardsByTags.callPromise({ boardId, nodeIds }),
+      );
+    const reset = (userId: string, putBack = false) =>
+      asUser(userId, () =>
+        resetWhiteboardLayout.callPromise({ boardId, putBack }),
+      );
+    const versions = () =>
+      WhiteboardVersions.find(
+        { board: boardId },
+        { sort: { createdAt: -1 } },
+      ).fetchAsync();
+    // Where every card and seeded frame is
+    const layout = async () =>
+      new Map(
+        (
+          await WhiteboardNodes.find({
+            board: boardId,
+            type: { $in: ["puzzle", "frame"] },
+          }).fetchAsync()
+        ).map((n) => [
+          n._id,
+          {
+            parent: n.parent,
+            position: n.position,
+            width: n.width,
+            height: n.height,
+            manual: n.manual,
+            hidden: n.hidden,
+          },
+        ]),
+      );
+    const comment = async (node: string, text: string) => {
+      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+      await asUser(member, () =>
+        sendChatMessage.callPromise({
+          puzzleId,
+          content: JSON.stringify(contentFromMessage(text)),
+          comment: { node, x: 10, y: 20 },
+        }),
+      );
+      return (await ChatMessages.findOneAsync({
+        "content.children.text": text,
+      }))!._id;
+    };
+
+    it("places a dragged card back into its round and clears manual", async function () {
+      const card = await angerCard();
+      const joyFrame = await frameFor(joy._id);
+      await upsertNodes(member, boardId, [
+        { _id: card._id, parent: joyFrame._id, position: { x: 900, y: 900 } },
+      ]);
+      assert.isTrue((await cardFor(card.puzzle)).manual);
+
+      await placeByTags(member, [card._id]);
+
+      const placed = await cardFor(card.puzzle);
+      assert.equal(placed._id, card._id);
+      assert.equal(placed.parent, (await frameFor(anger._id))._id);
+      assert.notOk(placed.manual);
+      assert.notDeepEqual(placed.position, { x: 900, y: 900 });
+      // and follows its tags from then on
+      await Puzzles.updateAsync(card.puzzle, { $set: { tags: [joy._id] } });
+      await syncPuzzlesOnBoard(huntId, [card.puzzle]);
+      assert.equal((await cardFor(card.puzzle)).parent, joyFrame._id);
+    });
+
+    it("leaves a card already in its round where it is", async function () {
+      const card = await angerCard();
+      const moved = { x: card.position.x + 5, y: card.position.y + 7 };
+      await upsertNodes(member, boardId, [{ _id: card._id, position: moved }]);
+
+      await placeByTags(member, [card._id]);
+
+      const placed = await cardFor(card.puzzle);
+      assert.equal(placed.parent, card.parent);
+      assert.deepEqual(placed.position, moved);
+      assert.notOk(placed.manual);
+    });
+
+    it("places by tags with history off, recording nothing", async function () {
+      const card = await angerCard();
+      await upsertNodes(member, boardId, [
+        { _id: card._id, parent: null, position: { x: 900, y: 900 } },
+      ]);
+      await FeatureFlags.insertAsync({
+        name: "disable.whiteboard_versions",
+        type: "on",
+        createdBy: operator,
+      });
+      const before = await versions();
+
+      await placeByTags(operator, [card._id]);
+
+      const placed = await cardFor(card.puzzle);
+      assert.equal(placed.parent, (await frameFor(anger._id))._id);
+      assert.notOk(placed.manual);
+      assert.sameMembers(
+        (await versions()).map((v) => v._id),
+        before.map((v) => v._id),
+      );
+    });
+
+    it("refuses place by tags for non-cards and non-editors", async function () {
+      const card = await angerCard();
+      await upsertNodes(member, boardId, [
+        { _id: card._id, position: { x: 1, y: 1 } },
+      ]);
+      const sticky = Random.id();
+      await upsertNodes(member, boardId, [
+        { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
+      ]);
+      const hidden = (await WhiteboardNodes.findOneAsync({
+        board: boardId,
+        type: "puzzle",
+        _id: { $ne: card._id },
+      }))!;
+      await deleteNodes(member, boardId, [hidden._id]);
+
+      for (const ids of [
+        [card._id, sticky],
+        [hidden._id],
+        [Random.id()],
+        [(await frameFor(anger._id))._id],
+      ]) {
+        await assert.isRejected(
+          placeByTags(member, ids),
+          /Only cards on this board can be placed by tags/,
+        );
+      }
+      // A card on another hunt's board
+      const otherHunt = await Hunts.insertAsync({
+        name: "Another hunt",
+        openSignups: true,
+        hasGuessQueue: true,
+        createdBy: operator,
+      });
+      await MeteorUsers.updateAsync(operator, {
+        $addToSet: { hunts: otherHunt },
+        $set: { [`roles.${otherHunt}`]: ["operator"] },
+      });
+      await Puzzles.insertAsync({
+        hunt: otherHunt,
+        title: "Elsewhere",
+        tags: [],
+        answers: [],
+        expectedAnswerCount: 1,
+        createdBy: operator,
+      });
+      const otherBoard = await ensureWhiteboard(operator, otherHunt);
+      const foreign = (await WhiteboardNodes.findOneAsync({
+        board: otherBoard,
+        type: "puzzle",
+      }))!;
+      await WhiteboardNodes.updateAsync(foreign._id, {
+        $set: { manual: true },
+      });
+      await assert.isRejected(
+        placeByTags(operator, [foreign._id]),
+        /Only cards on this board can be placed by tags/,
+      );
+      assert.isTrue((await WhiteboardNodes.findOneAsync(foreign._id))?.manual);
+
+      await assert.isRejected(
+        placeByTags(
+          member,
+          Array.from({ length: MAX_BATCH + 1 }, () => card._id),
+        ),
+        /Too many/,
+      );
+      await assert.isRejected(placeByTags(outsider, [card._id]), /member/);
+      await asUser(operator, () =>
+        setWhiteboardEditPolicy.callPromise({
+          boardId,
+          editPolicy: "operators",
+          editors: [],
+        }),
+      );
+      await assert.isRejected(
+        placeByTags(member, [card._id]),
+        /Only operators can edit/,
+      );
+      assert.isTrue((await cardFor(card.puzzle)).manual);
+    });
+
+    it("resets cards and round frames and keeps notes, ink and lines", async function () {
+      const seeded = await layout();
+      const card = await angerCard();
+      const angerFrame = await frameFor(anger._id);
+      const joyFrame = await frameFor(joy._id);
+      const note = Random.id();
+      const ink = Random.id();
+      const end = Random.id();
+      const line = Random.id();
+      const freeLine = Random.id();
+      await upsertNodes(member, boardId, [
+        { _id: card._id, parent: null, position: { x: 9000, y: 9000 } },
+        { _id: joyFrame._id, position: { x: 7000, y: 7000 } },
+        {
+          _id: note,
+          type: "sticky",
+          position: { x: 20, y: 30 },
+          parent: angerFrame._id,
+          text: "a note",
+        },
+        {
+          _id: ink,
+          type: "ink",
+          position: { x: 8000, y: 8000 },
+          width: 20,
+          height: 20,
+          points: [
+            [0, 0, 0.5],
+            [20, 20, 0.5],
+          ],
+          strokeWidth: "thin",
+          color: "black",
+          stroke: Random.id(),
+        },
+        { _id: end, type: "point", position: { x: 8500, y: 8500 } },
+      ]);
+      await upsertEdges(member, boardId, [
+        { _id: line, source: note, target: card._id },
+        { _id: freeLine, source: card._id, target: end },
+      ]);
+      const kept = await WhiteboardNodes.find({
+        _id: { $in: [note, ink, end] },
+      }).fetchAsync();
+
+      await reset(member);
+
+      // Every card and frame is back where a new board would have it
+      assert.deepEqual(await layout(), seeded);
+      assert.sameDeepMembers(
+        await WhiteboardNodes.find({
+          _id: { $in: [note, ink, end] },
+        }).fetchAsync(),
+        kept,
+      );
+      const edge = (await WhiteboardEdges.findOneAsync(line))!;
+      assert.equal(edge.source, note);
+      assert.equal(edge.target, card._id);
+      const free = (await WhiteboardEdges.findOneAsync(freeLine))!;
+      assert.equal(free.source, card._id);
+      assert.equal(free.target, end);
+      assert.ok((await Whiteboards.findOneAsync(boardId))?.lastRewrittenAt);
+    });
+
+    it("keeps comment anchors through a reset", async function () {
+      const card = await angerCard();
+      const angerFrame = await frameFor(anger._id);
+      await upsertNodes(member, boardId, [
+        { _id: card._id, parent: null, position: { x: 9000, y: 9000 } },
+      ]);
+      const onCard = await comment(card._id, "on the card");
+      const onFrame = await comment(angerFrame._id, "on the frame");
+
+      await reset(member);
+
+      assert.deepEqual((await ChatMessages.findOneAsync(onCard))?.comment, {
+        node: card._id,
+        x: 10,
+        y: 20,
+      });
+      assert.deepEqual((await ChatMessages.findOneAsync(onFrame))?.comment, {
+        node: angerFrame._id,
+        x: 10,
+        y: 20,
+      });
+    });
+
+    it("records a reset version first and restores from it", async function () {
+      const card = await angerCard();
+      await upsertNodes(member, boardId, [
+        { _id: card._id, parent: null, position: { x: 9000, y: 9000 } },
+      ]);
+      const before = await WhiteboardNodes.find({
+        board: boardId,
+      }).fetchAsync();
+
+      await reset(operator);
+
+      const [version] = await versions();
+      assert.equal(version!.kind, "reset");
+      assert.deepEqual(
+        version!.users.map((u) => u.user),
+        [operator],
+      );
+      const payload = await decodeVersion(
+        (
+          await WhiteboardVersionChunks.find(
+            { version: version!._id },
+            { sort: { index: 1 } },
+          ).fetchAsync()
+        ).map((c) => c.data),
+      );
+      assert.sameDeepMembers(payload.nodes, before);
+      assert.notOk((await cardFor(card.puzzle)).manual);
+
+      await restoreVersion(operator, boardId, version!._id);
+      const restored = await cardFor(card.puzzle);
+      assert.deepEqual(restored.position, { x: 9000, y: 9000 });
+      assert.notOk(restored.parent);
+      assert.isTrue(restored.manual);
+    });
+
+    it("snapshots the first edit after a reset", async function () {
+      const sticky = () =>
+        upsertNodes(member, boardId, [
+          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
+        ]);
+      await sticky();
+      assert.lengthOf(await versions(), 1);
+
+      await reset(operator);
+      assert.deepEqual(
+        (await versions()).map((v) => v.kind),
+        ["reset", "edits"],
+      );
+
+      // Inside the member's window, but the board has been rewritten since
+      await sticky();
+      assert.deepEqual(
+        (await versions()).map((v) => v.kind),
+        ["edits", "reset", "edits"],
+      );
+    });
+
+    it("unhides feeder arrows only when putting back", async function () {
+      const arrow = (await WhiteboardEdges.findOneAsync({
+        board: boardId,
+        auto: true,
+      }))!;
+      const card = await angerCard();
+      await deleteEdges(member, boardId, [arrow._id]);
+      await deleteNodes(member, boardId, [card._id]);
+      const hiddenAt = (await cardFor(card.puzzle)).position;
+
+      await reset(member);
+      assert.isTrue((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+      const stillHidden = await cardFor(card.puzzle);
+      assert.isTrue(stillHidden.hidden);
+      assert.deepEqual(stillHidden.position, hiddenAt);
+
+      await reset(member, true);
+      assert.notOk((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+      const back = await cardFor(card.puzzle);
+      assert.notOk(back.hidden);
+      assert.equal(back.parent, (await frameFor(anger._id))._id);
+    });
+
+    it("survives a card inserted by hand during a reset", async function () {
+      const puzzleId = await Puzzles.insertAsync({
+        hunt: huntId,
+        title: "Not on the board yet",
+        tags: [anger._id],
+        answers: [],
+        expectedAnswerCount: 1,
+        createdBy: operator,
+      });
+      assert.notOk(await cardFor(puzzleId));
+      const insert = WhiteboardNodes.insertAsync.bind(WhiteboardNodes);
+      let byHand: string | undefined;
+      const stub = sinon
+        .stub(WhiteboardNodes, "insertAsync")
+        .callsFake(async (doc) => {
+          if (doc.puzzle === puzzleId && !byHand) {
+            byHand = await insert({
+              hunt: huntId,
+              board: boardId,
+              type: "puzzle",
+              puzzle: puzzleId,
+              position: { x: 9000, y: 9000 },
+              createdBy: member,
+            });
+          }
+          return insert(doc);
+        });
+      try {
+        await reset(operator);
+      } finally {
+        stub.restore();
+      }
+
+      const cards = await WhiteboardNodes.find({
+        board: boardId,
+        puzzle: puzzleId,
+      }).fetchAsync();
+      assert.lengthOf(cards, 1);
+      assert.equal(cards[0]!._id, byHand);
+      assert.equal(cards[0]!.parent, (await frameFor(anger._id))._id);
+    });
+
+    it("checks access and history again once it has the board's lock", async function () {
+      const card = await angerCard();
+      await upsertNodes(member, boardId, [
+        { _id: card._id, position: { x: 1, y: 1 } },
+      ]);
+      const before = await versions();
+
+      // Holds the board's lock, lets a reset by userId queue for it, makes
+      // change, then lets the reset have the lock.
+      const lockName = `whiteboard:${boardId}`;
+      const resetWhileLocked = async (
+        userId: string,
+        change: () => Promise<unknown>,
+      ) => {
+        const held = await Locks.insertAsync({ name: lockName });
+        const insertLock = Locks.insertAsync.bind(Locks);
+        let queued!: () => void;
+        const waiting = new Promise<void>((resolve) => {
+          queued = resolve;
+        });
+        const stub = sinon
+          .stub(Locks, "insertAsync")
+          .callsFake((...args: Parameters<typeof insertLock>) => {
+            if (args[0].name === lockName) queued();
+            return insertLock(...args);
+          });
+        try {
+          const result = reset(userId);
+          await Promise.race([waiting, result]);
+          await change();
+          await Locks.removeAsync(held);
+          await result;
+        } finally {
+          stub.restore();
+          await Locks.removeAsync(held);
+        }
+      };
+
+      await assert.isRejected(
+        resetWhileLocked(member, () =>
+          asUser(operator, () =>
+            setWhiteboardEditPolicy.callPromise({
+              boardId,
+              editPolicy: "operators",
+              editors: [],
+            }),
+          ),
+        ),
+        /Only operators can edit/,
+      );
+      await assert.isRejected(
+        resetWhileLocked(operator, () =>
+          FeatureFlags.insertAsync({
+            name: "disable.whiteboard_versions",
+            type: "on",
+            createdBy: operator,
+          }),
+        ),
+        /Reset layout needs board history, which is turned off/,
+      );
+
+      assert.isTrue((await cardFor(card.puzzle)).manual);
+      assert.sameMembers(
+        (await versions()).map((v) => v._id),
+        before.map((v) => v._id),
+      );
+    });
+
+    it("refuses reset with history off, for non-editors and on an archived hunt", async function () {
+      const card = await angerCard();
+      await upsertNodes(member, boardId, [
+        { _id: card._id, position: { x: 1, y: 1 } },
+      ]);
+      const before = await versions();
+
+      await assert.isRejected(reset(outsider), /member/);
+      await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+      await assert.isRejected(reset(operator), /archived/);
+      await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
+      await asUser(operator, () =>
+        setWhiteboardEditPolicy.callPromise({
+          boardId,
+          editPolicy: "operators",
+          editors: [],
+        }),
+      );
+      await assert.isRejected(reset(member), /Only operators can edit/);
+      await FeatureFlags.insertAsync({
+        name: "disable.whiteboard_versions",
+        type: "on",
+        createdBy: operator,
+      });
+      await assert.isRejected(
+        reset(operator),
+        /Reset layout needs board history, which is turned off/,
+      );
+
+      assert.isTrue((await cardFor(card.puzzle)).manual);
+      assert.sameMembers(
+        (await versions()).map((v) => v._id),
+        before.map((v) => v._id),
+      );
     });
   });
 });

@@ -20,13 +20,21 @@ async function release(lock: string) {
   await Locks.removeAsync(lock);
 }
 
+// What renew() throws once another holder has taken the lock.
+export class LockPreemptedError extends Error {
+  constructor(id: string) {
+    super(`Lock was preempted: id=${id}`);
+    this.name = "LockPreemptedError";
+  }
+}
+
 async function renew(id: string) {
   const updated = await Locks.updateAsync(id, {
     $set: { renewedAt: new Date() },
   });
   if (updated === 0) {
     // we've already been preempted
-    throw new Error(`Lock was preempted: id=${id}`);
+    throw new LockPreemptedError(id);
   }
 }
 

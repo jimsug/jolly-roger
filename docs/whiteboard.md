@@ -17,6 +17,7 @@ files:
   - imports/client/components/whiteboard/FrameNode.tsx
   - imports/client/components/whiteboard/HistoryPanel.tsx
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
+  - imports/client/components/whiteboard/ResetLayoutModal.tsx
   - imports/client/components/whiteboard/RoundStateContext.ts
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
   - imports/client/components/whiteboard/WhiteboardCanvas.tsx
@@ -38,15 +39,20 @@ files:
   - imports/lib/whiteboard/limits.ts
   - imports/lib/whiteboard/links.ts
   - imports/lib/whiteboard/minimap.ts
+  - imports/lib/whiteboard/reset.ts
   - imports/lib/whiteboard/rounds.ts
   - imports/lib/whiteboard/search.ts
   - imports/lib/whiteboard/versions.ts
   - imports/methods/fetchWhiteboardVersion.ts
+  - imports/methods/placeWhiteboardCardsByTags.ts
+  - imports/methods/resetWhiteboardLayout.ts
   - imports/methods/restoreWhiteboardVersion.ts
   - imports/methods/setWhiteboardEditPolicy.ts
   - imports/methods/upsertWhiteboardEdges.ts
   - imports/server/daemons/whiteboardVersions.ts
   - imports/server/methods/fetchWhiteboardVersion.ts
+  - imports/server/methods/placeWhiteboardCardsByTags.ts
+  - imports/server/methods/resetWhiteboardLayout.ts
   - imports/server/methods/restoreWhiteboardVersion.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
   - imports/server/models/WhiteboardPresence.ts
@@ -56,9 +62,11 @@ files:
   - imports/server/whiteboardEdits.ts
   - imports/server/whiteboardLive.ts
   - imports/server/whiteboardPolicy.ts
+  - imports/server/whiteboardReset.ts
   - imports/server/whiteboardShared.ts
   - imports/server/whiteboardVersions.ts
-updated: 2026-10-04
+  - imports/server/withLock.ts
+updated: 2026-10-05
 ---
 
 # Hunt Whiteboard
@@ -73,9 +81,9 @@ An operator creates the board (`ensureWhiteboard` in
 `imports/server/whiteboard.ts`), which lays out every puzzle in the hunt. An
 archived hunt can't get a new board. From then on, puzzle hooks place each new
 puzzle, and move a card when its tags change, unless someone has moved that
-card by hand. Placement takes the
-`whiteboard:<boardId>` lock, so a burst of new puzzles can't land in the same
-slot.
+card by hand (Place by tags and Reset layout hand it back to placement).
+Placement takes the `whiteboard:<boardId>` lock, so a burst of new puzzles
+can't land in the same slot.
 
 The board's chat and call belong to a hidden puzzle (`kind: "whiteboard"`)
 created with the board. Comment threads are chat messages on that puzzle, so
@@ -449,17 +457,18 @@ than deleted. A seeded frame comes back through `upsertNodes` with
 
 ### When a save is refused
 
-Every write the board makes (nodes, lines, comments, replies, resolving and
-deleting) reports a refusal from the server in a dismissible alert under the
-toolbar, "Couldn't save: " and the server's own reason, until it's dismissed
-or the next refusal replaces it. The board goes back to what the server has,
-except for text: a sticky note, text box, frame label or line label whose
-edit was refused keeps what was typed, with a Retry button. Retry sends it
-again; editing it back to what's saved drops it. Text being typed when the
-viewer loses edit rights is kept the same way, marked "Not saved" until they
-can edit again, when it gets the Retry button. A refused comment or reply
-goes back in the composer, unless something new has been written there
-since, and a new comment's panel stays open until the server has taken it.
+Every write the board makes (nodes, lines, comments, replies, resolving,
+deleting and Place by tags) reports a refusal from the server in a
+dismissible alert under the toolbar, "Couldn't save: " and the server's own
+reason, until it's dismissed or the next refusal replaces it. The board goes
+back to what the server has, except for text: a sticky note, text box, frame
+label or line label whose edit was refused keeps what was typed, with a Retry
+button. Retry sends it again; editing it back to what's saved drops it. Text
+being typed when the viewer loses edit rights is kept the same way, marked
+"Not saved" until they can edit again, when it gets the Retry button. A
+refused comment or reply goes back in the composer, unless something new has
+been written there since, and a new comment's panel stays open until the
+server has taken it.
 
 ### Offline
 
@@ -498,8 +507,8 @@ nothing has to run later to finish one off, and the live board is always the
 newest state. It doesn't hold comments, cursors, the board's own document or
 its edit policy, so a restore never changes who may edit.
 
-Node and line edits (`upsertNodes`, `deleteNodes`, `upsertEdges` and
-`deleteEdges`) call `recordVersionBeforeEdit` in
+Node and line edits (`upsertNodes`, `deleteNodes`, `upsertEdges`,
+`deleteEdges` and `placeByTags`) call `recordVersionBeforeEdit` in
 `imports/server/whiteboardVersions.ts` after their checks and before their
 first write. Comments, live drags and strokes, and placement from puzzle
 hooks never record one. The rule for whether an edit records a version is
@@ -516,15 +525,15 @@ lists who edited after it and when each of them started:
    newest version, they join that one rather than storing it again.
 4. Otherwise a new version is stored.
 
-Only ordinary edits made since the last restore count for 1 to 3, so the
-first edit after a restore always records the restored board. A restore
+Only ordinary edits made since the last reset or restore count for 1 to 3, so
+the first edit after one always records the board it left. A reset or restore
 always records the board it's about to change. Someone editing steadily gets
 a version every 10 minutes, and a burst of edits is one version. The fast
 path (rule 1) is one indexed read with no lock; the rest takes the board's
 `whiteboard:<boardId>` lock, which placement also takes, so a version never
-sees half a placement. A failure to record is logged and the edit goes
-ahead: a missing version beats a refused edit. User edits don't take the lock
-for their own writes, so a version can catch part of someone else's batch;
+sees half a placement. A failure to record is logged and the edit goes ahead:
+a missing version beats a refused edit. User edits don't take the lock for
+their own writes, so a version can catch part of someone else's batch;
 restore cleans up what that can leave.
 
 ### The History panel
@@ -532,9 +541,10 @@ restore cleans up what that can leave.
 The panel lists versions by day, newest first. A version is the board before
 the edits it lists, so each row names a state: "Now", then "Before edits by
 Alice and Bob, 14:20 to 14:29 (37 changes)" (a change is one save, whatever
-it held) or "Before Carol restored the 12:10 version · 13:40". When older
-versions have been pruned, the panel ends with "Older history was cleared to
-save space". With history turned off it says so instead.
+it held), "Before Carol reset the layout · 14:02" or "Before Carol restored
+the 12:10 version · 13:40". When older versions have been pruned, the panel
+ends with "Older history was cleared to save space". With history turned off
+it says so instead.
 
 Picking a row previews it. The client fetches the version's chunks with
 `Whiteboards.methods.fetchVersion`, one call per chunk, joins them, unpacks
@@ -588,10 +598,12 @@ Only after that does it record the board as it is (a version of kind
   on it.
 - The board's `lastRewrittenAt` is set.
 
-Documents a restore changes draw on top of anything else at their level,
-since their `updatedAt` is new; documents it puts back keep the `updatedAt`
-they had in the version, and draw where that puts them. Edits that land while a restore runs may survive on top
-or be overwritten. Pins that came off a node before this feature have no
+Documents a restore changes or puts back draw on top of anything else at
+their level, since their `updatedAt` is new: documents it inserts again get
+the time of the restore rather than the one stored in the version. Edits that
+land while a restore runs may survive on top or be overwritten. A restore
+that loses the board's lock part-way stops and says so (see "When the board
+is busy" below). Pins that came off a node before this feature have no
 `detachedFrom` and stay free.
 
 ### Retention and storage
@@ -605,18 +617,105 @@ is about half a megabyte; ink is most of it.
 
 Every hour, `imports/server/daemons/whiteboardVersions.ts` prunes each
 board's history under its lock (`pruneWhiteboardVersions` in
-`imports/server/whiteboardVersions.ts`, rules in `versionsToPrune`): everything from the last two hours stays; before that,
-the first version in each UTC hour stays, as does every restore; and the
-newest versions are kept up to 256 MiB of compressed payload per board
+`imports/server/whiteboardVersions.ts`, rules in `versionsToPrune`):
+everything from the last two hours stays; before that, the first version in
+each UTC hour stays, as does every reset and restore; and the newest versions
+are kept up to 256 MiB of compressed payload per board
 (`MAX_VERSION_BYTES_PER_BOARD`), never dropping the newest. Once the hunt is
 archived, or the board has gone 14 days without a new version, its history
-thins to the newest 10 versions plus every restore. Anything pruned sets the
-board's `versionsPrunedBefore`. A recording that takes the board over the cap
-prunes there and then, and never refuses the edit. The daemon also removes
-chunks over an hour old that have no version (left by a write that didn't
-finish), and logs each board's history size once a day, so an ink-heavy
-board shows up before it reaches the cap. A board that fails is logged and
-left for the next pass, and the rest carry on.
+thins to the newest 10 versions plus every reset and restore. Anything pruned
+sets the board's `versionsPrunedBefore`. A recording that takes the board
+over the cap prunes there and then, and never refuses the edit. The daemon
+also removes chunks over an hour old that have no version (left by a write
+that didn't finish), and logs each board's history size once a day, so an
+ink-heavy board shows up before it reaches the cap. A board that fails is
+logged and left for the next pass, and the rest carry on.
+
+## Reset layout and Place by tags
+
+Both are edits: they need edit access, so the edit policy decides who may use
+them and an archived hunt refuses them, and both go through history.
+
+### Place by tags
+
+Selecting cards with the Select tool, on a board the viewer can edit, shows
+a "Place by tags" button above them, titled "Move back to where its tags put
+it, and keep it in step from now on". It doesn't ask first; History undoes
+it. It calls `Whiteboards.methods.placeByTags` (`placeByTags` in
+`imports/server/whiteboardReset.ts`) with the selected cards' node ids, in
+batches of `MAX_BATCH`. Anything that isn't a card on show on this board is
+refused ("Only cards on this board can be placed by tags"). Otherwise it
+records a version like any edit, clears `manual` on the cards, and runs a
+placement sync of their puzzles under the board's lock. A card already in
+the frame its tags choose stays where it is, but follows its tags from now
+on; one anywhere else moves to the first free slot of that frame, which
+grows to fit. Its comments and lines go with it, since its id is kept.
+
+### Reset layout
+
+"Reset layout…" (a grid button beside History in the toolbar) is there for
+people who can edit, while history is turned on. It asks first: "Reset the
+layout? Every card and round frame goes back to where the puzzle list puts
+it. Notes, drawings, lines and comments stay. The board as it is now is
+saved in history, so you can undo this from there." with a checkbox, "Also
+put back cards and rounds taken off the board". The question stays up, its
+buttons disabled, until the server answers, and a refusal shows in it. Once
+it's done, a notice says "Layout reset. Undo it from History." with an "Open
+History" button.
+
+`Whiteboards.methods.resetLayout` (`resetLayout` in
+`imports/server/whiteboardReset.ts`) needs edit access and history turned
+on ("Reset layout needs board history, which is turned off"). Under the
+board's lock it checks both again and records the board as it is, a version
+of kind `reset` that History shows as "Before Carol reset the layout"; if
+that fails, nothing on the board changes. It then lays the hunt out with
+`seedLayout`, as a new board would be, and `planReset` in
+`imports/lib/whiteboard/reset.ts` maps that onto what's there:
+
+- Each round's frame, Ungrouped and each card keeps its id and gets the
+  frame, position and size the layout gives it, and is no longer marked as
+  moved by hand. A card someone dragged into their own frame goes back to
+  its round.
+- Frames and cards the layout needs that aren't on the board are added, one
+  at a time, frames first. If someone puts a card on the board by hand at
+  the same moment, theirs is the one placed.
+- A round's frame that no puzzle needs any more stays, moved to the top
+  level below everything else on the board, with whatever is in it.
+- Cards and round frames someone took off the board stay off and where they
+  were. The layout leaves them out, so their puzzles go where placement
+  would put them today: another of their rounds, or Ungrouped. With the
+  checkbox ticked (`putBack`) they're laid out with everything else and come
+  back, and so do feeder arrows someone took off. With Ungrouped taken off
+  and the box not ticked, the cards it would hold go where it would have
+  been, at the top level.
+- Cards for deleted puzzles are left alone.
+
+Sticky notes, text, ink, people's own frames, lines and their free ends, and
+comments aren't touched; anything inside a round's frame keeps its place in
+the frame and moves with it. Since ids are kept, comment pins and lines stay
+on what they were attached to. Feeder arrows are redrawn to match the
+puzzles' tags (ones someone took off stay off unless putting back), and the
+board's `lastRewrittenAt` is set, so anyone's next edit records the reset
+board. Each write is its own update, and the lock is renewed every 200.
+
+The new layout starts at the top left, as a new board's does, so notes at
+the top level there can end up under frames, and anything in a round's
+frame can overlap its cards' new slots. Restoring the reset's version from
+History puts every card, frame and arrow back, and that restore records a
+version of its own, so it can be undone too.
+
+### When the board is busy
+
+A reset or restore holds the board's `whiteboard:<boardId>` lock while it
+runs, renewing it as it goes. If another server takes the lock anyway (it
+does once a holder has gone 10 seconds without renewing), the reset or
+restore stops at its next renewal and refuses with "The board was busy; try
+again" rather than an internal error. Each renews just before its first
+write to the board, so one that loses the lock before then leaves the board
+as it was, and takes away the version it recorded for itself. One that loses
+it after it has started writing stops there and keeps what it wrote, and
+`lastRewrittenAt` isn't set; running it again finishes the job, and the
+version it recorded undoes it.
 
 ## Phones
 
@@ -772,7 +871,9 @@ did, so existing boards only change in where new cards land.
   presence publication returns nothing and `setLive` does nothing.
 - `disable.whiteboard_versions` ("Whiteboard history" on the Setup page)
   stops recording versions, empties the history list (the publication returns
-  nothing), and refuses fetching and restoring versions. Versions already
+  nothing), refuses fetching and restoring versions, and refuses Reset layout
+  and hides its button, since History is how a reset is undone. Place by tags
+  still works, recording nothing, like any other edit. Versions already
   recorded are kept.
 
 There is no flag for the edit policy: `members` is already the off position.
@@ -786,8 +887,8 @@ There is no flag for the edit policy: `members` is already the off position.
   ink segments and the free ends of lines. A node inside a frame has `parent`
   set and a position relative to it. `hidden` marks a card or seeded frame
   someone removed, so placement doesn't put it back; `manual` marks a node
-  someone has moved, so placement leaves it alone. `contributors` records who
-  wrote or restyled it.
+  someone has moved, so placement leaves it alone until Place by tags or a
+  reset clears it. `contributors` records who wrote or restyled it.
 - `WhiteboardEdges` (`jr_whiteboard_edges`): lines between nodes. Feeder arrows
   are `auto`, with `feeder` and `meta` puzzle ids, and follow the puzzles'
   tags.
@@ -795,7 +896,7 @@ There is no flag for the edit policy: `members` is already the off position.
   per connection per board, with the cursor, drag and stroke. It goes when the
   connection closes, the presence subscription stops or its server dies.
 - `WhiteboardVersions` (`jr_whiteboard_versions`): one per version, with its
-  `kind` (`edits` or `restore`; `reset` is reserved for Reset layout), the
+  `kind` (`edits`, `reset` or `restore`), the
   `users` who edited after it and when each started, `changeCount`,
   `lastEditAt`, `restoredFromAt` for a restore, counts, the compressed `size`,
   `chunkCount` and the payload's `hash`. Published to members without the

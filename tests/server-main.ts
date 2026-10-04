@@ -39,6 +39,7 @@ import "./unit/imports/lib/whiteboard-layout";
 import "./unit/imports/lib/whiteboard-links";
 import "./unit/imports/lib/whiteboard-liveDrags";
 import "./unit/imports/lib/whiteboard-minimap";
+import "./unit/imports/lib/whiteboard-reset";
 import "./unit/imports/lib/whiteboard-rounds";
 import "./unit/imports/lib/whiteboard-search";
 import "./unit/imports/lib/whiteboard-versions";

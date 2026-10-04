@@ -34,7 +34,9 @@ import {
   ConnectionMode,
   Controls,
   MiniMap,
+  NodeToolbar,
   Panel,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   useInternalNode,
@@ -143,6 +145,7 @@ import { miniMapColor } from "../../../lib/whiteboard/minimap";
 import type { BoardSearchHit } from "../../../lib/whiteboard/search";
 import deleteWhiteboardEdges from "../../../methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
+import placeWhiteboardCardsByTags from "../../../methods/placeWhiteboardCardsByTags";
 import restoreWhiteboardVersion from "../../../methods/restoreWhiteboardVersion";
 import type { WhiteboardLiveState } from "../../../methods/setWhiteboardLive";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
@@ -202,6 +205,7 @@ import NodePulse from "./NodePulse";
 import PeopleContext from "./PeopleContext";
 import PointNode from "./PointNode";
 import PuzzleCardNode from "./PuzzleCardNode";
+import ResetLayoutModal, { ResetLayoutButton } from "./ResetLayoutModal";
 import RoundStateContext from "./RoundStateContext";
 import StickyNode from "./StickyNode";
 import TextNode from "./TextNode";
@@ -529,6 +533,12 @@ const AccessNotice = styled(Alert)`
   .btn-close {
     padding: 10px;
   }
+`;
+
+const NoticeAction = styled(Button)`
+  padding: 0 0 0 6px;
+  font-size: inherit;
+  vertical-align: baseline;
 `;
 
 const PlaceGhost = styled.div<{ $tool: PlaceTool }>`
@@ -1145,13 +1155,18 @@ const CanvasInner = ({
     },
     [],
   );
+  // Selected cards, kept as a string between renders for the same reason.
+  // Place by tags hands these back to placement.
+  const selectedCardKey = nodes
+    .filter((n) => n.selected && n.type === "puzzle")
+    .map((n) => n.id)
+    .join(" ");
+  const selectedCards = useMemo(
+    () => (selectedCardKey ? selectedCardKey.split(" ") : []),
+    [selectedCardKey],
+  );
   const feederFocusKey = feederFocus(
-    [
-      hoveredCard,
-      ...nodes
-        .filter((n) => n.selected && n.type === "puzzle")
-        .map((n) => n.id),
-    ],
+    [hoveredCard, ...selectedCards],
     edges.filter((e) => e.data?.doc.auto),
   ).join(" ");
   const feederFocusIds = useMemo(
@@ -1933,6 +1948,20 @@ const CanvasInner = ({
     () => edges.filter((e) => e.selected && !e.data?.doc.auto),
     [edges],
   );
+  const [placingByTags, setPlacingByTags] = useState(false);
+  const placeSelectedByTags = useCallback(() => {
+    const batches = chunks(selectedCards, MAX_BATCH);
+    let waiting = batches.length;
+    if (waiting === 0) return;
+    setPlacingByTags(true);
+    batches.forEach((batch) => {
+      placeWhiteboardCardsByTags.call({ boardId, nodeIds: batch }, (error) => {
+        reportRefusal(error);
+        waiting -= 1;
+        if (waiting === 0) setPlacingByTags(false);
+      });
+    });
+  }, [selectedCards, boardId, reportRefusal]);
   // The first selected line's look, for the restyling controls.
   const selectedLineStyle = useMemo((): LineStyle => {
     const doc = selectedLines[0]?.data?.doc;
@@ -2540,17 +2569,22 @@ const CanvasInner = ({
   }, [flow, paneCenter, huntId]);
 
   // A short message under the toolbar, gone after a while: a link that
-  // couldn't be followed, a version that couldn't be loaded, or a restore
-  // that worked.
+  // couldn't be followed, a version that couldn't be loaded, or a restore or
+  // reset that worked. It can carry a button for what to do next.
   const [notice, setNotice] = useState<{
     id: number;
     text: string;
     variant: "warning" | "success";
+    action?: { label: string; onClick: () => void };
   }>();
   const showNotice = useCallback(
-    (text: string, variant: "warning" | "success" = "warning") => {
+    (
+      text: string,
+      variant: "warning" | "success" = "warning",
+      action?: { label: string; onClick: () => void },
+    ) => {
       const id = Date.now();
-      setNotice({ id, text, variant });
+      setNotice({ id, text, variant, action });
       tidyLater(
         () =>
           setNotice((current) => (current?.id === id ? undefined : current)),
@@ -2560,6 +2594,10 @@ const CanvasInner = ({
     [tidyLater],
   );
   const dismissNotice = useCallback(() => setNotice(undefined), []);
+  const followNotice = useCallback(() => {
+    setNotice(undefined);
+    notice?.action?.onClick();
+  }, [notice]);
 
   // Once the board's chat has loaded, a thread that isn't in it is gone.
   const commentsLoaded = useContext(ChatLoadedContext);
@@ -3690,6 +3728,31 @@ const CanvasInner = ({
     });
   }, [preview, boardId, showNotice, t, previewTime]);
 
+  // Reset layout records the board first so History can undo it, so it's
+  // only offered while history is on.
+  const historyOn = useTracker(
+    () => !Flags.active("disable.whiteboard_versions"),
+    [],
+  );
+  const [resettingLayout, setResettingLayout] = useState(false);
+  const openResetLayout = useCallback(() => setResettingLayout(true), []);
+  const closeResetLayout = useCallback(() => setResettingLayout(false), []);
+  const openHistory = useCallback(() => {
+    setSidePanel("history");
+    closeComment();
+  }, [closeComment]);
+  const layoutReset = useCallback(() => {
+    setResettingLayout(false);
+    showNotice(
+      t("whiteboard.reset.done", "Layout reset. Undo it from History."),
+      "success",
+      {
+        label: t("whiteboard.reset.openHistory", "Open History"),
+        onClick: openHistory,
+      },
+    );
+  }, [showNotice, t, openHistory]);
+
   // A phone-sized screen has no history (see historyButton), so a preview
   // or the panel open when the screen shrinks goes.
   useEffect(() => {
@@ -3761,6 +3824,11 @@ const CanvasInner = ({
       onClose={dismissNotice}
     >
       {notice.text}
+      {notice.action && (
+        <NoticeAction size="sm" variant="link" onClick={followNotice}>
+          {notice.action.label}
+        </NoticeAction>
+      )}
     </AccessNotice>
   ) : null;
   const searchTools = (
@@ -4373,6 +4441,9 @@ const CanvasInner = ({
                           {notOnBoardCount > 0 && ` ${notOnBoardCount}`}
                         </Button>
                         {historyButton}
+                        {historyOn && (
+                          <ResetLayoutButton onClick={openResetLayout} />
+                        )}
                       </ButtonGroup>
                       {mayChangeEditPolicy && (
                         <EditPolicyButton
@@ -4386,6 +4457,28 @@ const CanvasInner = ({
                     {saveErrorAlert}
                     {noticeAlert}
                   </Panel>
+                )}
+                {!readOnly && tool === "select" && selectedCards.length > 0 && (
+                  <NodeToolbar
+                    nodeId={selectedCards}
+                    isVisible
+                    position={Position.Top}
+                  >
+                    <ToolBox>
+                      <Button
+                        size="sm"
+                        variant="outline-secondary"
+                        onClick={placeSelectedByTags}
+                        disabled={placingByTags}
+                        title={t(
+                          "whiteboard.placeByTags.title",
+                          "Move back to where its tags put it, and keep it in step from now on",
+                        )}
+                      >
+                        {t("whiteboard.placeByTags.button", "Place by tags")}
+                      </Button>
+                    </ToolBox>
+                  </NodeToolbar>
                 )}
                 {!readOnly && tool === "select" && selectedLines.length > 0 && (
                   <Panel position="bottom-center">
@@ -4618,6 +4711,13 @@ const CanvasInner = ({
             </CanvasWrapper>
             {/* Outside the wrapper, whose pointer handlers would otherwise see
             presses in the dialog through React's tree. */}
+            {resettingLayout && (
+              <ResetLayoutModal
+                boardId={boardId}
+                onHide={closeResetLayout}
+                onDone={layoutReset}
+              />
+            )}
             {editingPolicy && (
               <EditPolicyModal
                 boardId={boardId}

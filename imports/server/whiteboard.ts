@@ -49,12 +49,12 @@ export async function assertWhiteboardEnabled() {
 // the server's language.
 const whiteboardTitle = () =>
   i18n.t("whiteboard.title", "Whiteboard", { lng: serverLanguage });
-const ungroupedLabel = () =>
+export const ungroupedLabel = () =>
   i18n.t("whiteboard.frame.ungrouped", "Ungrouped", { lng: serverLanguage });
 
 // Placement never reads ink, text or attribution, which are most of a busy
 // board.
-const PLACEMENT_PROJECTION = {
+export const PLACEMENT_PROJECTION = {
   points: 0,
   contributors: 0,
   text: 0,
@@ -261,8 +261,9 @@ async function placePuzzle(
   if (placedCard) nodesById.set(placedCard._id, placedCard);
 }
 
-// Redraws the feeder arrows to and from a batch of puzzles.
-async function syncAutoEdges(
+// Redraws the feeder arrows to and from a batch of puzzles. Only for callers
+// holding the board's lock.
+export async function syncAutoEdges(
   board: WhiteboardType,
   batch: PuzzleType[],
   tags: TagType[],

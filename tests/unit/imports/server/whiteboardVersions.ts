@@ -3,6 +3,7 @@ import { EJSON } from "meteor/ejson";
 import type { Mongo } from "meteor/mongo";
 import { Random } from "meteor/random";
 import { assert } from "chai";
+import sinon from "sinon";
 import FixtureHunt from "../../../../imports/FixtureHunt";
 import ChatMessages, {
   contentFromMessage,
@@ -27,6 +28,7 @@ import restoreWhiteboardVersion from "../../../../imports/methods/restoreWhitebo
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEditPolicy";
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
+import Locks from "../../../../imports/server/models/Locks";
 import WhiteboardVersionChunks from "../../../../imports/server/models/WhiteboardVersionChunks";
 import { ensureWhiteboard } from "../../../../imports/server/whiteboard";
 import {
@@ -34,6 +36,7 @@ import {
   upsertEdges,
   upsertNodes,
 } from "../../../../imports/server/whiteboardEdits";
+import { resetLayout } from "../../../../imports/server/whiteboardReset";
 import {
   compressVersion,
   decodeVersion,
@@ -446,6 +449,107 @@ describe("whiteboard versions", function () {
         y: 1020,
         detachedFrom: added,
       });
+    });
+
+    it("gives what it puts back a fresh updatedAt", async function () {
+      const id = await sticky(member, { x: 0, y: 0 });
+      await nextWindow();
+      await sticky(member, { x: 400, y: 0 });
+      const version = await newest();
+      const stored = (await WhiteboardNodes.findOneAsync(id))!.updatedAt;
+      await deleteNodes(member, boardId, [id]);
+      const before = new Date();
+
+      await restoreVersion(member, boardId, version._id);
+
+      const restored = (await WhiteboardNodes.findOneAsync(id))!;
+      assert.isAtLeast(restored.updatedAt.getTime(), before.getTime());
+      assert.isAbove(restored.updatedAt.getTime(), stored.getTime());
+    });
+
+    // Runs a restore and then a reset, each of which loses the board's lock
+    // to another server the moment `steal` is first called while it holds
+    // it, and checks both refuse readably and leave the board and its
+    // history as they were.
+    const refusedWhenPreempted = async (
+      stub: (steal: () => Promise<void>) => sinon.SinonStub,
+    ) => {
+      await sticky(member, { x: 0, y: 0 });
+      await nextWindow();
+      const moved = await sticky(member, { x: 400, y: 0 });
+      const version = await newest();
+      await upsertNodes(member, boardId, [
+        { _id: moved, position: { x: 800, y: 800 } },
+      ]);
+      const before = await board();
+      const recorded = (await versions()).map((v) => v._id);
+
+      const lockName = `whiteboard:${boardId}`;
+      let held: string | undefined;
+      const steal = async () => {
+        const theirs = await Locks.findOneAsync({ name: lockName });
+        if (theirs && !held) {
+          await Locks.removeAsync(theirs._id);
+          held = await Locks.insertAsync({ name: lockName });
+        }
+      };
+      const letGo = async () => {
+        if (held) await Locks.removeAsync(held);
+        held = undefined;
+      };
+      const stubbed = stub(steal);
+      try {
+        await assert.isRejected(
+          restoreVersion(member, boardId, version._id),
+          /The board was busy; try again/,
+        );
+        assert.ok(held);
+        await letGo();
+        await assert.isRejected(
+          resetLayout(member, boardId, false),
+          /The board was busy; try again/,
+        );
+        assert.ok(held);
+      } finally {
+        stubbed.restore();
+        await letGo();
+      }
+
+      assert.sameDeepMembers((await board()).nodes, before.nodes);
+      assert.sameDeepMembers((await board()).edges, before.edges);
+      assert.sameMembers(
+        (await versions()).map((v) => v._id),
+        recorded,
+      );
+      assert.equal(
+        await WhiteboardVersionChunks.find({ board: boardId }).countAsync(),
+        recorded.length,
+      );
+    };
+
+    it("refuses readably, with nothing written, when another server takes the board's lock", async function () {
+      const findHunt = Hunts.findOneAsync.bind(Hunts);
+      await refusedWhenPreempted((steal) =>
+        sinon
+          .stub(Hunts, "findOneAsync")
+          .callsFake(async (...args: Parameters<typeof findHunt>) => {
+            await steal();
+            return findHunt(...args);
+          }),
+      );
+    });
+
+    it("takes away the version it recorded when the lock goes before the board is touched", async function () {
+      const insert = WhiteboardVersions.insertAsync.bind(WhiteboardVersions);
+      await refusedWhenPreempted((steal) =>
+        sinon
+          .stub(WhiteboardVersions, "insertAsync")
+          .callsFake(async (...args: Parameters<typeof insert>) => {
+            const id = await insert(...args);
+            await steal();
+            return id;
+          }),
+      );
     });
 
     it("records a restore version after planning and before writing", async function () {

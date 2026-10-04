@@ -75,6 +75,7 @@ import mediasoupConnectTransport from "../../../../imports/methods/mediasoupConn
 import mediasoupRemoteMutePeer from "../../../../imports/methods/mediasoupRemoteMutePeer";
 import mediasoupSetPeerState from "../../../../imports/methods/mediasoupSetPeerState";
 import mediasoupSetProducerPaused from "../../../../imports/methods/mediasoupSetProducerPaused";
+import placeWhiteboardCardsByTags from "../../../../imports/methods/placeWhiteboardCardsByTags";
 import postAnnouncement from "../../../../imports/methods/postAnnouncement";
 import promoteOperator from "../../../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../../../imports/methods/provisionFirstUser";
@@ -87,6 +88,7 @@ import removePuzzleAnswer from "../../../../imports/methods/removePuzzleAnswer";
 import removePuzzleTag from "../../../../imports/methods/removePuzzleTag";
 import removeUserAccountEmail from "../../../../imports/methods/removeUserAccountEmail";
 import renameTag from "../../../../imports/methods/renameTag";
+import resetWhiteboardLayout from "../../../../imports/methods/resetWhiteboardLayout";
 import restoreWhiteboardVersion from "../../../../imports/methods/restoreWhiteboardVersion";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import sendUserVerificationEmail from "../../../../imports/methods/sendUserVerificationEmail";
@@ -187,6 +189,7 @@ const METHODS = {
   mediasoupRemoteMutePeer,
   mediasoupSetPeerState,
   mediasoupSetProducerPaused,
+  placeWhiteboardCardsByTags,
   postAnnouncement,
   promoteOperator,
   provisionFirstUser,
@@ -199,6 +202,7 @@ const METHODS = {
   removePuzzleTag,
   removeUserAccountEmail,
   renameTag,
+  resetWhiteboardLayout,
   restoreWhiteboardVersion,
   sendChatMessage,
   sendUserVerificationEmail,

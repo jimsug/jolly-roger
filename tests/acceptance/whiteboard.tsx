@@ -52,6 +52,7 @@ import deleteWhiteboardNodes from "../../imports/methods/deleteWhiteboardNodes";
 import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
 import removePuzzleTag from "../../imports/methods/removePuzzleTag";
+import resetWhiteboardLayout from "../../imports/methods/resetWhiteboardLayout";
 import sendChatMessage from "../../imports/methods/sendChatMessage";
 import setWhiteboardCommentResolved from "../../imports/methods/setWhiteboardCommentResolved";
 import setWhiteboardEditPolicy from "../../imports/methods/setWhiteboardEditPolicy";
@@ -4146,6 +4147,255 @@ if (Meteor.isClient) {
           await press(document.body, { key: "Escape" });
           assert.isNull(screen.queryByRole("button", { name: "Now" }));
         });
+      });
+
+      it("resets the layout and undoes it from history", async function () {
+        this.timeout(60000);
+        await clearWhiteboardVersions.callPromise({ boardId });
+        const { a } = await sideBySideCards(boardId);
+        const dragged = { x: 26000, y: 26000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [{ _id: a._id, parent: null, position: dragged }],
+        });
+        lookAt(dragged);
+        try {
+          await openBoard();
+          await nodeShown(a._id);
+          await act(async () => {
+            fireEvent.click(
+              screen.getByRole("button", { name: "Reset layout…" }),
+            );
+            await stabilize();
+          });
+          const dialog = await waitFor(() => {
+            const found = document.querySelector<HTMLElement>(
+              ".modal.show .modal-content",
+            );
+            assert.exists(found);
+            return found;
+          });
+          assert.include(
+            dialog.textContent ?? "",
+            "Every card and round frame goes back to where the puzzle list puts it.",
+          );
+          assert.isFalse(
+            within(dialog).getByRole<HTMLInputElement>("checkbox", {
+              name: "Also put back cards and rounds taken off the board",
+            }).checked,
+          );
+          await act(async () => {
+            fireEvent.click(
+              within(dialog).getByRole("button", { name: "Reset layout" }),
+            );
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const card = await WhiteboardNodes.findOneAsync(a._id);
+              assert.equal(card?.parent, a.parent);
+              assert.notOk(card?.manual);
+            },
+            { timeout: 10000 },
+          );
+          await screen.findByText("Layout reset. Undo it from History.");
+          await waitFor(() =>
+            assert.isNull(document.querySelector(".modal.show")),
+          );
+
+          await act(async () => {
+            fireEvent.click(
+              screen.getByRole("button", { name: "Open History" }),
+            );
+            await stabilize();
+          });
+          const row = await waitFor(
+            () => {
+              const found = [
+                ...document.querySelectorAll<HTMLElement>(
+                  ".react-flow__panel.top.right button",
+                ),
+              ].find((b) => b.textContent?.includes("reset the layout"));
+              assert.exists(found);
+              return found;
+            },
+            { timeout: 10000 },
+          );
+          await act(async () => {
+            fireEvent.click(row);
+            await stabilize();
+          });
+          const banner = await screen.findByText(
+            /^Viewing the board as it was at /,
+            {},
+            { timeout: 10000 },
+          );
+          await act(async () => {
+            fireEvent.click(
+              within(banner.parentElement!).getByRole("button", {
+                name: "Restore this version",
+              }),
+            );
+            await stabilize();
+          });
+          const confirm = await waitFor(() => {
+            const found = document.querySelector<HTMLElement>(
+              ".modal.show .modal-content",
+            );
+            assert.exists(found);
+            return found;
+          });
+          await act(async () => {
+            fireEvent.click(
+              within(confirm).getByRole("button", {
+                name: "Restore this version",
+              }),
+            );
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const card = await WhiteboardNodes.findOneAsync(a._id);
+              assert.deepEqual(card?.position, dragged);
+              assert.notOk(card?.parent);
+              assert.isTrue(card?.manual);
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [{ _id: a._id, parent: a.parent, position: a.position }],
+          });
+        }
+      });
+
+      it("keeps the reset question up while it runs and shows a refusal in it", async function () {
+        this.timeout(30000);
+        await ensureBoard();
+        let answer: ((error: Meteor.Error) => void) | undefined;
+        const refuse = sinon
+          .stub(resetWhiteboardLayout, "call")
+          .callsFake((...args: unknown[]) => {
+            const callback = args.at(-1);
+            if (typeof callback === "function") {
+              answer = callback as (error: Meteor.Error) => void;
+            }
+          });
+        try {
+          await openBoard();
+          await act(async () => {
+            fireEvent.click(
+              await screen.findByRole(
+                "button",
+                { name: "Reset layout…" },
+                { timeout: 10000 },
+              ),
+            );
+            await stabilize();
+          });
+          const dialog = await waitFor(() => {
+            const found = document.querySelector<HTMLElement>(
+              ".modal.show .modal-content",
+            );
+            assert.exists(found);
+            return found;
+          });
+          await act(async () => {
+            fireEvent.click(
+              within(dialog).getByRole("button", { name: "Reset layout" }),
+            );
+            await stabilize();
+          });
+          assert.ok(answer);
+          assert.isTrue(
+            within(dialog).getByRole<HTMLButtonElement>("button", {
+              name: "Resetting…",
+            }).disabled,
+          );
+          assert.isTrue(
+            within(dialog).getByRole<HTMLButtonElement>("button", {
+              name: "Cancel",
+            }).disabled,
+          );
+          assert.isTrue(
+            within(dialog).getByRole<HTMLInputElement>("checkbox").disabled,
+          );
+
+          await act(async () => {
+            answer!(
+              new Meteor.Error(403, "Only operators can edit this whiteboard"),
+            );
+            await stabilize();
+          });
+          const shown = document.querySelector<HTMLElement>(
+            ".modal.show .modal-content",
+          );
+          assert.exists(shown);
+          within(shown).getByText(
+            "Couldn't reset the layout: Only operators can edit this whiteboard",
+          );
+          assert.isFalse(
+            within(shown).getByRole<HTMLButtonElement>("button", {
+              name: "Reset layout",
+            }).disabled,
+          );
+          await act(async () => {
+            fireEvent.click(
+              within(shown).getByRole("button", { name: "Cancel" }),
+            );
+            await stabilize();
+          });
+          await waitFor(() =>
+            assert.isNull(document.querySelector(".modal.show")),
+          );
+        } finally {
+          refuse.restore();
+        }
+      });
+
+      it("places a dragged card by tags", async function () {
+        this.timeout(30000);
+        await ensureBoard();
+        const { a } = await sideBySideCards(boardId);
+        const dragged = { x: 27000, y: 27000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [{ _id: a._id, parent: null, position: dragged }],
+        });
+        lookAt(dragged);
+        try {
+          await openBoard();
+          await select(a._id);
+          const place = await screen.findByRole(
+            "button",
+            { name: "Place by tags" },
+            { timeout: 10000 },
+          );
+          assert.equal(
+            place.title,
+            "Move back to where its tags put it, and keep it in step from now on",
+          );
+          await act(async () => {
+            fireEvent.click(place);
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const card = await WhiteboardNodes.findOneAsync(a._id);
+              assert.equal(card?.parent, a.parent);
+              assert.notOk(card?.manual);
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [{ _id: a._id, parent: a.parent, position: a.position }],
+          });
+        }
       });
     });
   });

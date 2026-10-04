@@ -40,14 +40,14 @@ import {
   loadBoardAccess,
   reattachComments,
 } from "./whiteboardShared";
-import withLock from "./withLock";
+import withLock, { LockPreemptedError } from "./withLock";
 
 // A version's payload is gzip(EJSON.stringify({ format, nodes, edges })),
 // with every node and line on the board as stored, hidden ones included.
 const VERSION_FORMAT = 1;
 
 // How many writes a restore makes between renewals of the board's lock.
-const WRITES_PER_RENEWAL = 200;
+export const WRITES_PER_RENEWAL = 200;
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -59,6 +59,24 @@ const unrestorable = () =>
     409,
     "This version is from an older layout and can't be restored",
   );
+
+// Runs a rewrite of the board (a restore or a reset) under the board's lock.
+// Losing the lock part-way, to another server that thought this one had
+// died, stops the rewrite at its next renewal and refuses with a reason
+// people can act on.
+export async function withBoardLock<T>(
+  boardId: string,
+  critSection: (renew: () => Promise<void>) => Promise<T>,
+) {
+  try {
+    return await withLock(`whiteboard:${boardId}`, critSection);
+  } catch (error) {
+    if (error instanceof LockPreemptedError) {
+      throw new Meteor.Error(409, "The board was busy; try again");
+    }
+    throw error;
+  }
+}
 
 async function assertHistoryEnabled() {
   if (await Flags.activeAsync("disable.whiteboard_versions")) {
@@ -366,16 +384,17 @@ async function pruneOverCap(board: WhiteboardType, now: Date) {
 }
 
 // Records the board as it is now, if versionDecision says to, for a write
-// of kind by userId. Only for callers holding whiteboard:<boardId>, whose
-// renew this calls between the slow steps. A failure to snapshot throws;
-// pruning afterwards never does.
+// of kind by userId, and returns the id of the version it adds, if any. Only
+// for callers holding whiteboard:<boardId>, whose renew this calls between
+// the slow steps. A failure to snapshot throws; pruning afterwards never
+// does.
 export async function recordVersionLocked(
   board: WhiteboardType,
   userId: string,
   kind: WhiteboardVersionKind,
   renew: () => Promise<void>,
   extra: { restoredFromAt?: Date } = {},
-) {
+): Promise<string | undefined> {
   const now = new Date();
   const { lastRewrittenAt } =
     (await Whiteboards.findOneAsync(board._id, {
@@ -400,11 +419,11 @@ export async function recordVersionLocked(
   let decision = decide();
   if (decision.action === "extend") {
     await countEdit(decision.version, userId, now);
-    return;
+    return undefined;
   }
   if (decision.action === "join") {
     await countEdit(decision.version, userId, now, decision);
-    return;
+    return undefined;
   }
 
   const nodes = await WhiteboardNodes.find({ board: board._id }).fetchAsync();
@@ -414,7 +433,7 @@ export async function recordVersionLocked(
   decision = decide(hash);
   if (decision.action === "unchanged") {
     await countEdit(decision.version, userId, now, decision);
-    return;
+    return undefined;
   }
 
   const chunks = await compressVersion(json);
@@ -452,6 +471,41 @@ export async function recordVersionLocked(
   });
 
   await pruneOverCap(board, now);
+  return versionId;
+}
+
+// Records the board before a rewrite (a restore or a reset) and checks the
+// lock is still held before the rewrite's first write. If it isn't, the
+// rewrite never runs, so the version recorded for it is taken away again.
+export async function recordVersionBeforeRewrite(
+  board: WhiteboardType,
+  userId: string,
+  kind: "restore" | "reset",
+  renew: () => Promise<void>,
+  extra: { restoredFromAt?: Date } = {},
+) {
+  const versionId = await recordVersionLocked(
+    board,
+    userId,
+    kind,
+    renew,
+    extra,
+  );
+  try {
+    await renew();
+  } catch (error) {
+    if (versionId && error instanceof LockPreemptedError) {
+      await WhiteboardVersions.removeAsync({
+        _id: versionId,
+        board: board._id,
+      });
+      await WhiteboardVersionChunks.removeAsync({
+        board: board._id,
+        version: versionId,
+      });
+    }
+    throw error;
+  }
 }
 
 // Called by every edit that can change the layout, after its checks and
@@ -578,7 +632,7 @@ export async function restoreVersion(
   });
   if (!version) throw unknownVersion();
 
-  await withLock(`whiteboard:${boardId}`, async (renew) => {
+  await withBoardLock(boardId, async (renew) => {
     // Anything may have changed while this waited for the lock
     const { board: current } = await assertMayEditBoard(userId, boardId);
     await assertHistoryEnabled();
@@ -623,7 +677,7 @@ export async function restoreVersion(
 
     // Nothing has been written yet, so a failure here leaves the board as
     // it was.
-    await recordVersionLocked(current, userId, "restore", renew, {
+    await recordVersionBeforeRewrite(current, userId, "restore", renew, {
       restoredFromAt: version.createdAt,
     });
 
@@ -663,6 +717,12 @@ export async function restoreVersion(
       await WhiteboardEdges.updateAsync(change._id, modifierFor(change));
       await wrote();
     }
+    // What comes back is new on the board as it is now, so it draws on top
+    // like anything the restore changed.
+    const updatedAt = new Date();
+    [...plan.nodes.insert, ...plan.edges.insert].forEach((doc) => {
+      doc.updatedAt = updatedAt;
+    });
     for (let i = 0; i < plan.nodes.insert.length; i += WRITES_PER_RENEWAL) {
       await WhiteboardNodes.insertManyAsync(
         plan.nodes.insert.slice(i, i + WRITES_PER_RENEWAL),
