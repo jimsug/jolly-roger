@@ -594,10 +594,12 @@ const OwnProfilePage = ({
           label={t("profile.offsite.checkbox", "I'm hunting remotely")}
         />
         <FormText>
-          {t(
-            "profile.offsite.help",
-            "Puzzles tagged as needing someone on site sort below the rest of their group for you.",
-          )}
+          <Trans
+            i18nKey="profile.offsite.help"
+            t={t}
+            defaults="Puzzles tagged <code>where:campus</code> or <code>where:mit</code> sort below the rest of their group for you."
+            components={{ code: <code /> }}
+          />
         </FormText>
       </FormGroup>
 

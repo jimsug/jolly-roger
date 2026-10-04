@@ -489,7 +489,7 @@ if (Meteor.isClient) {
           { timeout: 20000 },
         );
         assert.include(
-          show.parentElement?.textContent ?? "",
+          show.closest("div")?.textContent ?? "",
           "Comment on the board",
         );
         assert.notInclude(panelText(), "Is this the meta?");

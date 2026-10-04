@@ -170,9 +170,12 @@ const HighlightsPanel = React.memo(
         {
           key: "replies",
           title: t("chat.highlights.replies", "Replies"),
+          // Someone else's replies to the user, not the user's own follow-ups
           messages: messages.filter(
             (m) =>
-              m.parentId && messagesById.get(m.parentId)?.sender === selfUserId,
+              m.sender !== selfUserId &&
+              m.parentId &&
+              messagesById.get(m.parentId)?.sender === selfUserId,
           ),
         },
         {

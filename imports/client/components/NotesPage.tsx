@@ -324,7 +324,7 @@ const NotesAccordionItem = ({
           <Link to={`../puzzles/${puzzle._id}`} onClick={stopPropagation}>
             {puzzle.title}
           </Link>
-          <span className="ms-2">
+          <span>
             {puzzle.noteUpdateTs ? (
               <>
                 : {t("notes.lastUpdated", "Last updated")}{" "}
@@ -422,8 +422,9 @@ const NotesTable = ({
 }) => {
   const { t } = useTranslation();
   return (
-    // Not `responsive`, so the sticky header works against the window scroll
-    <StickyHeaderTable striped bordered hover size="sm">
+    // Only scrolls sideways on a narrow screen, so wider than that the sticky
+    // header works against the window scroll
+    <StickyHeaderTable striped bordered hover size="sm" responsive="md">
       <thead>
         <tr>
           <NotesTableHeader $width="140px">

@@ -19,6 +19,10 @@ const StyledContainer = styled.div`
   width: calc(24 * (${CELL}px + ${GAP}px) + 82px);
   max-width: 90%;
   overflow-x: auto;
+
+  /* Positioned, so the cells' visually hidden (absolutely positioned) labels
+     scroll with the graph rather than widening the page */
+  position: relative;
   background-color: ${({ theme }) => theme.colors.background};
 `;
 

@@ -151,9 +151,18 @@ const PuzzleActivityColumn = styled(PuzzleColumn)`
   )}
 `;
 
-// Takes the activity column's place while the puzzle is locked.
-const LockedSummaryColumn = styled(PuzzleColumn)`
-  flex: 3;
+// Stands in for the viewers column while the puzzle is locked (or for the
+// activity column when viewers are hidden), at the same size, so the columns
+// after it line up with the unlocked rows'.
+const LockedSummaryColumn = styled(PuzzleColumn)<{ $viewersShown: boolean }>`
+  ${({ $viewersShown }) =>
+    $viewersShown
+      ? css`
+          flex: 3;
+        `
+      : css`
+          width: 11rem;
+        `}
   font-style: italic;
   font-size: 0.9rem;
   color: ${({ theme }) => theme.colors.secondary};
@@ -687,9 +696,15 @@ const Puzzle = React.memo(
           )}
         </PuzzleMetaColumn>
         {renderAsLocked ? (
-          <LockedSummaryColumn title={puzzle.lockedSummary}>
-            {puzzle.lockedSummary}
-          </LockedSummaryColumn>
+          <>
+            <LockedSummaryColumn
+              $viewersShown={showViewers}
+              title={puzzle.lockedSummary}
+            >
+              {puzzle.lockedSummary}
+            </LockedSummaryColumn>
+            {showViewers && <PuzzleActivityColumn />}
+          </>
         ) : (
           <>
             {showViewers && (

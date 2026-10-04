@@ -32,14 +32,17 @@ import "./unit/imports/lib/whiteboard-contributors";
 import "./unit/imports/lib/whiteboard-ink";
 import "./unit/imports/lib/whiteboard-layout";
 import "./unit/imports/lib/whiteboard-liveDrags";
+import "./unit/imports/Logger";
 
 import "./unit/imports/client/bookmarkButton";
 import "./unit/imports/client/breadcrumb";
 import "./unit/imports/client/CommentPanel";
 import "./unit/imports/client/DocumentDisplay";
 import "./unit/imports/client/guessDetails";
+import "./unit/imports/client/HighlightsPanel";
 import "./unit/imports/client/operatorModeMenuItem";
 import "./unit/imports/client/persistedState";
+import "./unit/imports/client/PuzzleHistoryPage";
 import "./unit/imports/client/puzzleTitles";
 import "./unit/imports/client/search";
 import "./unit/imports/client/useCallState";

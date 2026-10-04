@@ -159,6 +159,7 @@ const WhiteboardPage = () => {
             huntId={huntId}
             puzzleId={board.puzzle}
             readOnly={archived || !isDesktop}
+            showMiniMap={isDesktop}
             boardLoaded={!contentsLoading()}
             focusRef={focusRef}
             initialComment={initialComment}

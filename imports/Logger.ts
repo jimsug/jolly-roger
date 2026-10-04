@@ -2,7 +2,7 @@ import Bugsnag from "@bugsnag/js";
 import { createLogger } from "winston";
 import Transport from "winston-transport";
 
-class BugsnagTransport extends Transport {
+export class BugsnagTransport extends Transport {
   public declare levels: Record<string, number>;
 
   public log(
@@ -23,8 +23,12 @@ class BugsnagTransport extends Transport {
       /* noop */
     },
   ) {
-    if (!Bugsnag.isStarted()) return;
-    if (!error || !(error instanceof Error)) return;
+    // Every write has to call next: once this transport has a buffer's worth
+    // of writes outstanding, winston stops writing to all of its transports
+    if (!Bugsnag.isStarted() || !(error instanceof Error)) {
+      next();
+      return;
+    }
 
     Bugsnag.notify(
       error,
@@ -41,7 +45,9 @@ class BugsnagTransport extends Transport {
 
         event.addMetadata("extra", rest);
       },
-      next,
+      // Not next itself: a report that fails to send comes back as an error,
+      // which would fail the log write and take the logger down with it
+      () => next(),
     );
   }
 }

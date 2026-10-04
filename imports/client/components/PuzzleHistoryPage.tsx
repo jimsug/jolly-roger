@@ -559,9 +559,10 @@ const PuzzleHistoryTable = ({ userId }: { userId: string }) => {
     [],
   );
 
-  const activityLoading = useTypedSubscribe(activitySummaryForUser);
+  const activitySummaryLoading = useTypedSubscribe(activitySummaryForUser);
   const historyLoading = useTypedSubscribe(puzzleHistorySummaryForUser);
   const loading = historyLoading();
+  const activityLoading = activitySummaryLoading();
 
   const [sortColumn, setSortColumn] = useState<SortColumn>("lastInteraction");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
@@ -624,7 +625,7 @@ const PuzzleHistoryTable = ({ userId }: { userId: string }) => {
   // The overall graph follows the hunt and interaction filters (for the
   // interaction kinds that are activity)
   const activitySummaries: ActivityItem[] = useTracker(() => {
-    if (activityLoading()) {
+    if (activityLoading) {
       return [];
     }
     const selectedActivityKinds = new Set(

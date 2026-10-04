@@ -482,6 +482,8 @@ interface CanvasProps {
   // The board's backing puzzle, whose chat holds the comments.
   puzzleId: string;
   readOnly: boolean;
+  // Off on a narrow screen, where it would cover half the board.
+  showMiniMap: boolean;
   // Whether the board's nodes and lines have arrived.
   boardLoaded: boolean;
   // Set to the canvas's way of showing a comment, for the board's chat.
@@ -496,6 +498,7 @@ const CanvasInner = ({
   huntId,
   puzzleId,
   readOnly,
+  showMiniMap,
   boardLoaded,
   focusRef,
   initialComment,
@@ -2570,7 +2573,9 @@ const CanvasInner = ({
           >
             <Background />
             <Controls showInteractive={false} />
-            <MiniMap pannable zoomable nodeColor={miniMapNodeColor} />
+            {showMiniMap && (
+              <MiniMap pannable zoomable nodeColor={miniMapNodeColor} />
+            )}
             <FrameLabelLayer />
             <CursorLayer boardId={boardId} liveEnabled={liveEnabled} />
             <CommentLayer

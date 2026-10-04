@@ -116,10 +116,12 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
         ),
     [allTags],
   );
+  // null rather than undefined: react-select treats an undefined value as
+  // uncontrolled and keeps showing whatever was last picked
   const selectedOption = useMemo(() => {
     return tagToRename
       ? { value: tagToRename._id, label: tagToRename.name }
-      : undefined;
+      : null;
   }, [tagToRename]);
 
   // The tag a rename would merge into, found the way the server finds it:
@@ -190,9 +192,13 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
     [selectedTagId, newTagName, keepOldNameAsAlias],
   );
 
-  const isNameDirtied = tagToRename?.name.trim() !== newTagName.trim();
+  // Nothing to rename until there's a tag and a new name for it
+  const newName = newTagName.trim();
   const disableRename =
-    !isNameDirtied || submitState === SubmitState.SUBMITTING;
+    !tagToRename ||
+    !newName ||
+    tagToRename.name.trim() === newName ||
+    submitState === SubmitState.SUBMITTING;
 
   const idPrefix = useId();
   const theme = useTheme();
@@ -237,7 +243,7 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
           </Alert>
         ) : null}
         <Row className="mb-3 align-items-end">
-          <Col xs={5}>
+          <Col xs={12} sm={5}>
             <FormGroup className="mb-3" controlId={`${idPrefix}-rename-source`}>
               <FormLabel>
                 {t("tags.renameTagSection.selectLabel", "Tag to rename")}
@@ -251,7 +257,7 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
               />
             </FormGroup>
           </Col>
-          <Col xs={5}>
+          <Col xs={12} sm={5}>
             <FormGroup
               className="mb-3"
               controlId={`${idPrefix}-rename-destination`}
@@ -267,7 +273,7 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
               />
             </FormGroup>
           </Col>
-          <Col xs={2}>
+          <Col xs="auto">
             <FormGroup className="mb-3">
               <Button
                 variant="primary"

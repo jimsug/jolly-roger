@@ -77,8 +77,8 @@ import Puzzles from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import Tags from "../../lib/models/Tags";
 import {
+  huntsUserIsOperatorFor,
   listAssignedRolesForHunt,
-  userMayUpdateGuessesForHunt,
   userMayWritePuzzlesForHunt,
 } from "../../lib/permission_stubs";
 import chatMessagesForPuzzle from "../../lib/publications/chatMessagesForPuzzle";
@@ -783,11 +783,14 @@ const ChatHistoryMessage = React.memo(
             })}
             {message.comment.resolvedAt
               ? ` ${t("whiteboard.comments.resolvedMark", "(resolved)")}`
-              : ""}
-            {" · "}
-            <CommentNoteLink variant="link" onClick={showOnBoard}>
-              {t("whiteboard.chat.showOnBoard", "Show on board")}
-            </CommentNoteLink>
+              : ""}{" "}
+            {/* Kept together, so a wrap doesn't strand the dot */}
+            <span className="text-nowrap">
+              ·{" "}
+              <CommentNoteLink variant="link" onClick={showOnBoard}>
+                {t("whiteboard.chat.showOnBoard", "Show on board")}
+              </CommentNoteLink>
+            </span>
           </CommentNote>
         )}
         <ChatMessageReactions
@@ -2050,7 +2053,10 @@ const PuzzlePageMetadata = ({
       </PuzzleMetadataActionRow>
       {renderAsLocked && puzzle.lockedSummary && (
         <PuzzleMetadataRow>
-          <strong>{t("puzzle.locked.summaryLabel", "Locked puzzle")}:</strong>{" "}
+          {/* A margin, since the flex row drops a plain space */}
+          <strong className="me-1">
+            {t("puzzle.locked.summaryLabel", "Locked puzzle")}:
+          </strong>
           {puzzle.lockedSummary}
         </PuzzleMetadataRow>
       )}
@@ -2060,6 +2066,14 @@ const PuzzlePageMetadata = ({
   );
 };
 
+// Block-level, so the help text goes underneath, and wrapping, so every
+// option stays on screen in a phone-width modal
+const GuessToggleButtonGroup = styled(ToggleButtonGroup)`
+  display: flex;
+  flex-wrap: wrap;
+  width: fit-content;
+`;
+
 const GuessTable = styled.div`
   display: grid;
   grid-template-columns:
@@ -2067,8 +2081,8 @@ const GuessTable = styled.div`
     [answer] auto
     [timestamp] auto
     [submitter] auto
-    [direction] 4em
-    [confidence] 4em;
+    [direction] max-content
+    [confidence] max-content;
   border-bottom: 1px solid #ddd;
   ${mediaBreakpointDown(
     "sm",
@@ -2253,11 +2267,11 @@ const PuzzleGuessModal = ({
     return computeSolvedness(puzzle);
   }, [puzzle]);
 
-  // Operators mark guesses from the notification toasts, which stay hidden
-  // while the operator interface is off
-  const canUpdateGuesses = useTracker(
-    () =>
-      userMayUpdateGuessesForHunt(Meteor.user(), Hunts.findOne(puzzle.hunt)),
+  // Operators mark guesses from the notification toasts, which only reach
+  // operators assigned to the hunt (not those its default roles make
+  // operators) and stay hidden while the operator interface is off
+  const getsGuessToasts = useTracker(
+    () => huntsUserIsOperatorFor(Meteor.user()).has(puzzle.hunt),
     [puzzle.hunt],
   );
   const [operatorActionsHidden] = useOperatorActionsHiddenForHunt(puzzle.hunt);
@@ -2391,7 +2405,7 @@ const PuzzleGuessModal = ({
           {t("puzzle.answerOrGuess.direction", "Solve direction")}:
         </FormLabel>
         <Col xs={9}>
-          <ToggleButtonGroup
+          <GuessToggleButtonGroup
             type="radio"
             name={`${idPrefix}-guess-direction`}
             aria-labelledby={`${idPrefix}-guess-direction-label`}
@@ -2409,7 +2423,7 @@ const PuzzleGuessModal = ({
                 {t(toggle.key, toggle.label)}
               </ToggleButton>
             ))}
-          </ToggleButtonGroup>
+          </GuessToggleButtonGroup>
           <FormText>
             {t(
               "puzzle.answerOrGuess.directionOptionsHelp",
@@ -2424,7 +2438,7 @@ const PuzzleGuessModal = ({
           {t("puzzle.answerOrGuess.confidence", "Confidence")}
         </FormLabel>
         <Col xs={9}>
-          <ToggleButtonGroup
+          <GuessToggleButtonGroup
             type="radio"
             name={`${idPrefix}-guess-confidence`}
             aria-labelledby={`${idPrefix}-guess-confidence-label`}
@@ -2442,7 +2456,7 @@ const PuzzleGuessModal = ({
                 {t(toggle.key, toggle.label)}
               </ToggleButton>
             ))}
-          </ToggleButtonGroup>
+          </GuessToggleButtonGroup>
           <FormText>
             {t(
               "puzzle.answerOrGuess.confidenceOptionsHelp",
@@ -2512,7 +2526,7 @@ const PuzzleGuessModal = ({
                 );
               })}
           </GuessTable>
-          {canUpdateGuesses && (
+          {getsGuessToasts && (
             <Alert variant="info" className="mt-3">
               {operatorActionsHidden
                 ? t(
