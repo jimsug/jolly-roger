@@ -78,6 +78,7 @@ import "./setChatMessagePin";
 import "./setFeatureFlag";
 import "./setGuessState";
 import "./setWhiteboardCommentResolved";
+import "./setWhiteboardEditPolicy";
 import "./setWhiteboardLive";
 import "./suppressDingwordsForPuzzle";
 import "./syncHuntDiscordRole";

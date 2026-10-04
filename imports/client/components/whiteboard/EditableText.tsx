@@ -81,6 +81,7 @@ const EditableText = ({
   placeholder,
   startEditing,
   onStartedEditing,
+  saveOnReadOnly = false,
 }: {
   value: string | undefined;
   onCommit: (text: string) => void;
@@ -91,6 +92,9 @@ const EditableText = ({
   placeholder: string;
   startEditing?: boolean;
   onStartedEditing?: () => void;
+  // Whether text being typed when readOnly turns on is saved rather than
+  // dropped.
+  saveOnReadOnly?: boolean;
 }) => {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -134,6 +138,20 @@ const EditableText = ({
       onCommit(trimmed);
     }
   }, [draft, value, onCommit]);
+
+  // Losing edit rights mid-edit (the edit policy changes, or the hunt is
+  // archived) closes the editor without saving what was typed, which the
+  // server would refuse. A screen narrowing only stops further edits, so
+  // what was typed is saved.
+  useEffect(() => {
+    if (!readOnly || !editing) return;
+    if (saveOnReadOnly) {
+      commit();
+    } else {
+      setEditing(false);
+    }
+    cancelled.current = true;
+  }, [readOnly, editing, saveOnReadOnly, commit]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {

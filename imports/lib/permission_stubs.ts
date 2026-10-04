@@ -4,6 +4,7 @@ import isAdmin, { GLOBAL_SCOPE } from "./isAdmin";
 import type { HuntDefaultRole, HuntType } from "./models/Hunts";
 import MeteorUsers from "./models/MeteorUsers";
 import type { User } from "./models/User";
+import type { WhiteboardType } from "./models/Whiteboards";
 import type { Selector } from "./typedModel/Model";
 
 type HuntWithDefaultRoles = Pick<HuntType, "_id" | "defaultRoles">;
@@ -346,6 +347,53 @@ export function userMayWritePuzzlesForHunt(
     return true;
   }
   return false;
+}
+
+// What someone may do on a hunt's whiteboard. "edit" includes commenting,
+// and "comment" includes viewing.
+export type WhiteboardAccess = "edit" | "comment" | "view" | "none";
+// Why someone has less than "edit". "narrow" is only ever set by the client,
+// which keeps small screens to commenting.
+export type WhiteboardAccessReason =
+  | "archived"
+  | "operators"
+  | "operatorsAndEditors"
+  | "narrow";
+
+// Members only, admins included: every board publication is for members, so
+// letting anyone else through would let them write to a board they can't
+// see. An archived hunt's board is view-only. Otherwise the board's edit
+// policy decides between editing and commenting.
+export function whiteboardAccess(
+  user: (UserWithRoles & Pick<Meteor.User, "_id">) | null | undefined,
+  hunt:
+    | Pick<HuntType, "_id" | "defaultRoles" | "isArchived">
+    | null
+    | undefined,
+  board: Pick<WhiteboardType, "editPolicy" | "editors">,
+): { access: WhiteboardAccess; reason?: WhiteboardAccessReason } {
+  if (!user || !hunt || !user.hunts?.includes(hunt._id)) {
+    return { access: "none" };
+  }
+  if (hunt.isArchived) {
+    return { access: "view", reason: "archived" };
+  }
+  const policy = board.editPolicy ?? "members";
+  switch (policy) {
+    case "members":
+      return { access: "edit" };
+    case "operators":
+      return userMayWritePuzzlesForHunt(user, hunt)
+        ? { access: "edit" }
+        : { access: "comment", reason: policy };
+    case "operatorsAndEditors":
+      return userMayWritePuzzlesForHunt(user, hunt) ||
+        (board.editors?.includes(user._id) ?? false)
+        ? { access: "edit" }
+        : { access: "comment", reason: policy };
+    default:
+      return policy satisfies never;
+  }
 }
 
 export function userMayCreateHunt(

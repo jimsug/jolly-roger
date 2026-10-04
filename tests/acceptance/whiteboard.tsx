@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { assert } from "chai";
 import type React from "react";
@@ -24,6 +25,7 @@ import ChatMessages from "../../imports/lib/models/ChatMessages";
 import Hunts from "../../imports/lib/models/Hunts";
 import WhiteboardEdges from "../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../imports/lib/models/WhiteboardNodes";
+import type { WhiteboardEditPolicy } from "../../imports/lib/models/Whiteboards";
 import Whiteboards from "../../imports/lib/models/Whiteboards";
 import whiteboardContents from "../../imports/lib/publications/whiteboardContents";
 import whiteboardForHunt from "../../imports/lib/publications/whiteboardForHunt";
@@ -39,9 +41,11 @@ import deleteWhiteboardNodes from "../../imports/methods/deleteWhiteboardNodes";
 import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
 import sendChatMessage from "../../imports/methods/sendChatMessage";
+import setWhiteboardEditPolicy from "../../imports/methods/setWhiteboardEditPolicy";
 import TypedMethod from "../../imports/methods/TypedMethod";
 import upsertWhiteboardNodes from "../../imports/methods/upsertWhiteboardNodes";
 import resetDatabase from "../lib/resetDatabase";
+import createTestUser from "./createTestUser";
 import { stabilize, USER_EMAIL, USER_PASSWORD } from "./lib";
 
 // Archiving through updateHunt means sending every field of the hunt, so this
@@ -216,6 +220,21 @@ if (Meteor.isClient) {
       render(<TestApp />);
       await goTo(boardPath);
       await screen.findByRole("button", { name: "Create whiteboard" });
+    });
+
+    it("doesn't offer to create a board on an archived hunt", async function () {
+      this.timeout(10000);
+      await setHuntArchived.callPromise({ huntId, isArchived: true });
+      try {
+        render(<TestApp />);
+        await goTo(boardPath);
+        await screen.findByText(/^This hunt is archived/);
+        assert.isNull(
+          screen.queryByRole("button", { name: "Create whiteboard" }),
+        );
+      } finally {
+        await setHuntArchived.callPromise({ huntId, isArchived: false });
+      }
     });
 
     it("shows the canvas, styled, and chat once there's a board", async function () {
@@ -499,6 +518,166 @@ if (Meteor.isClient) {
         });
         await waitFor(() => {
           assert.include(panelText(), "Is this the meta?");
+        });
+      });
+    });
+
+    describe("edit policy", function () {
+      const MEMBER_EMAIL = "editor-policy-member@example.com";
+      const MEMBER_PASSWORD = "password";
+      let boardId: string;
+
+      const login = (email: string, password: string) =>
+        promisify(Meteor.loginWithPassword)(email, password);
+      const setPolicy = (editPolicy: WhiteboardEditPolicy) =>
+        setWhiteboardEditPolicy.callPromise({
+          boardId,
+          editPolicy,
+          editors: [],
+        });
+
+      before(async function () {
+        this.timeout(10000);
+        boardId = (await ensureBoard())._id;
+        await createTestUser.callPromise({
+          email: MEMBER_EMAIL,
+          password: MEMBER_PASSWORD,
+          displayName: "Member",
+        });
+        await addHuntUser.callPromise({ huntId, email: MEMBER_EMAIL });
+      });
+
+      it("offers operators the who-can-edit dialog", async function () {
+        this.timeout(30000);
+        render(<TestApp />);
+        await goTo(boardPath);
+        const open = await screen.findByTitle(
+          "Who can edit: Everyone in the hunt",
+          {},
+          { timeout: 20000 },
+        );
+        await act(async () => {
+          fireEvent.click(open);
+          await stabilize();
+        });
+        await screen.findByText("Who can edit the board");
+        await act(async () => {
+          fireEvent.click(screen.getByLabelText("Operators only"));
+          fireEvent.click(screen.getByRole("button", { name: "Save" }));
+          await stabilize();
+        });
+        try {
+          await waitFor(
+            async () => {
+              assert.equal(
+                (await Whiteboards.findOneAsync(boardId))?.editPolicy,
+                "operators",
+              );
+              assert.isNull(screen.queryByText("Who can edit the board"));
+            },
+            { timeout: 10000 },
+          );
+          await screen.findByTitle("Who can edit: Operators only");
+        } finally {
+          await setPolicy("members");
+        }
+      });
+
+      describe("for someone who can't edit", function () {
+        before(async function () {
+          this.timeout(10000);
+          await setPolicy("operators");
+          await promisify(Meteor.logout)();
+          await login(MEMBER_EMAIL, MEMBER_PASSWORD);
+        });
+
+        after(async function () {
+          this.timeout(10000);
+          await promisify(Meteor.logout)();
+          await login(USER_EMAIL, USER_PASSWORD);
+          await setPolicy("members");
+        });
+
+        it("shows non-editors why they can't edit and keeps the comment tool", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          await screen.findByText("Viewing only", {}, { timeout: 20000 });
+          screen.getByText("Only operators can edit this board.");
+          assert.exists(screen.getByTitle(/^Comment:/));
+          assert.isNull(screen.queryByTitle(/^Select and move/));
+          assert.isNull(screen.queryByLabelText("Who can edit"));
+        });
+
+        it("lets a non-editor place a comment", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          const commentTool = await screen.findByTitle(
+            /^Comment:/,
+            {},
+            { timeout: 20000 },
+          );
+          await act(async () => {
+            fireEvent.click(commentTool);
+            await stabilize();
+          });
+          const pane = document.querySelector(".react-flow__pane")!;
+          const box = pane.getBoundingClientRect();
+          const at = {
+            button: 0,
+            pointerId: 1,
+            clientX: box.left + box.width * 0.6,
+            clientY: box.top + box.height * 0.6,
+          };
+          await act(async () => {
+            fireEvent.pointerDown(pane, at);
+            fireEvent.pointerUp(pane, at);
+            await stabilize();
+          });
+          const panel = await waitFor(() => {
+            const found = document.querySelector<HTMLElement>(
+              ".react-flow__panel.top.right",
+            );
+            assert.include(found?.textContent ?? "", "New comment on");
+            assert.isNotNull(found?.querySelector("[data-slate-editor]"));
+            return found!;
+          });
+          const editor = panel.querySelector<HTMLElement>(
+            "[data-slate-editor]",
+          )!;
+          await act(async () => {
+            editor.focus();
+            await stabilize();
+          });
+          await act(async () => {
+            // Slate types from beforeinput, at the selection focusing set
+            editor.dispatchEvent(
+              new InputEvent("beforeinput", {
+                inputType: "insertText",
+                data: "Where does this go?",
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.click(
+              within(panel).getByRole("button", { name: "Send" }),
+            );
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const sent = await ChatMessages.findOneAsync({
+                sender: Meteor.userId()!,
+                comment: { $exists: true },
+              });
+              assert.exists(sent);
+            },
+            { timeout: 10000 },
+          );
         });
       });
     });

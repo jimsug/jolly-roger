@@ -3,8 +3,6 @@ import { Meteor } from "meteor/meteor";
 import isReaction from "../lib/isReaction";
 import ChatMessages from "../lib/models/ChatMessages";
 import ChatNotifications from "../lib/models/ChatNotifications";
-import Hunts from "../lib/models/Hunts";
-import MeteorUsers from "../lib/models/MeteorUsers";
 import Puzzles from "../lib/models/Puzzles";
 import WhiteboardEdges, {
   LINE_STYLE_FIELDS,
@@ -14,16 +12,14 @@ import type {
   WhiteboardNodeType,
 } from "../lib/models/WhiteboardNodes";
 import WhiteboardNodes from "../lib/models/WhiteboardNodes";
-import Whiteboards from "../lib/models/Whiteboards";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import { Id } from "../lib/typedModel/regexes";
 import type { InkPoint } from "../lib/whiteboard/ink";
 import isWhiteboardPuzzle from "../lib/whiteboard/isWhiteboardPuzzle";
-import { CARD_HEIGHT, CARD_WIDTH, POINT_SIZE } from "../lib/whiteboard/layout";
+import { POINT_SIZE } from "../lib/whiteboard/layout";
 import {
   MAX_BATCH,
   MAX_CONTRIBUTORS,
-  MAX_COORDINATE,
   MAX_DIMENSION,
   MAX_EDGES_PER_BOARD,
   MAX_FRAME_DEPTH,
@@ -35,8 +31,13 @@ import {
 import type { CommentAnchorInput } from "../methods/sendChatMessage";
 import type { WhiteboardEdgeInput } from "../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../methods/upsertWhiteboardNodes";
-import { assertHuntMember } from "./sendChatMessageInternal";
-import { assertWhiteboardEnabled } from "./whiteboard";
+import {
+  assertMayCommentOnBoard,
+  assertMayEditBoard,
+  detachComments,
+  inRange,
+  isInkPoint,
+} from "./whiteboardShared";
 
 // Types whose content belongs to whoever wrote it.
 const NATIVE_TYPES = new Set(["frame", "sticky", "text", "ink"]);
@@ -47,9 +48,6 @@ const UNCOMMENTABLE_TYPES = new Set(["ink", "point"]);
 
 const badRequest = (message: string) => new Meteor.Error(400, message);
 
-export const inRange = (n: number) =>
-  Number.isFinite(n) && Math.abs(n) <= MAX_COORDINATE;
-
 // An ink sample's shape, [x, y, pressure], for the methods' check(). Whether
 // it's on the board is up to isInkPoint.
 export const InkPointPattern = Match.Where(
@@ -58,18 +56,6 @@ export const InkPointPattern = Match.Where(
     point.length === 3 &&
     point.every((n) => typeof n === "number"),
 );
-
-// [x, y, pressure] on the board, with the pressure between 0 and 1.
-export function isInkPoint(point: number[]) {
-  const [x = Number.NaN, y = Number.NaN, pressure = Number.NaN] = point;
-  return (
-    point.length === 3 &&
-    inRange(x) &&
-    inRange(y) &&
-    pressure >= 0 &&
-    pressure <= 1
-  );
-}
 
 // Blank text counts as none.
 const nonBlank = (text: string | null | undefined) =>
@@ -98,27 +84,6 @@ function validatePoints(points: number[][]) {
     throw badRequest("Ink stroke has too many or too few points");
   }
   if (!points.every(isInkPoint)) throw badRequest("Invalid ink point");
-}
-
-// Finds the board by its id, or by the puzzle behind it.
-async function assertMayWriteBoard(
-  userId: string,
-  selector: string | { puzzle: string },
-) {
-  await assertWhiteboardEnabled();
-  const board = await Whiteboards.findOneAsync(selector);
-  if (!board) {
-    throw new Meteor.Error(404, "Unknown whiteboard");
-  }
-  await assertHuntMember(userId, board.hunt);
-  const hunt = await Hunts.findOneAsync(board.hunt);
-  if (!hunt) {
-    throw new Meteor.Error(404, "Unknown hunt");
-  }
-  if (hunt.isArchived) {
-    throw new Meteor.Error(403, "This hunt is archived");
-  }
-  return { board, hunt };
 }
 
 // How many frames a node inside parent would be in: parent and each frame
@@ -367,7 +332,7 @@ export async function upsertNodes(
   boardId: string,
   inputs: WhiteboardNodeInput[],
 ) {
-  const { board } = await assertMayWriteBoard(userId, boardId);
+  const { board } = await assertMayEditBoard(userId, boardId);
   if (inputs.length > MAX_BATCH) throw badRequest("Too many nodes at once");
   inputs.forEach(validateCommonFields);
 
@@ -423,60 +388,12 @@ async function removeOrphanPoints(boardId: string, candidates: string[]) {
   });
 }
 
-async function absolutePosition(node: WhiteboardNodeType) {
-  let { x, y } = node.position;
-  let parentId = node.parent;
-  for (let depth = 0; parentId && depth <= MAX_FRAME_DEPTH; depth++) {
-    const parent = await WhiteboardNodes.findOneAsync(parentId);
-    if (!parent) break;
-    x += parent.position.x;
-    y += parent.position.y;
-    parentId = parent.parent;
-  }
-  return { x, y };
-}
-
-const clampOffset = (offset: number, size: number | undefined) =>
-  size === undefined ? offset : Math.min(Math.max(offset, 0), size);
-
-// Comments on a node that's going away stay where they were on the board as
-// free pins.
-async function detachComments(puzzleId: string, node: WhiteboardNodeType) {
-  // The comment predicate lets Mongo use the partial {puzzle, comment.node}
-  // index, which it can't infer from comment.node alone.
-  const comments = await ChatMessages.find({
-    puzzle: puzzleId,
-    comment: { $exists: true },
-    "comment.node": node._id,
-  }).fetchAsync();
-  if (comments.length === 0) return;
-  const origin = await absolutePosition(node);
-  // Pins are drawn with their offset kept inside the node (see
-  // commentPosition), so a node that has shrunk leaves them on its edge.
-  const width = node.width ?? (node.type === "puzzle" ? CARD_WIDTH : undefined);
-  const height =
-    node.height ?? (node.type === "puzzle" ? CARD_HEIGHT : undefined);
-  for (const message of comments) {
-    if (!message.comment) continue;
-    await ChatMessages.updateAsync(
-      { _id: message._id, "comment.node": node._id },
-      {
-        $set: {
-          "comment.x": origin.x + clampOffset(message.comment.x, width),
-          "comment.y": origin.y + clampOffset(message.comment.y, height),
-        },
-        $unset: { "comment.node": 1 },
-      },
-    );
-  }
-}
-
 export async function deleteNodes(
   userId: string,
   boardId: string,
   nodeIds: string[],
 ) {
-  const { board } = await assertMayWriteBoard(userId, boardId);
+  const { board } = await assertMayEditBoard(userId, boardId);
   if (nodeIds.length > MAX_BATCH) throw badRequest("Too many nodes at once");
 
   const targets = await WhiteboardNodes.find({
@@ -568,7 +485,7 @@ export async function upsertEdges(
   boardId: string,
   inputs: WhiteboardEdgeInput[],
 ) {
-  const { board } = await assertMayWriteBoard(userId, boardId);
+  const { board } = await assertMayEditBoard(userId, boardId);
   if (inputs.length > MAX_BATCH) throw badRequest("Too many edges at once");
 
   const existingEdges = await WhiteboardEdges.find({
@@ -668,7 +585,7 @@ export async function deleteEdges(
   boardId: string,
   edgeIds: string[],
 ) {
-  await assertMayWriteBoard(userId, boardId);
+  await assertMayEditBoard(userId, boardId);
   if (edgeIds.length > MAX_BATCH) throw badRequest("Too many edges at once");
 
   await WhiteboardEdges.updateAsync(
@@ -693,7 +610,7 @@ export async function deleteEdges(
 }
 
 // A reply (or reaction) that joins a comment thread adds to the board, so it
-// needs a board that can be written to, as a new comment does. A resolved
+// needs a board that can be commented on, as a new comment does. A resolved
 // thread would otherwise reopen on a board nobody can resolve it on again.
 export async function assertMayReplyInThread(
   userId: string,
@@ -704,7 +621,7 @@ export async function assertMayReplyInThread(
     projection: { puzzle: 1, comment: 1, thread: 1 },
   });
   if (parent?.puzzle === puzzleId && (parent.comment || parent.thread)) {
-    await assertMayWriteBoard(userId, { puzzle: puzzleId });
+    await assertMayCommentOnBoard(userId, { puzzle: puzzleId });
   }
 }
 
@@ -715,7 +632,9 @@ export async function assertValidCommentAnchor(
   puzzleId: string,
   anchor: CommentAnchorInput,
 ) {
-  const { board } = await assertMayWriteBoard(userId, { puzzle: puzzleId });
+  const { board } = await assertMayCommentOnBoard(userId, {
+    puzzle: puzzleId,
+  });
   assertCoordinate(anchor.x);
   assertCoordinate(anchor.y);
   if (anchor.node !== undefined) {
@@ -736,10 +655,10 @@ async function rootCommentForWrite(userId: string, messageId: string) {
   if (!message?.comment) {
     throw new Meteor.Error(404, "Unknown comment");
   }
-  const { hunt } = await assertMayWriteBoard(userId, {
+  const { hunt, user } = await assertMayCommentOnBoard(userId, {
     puzzle: message.puzzle,
   });
-  return { message, hunt };
+  return { message, hunt, user };
 }
 
 export async function setCommentResolved(
@@ -770,8 +689,7 @@ export async function setCommentResolved(
 // Authors can take back a comment until someone else replies to it. Operators
 // can always delete one. The whole thread goes with it.
 export async function deleteComment(userId: string, messageId: string) {
-  const { message, hunt } = await rootCommentForWrite(userId, messageId);
-  const user = await MeteorUsers.findOneAsync(userId);
+  const { message, hunt, user } = await rootCommentForWrite(userId, messageId);
   if (!userMayWritePuzzlesForHunt(user, hunt)) {
     if (message.sender !== userId) {
       throw new Meteor.Error(403, "Only its author can delete a comment");

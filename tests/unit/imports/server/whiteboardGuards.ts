@@ -92,6 +92,7 @@ import setChatMessagePin from "../../../../imports/methods/setChatMessagePin";
 import setFeatureFlag from "../../../../imports/methods/setFeatureFlag";
 import setGuessState from "../../../../imports/methods/setGuessState";
 import setWhiteboardCommentResolved from "../../../../imports/methods/setWhiteboardCommentResolved";
+import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEditPolicy";
 import setWhiteboardLive from "../../../../imports/methods/setWhiteboardLive";
 import suppressDingwordsForPuzzle from "../../../../imports/methods/suppressDingwordsForPuzzle";
 import syncHuntDiscordRole from "../../../../imports/methods/syncHuntDiscordRole";
@@ -201,6 +202,7 @@ const METHODS = {
   setFeatureFlag,
   setGuessState,
   setWhiteboardCommentResolved,
+  setWhiteboardEditPolicy,
   setWhiteboardLive,
   suppressDingwordsForPuzzle,
   syncHuntDiscordRole,

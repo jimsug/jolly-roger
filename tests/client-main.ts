@@ -38,6 +38,7 @@ import "./unit/imports/client/bookmarkButton";
 import "./unit/imports/client/breadcrumb";
 import "./unit/imports/client/CommentPanel";
 import "./unit/imports/client/DocumentDisplay";
+import "./unit/imports/client/EditableText";
 import "./unit/imports/client/guessDetails";
 import "./unit/imports/client/HighlightsPanel";
 import "./unit/imports/client/operatorModeMenuItem";

@@ -9,7 +9,15 @@ import { useMediaQuery } from "usehooks-ts";
 import Flags from "../../Flags";
 import Hunts from "../../lib/models/Hunts";
 import Whiteboards from "../../lib/models/Whiteboards";
-import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
+import type {
+  WhiteboardAccess,
+  WhiteboardAccessReason,
+} from "../../lib/permission_stubs";
+import {
+  userMayMakeOperatorForHunt,
+  userMayWritePuzzlesForHunt,
+  whiteboardAccess,
+} from "../../lib/permission_stubs";
 import whiteboardContents from "../../lib/publications/whiteboardContents";
 import whiteboardForHunt from "../../lib/publications/whiteboardForHunt";
 import createWhiteboard from "../../methods/createWhiteboard";
@@ -29,6 +37,7 @@ const EmptyWhiteboard = ({ huntId }: { huntId: string }) => {
     () => userMayWritePuzzlesForHunt(Meteor.user(), hunt),
     [hunt],
   );
+  const archived = !!hunt?.isArchived;
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
@@ -50,7 +59,15 @@ const EmptyWhiteboard = ({ huntId }: { huntId: string }) => {
           "A shared board for laying out this hunt's rounds, puzzles and answers, with arrows, notes and drawing, and its own chat.",
         )}
       </p>
-      {canCreate ? (
+      {archived && (
+        <p>
+          {t(
+            "whiteboard.empty.archived",
+            "This hunt is archived, so a whiteboard can't be set up for it.",
+          )}
+        </p>
+      )}
+      {!archived && canCreate && (
         <>
           <p>
             {t(
@@ -69,7 +86,8 @@ const EmptyWhiteboard = ({ huntId }: { huntId: string }) => {
             </Alert>
           )}
         </>
-      ) : (
+      )}
+      {!archived && !canCreate && (
         <p>
           {t(
             "whiteboard.empty.noBoard",
@@ -89,13 +107,32 @@ const WhiteboardPage = () => {
     () => Whiteboards.findOne({ hunt: huntId }),
     [huntId],
   );
-  const archived = useTracker(
-    () => !!Hunts.findOne(huntId)?.isArchived,
-    [huntId],
-  );
+  const policyAccess = useTracker(() => {
+    const user = Meteor.user();
+    const hunt = Hunts.findOne(huntId);
+    const current = Whiteboards.findOne(
+      { hunt: huntId },
+      { projection: { editPolicy: 1, editors: 1 } },
+    );
+    return {
+      ...(current
+        ? whiteboardAccess(user, hunt, current)
+        : { access: "none" as const }),
+      editPolicy: current?.editPolicy ?? "members",
+      editors: current?.editors ?? [],
+      mayChangePolicy: userMayMakeOperatorForHunt(user, hunt),
+    };
+  }, [huntId]);
   const disabled = useTracker(() => Flags.active("disable.whiteboard"), []);
-  // PuzzlePage's own breakpoint; narrower than this the board is view-only.
+  // PuzzlePage's own breakpoint; narrower than this the board can only be
+  // commented on.
   const isDesktop = useMediaQuery(`(min-width: ${MinimumDesktopWidth}px)`);
+  let access: WhiteboardAccess = policyAccess.access;
+  let accessReason: WhiteboardAccessReason | undefined = policyAccess.reason;
+  if (access === "edit" && !isDesktop) {
+    access = "comment";
+    accessReason = "narrow";
+  }
   // Here rather than in the canvas, so chat can still name what a comment is
   // on while a narrow screen shows chat instead of the board.
   const contentsLoading = useTypedSubscribe(
@@ -158,7 +195,13 @@ const WhiteboardPage = () => {
             boardId={board._id}
             huntId={huntId}
             puzzleId={board.puzzle}
-            readOnly={archived || !isDesktop}
+            access={access}
+            accessReason={accessReason}
+            mayChangeEditPolicy={
+              policyAccess.mayChangePolicy && access !== "view"
+            }
+            editPolicy={policyAccess.editPolicy}
+            editors={policyAccess.editors}
             showMiniMap={isDesktop}
             boardLoaded={!contentsLoading()}
             focusRef={focusRef}

@@ -4,6 +4,7 @@ import { Random } from "meteor/random";
 import { assert } from "chai";
 import sinon from "sinon";
 import FixtureHunt from "../../../../imports/FixtureHunt";
+import { GLOBAL_SCOPE } from "../../../../imports/lib/isAdmin";
 import mergeUsersJob from "../../../../imports/lib/jobs/mergeUsers";
 import purgeHuntJob from "../../../../imports/lib/jobs/purgeHunt";
 import ChatMessages, {
@@ -20,6 +21,7 @@ import Servers from "../../../../imports/lib/models/Servers";
 import Tags from "../../../../imports/lib/models/Tags";
 import WhiteboardEdges from "../../../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../../../imports/lib/models/WhiteboardNodes";
+import type { WhiteboardEditPolicy } from "../../../../imports/lib/models/Whiteboards";
 import Whiteboards from "../../../../imports/lib/models/Whiteboards";
 import whiteboardPresence from "../../../../imports/lib/publications/whiteboardPresence";
 import {
@@ -31,6 +33,7 @@ import {
   MAX_BATCH,
   MAX_FRAME_DEPTH,
   MAX_NODES_PER_BOARD,
+  MAX_WHITEBOARD_EDITORS,
 } from "../../../../imports/lib/whiteboard/limits";
 import addPuzzleTag from "../../../../imports/methods/addPuzzleTag";
 import createWhiteboard from "../../../../imports/methods/createWhiteboard";
@@ -40,6 +43,7 @@ import renameTag from "../../../../imports/methods/renameTag";
 import type { CommentAnchorInput } from "../../../../imports/methods/sendChatMessage";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import setWhiteboardCommentResolved from "../../../../imports/methods/setWhiteboardCommentResolved";
+import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEditPolicy";
 import setWhiteboardLive from "../../../../imports/methods/setWhiteboardLive";
 import updatePuzzle from "../../../../imports/methods/updatePuzzle";
 import upsertWhiteboardNodes from "../../../../imports/methods/upsertWhiteboardNodes";
@@ -230,6 +234,13 @@ describe("whiteboard", function () {
         createdBy: operator,
       });
       await assert.isRejected(ensureWhiteboard(operator, huntId), /disabled/);
+      assert.equal(await Puzzles.find({ kind: "whiteboard" }).countAsync(), 0);
+    });
+
+    it("refuses an archived hunt", async function () {
+      await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+      await assert.isRejected(ensureWhiteboard(operator, huntId), /archived/);
+      assert.equal(await Whiteboards.find({}).countAsync(), 0);
       assert.equal(await Puzzles.find({ kind: "whiteboard" }).countAsync(), 0);
     });
   });
@@ -1700,7 +1711,7 @@ describe("whiteboard", function () {
       );
     });
 
-    it("only resolves root comments, for people who can edit the board", async function () {
+    it("only resolves root comments, for anyone in the hunt", async function () {
       const root = await send(member, "root", { comment: { x: 0, y: 0 } });
       const replyMessage = await reply(operator, root._id, "a reply");
       const plain = await send(member, "plain chat");
@@ -2030,6 +2041,440 @@ describe("whiteboard", function () {
         target,
       );
       assert.equal(await WhiteboardPresence.find({}).countAsync(), 0);
+    });
+
+    it("moves the merged account onto the editor list", async function () {
+      const source = await makeUser("source@example.com", []);
+      const target = await makeUser("target@example.com", []);
+      await asUser(operator, () =>
+        setWhiteboardEditPolicy.callPromise({
+          boardId,
+          editPolicy: "operatorsAndEditors",
+          editors: [member, source],
+        }),
+      );
+
+      await runJob(
+        mergeUsersJob,
+        { sourceUser: source, targetUser: target },
+        { userId: target },
+      );
+
+      assert.sameMembers(
+        (await Whiteboards.findOneAsync(boardId))?.editors ?? [],
+        [member, target],
+      );
+    });
+  });
+
+  describe("edit policy", function () {
+    let boardId: string;
+    let backingId: string;
+
+    beforeEach(async function () {
+      boardId = await ensureWhiteboard(operator, huntId);
+      backingId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+    });
+
+    const setPolicy = (
+      userId: string,
+      editPolicy: WhiteboardEditPolicy,
+      editors: string[] = [],
+    ) =>
+      asUser(userId, () =>
+        setWhiteboardEditPolicy.callPromise({ boardId, editPolicy, editors }),
+      );
+    const sticky = () => ({
+      _id: Random.id(),
+      type: "sticky" as const,
+      position: { x: 0, y: 0 },
+    });
+    const editors = async () =>
+      (await Whiteboards.findOneAsync(boardId))?.editors;
+    const presenceOf = (connection: Meteor.Connection) =>
+      WhiteboardPresence.findOneAsync({ connection: connection.id });
+    const card = async () =>
+      (await WhiteboardNodes.findOneAsync({ board: boardId, type: "puzzle" }))!;
+    // A cursor, a drag and a stroke all at once
+    const busy = async () => {
+      const node = await card();
+      return {
+        cursor: { x: 1, y: 2 },
+        drag: [{ node: node._id, x: 5, y: 6, parent: node.parent ?? null }],
+        stroke: {
+          color: "black" as const,
+          strokeWidth: "thin" as const,
+          points: [[0, 0, 0.5] as [number, number, number]],
+        },
+      };
+    };
+
+    it("refuses node edits, deletes and edge edits from non-editors", async function () {
+      const a = sticky();
+      const b = sticky();
+      const line = Random.id();
+      await upsertNodes(member, boardId, [a, b]);
+      await upsertEdges(member, boardId, [
+        { _id: line, source: a._id, target: b._id },
+      ]);
+      await setPolicy(operator, "operators");
+
+      await assert.isRejected(
+        upsertNodes(member, boardId, [sticky()]),
+        /Only operators can edit/,
+      );
+      await assert.isRejected(
+        deleteNodes(member, boardId, [a._id]),
+        /Only operators can edit/,
+      );
+      await assert.isRejected(
+        upsertEdges(member, boardId, [{ _id: line, label: "mine" }]),
+        /Only operators can edit/,
+      );
+      await assert.isRejected(
+        deleteEdges(member, boardId, [line]),
+        /Only operators can edit/,
+      );
+      assert.ok(await WhiteboardNodes.findOneAsync(a._id));
+      assert.notOk((await WhiteboardEdges.findOneAsync(line))?.label);
+
+      await upsertNodes(operator, boardId, [sticky()]);
+      await deleteEdges(operator, boardId, [line]);
+    });
+
+    it("lets listed people edit", async function () {
+      const listed = await makeUser("listed@example.com", []);
+      await setPolicy(operator, "operatorsAndEditors", [listed]);
+      await upsertNodes(listed, boardId, [sticky()]);
+      await upsertNodes(operator, boardId, [sticky()]);
+      await assert.isRejected(
+        upsertNodes(member, boardId, [sticky()]),
+        /people they've chosen/,
+      );
+    });
+
+    it("applies a policy change to the next edit", async function () {
+      await upsertNodes(member, boardId, [sticky()]);
+      await setPolicy(operator, "operators");
+      await assert.isRejected(upsertNodes(member, boardId, [sticky()]));
+      await setPolicy(operator, "members");
+      await upsertNodes(member, boardId, [sticky()]);
+    });
+
+    it("lets anyone in the hunt comment, reply, react and resolve whatever the policy", async function () {
+      await setPolicy(operator, "operators");
+      const send = async (text: string, extra: object) => {
+        await asUser(member, () =>
+          sendChatMessage.callPromise({
+            puzzleId: backingId,
+            content: JSON.stringify(contentFromMessage(text)),
+            ...extra,
+          }),
+        );
+        return (await ChatMessages.findOneAsync({
+          puzzle: backingId,
+          "content.children.text": text,
+        }))!;
+      };
+      const node = (await card())._id;
+      const root = await send("on the card", { comment: { node, x: 1, y: 1 } });
+      await send("a reply", { parentId: root._id });
+      await send("👍", { parentId: root._id });
+      assert.equal(
+        await ChatMessages.find({ thread: root._id }).countAsync(),
+        2,
+      );
+      await asUser(member, () =>
+        setWhiteboardCommentResolved.callPromise({
+          messageId: root._id,
+          resolved: true,
+        }),
+      );
+      assert.ok(
+        (await ChatMessages.findOneAsync(root._id))?.comment?.resolvedAt,
+      );
+      await asUser(member, () =>
+        setWhiteboardCommentResolved.callPromise({
+          messageId: root._id,
+          resolved: false,
+        }),
+      );
+      assert.notOk(
+        (await ChatMessages.findOneAsync(root._id))?.comment?.resolvedAt,
+      );
+    });
+
+    it("keeps delete to authors and operators", async function () {
+      await setPolicy(operator, "operators");
+      const other = await makeUser("other@example.com", []);
+      const comment = async (userId: string, text: string) => {
+        await asUser(userId, () =>
+          sendChatMessage.callPromise({
+            puzzleId: backingId,
+            content: JSON.stringify(contentFromMessage(text)),
+            comment: { x: 0, y: 0 },
+          }),
+        );
+        return (await ChatMessages.findOneAsync({
+          puzzle: backingId,
+          "content.children.text": text,
+        }))!._id;
+      };
+      const remove = (userId: string, messageId: string) =>
+        asUser(userId, () =>
+          deleteWhiteboardComment.callPromise({ messageId }),
+        );
+      const mine = await comment(member, "mine");
+      const theirs = await comment(other, "theirs");
+
+      await assert.isRejected(remove(member, theirs), /author/);
+      await remove(member, mine);
+      await remove(operator, theirs);
+      assert.equal(
+        await ChatMessages.find({ puzzle: backingId }).countAsync(),
+        0,
+      );
+    });
+
+    it("drops live drags and strokes from non-editors but keeps the cursor", async function () {
+      await setPolicy(operator, "operators");
+      const live = await busy();
+      const theirs = fakeConnection();
+      const ours = fakeConnection();
+      try {
+        await setLive(member, theirs.connection, boardId, live);
+        await setLive(operator, ours.connection, boardId, live);
+        const doc = await presenceOf(theirs.connection);
+        assert.deepEqual(doc?.cursor, live.cursor);
+        assert.isNull(doc?.drag);
+        assert.isNull(doc?.stroke);
+        assert.deepEqual((await presenceOf(ours.connection))?.drag, live.drag);
+        // Not even checked: a drag of something on another board is dropped
+        // rather than refused.
+        await setLive(member, theirs.connection, boardId, {
+          ...live,
+          drag: [{ node: Random.id(), x: 0, y: 0 }],
+        });
+      } finally {
+        theirs.close();
+        ours.close();
+      }
+    });
+
+    it("drops live drags on an archived hunt", async function () {
+      const live = await busy();
+      await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+      const { connection, close } = fakeConnection();
+      try {
+        await setLive(operator, connection, boardId, live);
+        const doc = await presenceOf(connection);
+        assert.deepEqual(doc?.cursor, live.cursor);
+        assert.isNull(doc?.drag);
+        assert.isNull(doc?.stroke);
+      } finally {
+        close();
+      }
+    });
+
+    it("clears the live state of people who lose edit rights", async function () {
+      const live = await busy();
+      const theirs = fakeConnection();
+      const ours = fakeConnection();
+      try {
+        await setLive(member, theirs.connection, boardId, live);
+        await setLive(operator, ours.connection, boardId, live);
+        assert.deepEqual(
+          (await presenceOf(theirs.connection))?.drag,
+          live.drag,
+        );
+
+        await setPolicy(operator, "operators");
+        const doc = await presenceOf(theirs.connection);
+        assert.deepEqual(doc?.cursor, live.cursor);
+        assert.isNull(doc?.drag);
+        assert.isNull(doc?.stroke);
+        assert.deepEqual((await presenceOf(ours.connection))?.drag, live.drag);
+
+        // and their next update keeps it that way
+        await setLive(member, theirs.connection, boardId, live);
+        assert.isNull((await presenceOf(theirs.connection))?.drag);
+      } finally {
+        theirs.close();
+        ours.close();
+      }
+    });
+
+    describe("setEditPolicy", function () {
+      it("is for assigned operators and admins, not default-role operators", async function () {
+        await assert.isRejected(
+          setPolicy(member, "operators"),
+          /assigned operators/,
+        );
+        await Hunts.updateAsync(huntId, {
+          $set: { defaultRoles: ["operator"] },
+        });
+        await assert.isRejected(
+          setPolicy(member, "operators"),
+          /assigned operators/,
+        );
+        await assert.isRejected(setPolicy(outsider, "operators"), /member/);
+        assert.isUndefined(
+          (await Whiteboards.findOneAsync(boardId))?.editPolicy,
+        );
+
+        const admin = await makeUser("admin@example.com");
+        await MeteorUsers.updateAsync(admin, {
+          $set: { hunts: [huntId], roles: { [GLOBAL_SCOPE]: ["admin"] } },
+        });
+        await setPolicy(admin, "operators");
+        assert.equal(
+          (await Whiteboards.findOneAsync(boardId))?.editPolicy,
+          "operators",
+        );
+        await setPolicy(operator, "members");
+        assert.equal(
+          (await Whiteboards.findOneAsync(boardId))?.editPolicy,
+          "members",
+        );
+      });
+
+      it("drops people who aren't in the hunt from the list at any tier", async function () {
+        for (const policy of [
+          "members",
+          "operators",
+          "operatorsAndEditors",
+        ] as const) {
+          await setPolicy(operator, policy, [member, outsider, Random.id()]);
+          assert.deepEqual(await editors(), [member]);
+        }
+      });
+
+      it("caps the list", async function () {
+        const tooMany = Array.from({ length: MAX_WHITEBOARD_EDITORS + 1 }, () =>
+          Random.id(),
+        );
+        await assert.isRejected(
+          setPolicy(operator, "operatorsAndEditors", tooMany),
+          /Too many/,
+        );
+        await assert.isRejected(
+          setPolicy(operator, "operatorsAndEditors", ["not an id!"]),
+          /Invalid user id/,
+        );
+        assert.isUndefined(await editors());
+      });
+
+      it("dedupes the list", async function () {
+        await setPolicy(operator, "operatorsAndEditors", [
+          member,
+          member,
+          operator,
+          member,
+        ]);
+        assert.deepEqual(await editors(), [member, operator]);
+      });
+
+      it("refuses on an archived hunt or with the whiteboard off", async function () {
+        await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+        await assert.isRejected(setPolicy(operator, "operators"), /archived/);
+        await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
+
+        await FeatureFlags.insertAsync({
+          name: "disable.whiteboard",
+          type: "on",
+          createdBy: operator,
+        });
+        await assert.isRejected(setPolicy(operator, "operators"), /disabled/);
+        assert.isUndefined(
+          (await Whiteboards.findOneAsync(boardId))?.editPolicy,
+        );
+      });
+    });
+
+    describe("live cache", function () {
+      // Writes straight to the database, as another server would, so only
+      // the observers can tell this one.
+      const dropsDrags = async (
+        userId: string,
+        connection: Meteor.Connection,
+        live: Awaited<ReturnType<typeof busy>>,
+      ) => {
+        await waitForAssertion(async () => {
+          await setLive(userId, connection, boardId, live);
+          assert.isNull((await presenceOf(connection))?.drag);
+        }, 12000);
+      };
+
+      // Restricts the board to operators, and returns once this process's
+      // board observer has dropped what it remembered. A test that caches
+      // after this can't then be helped along by that observer arriving late.
+      const restrictBoard = async () => {
+        const live = await busy();
+        const { connection, close } = fakeConnection();
+        try {
+          await setLive(member, connection, boardId, live);
+          assert.deepEqual((await presenceOf(connection))?.drag, live.drag);
+          await Whiteboards.updateAsync(boardId, {
+            $set: { editPolicy: "operators" },
+          });
+          await dropsDrags(member, connection, live);
+        } finally {
+          close();
+        }
+      };
+
+      it("forgets a board's cached access when its policy changes", async function () {
+        await restrictBoard();
+      });
+
+      it("forgets a connection's cached access when its user is demoted", async function () {
+        await restrictBoard();
+        const live = await busy();
+        const { connection, close } = fakeConnection();
+        try {
+          await setLive(operator, connection, boardId, live);
+          assert.deepEqual((await presenceOf(connection))?.drag, live.drag);
+          await MeteorUsers.updateAsync(operator, {
+            $set: { [`roles.${huntId}`]: [] },
+          });
+          await dropsDrags(operator, connection, live);
+        } finally {
+          close();
+        }
+      });
+
+      it("rereads a user's access once someone else has used the connection", async function () {
+        await restrictBoard();
+        const live = await busy();
+        const { connection, close } = fakeConnection();
+        try {
+          await setLive(operator, connection, boardId, live);
+          assert.deepEqual((await presenceOf(connection))?.drag, live.drag);
+          // The connection now watches the member, so nothing here hears of
+          // the operator's demotion.
+          await setLive(member, connection, boardId, live);
+          await MeteorUsers.updateAsync(operator, {
+            $set: { [`roles.${huntId}`]: [] },
+          });
+          await setLive(operator, connection, boardId, live);
+          assert.isNull((await presenceOf(connection))?.drag);
+        } finally {
+          close();
+        }
+      });
+
+      it("forgets a hunt's boards when it is archived", async function () {
+        const live = await busy();
+        const { connection, close } = fakeConnection();
+        try {
+          await setLive(member, connection, boardId, live);
+          assert.deepEqual((await presenceOf(connection))?.drag, live.drag);
+          await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+          await dropsDrags(member, connection, live);
+        } finally {
+          close();
+        }
+      });
     });
   });
 });

@@ -22,7 +22,7 @@ describe("whiteboard comment panel", function () {
           puzzleId="puzzle"
           draft={{ x: 0, y: 0 }}
           targetLabel={TARGET}
-          readOnly
+          canComment={false}
           onClose={sinon.fake()}
           onDraftSent={sinon.fake()}
         />

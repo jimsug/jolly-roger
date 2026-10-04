@@ -99,7 +99,7 @@ const CommentPanel = ({
   thread,
   draft,
   targetLabel,
-  readOnly,
+  canComment,
   onClose,
   onDraftSent,
 }: {
@@ -108,7 +108,8 @@ const CommentPanel = ({
   thread?: CommentThread<ChatMessageType>;
   draft?: ChatMessageCommentAnchorType;
   targetLabel: string;
-  readOnly: boolean;
+  // Off once the hunt is archived; the edit policy never takes it away.
+  canComment: boolean;
   onClose: () => void;
   onDraftSent: (sentAt: Date) => void;
 }) => {
@@ -152,7 +153,7 @@ const CommentPanel = ({
   // can always remove one.
   const canDelete =
     !!thread &&
-    !readOnly &&
+    canComment &&
     (isOperator ||
       (thread.root.sender === selfUserId &&
         thread.replies.every((r) => r.sender === selfUserId)));
@@ -218,7 +219,7 @@ const CommentPanel = ({
     <Panel className="nodrag nowheel nopan">
       <Header>
         <Title title={title}>{title}</Title>
-        {thread && !readOnly && (
+        {thread && canComment && (
           <Button
             size="sm"
             variant="outline-secondary"
@@ -299,7 +300,7 @@ const CommentPanel = ({
           )}
         </Messages>
       )}
-      {!readOnly && (
+      {canComment && (
         <Footer>
           <CommentComposer
             huntId={huntId}

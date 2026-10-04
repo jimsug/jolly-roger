@@ -45,6 +45,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
 import FormSelect from "react-bootstrap/FormSelect";
@@ -60,6 +61,11 @@ import type {
 import WhiteboardNodes, {
   WhiteboardStrokeWidths,
 } from "../../../lib/models/WhiteboardNodes";
+import type { WhiteboardEditPolicy } from "../../../lib/models/Whiteboards";
+import type {
+  WhiteboardAccess,
+  WhiteboardAccessReason,
+} from "../../../lib/permission_stubs";
 import whiteboardPresence from "../../../lib/publications/whiteboardPresence";
 import type {
   AlignMode,
@@ -144,6 +150,7 @@ import CommentPanel from "./CommentPanel";
 import CursorLayer from "./CursorLayer";
 import colors from "./colors";
 import describeCommentTarget from "./describeCommentTarget";
+import EditPolicyModal, { EditPolicyButton } from "./EditPolicyModal";
 import FrameLabelLayer from "./FrameLabelLayer";
 import FrameNode from "./FrameNode";
 import { boxOf } from "./floatingEdgeParams";
@@ -310,9 +317,26 @@ const PenWidthSelect = styled(FormSelect)`
   width: auto;
 `;
 
-const ReadOnlyNote = styled.span`
+const ReadOnlyNote = styled.div`
+  display: flex;
+  flex-direction: column;
   padding: 0 4px;
   font-size: 13px;
+`;
+
+const ReadOnlyReason = styled.span`
+  color: ${({ theme }) => theme.colors.textSecondary};
+`;
+
+const AccessNotice = styled(Alert)`
+  max-width: 320px;
+  margin: 6px 0 0;
+  padding: 6px 36px 6px 10px;
+  font-size: 13px;
+
+  .btn-close {
+    padding: 10px;
+  }
 `;
 
 const PlaceGhost = styled.div<{ $tool: PlaceTool }>`
@@ -410,6 +434,31 @@ const ToolButton = ({
   );
 };
 
+// The Comment tool, on the full toolbar and on a board that can only be
+// commented on.
+const CommentToolButton = ({
+  active,
+  onSelect,
+}: {
+  active: boolean;
+  onSelect: (tool: Tool) => void;
+}) => {
+  const { t } = useTranslation();
+  return (
+    <ToolButton
+      tool="comment"
+      active={active}
+      onSelect={onSelect}
+      title={t(
+        "whiteboard.toolbar.comment",
+        "Comment: click on something to start a thread about it",
+      )}
+    >
+      <FontAwesomeIcon icon={faComment} />
+    </ToolButton>
+  );
+};
+
 // Lines up or spaces out the selection one way.
 const ArrangeButton = <Kind extends AlignMode | DistributeAxis>({
   kind,
@@ -481,7 +530,14 @@ interface CanvasProps {
   huntId: string;
   // The board's backing puzzle, whose chat holds the comments.
   puzzleId: string;
-  readOnly: boolean;
+  // What the viewer may do on the board (see whiteboardAccess), and why it
+  // isn't more.
+  access: WhiteboardAccess;
+  accessReason: WhiteboardAccessReason | undefined;
+  // Whether to offer the who-can-edit dialog, and what the board is set to.
+  mayChangeEditPolicy: boolean;
+  editPolicy: WhiteboardEditPolicy;
+  editors: string[];
   // Off on a narrow screen, where it would cover half the board.
   showMiniMap: boolean;
   // Whether the board's nodes and lines have arrived.
@@ -497,7 +553,11 @@ const CanvasInner = ({
   boardId,
   huntId,
   puzzleId,
-  readOnly,
+  access,
+  accessReason,
+  mayChangeEditPolicy,
+  editPolicy,
+  editors,
   showMiniMap,
   boardLoaded,
   focusRef,
@@ -508,6 +568,8 @@ const CanvasInner = ({
   const { t } = useTranslation();
   const flow = useReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>();
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const readOnly = access !== "edit";
+  const canComment = access === "edit" || access === "comment";
 
   // The hunt's puzzles and tags come from the puzzle page around the canvas,
   // which only shows it once they've loaded (puzzleForPuzzlePage), and the
@@ -521,7 +583,9 @@ const CanvasInner = ({
   useTypedSubscribe(liveEnabled ? whiteboardPresence : undefined, {
     boardId,
   });
-  const live = useWhiteboardLive(boardId, liveEnabled && !readOnly);
+  // Commenters send their cursor too; the server keeps only an editor's
+  // drags and strokes.
+  const live = useWhiteboardLive(boardId, liveEnabled && canComment);
 
   // Cursors move constantly, but only what people are dragging matters here
   // (CursorLayer draws the rest). Reading just that means cursor moves don't
@@ -585,8 +649,34 @@ const CanvasInner = ({
   const [showFeederArrows, setShowFeederArrows] = useWhiteboardFeederArrows();
   const [tool, setTool] = useState<Tool>("select");
   // A board that becomes read-only (say, the hunt is archived) puts any
-  // drawing tool down.
-  if (readOnly && tool !== "select") setTool("select");
+  // drawing tool down, and the Comment tool too once commenting goes.
+  if (readOnly && tool !== "select" && !(tool === "comment" && canComment)) {
+    setTool("select");
+  }
+  // Says so when the viewer's edit rights come or go while the board is
+  // open. A screen crossing the narrow breakpoint isn't news. The reason is
+  // tracked even when edit rights don't change, so a later change is judged
+  // against the current one.
+  const mayEdit = !readOnly;
+  const [seenAccess, setSeenAccess] = useState({
+    mayEdit,
+    reason: accessReason,
+  });
+  const [accessNotice, setAccessNotice] = useState<"lost" | "gained">();
+  if (seenAccess.mayEdit !== mayEdit || seenAccess.reason !== accessReason) {
+    setSeenAccess({ mayEdit, reason: accessReason });
+    if (
+      seenAccess.mayEdit !== mayEdit &&
+      seenAccess.reason !== "narrow" &&
+      accessReason !== "narrow"
+    ) {
+      setAccessNotice(mayEdit ? "gained" : "lost");
+    }
+  }
+  const dismissAccessNotice = useCallback(() => setAccessNotice(undefined), []);
+  const [editingPolicy, setEditingPolicy] = useState(false);
+  const openEditPolicy = useCallback(() => setEditingPolicy(true), []);
+  const closeEditPolicy = useCallback(() => setEditingPolicy(false), []);
   const [penColor, setPenColor] = useWhiteboardPenColor();
   const [penWidth, setPenWidth] = useWhiteboardPenWidth();
   const [showHidden, setShowHidden] = useState(false);
@@ -1902,7 +1992,7 @@ const CanvasInner = ({
   const onPointerDownCapture = useCallback(
     (event: React.PointerEvent) => {
       if (
-        readOnly ||
+        (readOnly && tool !== "comment") ||
         tool === "select" ||
         event.button !== 0 ||
         spaceHeld.current
@@ -2286,6 +2376,7 @@ const CanvasInner = ({
   const actions: WhiteboardActions = useMemo(
     () => ({
       readOnly,
+      readOnlyForLayout: accessReason === "narrow",
       updateNodes,
       updateEdge,
       persistResize,
@@ -2295,6 +2386,7 @@ const CanvasInner = ({
     }),
     [
       readOnly,
+      accessReason,
       updateNodes,
       updateEdge,
       persistResize,
@@ -2433,6 +2525,33 @@ const CanvasInner = ({
     isPlaceTool(tool) && placeAt
       ? placementRect(tool, placeAt.start, placeAt.current)
       : undefined;
+  const accessReasons: Record<WhiteboardAccessReason, string> = {
+    archived: t("whiteboard.toolbar.reason.archived", "This hunt is archived."),
+    operators: t(
+      "whiteboard.toolbar.reason.operators",
+      "Only operators can edit this board.",
+    ),
+    operatorsAndEditors: t(
+      "whiteboard.toolbar.reason.operatorsAndEditors",
+      "Only operators and people they've chosen can edit this board.",
+    ),
+    narrow: t(
+      "whiteboard.toolbar.reason.narrow",
+      "Editing needs a wider screen. You can still comment.",
+    ),
+  };
+  const accessNoticeAlert = accessNotice ? (
+    <AccessNotice
+      variant="info"
+      dismissible
+      closeLabel={t("common.close", "Close")}
+      onClose={dismissAccessNotice}
+    >
+      {accessNotice === "lost"
+        ? t("whiteboard.access.lost", "You can no longer edit this board.")
+        : t("whiteboard.access.gained", "You can now edit this board.")}
+    </AccessNotice>
+  ) : null;
   const showResolvedTitle = t(
     "whiteboard.toolbar.showResolved",
     "Show resolved comments",
@@ -2529,7 +2648,7 @@ const CanvasInner = ({
       <PeopleContext value={people}>
         <CanvasWrapper
           ref={wrapperRef}
-          $tool={readOnly ? "select" : tool}
+          $tool={tool}
           $readOnly={readOnly}
           onPointerDownCapture={onPointerDownCapture}
           onPointerMove={onPointerMove}
@@ -2648,21 +2767,47 @@ const CanvasInner = ({
               <Panel position="top-left">
                 <ToolBox>
                   <ReadOnlyNote>
-                    {t("whiteboard.toolbar.viewingOnly", "Viewing only")}
+                    <span>
+                      {t("whiteboard.toolbar.viewingOnly", "Viewing only")}
+                    </span>
+                    {accessReason && (
+                      <ReadOnlyReason>
+                        {accessReasons[accessReason]}
+                      </ReadOnlyReason>
+                    )}
                   </ReadOnlyNote>
-                  {resolvedCount > 0 && (
-                    <Button
-                      size="sm"
-                      variant={showResolved ? "secondary" : "outline-secondary"}
-                      onClick={toggleShowResolved}
-                      title={showResolvedTitle}
-                      aria-label={showResolvedLabel}
-                      aria-pressed={showResolved}
-                    >
-                      <FontAwesomeIcon icon={faCircleCheck} /> {resolvedCount}
-                    </Button>
+                  {(canComment || resolvedCount > 0) && (
+                    <ButtonGroup size="sm">
+                      {canComment && (
+                        <CommentToolButton
+                          active={tool === "comment"}
+                          onSelect={setTool}
+                        />
+                      )}
+                      {resolvedCount > 0 && (
+                        <Button
+                          variant={
+                            showResolved ? "secondary" : "outline-secondary"
+                          }
+                          onClick={toggleShowResolved}
+                          title={showResolvedTitle}
+                          aria-label={showResolvedLabel}
+                          aria-pressed={showResolved}
+                        >
+                          <FontAwesomeIcon icon={faCircleCheck} />{" "}
+                          {resolvedCount}
+                        </Button>
+                      )}
+                    </ButtonGroup>
+                  )}
+                  {mayChangeEditPolicy && (
+                    <EditPolicyButton
+                      policy={editPolicy}
+                      onClick={openEditPolicy}
+                    />
                   )}
                 </ToolBox>
+                {accessNoticeAlert}
               </Panel>
             ) : (
               <Panel position="top-left">
@@ -2777,17 +2922,10 @@ const CanvasInner = ({
                     </ToolButton>
                   </ButtonGroup>
                   <ButtonGroup size="sm">
-                    <ToolButton
-                      tool="comment"
+                    <CommentToolButton
                       active={tool === "comment"}
                       onSelect={setTool}
-                      title={t(
-                        "whiteboard.toolbar.comment",
-                        "Comment: click on something to start a thread about it",
-                      )}
-                    >
-                      <FontAwesomeIcon icon={faComment} />
-                    </ToolButton>
+                    />
                     <Button
                       variant={showResolved ? "secondary" : "outline-secondary"}
                       onClick={toggleShowResolved}
@@ -2822,7 +2960,14 @@ const CanvasInner = ({
                       {hiddenCards.length > 0 && ` ${hiddenCards.length}`}
                     </Button>
                   </ButtonGroup>
+                  {mayChangeEditPolicy && (
+                    <EditPolicyButton
+                      policy={editPolicy}
+                      onClick={openEditPolicy}
+                    />
+                  )}
                 </ToolBox>
+                {accessNoticeAlert}
               </Panel>
             )}
             {!readOnly && tool === "select" && selectedLines.length > 0 && (
@@ -2900,7 +3045,7 @@ const CanvasInner = ({
                   thread={openThreadData}
                   draft={draft}
                   targetLabel={commentTarget}
-                  readOnly={readOnly}
+                  canComment={canComment}
                   onClose={closeComment}
                   onDraftSent={onDraftSent}
                 />
@@ -2932,6 +3077,17 @@ const CanvasInner = ({
             )}
           </ReactFlow>
         </CanvasWrapper>
+        {/* Outside the wrapper, whose pointer handlers would otherwise see
+            presses in the dialog through React's tree. */}
+        {editingPolicy && (
+          <EditPolicyModal
+            boardId={boardId}
+            huntId={huntId}
+            initialPolicy={editPolicy}
+            initialEditors={editors}
+            onHide={closeEditPolicy}
+          />
+        )}
       </PeopleContext>
     </WhiteboardContext>
   );

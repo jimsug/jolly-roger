@@ -363,6 +363,18 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
     },
   ],
   [
+    Whiteboards,
+    async (source, target) => {
+      // Two updates, since Mongo won't $addToSet and $pull one field at once.
+      const raw = Whiteboards.collection.rawCollection();
+      await raw.updateMany(
+        { editors: source },
+        { $addToSet: { editors: target } },
+      );
+      await raw.updateMany({ editors: source }, { $pull: { editors: source } });
+    },
+  ],
+  [
     WhiteboardPresence,
     async (source) => {
       // Live cursors and drags belong to the source account's sessions,

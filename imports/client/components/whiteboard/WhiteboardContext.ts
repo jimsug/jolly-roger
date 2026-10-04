@@ -6,6 +6,9 @@ import type { WhiteboardNodeInput } from "../../../methods/upsertWhiteboardNodes
 // What the board's nodes and lines need from the canvas.
 export interface WhiteboardActions {
   readOnly: boolean;
+  // Read-only only because the screen is narrow. The server still takes this
+  // viewer's edits, so text being typed when the screen narrows is saved.
+  readOnlyForLayout: boolean;
   updateNodes: (inputs: WhiteboardNodeInput[]) => void;
   updateEdge: (input: WhiteboardEdgeInput) => void;
   // Persists a node's size and position, and its children's positions, after

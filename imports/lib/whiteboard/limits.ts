@@ -15,3 +15,5 @@ export const MAX_LIVE_DRAG_NODES = 50;
 // (which frames moved into each other at the same time can briefly make), so
 // nothing that walks up one can hang.
 export const MAX_FRAME_DEPTH = 64;
+// How many people a board's edit policy can name.
+export const MAX_WHITEBOARD_EDITORS = 500;

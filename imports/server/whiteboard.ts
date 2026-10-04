@@ -457,6 +457,9 @@ export async function ensureWhiteboard(
   if (!hunt) {
     throw new Meteor.Error(404, "Unknown hunt id");
   }
+  if (hunt.isArchived) {
+    throw new Meteor.Error(403, "This hunt is archived");
+  }
   if (
     !userMayWritePuzzlesForHunt(await MeteorUsers.findOneAsync(userId), hunt)
   ) {

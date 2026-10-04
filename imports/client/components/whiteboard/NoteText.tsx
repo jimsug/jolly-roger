@@ -6,8 +6,13 @@ import { useWhiteboard } from "./WhiteboardContext";
 
 // A sticky's or text box's markdown, edited in place.
 const NoteText = ({ id, text }: { id: string; text: string | undefined }) => {
-  const { readOnly, updateNodes, editOnAppear, clearEditOnAppear } =
-    useWhiteboard();
+  const {
+    readOnly,
+    readOnlyForLayout,
+    updateNodes,
+    editOnAppear,
+    clearEditOnAppear,
+  } = useWhiteboard();
   const { t } = useTranslation();
   const onText = useCallback(
     (next: string) => updateNodes([{ _id: id, text: next || null }]),
@@ -18,6 +23,7 @@ const NoteText = ({ id, text }: { id: string; text: string | undefined }) => {
       value={text}
       onCommit={onText}
       readOnly={readOnly}
+      saveOnReadOnly={readOnlyForLayout}
       multiline
       markdown
       maxLength={MAX_TEXT_LENGTH}
