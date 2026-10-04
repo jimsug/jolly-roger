@@ -57,6 +57,7 @@ import resetWhiteboardLayout from "../../imports/methods/resetWhiteboardLayout";
 import sendChatMessage from "../../imports/methods/sendChatMessage";
 import setWhiteboardCommentResolved from "../../imports/methods/setWhiteboardCommentResolved";
 import setWhiteboardEditPolicy from "../../imports/methods/setWhiteboardEditPolicy";
+import setWhiteboardLayoutLocked from "../../imports/methods/setWhiteboardLayoutLocked";
 import setWhiteboardLive from "../../imports/methods/setWhiteboardLive";
 import TypedMethod from "../../imports/methods/TypedMethod";
 import upsertWhiteboardEdges from "../../imports/methods/upsertWhiteboardEdges";
@@ -4821,6 +4822,382 @@ if (Meteor.isClient) {
           // With no preview, Escape closes History
           await press(document.body, { key: "Escape" });
           assert.isNull(screen.queryByRole("button", { name: "Now" }));
+        });
+
+        describe("locks", function () {
+          const stickies = async (
+            base: { x: number; y: number },
+            n: number,
+          ) => {
+            const ids = Array.from({ length: n }, () => Random.id());
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: ids.map((_id, i) => ({
+                _id,
+                type: "sticky" as const,
+                position: { x: base.x + i * 200, y: base.y },
+                width: 160,
+                height: 120,
+                text: `Note ${i}`,
+              })),
+            });
+            return ids;
+          };
+          const badge = (id: string) =>
+            nodeElement(id)?.querySelector<HTMLElement>(".jr-lock-badge");
+          const lockButton = () =>
+            screen.getByRole<HTMLButtonElement>("button", {
+              name: /^(Lock|Unlock)$/,
+            });
+          const click = async (element: Element) => {
+            await act(async () => {
+              fireEvent.click(element);
+              await stabilize();
+            });
+          };
+          const theyMove = (id: string) =>
+            other.callAsync(upsertWhiteboardNodes.name, {
+              boardId,
+              nodes: [{ _id: id, position: { x: 1, y: 1 } }],
+            });
+
+          it("locks a sticky so they can't move it, and Ctrl+L unlocks it", async function () {
+            this.timeout(30000);
+            const base = { x: 31000, y: 31000 };
+            const [note] = await stickies(base, 1);
+            lookAt(base);
+            try {
+              await openBoard();
+              assert.isTrue(lockButton().disabled);
+              // A disabled button gets no hover, so its wrapper says why
+              assert.include(
+                lockButton().parentElement!.title,
+                "select something to lock it",
+              );
+              await select(note!);
+              assert.equal(lockButton().getAttribute("aria-label"), "Lock");
+              assert.include(lockButton().title, "Ctrl/⌘+L");
+              await click(lockButton());
+              await waitFor(
+                async () => {
+                  const saved = await savedNode(note!);
+                  assert.isTrue(saved?.locked);
+                  assert.equal(saved?.lockedBy, Meteor.userId());
+                },
+                { timeout: 10000 },
+              );
+              await waitFor(() => {
+                assert.match(badge(note!)?.title ?? "", /^Locked/);
+                assert.equal(lockButton().getAttribute("aria-label"), "Unlock");
+              });
+              // A locked node can't be picked up or resized
+              assert.isFalse(
+                nodeElement(note!)!.classList.contains("draggable"),
+              );
+              assert.isNull(
+                document.querySelector(".react-flow__resize-control"),
+              );
+
+              await assert.isRejected(theyMove(note!), /That's locked/);
+
+              const node = await nodeShown(note!);
+              await act(async () => {
+                node.focus();
+                await stabilize();
+              });
+              await press(node, { key: "l", ctrlKey: true });
+              await waitFor(
+                async () => assert.notOk((await savedNode(note!))?.locked),
+                { timeout: 10000 },
+              );
+              await waitFor(() => assert.notOk(badge(note!)));
+              await theyMove(note!);
+            } finally {
+              forgetView();
+              await upsertWhiteboardNodes.callPromise({
+                boardId,
+                nodes: [{ _id: note!, locked: false }],
+              });
+              await removeNodes([note!]);
+            }
+          });
+
+          it("shows who locked what they lock", async function () {
+            this.timeout(30000);
+            const base = { x: 31500, y: 31000 };
+            const [note] = await stickies(base, 1);
+            await other.callAsync(upsertWhiteboardNodes.name, {
+              boardId,
+              nodes: [{ _id: note, locked: true }],
+            });
+            lookAt(base);
+            try {
+              await openBoard();
+              await nodeShown(note!);
+              await waitFor(() =>
+                assert.equal(badge(note!)?.title, `Locked by ${OTHER_NAME}`),
+              );
+            } finally {
+              forgetView();
+              await upsertWhiteboardNodes.callPromise({
+                boardId,
+                nodes: [{ _id: note!, locked: false }],
+              });
+              await removeNodes([note!]);
+            }
+          });
+
+          it("leaves a locked note out of Delete and says so", async function () {
+            this.timeout(30000);
+            const base = { x: 32000, y: 31000 };
+            const [held, free] = await stickies(base, 2);
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: held!, locked: true }],
+            });
+            lookAt(base);
+            try {
+              await openBoard();
+              await select(held!);
+              await press(document.body, { key: "Delete" });
+              await screen.findByText("That's locked");
+              // React Flow only acts on a fresh press of the key
+              await act(async () => {
+                fireEvent.keyUp(document.body, { key: "Delete" });
+                await stabilize();
+              });
+              await act(async () => {
+                fireEvent.keyDown(document, {
+                  key: "Control",
+                  code: "ControlLeft",
+                });
+                await stabilize();
+              });
+              await select(free!);
+              await act(async () => {
+                fireEvent.keyUp(document, {
+                  key: "Control",
+                  code: "ControlLeft",
+                });
+                await stabilize();
+              });
+              await press(document.body, { key: "Delete" });
+              await screen.findByText("Some of those are locked");
+              await waitFor(
+                async () => assert.isUndefined(await savedNode(free!)),
+                { timeout: 10000 },
+              );
+              assert.ok(await savedNode(held!));
+            } finally {
+              forgetView();
+              await upsertWhiteboardNodes.callPromise({
+                boardId,
+                nodes: [{ _id: held!, locked: false }],
+              });
+              await removeNodes([held!, free!]);
+            }
+          });
+
+          it("leaves a locked note where it is when the rest are aligned", async function () {
+            this.timeout(30000);
+            const base = { x: 33000, y: 31000 };
+            const ids = [Random.id(), Random.id(), Random.id()];
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: ids.map((_id, i) => ({
+                _id,
+                type: "sticky" as const,
+                position: { x: base.x + i * 200, y: base.y + i * 60 },
+                width: 100,
+                height: 80,
+              })),
+            });
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: ids[1]!, locked: true }],
+            });
+            lookAt(base);
+            try {
+              await openBoard();
+              await select(ids[0]!);
+              await act(async () => {
+                fireEvent.keyDown(document, {
+                  key: "Control",
+                  code: "ControlLeft",
+                });
+                await stabilize();
+              });
+              await select(ids[1]!);
+              await select(ids[2]!);
+              await act(async () => {
+                fireEvent.keyUp(document, {
+                  key: "Control",
+                  code: "ControlLeft",
+                });
+                await stabilize();
+              });
+              await click(
+                await screen.findByRole("button", { name: "Align top edges" }),
+              );
+              await waitFor(
+                async () =>
+                  assert.equal(
+                    Math.round((await savedNode(ids[2]!))?.position.y ?? 0),
+                    base.y,
+                  ),
+                { timeout: 10000 },
+              );
+              assert.equal((await savedNode(ids[1]!))?.position.y, base.y + 60);
+            } finally {
+              forgetView();
+              await upsertWhiteboardNodes.callPromise({
+                boardId,
+                nodes: [{ _id: ids[1]!, locked: false }],
+              });
+              await removeNodes(ids);
+            }
+          });
+
+          it("erases unlocked ink and passes over locked ink", async function () {
+            this.timeout(30000);
+            const base = { x: 34000, y: 31000 };
+            const [held, free] = [Random.id(), Random.id()];
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [held, free].map((_id, i) => ({
+                _id,
+                type: "ink" as const,
+                position: { x: base.x, y: base.y + i * 200 },
+                width: 200,
+                height: 20,
+                points: Array.from(
+                  { length: 41 },
+                  (_, j): [number, number, number] => [j * 5, 10, 0.5],
+                ),
+                strokeWidth: "medium" as const,
+                color: "black" as const,
+                stroke: _id,
+              })),
+            });
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: held, locked: true }],
+            });
+            const screenAt = lookAt(base);
+            try {
+              await openBoard();
+              await nodeShown(held);
+              await waitFor(() => assert.ok(badge(held)));
+              await click(
+                screen.getByRole("button", { name: "Erase strokes" }),
+              );
+              for (const y of [base.y + 10, base.y + 210]) {
+                const at = {
+                  button: 0,
+                  buttons: 1,
+                  pointerId: 1,
+                  ...screenAt(base.x + 100, y),
+                };
+                await act(async () => {
+                  fireEvent.pointerDown(pane(), at);
+                  await stabilize();
+                });
+                await act(async () => {
+                  fireEvent.pointerUp(pane(), { ...at, buttons: 0 });
+                  await stabilize();
+                });
+              }
+              await waitFor(
+                async () => assert.isUndefined(await savedNode(free)),
+                { timeout: 10000 },
+              );
+              assert.ok(await savedNode(held));
+            } finally {
+              forgetView();
+              await upsertWhiteboardNodes.callPromise({
+                boardId,
+                nodes: [{ _id: held, locked: false }],
+              });
+              await removeNodes([held, free]);
+            }
+          });
+
+          it("undoes a lock", async function () {
+            this.timeout(30000);
+            const base = { x: 32500, y: 31000 };
+            const [note] = await stickies(base, 1);
+            lookAt(base);
+            try {
+              await openBoard();
+              await select(note!);
+              await click(lockButton());
+              await waitFor(
+                async () => assert.isTrue((await savedNode(note!))?.locked),
+                { timeout: 10000 },
+              );
+              const undo = screen.getByRole<HTMLButtonElement>("button", {
+                name: "Undo",
+              });
+              await waitFor(() => assert.isFalse(undo.disabled), {
+                timeout: 10000,
+              });
+              await click(undo);
+              await waitFor(
+                async () => assert.notOk((await savedNode(note!))?.locked),
+                { timeout: 10000 },
+              );
+            } finally {
+              forgetView();
+              await upsertWhiteboardNodes.callPromise({
+                boardId,
+                nodes: [{ _id: note!, locked: false }],
+              });
+              await removeNodes([note!]);
+            }
+          });
+
+          it("locks every frame with Lock layout, and Unlock layout frees them", async function () {
+            this.timeout(30000);
+            // Frames taken off the board are left unlocked
+            const frames = () =>
+              WhiteboardNodes.find({
+                board: boardId,
+                type: "frame",
+                hidden: { $ne: true },
+              }).fetchAsync();
+            const frame = (await frames())[0]!;
+            try {
+              await openBoard();
+              await click(screen.getByRole("button", { name: "Lock layout" }));
+              await waitFor(
+                async () =>
+                  (await frames()).forEach((f) => assert.isTrue(f.locked)),
+                { timeout: 10000 },
+              );
+              // In a frame's header, or on its label zoomed right out
+              const frameLock = () =>
+                document.querySelector(
+                  ".react-flow__node-frame .jr-lock-badge, .jr-frame-lock",
+                );
+              await waitFor(() => assert.isNotNull(frameLock()));
+              await assert.isRejected(theyMove(frame._id), /That's locked/);
+
+              await click(
+                screen.getByRole("button", { name: "Unlock layout" }),
+              );
+              await waitFor(
+                async () =>
+                  (await frames()).forEach((f) => assert.notOk(f.locked)),
+                { timeout: 10000 },
+              );
+              await waitFor(() => assert.isNull(frameLock()));
+            } finally {
+              await setWhiteboardLayoutLocked.callPromise({
+                boardId,
+                locked: false,
+              });
+            }
+          });
         });
       });
 

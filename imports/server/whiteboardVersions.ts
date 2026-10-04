@@ -44,7 +44,9 @@ import { deferSyncPuzzlesOnBoard } from "./whiteboard";
 import {
   assertMayEditBoard,
   detachComments,
+  LOCKED_FIELDS,
   loadBoardAccess,
+  lockedError,
   reattachComments,
 } from "./whiteboardShared";
 import withLock, { LockPreemptedError } from "./withLock";
@@ -604,6 +606,7 @@ function withMergedAccounts<
   T extends {
     createdBy: string;
     updatedBy?: string;
+    lockedBy?: string;
     contributors: { user: string; at: Date }[];
   },
 >(doc: T, account: (user: string) => string): T {
@@ -611,6 +614,7 @@ function withMergedAccounts<
     ...doc,
     createdBy: account(doc.createdBy),
     updatedBy: doc.updatedBy && account(doc.updatedBy),
+    ...(doc.lockedBy ? { lockedBy: account(doc.lockedBy) } : {}),
     contributors: doc.contributors.map((c) => ({
       ...c,
       user: account(c.user),
@@ -834,6 +838,25 @@ export async function restoreItems(
     const result = planItemRestore(live, target, items);
     if (!result.ok) throw new Meteor.Error(400, "This board is full");
     const { plan } = result;
+    // Restoring an item is a person's edit, so like Place by tags it doesn't
+    // move, change or unlock anything locked, whoever asks.
+    const liveById = new Map(live.nodes.map((n) => [n._id, n]));
+    const lockedKeys = new Set<string>([
+      ...LOCKED_FIELDS,
+      "locked",
+      "lockedBy",
+    ]);
+    if (
+      plan.nodes.change.some(
+        (c) =>
+          liveById.get(c._id)?.locked &&
+          [...Object.keys(c.$set), ...Object.keys(c.$unset)].some((key) =>
+            lockedKeys.has(key),
+          ),
+      )
+    ) {
+      throw lockedError();
+    }
     const restored =
       plan.nodes.change.length > 0 ||
       plan.nodes.insert.length > 0 ||

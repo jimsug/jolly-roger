@@ -243,7 +243,7 @@ function withStacking(nodes: WhiteboardFlowNode[]): WhiteboardFlowNode[] {
 }
 
 // The selection as units that align and distribute as one (see
-// arrangeUnits), with each unit's nodes.
+// arrangeUnits), with each unit's nodes. Locked nodes are left out.
 export function selectionUnits(
   nodes: WhiteboardFlowNode[],
   edges: WhiteboardFlowEdge[],
@@ -254,7 +254,7 @@ export function selectionUnits(
       id: n.id,
       type: n.type ?? "",
       parent: n.parentId,
-      selected: n.selected,
+      selected: n.selected && !n.data.doc.locked,
       stroke: n.data.doc.stroke,
     })),
     edges,
@@ -570,7 +570,10 @@ export default function useWhiteboardSync({
           measured: prev?.measured,
           // Dragging, selecting, connecting and deleting are left to the
           // canvas, which turns them off for read-only boards and while a
-          // drawing tool is in use; a per-node true would override that.
+          // drawing tool is in use; a per-node true would override that. A
+          // locked node can't be dragged, which also keeps it out of
+          // arrow-key nudges.
+          draggable: doc.locked ? false : undefined,
           style: doc.type === "ink" ? INK_STYLE : undefined,
         };
       });

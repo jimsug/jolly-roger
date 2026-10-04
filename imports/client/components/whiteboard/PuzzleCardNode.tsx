@@ -26,6 +26,7 @@ import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import AvatarStack from "../AvatarStack";
 import PuzzleAnswer from "../PuzzleAnswer";
 import { LOCATION_TAG_COLOR, NEEDS_TAG_COLOR } from "../tagColors";
+import { CornerLockBadge } from "./LockBadge";
 import NodeHandles from "./NodeHandles";
 import PeopleContext from "./PeopleContext";
 
@@ -400,8 +401,9 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
       // shows it instead.
       $stuckEdge={detail === "mid" && status.stuck}
     >
-      <NodeHandles />
+      <NodeHandles locked={!!data.doc.locked} />
       {body}
+      {data.doc.locked && <CornerLockBadge lockedBy={data.doc.lockedBy} />}
     </Card>
   );
 };

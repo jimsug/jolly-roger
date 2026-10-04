@@ -88,6 +88,7 @@ import "./setFeatureFlag";
 import "./setGuessState";
 import "./setWhiteboardCommentResolved";
 import "./setWhiteboardEditPolicy";
+import "./setWhiteboardLayoutLocked";
 import "./setWhiteboardLive";
 import "./suppressDingwordsForPuzzle";
 import "./syncHuntDiscordRole";

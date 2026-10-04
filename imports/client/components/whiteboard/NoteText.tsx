@@ -4,8 +4,16 @@ import { MAX_TEXT_LENGTH } from "../../../lib/whiteboard/limits";
 import EditableText from "./EditableText";
 import { useWhiteboard } from "./WhiteboardContext";
 
-// A sticky's or text box's markdown, edited in place.
-const NoteText = ({ id, text }: { id: string; text: string | undefined }) => {
+// A sticky's or text box's markdown, edited in place unless it's locked.
+const NoteText = ({
+  id,
+  text,
+  locked,
+}: {
+  id: string;
+  text: string | undefined;
+  locked: boolean;
+}) => {
   const {
     readOnly,
     readOnlyForLayout,
@@ -25,7 +33,7 @@ const NoteText = ({ id, text }: { id: string; text: string | undefined }) => {
     <EditableText
       value={text}
       onCommit={onText}
-      readOnly={readOnly}
+      readOnly={readOnly || locked}
       saveOnReadOnly={readOnlyForLayout}
       multiline
       markdown

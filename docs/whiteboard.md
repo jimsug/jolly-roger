@@ -17,7 +17,11 @@ files:
   - imports/client/components/whiteboard/FrameLabelLayer.tsx
   - imports/client/components/whiteboard/FrameNode.tsx
   - imports/client/components/whiteboard/HistoryPanel.tsx
+  - imports/client/components/whiteboard/InkNode.tsx
+  - imports/client/components/whiteboard/LockBadge.tsx
+  - imports/client/components/whiteboard/LockLayoutButtons.tsx
   - imports/client/components/whiteboard/NodeChrome.tsx
+  - imports/client/components/whiteboard/NodeHandles.tsx
   - imports/client/components/whiteboard/PeopleContext.ts
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
   - imports/client/components/whiteboard/ResetLayoutModal.tsx
@@ -61,6 +65,7 @@ files:
   - imports/methods/restoreWhiteboardItems.ts
   - imports/methods/restoreWhiteboardVersion.ts
   - imports/methods/setWhiteboardEditPolicy.ts
+  - imports/methods/setWhiteboardLayoutLocked.ts
   - imports/methods/upsertWhiteboardEdges.ts
   - imports/methods/upsertWhiteboardNodes.ts
   - imports/server/daemons/whiteboardVersions.ts
@@ -70,6 +75,7 @@ files:
   - imports/server/methods/restoreWhiteboardItems.ts
   - imports/server/methods/restoreWhiteboardVersion.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
+  - imports/server/methods/setWhiteboardLayoutLocked.ts
   - imports/server/models/WhiteboardPresence.ts
   - imports/server/models/WhiteboardVersionChunks.ts
   - imports/server/publications/whiteboardVersions.ts
@@ -385,11 +391,11 @@ on the board.
 
 ### Keyboard
 
-The tool keys, 1 to 3, N, Ctrl+A and the undo and redo keys only work while
-the board has focus (the last press or focus was on it) and nothing is being
-typed: not in a text box, a note being edited, the comment composer or the
-search field, where Ctrl+Z is the browser's own. Each tool's tooltip shows its
-key.
+The tool keys, 1 to 3, N, Ctrl+A, Ctrl+L and the undo and redo keys only
+work while the board has focus (the last press or focus was on it) and
+nothing is being typed: not in a text box, a note being edited, the comment
+composer or the search field, where Ctrl+Z is the browser's own. Each tool's
+tooltip shows its key.
 
 | Key | Does | Needs |
 |---|---|---|
@@ -406,7 +412,8 @@ key.
 | Ctrl+A (Cmd+A on a Mac) | Select everything but frames (a selected frame carries its contents anyway) and no lines, switching to Select | edit |
 | Escape | Close an open comment thread, then the Comments list, then leave a preview, then close History; with none of those open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
 | / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
-| Delete or Backspace | Delete the selection | edit |
+| Delete or Backspace | Delete the selection, leaving out anything locked (see Locks) | edit |
+| Ctrl+L (Cmd+L) | Lock the selection, or unlock it if it's all locked (see Locks), only with the Select tool; with nothing selected or another tool it's the browser's own | edit |
 | Arrow keys | Move the selection 5 units, 20 with Shift; it joins or leaves a frame as a drop would | edit |
 | Enter | Start editing a focused sticky note or text box | edit |
 | Ctrl+Z (Cmd+Z) | Undo your own last edit from this visit (see Undo and redo) | edit |
@@ -440,7 +447,8 @@ one draws a line to wherever it's let go. Clicking one instead starts a line
 that ends at the next handle clicked; until then the handle is ringed in the
 theme's primary colour and a dashed line runs from it to the pointer, so it's
 clear the next click joins something. Escape, or picking another tool, lets
-go of it.
+go of it. A locked node's handles only end lines: a line can be drawn to it,
+but not started from it.
 
 ### Not on the board
 
@@ -508,7 +516,13 @@ It covers the viewer's own edits this visit, up to the last 100:
 - moving a line's end and restyling a line, which go back to the old end
   (bringing back a free end the move removed) and the old style;
 - collapsing or expanding a frame for everyone, including Collapse finished
-  rounds.
+  rounds;
+- locking or unlocking with the Lock button or Ctrl+L. Undoing an unlock
+  locks the node again, as the viewer's lock, even when someone else had
+  locked it: an operator who unlocks Ada's note and undoes that becomes its
+  locker, so Ada can no longer unlock it herself. An undo that would unlock
+  someone else's lock, for a viewer who isn't an operator, is refused by the
+  server and shows the usual alert. Lock layout isn't undone.
 
 An ink stroke is one step however many segments it was saved in, and a
 selection deleted in one go is one step. Edits to the same thing made before
@@ -551,6 +565,102 @@ reverse from the documents the client has just before the save, and
 `useWhiteboardUndo` keeps the stacks, joins saves still on their way, and
 sends the steps. So that a colour can go back to none, `upsertNodes` and
 `upsertEdges` take `color: null` to clear it.
+
+### Locks
+
+A lock stops a node being moved, resized, edited or deleted by anyone,
+including whoever locked it, until it's unlocked. It's for the common
+accident on a busy board: a frame dragged by someone trying to pan. Cards,
+frames, notes, text and ink can be locked; a line's free end can't.
+
+The edit toolbar has a Lock button beside Undo and Redo, and Ctrl+L (Cmd+L)
+does the same while the board has focus. With anything unlocked in the
+selection it locks the lot ("Lock what's selected, so it can't be moved,
+resized, edited or deleted [Ctrl/⌘+L]"); with all of it locked it unlocks
+it ("Unlock what's selected [Ctrl/⌘+L]"). With nothing selected it's
+disabled. Unlocking is for whoever locked each node and for operators
+(`userMayWritePuzzlesForHunt`, so admins and anyone the hunt makes an
+operator); for anyone else the button is disabled, titled "Only the person
+who locked this, or an operator, can unlock it", and Ctrl+L says the same in
+a notice. A disabled button gets no hover in Bootstrap, so the title sits
+on a wrapper around it as well.
+
+A locked node shows a padlock: on the top-right corner of a card, note or
+text box, sitting over its edge so it isn't confused with a locked puzzle's
+padlock inside a card, and in the header of a frame. A locked ink stroke
+shows one, on the corner of whichever of its segments reaches furthest
+right (`InkNode`). Zoomed right out, a locked frame's label carries a small
+padlock. The padlock's title says who locked it ("Locked by Carol"), or just
+"Locked" when the client doesn't know them.
+
+On the client a locked node isn't draggable (React Flow's per-node
+`draggable: false`, which also keeps it out of arrow-key nudges and out of a
+group drag), has no resize handles or colour picker, and its text or label
+can't be opened for editing (a frame keeps its fold button, and a frame
+label being typed when a lock arrives is kept as unsaved, as notes keep
+theirs). The eraser passes over locked ink. Delete leaves locked nodes out
+and says "Some of those are locked", or "That's locked" when everything
+selected is. Align and distribute leave locked nodes out (`selectionUnits`
+skips them), Place by tags sends only the unlocked cards selected, and the
+end of a line attached to a locked node can't be dragged off it ("That's
+locked").
+
+The server enforces the same through `Whiteboards.methods.upsertNodes`, which
+takes `locked: true` or `false` on a node already on the board. True sets
+`locked` and `lockedBy` (the caller), unless it's locked already, when
+nothing changes, so locking something again doesn't take it over; false
+removes both. A new node with `locked`, or a point, is refused ("That can't
+be locked"), and unlocking by anyone but the locker or an operator is refused
+("Only the person who locked this, or an operator, can unlock it"). While a
+node is locked, `upsertNodes` refuses any change to its `position`, `parent`,
+`width`, `height`, `text`, `label`, `color` or `hidden` ("That's locked"),
+unless the same input unlocks it; folding a locked frame is still allowed,
+since it changes no geometry. One move is allowed: resizing a frame from its
+top or left edge moves its origin, and the client keeps the frame's contents
+still by moving each child the other way, so a `position` alone on a locked
+node passes when its frame's new `position` is in the same batch and the
+node stays where it was on the board (`staysPutInMovedFrame`).
+`deleteNodes` refuses a locked node, or an ink stroke with any locked
+segment, and `upsertEdges` refuses moving a line's end off a locked node,
+though the line can be restyled or relabelled and new lines can be drawn to
+it. Each of these refuses the whole batch before any of it is written, as
+the collapse check does. Locking isn't authorship: it doesn't mark the node
+as moved by hand or add a contributor. A batch that does nothing but lock,
+unlock, collapse or expand records no version, since none of those change
+the layout. The checks read each node before writing, so the write is made
+conditional on the lock they saw: an edit that finds the node locked in the
+meantime is refused ("That's locked") rather than landing, a lock that finds
+it locked leaves the other locker in place, and an unlock doesn't remove a
+newer lock by someone else.
+
+Deleting an unlocked frame moves its children up to its own frame (or the
+top level), keeping them where they are on the board, and that includes
+locked children: their `parent` changes though they don't move.
+
+Some things still move locked nodes: placement from puzzle hooks, which
+isn't a person's edit, puts new cards into a locked frame and grows it, and
+moves a locked card that isn't marked as moved by hand when its tags change;
+Reset layout lays out locked cards and frames like any others, keeping
+their locks; restoring a whole version puts each node back as the version
+had it, lock included, so it can unlock or lock nodes (the preview marks a
+node whose lock differs). Both record a version first. Place by tags on a
+locked card is refused ("That's locked"), and so is Restore this item when
+it would change anything a lock covers, or the lock itself, on a node that's
+locked on the board (`restoreItems`), since both are a person's edit to
+chosen things. Whoever locked it, or an operator, unlocks it first.
+
+#### Lock layout
+
+Operators get "Lock layout" and "Unlock layout" buttons beside Reset layout,
+for when the map has settled. `Whiteboards.methods.setLayoutLocked`
+(`setLayoutLocked` in `imports/server/whiteboardEdits.ts`) takes `boardId`
+and `locked`, needs edit access, and refuses anyone who isn't an operator
+("Only operators can lock or unlock the layout"). Under the board's lock it
+locks every frame on show, seeded or hand-made, in one update with the
+caller as `lockedBy`, or unlocks every locked frame, hidden or not. A frame
+someone has already locked keeps its locker, and a frame taken off the
+board stays unlocked so it can still be put back. It records no version and
+isn't undone.
 
 ### When a save is refused
 
@@ -609,9 +719,10 @@ and `placeByTags`) call `recordVersionBeforeEdit` in
 `imports/server/whiteboardVersions.ts` after their checks and before their first
 write. Restoring one item (`restoreItems`, below) records the same way from
 under the board's lock. Comments, live drags and strokes, placement from puzzle
-hooks, and an `upsertNodes` batch that does nothing but collapse or expand
-frames never record one. Versions hold each frame's `collapsed` like any other
-field, so a restore brings it back. The rule for whether an edit records a
+hooks, an `upsertNodes` batch that does nothing but collapse, expand, lock or
+unlock, and Lock layout never record one. Versions hold each frame's
+`collapsed` and each node's `locked` and `lockedBy` like any other field, so
+a restore brings them back. The rule for whether an edit records a
 version is `versionDecision` in `imports/lib/whiteboard/versions.ts`. Each
 version lists who edited after it and when each of them started:
 
@@ -798,10 +909,12 @@ Selecting cards with the Select tool, on a board the viewer can edit, shows a
 and keep it in step from now on". It doesn't ask first; undo (Ctrl+Z) or
 History reverses it. It calls `Whiteboards.methods.placeByTags` (`placeByTags`
 in `imports/server/whiteboardReset.ts`) with the selected cards' node ids, in
-batches of `MAX_BATCH`. Anything that isn't a card on show on this board is
-refused ("Only cards on this board can be placed by tags"). Otherwise it
-records a version like any edit, clears `manual` on the cards, and runs a
-placement sync of their puzzles under the board's lock. A card already in the
+batches of `MAX_BATCH`. Locked cards are left out of the selection it sends
+and don't get the button. Anything that isn't a card on show on this board
+is refused ("Only cards on this board can be placed by tags"), and so is a
+locked card ("That's locked"). Otherwise it records a version like any
+edit, clears `manual` on the cards, and runs a placement sync of their
+puzzles under the board's lock. A card already in the
 frame its tags choose stays where it is, but follows its tags from now on; one
 anywhere else moves to the first free slot of that frame, which grows to fit.
 Its comments and lines go with it, since its id is kept.
@@ -1171,7 +1284,8 @@ There is no flag for the edit policy: `members` is already the off position.
   someone removed, so placement doesn't put it back; `manual` marks a node
   someone has moved, so placement leaves it alone until Place by tags or a
   reset clears it. `collapsed` marks a frame folded for everyone (see
-  Collapsed rounds). `contributors` records who wrote or restyled it.
+  Collapsed rounds). `locked` and `lockedBy` mark a node locked and who
+  locked it (see Locks). `contributors` records who wrote or restyled it.
 - `WhiteboardEdges` (`jr_whiteboard_edges`): lines between nodes. Feeder arrows
   are `auto`, with `feeder` and `meta` puzzle ids, and follow the puzzles'
   tags.
@@ -1195,7 +1309,7 @@ The server enforces the limits in `imports/lib/whiteboard/limits.ts` (batch
 sizes, nodes and lines per board, text lengths, ink points, coordinate range,
 frame depth, the edit list, history's intervals and caps), and the client
 keeps to the ones it can. Purging a hunt removes all six collections, and
-merging users carries `createdBy`, `contributors`, the `editors` list and
-versions' `users` over to the merged account and drops the source account's
-presence. User ids inside a version's payload aren't rewritten; a restore maps
-them instead.
+merging users carries `createdBy`, `contributors`, `lockedBy`, the `editors`
+list and versions' `users` over to the merged account and drops the source
+account's presence. User ids inside a version's payload aren't rewritten; a
+restore maps them instead.

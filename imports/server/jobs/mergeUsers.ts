@@ -346,14 +346,18 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
   [
     WhiteboardNodes,
     async (source, target) => {
-      // Attribution follows the person, like createdBy does.
-      await WhiteboardNodes.collection
-        .rawCollection()
-        .updateMany(
-          { "contributors.user": source },
-          { $set: { "contributors.$[entry].user": target } },
-          { arrayFilters: [{ "entry.user": source }] },
-        );
+      // Attribution follows the person, like createdBy does, and so do
+      // their locks.
+      const raw = WhiteboardNodes.collection.rawCollection();
+      await raw.updateMany(
+        { "contributors.user": source },
+        { $set: { "contributors.$[entry].user": target } },
+        { arrayFilters: [{ "entry.user": source }] },
+      );
+      await raw.updateMany(
+        { lockedBy: source },
+        { $set: { lockedBy: target } },
+      );
     },
   ],
   [

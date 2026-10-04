@@ -212,6 +212,7 @@ function invertNodeUpserts(
       back.height = old.height;
     }
     if (input.collapsed !== undefined) back.collapsed = !!old.collapsed;
+    if (input.locked !== undefined) back.locked = !!old.locked;
     if (input.text !== undefined) back.text = old.text ?? null;
     if (input.label !== undefined) back.label = old.label ?? null;
     if (input.color !== undefined) back.color = old.color ?? null;

@@ -131,6 +131,7 @@ const WhiteboardPage = () => {
       editPolicy: current?.editPolicy ?? "members",
       editors: current?.editors ?? [],
       mayChangePolicy: userMayMakeOperatorForHunt(user, hunt),
+      isOperator: userMayWritePuzzlesForHunt(user, hunt),
     };
   }, [huntId]);
   const disabled = useTracker(() => Flags.active("disable.whiteboard"), []);
@@ -245,6 +246,7 @@ const WhiteboardPage = () => {
             }
             editPolicy={policyAccess.editPolicy}
             editors={policyAccess.editors}
+            isOperator={policyAccess.isOperator}
             showMiniMap={!compact}
             compact={compact}
             boardLoaded={!contentsLoading()}

@@ -89,6 +89,7 @@ import "./unit/imports/server/userStatuses";
 import "./unit/imports/server/validateSchema";
 import "./unit/imports/server/whiteboard";
 import "./unit/imports/server/whiteboardGuards";
+import "./unit/imports/server/whiteboardLocks";
 import "./unit/imports/server/whiteboardVersions";
 import "./unit/imports/server/mergeUsers";
 

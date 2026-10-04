@@ -20,6 +20,7 @@ import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import CollapseContext from "./CollapseContext";
 import colors from "./colors";
 import EditableText from "./EditableText";
+import LockBadge from "./LockBadge";
 import NodeChrome from "./NodeChrome";
 import NodeContributors from "./NodeContributors";
 import RoundStateContext from "./RoundStateContext";
@@ -268,7 +269,9 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
   );
   const fill = doc.color ? colors.fill[doc.color] : undefined;
   // Seeded frames take their name from the tag, so only hand-made frames
-  // have an editable label.
+  // have an editable label. A locked one's label is shown read-only, so a
+  // lock arriving mid-edit keeps what was typed as unsaved.
+  const locked = !!doc.locked;
   const editable = doc.frameKind === "user" && !readOnly;
   // Folding for everyone is an edit; anyone can open a collapsed frame for
   // themselves.
@@ -308,6 +311,7 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
         color={doc.color}
         palette={colors.fill}
         resizable={!collapsed}
+        locked={locked}
         tools={
           <CollapseForAllButton
             id={id}
@@ -330,13 +334,14 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
           {mayFold && canPeek && (
             <PeekButton id={id} collapsed={collapsed} chevron={false} />
           )}
+          {locked && <LockBadge lockedBy={doc.lockedBy} corner={false} />}
           {finished && <FinishedTick icon={faCheck} />}
           <Label>
             {editable ? (
               <EditableText
                 value={doc.label}
                 onCommit={onLabel}
-                readOnly={readOnly}
+                readOnly={readOnly || locked}
                 multiline={false}
                 maxLength={MAX_LABEL_LENGTH}
                 placeholder={t("whiteboard.frame.placeholder", "Frame")}

@@ -19,6 +19,9 @@ export type WhiteboardNodeInput = {
   hidden?: boolean;
   // Frames only: true folds the frame for everyone, false opens it.
   collapsed?: boolean;
+  // Existing nodes only, not points: true locks the node for the caller,
+  // false unlocks it (for whoever locked it, or an operator).
+  locked?: boolean;
   text?: string | null;
   label?: string | null;
   color?: WhiteboardColor | null;

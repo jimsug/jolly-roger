@@ -671,6 +671,7 @@ const NODE_FIELDS = [
   "color",
   "hidden",
   "collapsed",
+  "locked",
 ] as const;
 const EDGE_FIELDS = [
   "label",
@@ -684,7 +685,7 @@ const EDGE_FIELDS = [
 // The ids of a version's nodes and lines that aren't as they are on the live
 // board, matched by what they are as a restore matches them: missing from
 // it, or with a different place, frame, size, text, label, colour, ends,
-// style, or hidden or collapsed state.
+// style, or hidden, collapsed or locked state.
 export function versionDifferences(
   live: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
   version: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },

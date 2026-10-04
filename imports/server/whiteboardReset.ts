@@ -45,7 +45,7 @@ export async function placeByTags(
       type: "puzzle",
       hidden: { $ne: true },
     },
-    { projection: { puzzle: 1 } },
+    { projection: { puzzle: 1, locked: 1 } },
   ).fetchAsync();
   const puzzleIds = cards.flatMap((c) => (c.puzzle ? [c.puzzle] : []));
   if (puzzleIds.length !== ids.length) {
@@ -53,6 +53,11 @@ export async function placeByTags(
       400,
       "Only cards on this board can be placed by tags",
     );
+  }
+  // Placing a card by hand moves it, so a locked one stays put. Placement on
+  // its own still moves it.
+  if (cards.some((c) => c.locked)) {
+    throw new Meteor.Error(403, "That's locked");
   }
 
   await recordVersionBeforeEdit(board, userId);

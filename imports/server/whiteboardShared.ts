@@ -29,6 +29,21 @@ export function isInkPoint(point: number[]) {
   );
 }
 
+export const lockedError = () => new Meteor.Error(403, "That's locked");
+
+// What a lock stops on a node. Folding a frame changes no geometry, so it's
+// still allowed.
+export const LOCKED_FIELDS = [
+  "position",
+  "parent",
+  "width",
+  "height",
+  "text",
+  "label",
+  "color",
+  "hidden",
+] as const;
+
 const archived = () => new Meteor.Error(403, "This hunt is archived");
 
 // Finds the board by its id, or by the puzzle behind it, and works out what

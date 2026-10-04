@@ -3,6 +3,7 @@ import React from "react";
 import styled from "styled-components";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
 import colors from "./colors";
+import { CornerLockBadge } from "./LockBadge";
 import NodeChrome from "./NodeChrome";
 import NodeContributors from "./NodeContributors";
 import NoteText from "./NoteText";
@@ -54,15 +55,17 @@ const StickyNode = ({ id, data, selected }: NodeProps<StickyNodeType>) => {
         id={id}
         kind="sticky"
         selected={selected}
+        locked={!!doc.locked}
         color={color}
         palette={colors.fill}
       />
       <Body>
-        <NoteText id={id} text={doc.text} />
+        <NoteText id={id} text={doc.text} locked={!!doc.locked} />
       </Body>
       <Attribution>
         <NodeContributors contributors={doc.contributors} />
       </Attribution>
+      {doc.locked && <CornerLockBadge lockedBy={doc.lockedBy} />}
     </Paper>
   );
 };

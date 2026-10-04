@@ -63,6 +63,10 @@ const WhiteboardNode = withCommon(
     // A frame folded to its header for everyone. Its stored size stays the
     // expanded one, so folding changes no geometry.
     collapsed: z.boolean().optional(),
+    // Locked against being moved, resized, edited or deleted, and who locked
+    // it. Any type but point. Placement, restores and resets still move it.
+    locked: z.boolean().optional(),
+    lockedBy: foreignKey.optional(),
 
     // type: "puzzle"
     puzzle: foreignKey.optional(),

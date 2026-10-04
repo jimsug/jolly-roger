@@ -12,6 +12,8 @@ import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faEyeSlash } from "@fortawesome/free-solid-svg-icons/faEyeSlash";
 import { faFont } from "@fortawesome/free-solid-svg-icons/faFont";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faLockOpen } from "@fortawesome/free-solid-svg-icons/faLockOpen";
 import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faObjectGroup } from "@fortawesome/free-solid-svg-icons/faObjectGroup";
 import { faPen } from "@fortawesome/free-solid-svg-icons/faPen";
@@ -216,6 +218,7 @@ import HistoryPanel, { loadVersion, versionMoment } from "./HistoryPanel";
 import InkNode from "./InkNode";
 import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
 import LineStyleIcon from "./LineStyleIcon";
+import LockLayoutButtons from "./LockLayoutButtons";
 import { MIN_SIZES } from "./NodeChrome";
 import NodePulse from "./NodePulse";
 import PeopleContext from "./PeopleContext";
@@ -847,6 +850,9 @@ interface CanvasProps {
   mayChangeEditPolicy: boolean;
   editPolicy: WhiteboardEditPolicy;
   editors: string[];
+  // An operator (or admin), who can unlock anyone's lock and lock or unlock
+  // every frame at once.
+  isOperator: boolean;
   // Off on a phone, where it would cover half the board.
   showMiniMap: boolean;
   // A phone-sized screen (see WhiteboardPage): bigger targets, a tap places
@@ -889,6 +895,7 @@ const CanvasInner = ({
   mayChangeEditPolicy,
   editPolicy,
   editors,
+  isOperator,
   showMiniMap,
   compact,
   boardLoaded,
@@ -1344,7 +1351,7 @@ const CanvasInner = ({
     [],
   );
   // Selected cards, kept as a string between renders for the same reason.
-  // Place by tags hands these back to placement.
+  // Place by tags hands the unlocked ones back to placement.
   const selectedCardKey = nodes
     .filter((n) => n.selected && n.type === "puzzle")
     .map((n) => n.id)
@@ -1352,6 +1359,14 @@ const CanvasInner = ({
   const selectedCards = useMemo(
     () => (selectedCardKey ? selectedCardKey.split(" ") : []),
     [selectedCardKey],
+  );
+  const placeableCardKey = nodes
+    .filter((n) => n.selected && n.type === "puzzle" && !n.data.doc.locked)
+    .map((n) => n.id)
+    .join(" ");
+  const placeableCards = useMemo(
+    () => (placeableCardKey ? placeableCardKey.split(" ") : []),
+    [placeableCardKey],
   );
   const feederFocusKey = feederFocus(
     [hoveredCard, ...selectedCards],
@@ -1646,17 +1661,27 @@ const CanvasInner = ({
   );
 
   // We delete on the server and let the echo update the canvas, so that
-  // children of a deleted frame stay put rather than going with it.
+  // children of a deleted frame stay put rather than going with it. Locked
+  // nodes stay, and say so.
   const onBeforeDelete: OnBeforeDelete<WhiteboardFlowNode, WhiteboardFlowEdge> =
     useCallback(
       ({ nodes: doomedNodes, edges: doomedEdges }) => {
+        const selected = doomedNodes.filter((n) => n.selected);
+        const unlocked = selected.filter((n) => !n.data.doc.locked);
+        if (selected.length > 0 && unlocked.length === 0) {
+          showNotice(t("whiteboard.lock.refused", "That's locked"));
+        } else if (unlocked.length < selected.length) {
+          showNotice(
+            t("whiteboard.lock.someLocked", "Some of those are locked"),
+          );
+        }
         deleteItems(
-          doomedNodes.filter((n) => n.selected).map((n) => n.id),
+          unlocked.map((n) => n.id),
           doomedEdges.filter((e) => e.selected).map((e) => e.id),
         );
         return Promise.resolve(false);
       },
-      [deleteItems],
+      [deleteItems, showNotice, t],
     );
 
   const absoluteRect = useCallback(
@@ -2214,11 +2239,11 @@ const CanvasInner = ({
   );
   const [placingByTags, setPlacingByTags] = useState(false);
   const placeSelectedByTags = useCallback(() => {
-    if (selectedCards.length === 0) return;
+    if (placeableCards.length === 0) return;
     setPlacingByTags(true);
-    const settled = recordEdit({ placeByTags: selectedCards });
+    const settled = recordEdit({ placeByTags: placeableCards });
     callAll(
-      chunks(selectedCards, MAX_BATCH).map(
+      chunks(placeableCards, MAX_BATCH).map(
         (batch) => (done: Done) =>
           placeWhiteboardCardsByTags.call(
             { boardId, nodeIds: batch },
@@ -2233,7 +2258,7 @@ const CanvasInner = ({
         settled(refused);
       },
     );
-  }, [selectedCards, boardId, reportRefusal, recordEdit]);
+  }, [placeableCards, boardId, reportRefusal, recordEdit]);
   // The first selected line's look, for the restyling controls.
   const selectedLineStyle = useMemo((): LineStyle => {
     const doc = selectedLines[0]?.data?.doc;
@@ -2568,6 +2593,37 @@ const CanvasInner = ({
   );
 
   const selfId = useTracker(() => Meteor.userId() ?? undefined, []);
+
+  // What Lock (Ctrl+L) does to the selection: lock it if any of it is
+  // unlocked, otherwise unlock it, which is for whoever locked each node or
+  // an operator. A line's free end can't be locked.
+  const lockSelection = useMemo(() => {
+    const selected = nodes.filter((n) => n.selected && n.type !== "point");
+    const unlocked = selected.filter((n) => !n.data.doc.locked);
+    const lock = unlocked.length > 0 || selected.length === 0;
+    return {
+      lock,
+      ids: (lock ? unlocked : selected).map((n) => n.id),
+      blocked:
+        !lock &&
+        !isOperator &&
+        selected.some((n) => n.data.doc.lockedBy !== selfId),
+    };
+  }, [nodes, isOperator, selfId]);
+  const toggleLock = useCallback(() => {
+    const { lock, ids, blocked } = lockSelection;
+    if (ids.length === 0) return;
+    if (blocked) {
+      showNotice(
+        t(
+          "whiteboard.lock.cantUnlock",
+          "Only the person who locked this, or an operator, can unlock it",
+        ),
+      );
+      return;
+    }
+    updateNodes(ids.map((_id) => ({ _id, locked: lock })));
+  }, [lockSelection, updateNodes, showNotice, t]);
   const threads = useWhiteboardComments(puzzleId);
   const [seenComments, markCommentSeen] = useSeenComments(boardId, threads);
   // The threads the Comments panel lists, and N steps through, leaving
@@ -3208,12 +3264,26 @@ const CanvasInner = ({
     [],
   );
 
+  // Locked ink isn't erased.
   const eraseAt = useCallback(
     (point: XYPosition) => {
       const hits: string[] = [];
-      flow.getNodes().forEach((n) => {
+      const all = flow.getNodes();
+      const locked = new Set(
+        all.flatMap((n) =>
+          n.data.doc.locked && n.data.doc.stroke ? [n.data.doc.stroke] : [],
+        ),
+      );
+      all.forEach((n) => {
         const stroke = n.data.doc.stroke;
-        if (n.type !== "ink" || !stroke || erasingStrokes.has(stroke)) return;
+        if (
+          n.type !== "ink" ||
+          !stroke ||
+          erasingStrokes.has(stroke) ||
+          locked.has(stroke)
+        ) {
+          return;
+        }
         const rect = absoluteRect(n.id);
         if (!rect || !contains(rect, point)) return;
         const size = STROKE_SIZES[n.data.doc.strokeWidth ?? "medium"];
@@ -3726,6 +3796,11 @@ const CanvasInner = ({
       if (readOnly) return;
       const line = flow.getEdge(edgeId);
       if (!line) return;
+      // An end on a locked node stays on it
+      if (flow.getNode(line[end])?.data.doc.locked) {
+        showNotice(t("whiteboard.lock.refused", "That's locked"));
+        return;
+      }
       wrapperRef.current?.setPointerCapture(event.pointerId);
       setConnecting({
         fixed: { node: end === "source" ? line.target : line.source },
@@ -3735,7 +3810,7 @@ const CanvasInner = ({
         pressedAt: { x: event.clientX, y: event.clientY },
       });
     },
-    [readOnly, flow, flowPoint],
+    [readOnly, flow, flowPoint, showNotice, t],
   );
 
   const actions: WhiteboardActions = useMemo(
@@ -3910,6 +3985,23 @@ const CanvasInner = ({
           return;
         }
       }
+      // Ctrl+L (Cmd+L) locks or unlocks the selection. With nothing
+      // selected it's left to the browser.
+      if (
+        modified &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "l" &&
+        !readOnly &&
+        tool === "select" &&
+        canvasActive.current &&
+        !isTyping(event.target) &&
+        lockSelection.ids.length > 0
+      ) {
+        event.preventDefault();
+        toggleLock();
+        return;
+      }
       if (
         modified &&
         !event.shiftKey &&
@@ -3935,7 +4027,8 @@ const CanvasInner = ({
         note instanceof HTMLElement &&
         note.matches(".react-flow__node-sticky, .react-flow__node-text") &&
         wrapperRef.current?.contains(note) &&
-        note.dataset.id
+        note.dataset.id &&
+        !flow.getNode(note.dataset.id)?.data.doc.locked
       ) {
         event.preventDefault();
         setEditOnAppear(note.dataset.id);
@@ -3990,6 +4083,9 @@ const CanvasInner = ({
     setPenWidth,
     threadRows,
     focusComment,
+    flow,
+    lockSelection,
+    toggleLock,
   ]);
 
   // Double-clicking a card opens its puzzle, on any board, as long as nothing
@@ -4535,6 +4631,28 @@ const CanvasInner = ({
     "whiteboard.history.restoreButton",
     "Restore this version",
   );
+  let lockTitle: string;
+  if (lockSelection.blocked) {
+    lockTitle = t(
+      "whiteboard.lock.cantUnlock",
+      "Only the person who locked this, or an operator, can unlock it",
+    );
+  } else if (lockSelection.ids.length === 0) {
+    lockTitle = t(
+      "whiteboard.lock.nothingSelected",
+      "Lock: select something to lock it [Ctrl/⌘+L]",
+    );
+  } else if (lockSelection.lock) {
+    lockTitle = t(
+      "whiteboard.lock.lockTitle",
+      "Lock what's selected, so it can't be moved, resized, edited or deleted [Ctrl/⌘+L]",
+    );
+  } else {
+    lockTitle = t(
+      "whiteboard.lock.unlockTitle",
+      "Unlock what's selected [Ctrl/⌘+L]",
+    );
+  }
   const alignModes = [
     ["left", t("whiteboard.arrange.left", "Align left edges")],
     ["center", t("whiteboard.arrange.center", "Align centres horizontally")],
@@ -4970,6 +5088,30 @@ const CanvasInner = ({
                             <FontAwesomeIcon icon={faRotateRight} />
                           </Button>
                         </ButtonGroup>
+                        {/* A disabled button gets no hover, so the reason
+                            goes on a wrapper */}
+                        <span title={lockTitle} className="d-inline-block">
+                          <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={toggleLock}
+                            disabled={
+                              lockSelection.ids.length === 0 ||
+                              lockSelection.blocked
+                            }
+                            title={lockTitle}
+                            aria-label={
+                              lockSelection.lock
+                                ? t("whiteboard.lock.lock", "Lock")
+                                : t("whiteboard.lock.unlock", "Unlock")
+                            }
+                            aria-keyshortcuts="Control+L Meta+L"
+                          >
+                            <FontAwesomeIcon
+                              icon={lockSelection.lock ? faLock : faLockOpen}
+                            />
+                          </Button>
+                        </span>
                         <ButtonGroup size="sm">
                           <CommentToolButton
                             active={tool === "comment"}
@@ -5022,6 +5164,12 @@ const CanvasInner = ({
                           {historyOn && (
                             <ResetLayoutButton onClick={openResetLayout} />
                           )}
+                          {isOperator && (
+                            <LockLayoutButtons
+                              boardId={boardId}
+                              onRefused={reportRefusal}
+                            />
+                          )}
                           {finishedOpen.length > 0 && (
                             <Button
                               variant="outline-secondary"
@@ -5054,9 +5202,9 @@ const CanvasInner = ({
                   )}
                   {!readOnly &&
                     tool === "select" &&
-                    selectedCards.length > 0 && (
+                    placeableCards.length > 0 && (
                       <NodeToolbar
-                        nodeId={selectedCards}
+                        nodeId={placeableCards}
                         isVisible
                         position={Position.Top}
                       >

@@ -21,8 +21,8 @@ const ToolbarRow = styled.div`
 `;
 
 // What stickies, text boxes and frames all have: handles for lines and, while
-// the board can be edited, resize handles and a colour picker, with anything
-// else the node offers beside it.
+// the board can be edited and the node isn't locked, resize handles and a
+// colour picker, with anything else the node offers beside it.
 const NodeChrome = ({
   id,
   kind,
@@ -31,6 +31,7 @@ const NodeChrome = ({
   palette,
   fallback,
   resizable = true,
+  locked = false,
   tools,
 }: {
   id: string;
@@ -41,6 +42,7 @@ const NodeChrome = ({
   fallback?: string;
   // Off for a collapsed frame, whose size on screen isn't its own.
   resizable?: boolean;
+  locked?: boolean;
   tools?: React.ReactNode;
 }) => {
   const { readOnly, updateNodes, persistResize } = useWhiteboard();
@@ -53,7 +55,7 @@ const NodeChrome = ({
     <>
       {!readOnly && (
         <>
-          {resizable && (
+          {resizable && !locked && (
             <NodeResizer
               isVisible={selected}
               minWidth={MIN_SIZES[kind].width}
@@ -61,20 +63,24 @@ const NodeChrome = ({
               onResizeEnd={onResizeEnd}
             />
           )}
-          <NodeToolbar position={Position.Top}>
-            <ToolbarRow>
-              <ColorPicker
-                value={color}
-                palette={palette}
-                onChange={onColor}
-                fallback={fallback}
-              />
-              {tools}
-            </ToolbarRow>
-          </NodeToolbar>
+          {(!locked || tools) && (
+            <NodeToolbar position={Position.Top}>
+              <ToolbarRow>
+                {!locked && (
+                  <ColorPicker
+                    value={color}
+                    palette={palette}
+                    onChange={onColor}
+                    fallback={fallback}
+                  />
+                )}
+                {tools}
+              </ToolbarRow>
+            </NodeToolbar>
+          )}
         </>
       )}
-      <NodeHandles />
+      <NodeHandles locked={locked} />
     </>
   );
 };

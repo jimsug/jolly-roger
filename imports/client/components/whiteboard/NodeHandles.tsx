@@ -16,8 +16,9 @@ const inertStyle = { opacity: 0, pointerEvents: "none" as const };
 
 // One handle per side. The canvas uses loose connections, so any handle can
 // start or end an arrow; WhiteboardEdge works out where the line meets each
-// node itself.
-const NodeHandles = () => {
+// node itself. A locked node's handles only end lines: starting one from it
+// is too close to grabbing it.
+const NodeHandles = ({ locked = false }: { locked?: boolean }) => {
   const { readOnly } = useWhiteboard();
   const connectable = useStore((s) => s.nodesConnectable) && !readOnly;
   return (
@@ -29,6 +30,8 @@ const NodeHandles = () => {
           position={position}
           id={side}
           isConnectable={connectable}
+          isConnectableStart={connectable && !locked}
+          isConnectableEnd={connectable}
           style={connectable ? undefined : inertStyle}
         />
       ))}

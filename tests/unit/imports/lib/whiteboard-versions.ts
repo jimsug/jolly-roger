@@ -709,6 +709,15 @@ describe("whiteboard versions", function () {
       );
     });
 
+    it("marks a node whose only difference is its lock", function () {
+      const live = {
+        nodes: [node("a", { locked: true, lockedBy: "u1" }), node("b")],
+        edges: [],
+      };
+      const version = { nodes: [node("a"), node("b")], edges: [] };
+      assert.sameMembers([...versionDifferences(live, version)], ["a"]);
+    });
+
     it("finds nothing when the board hasn't changed", function () {
       const board = {
         nodes: [node("a"), node("b")],

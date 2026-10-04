@@ -103,6 +103,28 @@ describe("whiteboard undo inverses", function () {
     );
   });
 
+  it("unlocks what was locked and locks what was unlocked", function () {
+    const docs = docsOf([
+      node("open"),
+      node("held", { locked: true, lockedBy: "someone" }),
+    ]);
+    assert.deepEqual(
+      inverseOf(
+        {
+          upsertNodes: [
+            { _id: "open", locked: true },
+            { _id: "held", locked: false },
+          ],
+        },
+        docs,
+      ).upsertNodes,
+      [
+        { _id: "open", locked: false },
+        { _id: "held", locked: true },
+      ],
+    );
+  });
+
   it("deletes what was created, and takes away what was put back", function () {
     const docs = docsOf([node("card", { type: "puzzle", hidden: true })]);
     assert.deepEqual(

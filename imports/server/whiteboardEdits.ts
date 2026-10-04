@@ -1,5 +1,6 @@
 import { Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
+import type { Mongo } from "meteor/mongo";
 import isReaction from "../lib/isReaction";
 import ChatMessages from "../lib/models/ChatMessages";
 import ChatNotifications from "../lib/models/ChatNotifications";
@@ -38,8 +39,10 @@ import {
   detachComments,
   inRange,
   isInkPoint,
+  LOCKED_FIELDS,
+  lockedError,
 } from "./whiteboardShared";
-import { recordVersionBeforeEdit } from "./whiteboardVersions";
+import { recordVersionBeforeEdit, withBoardLock } from "./whiteboardVersions";
 
 // Types whose content belongs to whoever wrote it.
 const NATIVE_TYPES = new Set(["frame", "sticky", "text", "ink"]);
@@ -225,6 +228,15 @@ async function updateNode(
     }
   }
 
+  // Locking isn't authorship either.
+  if (input.locked === true && !existing.locked) {
+    $set.locked = true;
+    $set.lockedBy = userId;
+  } else if (input.locked === false && existing.locked) {
+    $unset.locked = "";
+    $unset.lockedBy = "";
+  }
+
   let contentChanged = false;
   const setContent = (
     field: "text" | "label",
@@ -265,10 +277,31 @@ async function updateNode(
   if (Object.keys($set).length === 0 && Object.keys($unset).length === 0) {
     return;
   }
-  await WhiteboardNodes.updateAsync(existing._id, {
+  // The lock checks read the node before this write, so a write they let
+  // through on the strength of the lock only lands if the lock is still as
+  // it was then: a node locked in the meantime keeps its locker and isn't
+  // moved, and an unlock doesn't remove someone else's newer lock.
+  const touchesLocked = LOCKED_FIELDS.some((f) => input[f] !== undefined);
+  let selector: Mongo.Selector<WhiteboardNodeType> = { _id: existing._id };
+  if (existing.locked && input.locked === false) {
+    selector = {
+      _id: existing._id,
+      locked: true,
+      ...(existing.lockedBy ? { lockedBy: existing.lockedBy } : {}),
+    };
+  } else if (!existing.locked && (touchesLocked || input.locked === true)) {
+    selector = { _id: existing._id, locked: { $ne: true } };
+  }
+  const updated = await WhiteboardNodes.updateAsync(selector, {
     ...(Object.keys($set).length > 0 ? { $set } : {}),
     ...(Object.keys($unset).length > 0 ? { $unset } : {}),
   });
+  if (updated === 0) {
+    if (touchesLocked && (await WhiteboardNodes.findOneAsync(existing._id))) {
+      throw lockedError();
+    }
+    return;
+  }
 
   // The check above read the board before this write, so a concurrent move
   // may have put the new parent inside this frame since. The move that closes
@@ -346,12 +379,86 @@ async function insertNode(
   });
 }
 
+// Rounding on the client can leave a kept-still position a fraction out.
+const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
+
+// Resizing a frame from its top or left edge moves its origin, and the
+// client keeps the frame's contents still by moving each child the other
+// way. A locked child's new position is allowed when it's only that: its
+// frame moves in the same batch and it stays where it was on the board.
+function staysPutInMovedFrame(
+  input: WhiteboardNodeInput,
+  existing: WhiteboardNodeType,
+  inputs: WhiteboardNodeInput[],
+  existingById: Map<string, WhiteboardNodeType>,
+) {
+  if (
+    !input.position ||
+    !existing.parent ||
+    LOCKED_FIELDS.some((f) => f !== "position" && input[f] !== undefined)
+  ) {
+    return false;
+  }
+  const parent = existingById.get(existing.parent);
+  const parentInput = inputs.find((i) => i._id === existing.parent);
+  if (!parent || !parentInput?.position || parentInput.parent !== undefined) {
+    return false;
+  }
+  return (
+    near(
+      parent.position.x + existing.position.x,
+      parentInput.position.x + input.position.x,
+    ) &&
+    near(
+      parent.position.y + existing.position.y,
+      parentInput.position.y + input.position.y,
+    )
+  );
+}
+
+// Checks a batch against locks before any of it is written, so a batch that
+// touches something locked fails as a whole. Only nodes already on the board
+// can be locked, and not a line's free end. Unlocking is for whoever locked
+// the node, or an operator. A node being unlocked in the same input can be
+// changed.
+function assertLocksAllow(
+  inputs: WhiteboardNodeInput[],
+  existingById: Map<string, WhiteboardNodeType>,
+  caller: { userId: string; operator: boolean },
+) {
+  inputs.forEach((input) => {
+    const existing = existingById.get(input._id);
+    if (
+      input.locked !== undefined &&
+      (!existing || existing.type === "point")
+    ) {
+      throw badRequest("That can't be locked");
+    }
+    if (!existing?.locked) return;
+    if (input.locked === false) {
+      if (existing.lockedBy !== caller.userId && !caller.operator) {
+        throw new Meteor.Error(
+          403,
+          "Only the person who locked this, or an operator, can unlock it",
+        );
+      }
+      return;
+    }
+    if (
+      LOCKED_FIELDS.some((field) => input[field] !== undefined) &&
+      !staysPutInMovedFrame(input, existing, inputs, existingById)
+    ) {
+      throw lockedError();
+    }
+  });
+}
+
 export async function upsertNodes(
   userId: string,
   boardId: string,
   inputs: WhiteboardNodeInput[],
 ) {
-  const { board } = await assertMayEditBoard(userId, boardId);
+  const { board, hunt, user } = await assertMayEditBoard(userId, boardId);
   if (inputs.length > MAX_BATCH) throw badRequest("Too many nodes at once");
   inputs.forEach(validateCommonFields);
 
@@ -380,6 +487,10 @@ export async function upsertNodes(
   ) {
     throw badRequest("Only frames can be collapsed");
   }
+  assertLocksAllow(inputs, existingById, {
+    userId,
+    operator: userMayWritePuzzlesForHunt(user, hunt),
+  });
   if (inserts.length > 0) {
     const count = await WhiteboardNodes.find({ board: boardId }).countAsync();
     if (count + inserts.length > MAX_NODES_PER_BOARD) {
@@ -387,14 +498,17 @@ export async function upsertNodes(
     }
   }
 
-  // Folding or opening frames on its own doesn't start a version: it's
-  // undone the way it was done, and Collapse finished rounds sends a lot.
-  const collapseOnly = inputs.every(
+  // Folding, opening, locking or unlocking on its own doesn't start a
+  // version: none of them changes the layout, they're undone the way they
+  // were done, and Collapse finished rounds sends a lot.
+  const viewOnly = inputs.every(
     (input) =>
-      input.collapsed !== undefined &&
-      Object.keys(input).every((key) => key === "_id" || key === "collapsed"),
+      (input.collapsed !== undefined || input.locked !== undefined) &&
+      Object.keys(input).every(
+        (key) => key === "_id" || key === "collapsed" || key === "locked",
+      ),
   );
-  if (!collapseOnly) await recordVersionBeforeEdit(board, userId);
+  if (!viewOnly) await recordVersionBeforeEdit(board, userId);
   for (const input of inputs) {
     const existing = existingById.get(input._id);
     if (existing) {
@@ -445,7 +559,6 @@ export async function deleteNodes(
 ) {
   const { board } = await assertMayEditBoard(userId, boardId);
   if (nodeIds.length > MAX_BATCH) throw badRequest("Too many nodes at once");
-  await recordVersionBeforeEdit(board, userId);
 
   const targets = await WhiteboardNodes.find({
     _id: { $in: nodeIds },
@@ -459,7 +572,12 @@ export async function deleteNodes(
           stroke: { $in: strokes },
         }).fetchAsync()
       : [];
+  // Nothing is deleted if anything asked for is locked
+  if ([...targets, ...strokeSegments].some((n) => n.locked)) {
+    throw lockedError();
+  }
   const ids = [...new Set([...targets, ...strokeSegments].map((n) => n._id))];
+  await recordVersionBeforeEdit(board, userId);
 
   const removed: string[] = [];
   for (const id of ids) {
@@ -568,6 +686,32 @@ export async function upsertEdges(
     if (count + inserts.length > MAX_EDGES_PER_BOARD) {
       throw badRequest("This board has too many arrows");
     }
+  }
+
+  // A line's end can't come off a locked node, though the line can be
+  // restyled and lines can still be drawn to it. Checked for the whole batch
+  // before any of it is written.
+  const leaving = inputs.flatMap((input) => {
+    const existing = existingById.get(input._id);
+    if (!existing) return [];
+    return [
+      ...(input.source && input.source !== existing.source
+        ? [existing.source]
+        : []),
+      ...(input.target && input.target !== existing.target
+        ? [existing.target]
+        : []),
+    ];
+  });
+  if (
+    leaving.length > 0 &&
+    (await WhiteboardNodes.find({
+      _id: { $in: leaving },
+      board: boardId,
+      locked: true,
+    }).countAsync()) > 0
+  ) {
+    throw lockedError();
   }
 
   await recordVersionBeforeEdit(board, userId);
@@ -687,6 +831,43 @@ export async function deleteEdges(
     boardId,
     doomed.flatMap((e) => [e.source, e.target]),
   );
+}
+
+// Locks or unlocks every frame on the board at once, seeded and hand-made,
+// for operators settling the map. Locking takes the frames on show that
+// aren't locked yet, with the caller as their locker: a frame already locked
+// keeps its locker, and one taken off the board stays unlocked so it can be
+// put back. Unlocking takes every locked frame. Records no version, since it
+// changes no layout.
+export async function setLayoutLocked(
+  userId: string,
+  boardId: string,
+  locked: boolean,
+) {
+  const { hunt, user } = await assertMayEditBoard(userId, boardId);
+  if (!userMayWritePuzzlesForHunt(user, hunt)) {
+    throw new Meteor.Error(403, "Only operators can lock or unlock the layout");
+  }
+  await withBoardLock(boardId, async () => {
+    if (locked) {
+      await WhiteboardNodes.updateAsync(
+        {
+          board: boardId,
+          type: "frame",
+          hidden: { $ne: true },
+          locked: { $ne: true },
+        },
+        { $set: { locked: true, lockedBy: userId } },
+        { multi: true },
+      );
+    } else {
+      await WhiteboardNodes.updateAsync(
+        { board: boardId, type: "frame", locked: true },
+        { $unset: { locked: "", lockedBy: "" } },
+        { multi: true },
+      );
+    }
+  });
 }
 
 // A reply (or reaction) that joins a comment thread adds to the board, so it

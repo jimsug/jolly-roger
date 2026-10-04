@@ -1,5 +1,6 @@
 import { useTracker } from "meteor/react-meteor-data";
 import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { InternalNode } from "@xyflow/react";
 import { useStore, ViewportPortal } from "@xyflow/react";
@@ -52,6 +53,12 @@ const Count = styled.span`
 
 const FinishedTick = styled(FontAwesomeIcon)`
   color: ${({ theme }) => theme.colors.whiteboardFinishedTick};
+`;
+
+const LockIcon = styled(FontAwesomeIcon)`
+  font-size: 0.6em;
+  vertical-align: 0.15em;
+  color: ${({ theme }) => theme.colors.textSecondary};
 `;
 
 // A frame, with the document every node on the board carries (see
@@ -169,6 +176,15 @@ const FrameLabelLayer = () => {
                 </>
               )}
               {text}
+              {doc.locked && (
+                <>
+                  {" "}
+                  <LockIcon className="jr-frame-lock" icon={faLock} />
+                  <span className="visually-hidden">
+                    {t("whiteboard.lock.locked", "Locked")}
+                  </span>
+                </>
+              )}
             </Pill>
           </Label>
         );

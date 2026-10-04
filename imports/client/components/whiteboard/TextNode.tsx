@@ -4,6 +4,7 @@ import styled from "styled-components";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
 import useHoverIntent from "../../hooks/useHoverIntent";
 import colors from "./colors";
+import { CornerLockBadge } from "./LockBadge";
 import NodeChrome from "./NodeChrome";
 import NodeContributors from "./NodeContributors";
 import NoteText from "./NoteText";
@@ -44,16 +45,18 @@ const TextNode = ({ id, data, selected }: NodeProps<TextNodeType>) => {
         id={id}
         kind="text"
         selected={selected}
+        locked={!!doc.locked}
         color={doc.color}
         palette={colors.stroke}
         fallback="currentColor"
       />
-      <NoteText id={id} text={doc.text} />
+      <NoteText id={id} text={doc.text} locked={!!doc.locked} />
       {(hover.hovered || selected) && (
         <Attribution>
           <NodeContributors contributors={doc.contributors} />
         </Attribution>
       )}
+      {doc.locked && <CornerLockBadge lockedBy={doc.lockedBy} />}
     </TextBox>
   );
 };
