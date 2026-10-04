@@ -41,6 +41,7 @@ import "./unit/imports/lib/whiteboard-liveDrags";
 import "./unit/imports/lib/whiteboard-minimap";
 import "./unit/imports/lib/whiteboard-rounds";
 import "./unit/imports/lib/whiteboard-search";
+import "./unit/imports/lib/whiteboard-versions";
 import "./unit/imports/Logger";
 
 // Disable rate limiting
@@ -81,6 +82,7 @@ import "./unit/imports/server/userStatuses";
 import "./unit/imports/server/validateSchema";
 import "./unit/imports/server/whiteboard";
 import "./unit/imports/server/whiteboardGuards";
+import "./unit/imports/server/whiteboardVersions";
 import "./unit/imports/server/mergeUsers";
 
 import "./acceptance/authentication";

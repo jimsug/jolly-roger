@@ -39,6 +39,7 @@ import {
   inRange,
   isInkPoint,
 } from "./whiteboardShared";
+import { recordVersionBeforeEdit } from "./whiteboardVersions";
 
 // Types whose content belongs to whoever wrote it.
 const NATIVE_TYPES = new Set(["frame", "sticky", "text", "ink"]);
@@ -358,6 +359,7 @@ export async function upsertNodes(
     }
   }
 
+  await recordVersionBeforeEdit(board, userId);
   for (const input of inputs) {
     const existing = existingById.get(input._id);
     if (existing) {
@@ -408,6 +410,7 @@ export async function deleteNodes(
 ) {
   const { board } = await assertMayEditBoard(userId, boardId);
   if (nodeIds.length > MAX_BATCH) throw badRequest("Too many nodes at once");
+  await recordVersionBeforeEdit(board, userId);
 
   const targets = await WhiteboardNodes.find({
     _id: { $in: nodeIds },
@@ -528,6 +531,8 @@ export async function upsertEdges(
     }
   }
 
+  await recordVersionBeforeEdit(board, userId);
+
   for (const input of inputs) {
     assertId(input._id, "edge");
     if (typeof input.label === "string") {
@@ -614,8 +619,9 @@ export async function deleteEdges(
   boardId: string,
   edgeIds: string[],
 ) {
-  await assertMayEditBoard(userId, boardId);
+  const { board } = await assertMayEditBoard(userId, boardId);
   if (edgeIds.length > MAX_BATCH) throw badRequest("Too many edges at once");
+  await recordVersionBeforeEdit(board, userId);
 
   await WhiteboardEdges.updateAsync(
     { _id: { $in: edgeIds }, board: boardId, auto: true },

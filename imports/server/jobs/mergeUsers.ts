@@ -48,6 +48,7 @@ import UserStatuses from "../../lib/models/UserStatuses";
 import WhiteboardEdges from "../../lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../lib/models/WhiteboardNodes";
 import Whiteboards from "../../lib/models/Whiteboards";
+import WhiteboardVersions from "../../lib/models/WhiteboardVersions";
 import { AllModels } from "../../lib/typedModel/Model";
 import addUsersToDiscordRole from "../addUsersToDiscordRole";
 import { ensureHuntFolderPermission } from "../gdrive";
@@ -63,6 +64,7 @@ import Locks from "../models/Locks";
 import Subscribers from "../models/Subscribers";
 import UploadTokens from "../models/UploadTokens";
 import WhiteboardPresence from "../models/WhiteboardPresence";
+import WhiteboardVersionChunks from "../models/WhiteboardVersionChunks";
 import defineJob from "./framework/defineJob";
 import PermanentJobError from "./framework/PermanentJobError";
 
@@ -109,6 +111,7 @@ const MODELS_WITH_COMMON: { collection: { rawCollection(): any } }[] = [
   WhiteboardEdges,
   WhiteboardNodes,
   Whiteboards,
+  WhiteboardVersions,
 ];
 
 // Models with no user foreign keys (or with non-user FKs we skip).
@@ -124,6 +127,9 @@ const MODELS_EXPLICITLY_SKIPPED = [
   MonitorConnectAcks,
   MonitorConnectRequests,
   Servers,
+  // The user ids inside a version's compressed payload aren't rewritten;
+  // restoring a version maps them through completed merges instead.
+  WhiteboardVersionChunks,
 ];
 
 // Collections with user FK fields beyond createdBy/updatedBy. Each callback
@@ -372,6 +378,20 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
         { $addToSet: { editors: target } },
       );
       await raw.updateMany({ editors: source }, { $pull: { editors: source } });
+    },
+  ],
+  [
+    WhiteboardVersions,
+    async (source, target) => {
+      // users[0] started the version, so entries are rewritten in place
+      // rather than moved.
+      await WhiteboardVersions.collection
+        .rawCollection()
+        .updateMany(
+          { "users.user": source },
+          { $set: { "users.$[u].user": target } },
+          { arrayFilters: [{ "u.user": source }] },
+        );
     },
   ],
   [

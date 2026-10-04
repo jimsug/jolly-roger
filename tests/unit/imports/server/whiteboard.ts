@@ -23,6 +23,7 @@ import WhiteboardEdges from "../../../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../../../imports/lib/models/WhiteboardNodes";
 import type { WhiteboardEditPolicy } from "../../../../imports/lib/models/Whiteboards";
 import Whiteboards from "../../../../imports/lib/models/Whiteboards";
+import WhiteboardVersions from "../../../../imports/lib/models/WhiteboardVersions";
 import whiteboardPresence from "../../../../imports/lib/publications/whiteboardPresence";
 import {
   CARD_HEIGHT,
@@ -54,6 +55,7 @@ import GlobalHooks from "../../../../imports/server/GlobalHooks";
 import { cleanupDeadServer } from "../../../../imports/server/garbage-collection";
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
 import WhiteboardPresence from "../../../../imports/server/models/WhiteboardPresence";
+import WhiteboardVersionChunks from "../../../../imports/server/models/WhiteboardVersionChunks";
 import {
   deferSyncPuzzlesOnBoard,
   ensureWhiteboard,
@@ -2026,13 +2028,16 @@ describe("whiteboard", function () {
       });
 
       await deleteNodes(member, boardId, [nested, topLevel]);
+      // Each remembers its node, for a restore that brings it back
       assert.deepEqual((await reload(onNested._id)).comment, {
         x: 115,
         y: 226,
+        detachedFrom: nested,
       });
       assert.deepEqual((await reload(onTopLevel._id)).comment, {
         x: 307,
         y: 408,
+        detachedFrom: topLevel,
       });
     });
 
@@ -2050,7 +2055,11 @@ describe("whiteboard", function () {
       });
 
       await deleteNodes(member, boardId, [frame]);
-      assert.deepEqual((await reload(onFrame._id)).comment, { x: 101, y: 201 });
+      assert.deepEqual((await reload(onFrame._id)).comment, {
+        x: 101,
+        y: 201,
+        detachedFrom: frame,
+      });
       assert.deepEqual((await reload(onNested._id)).comment, {
         node: nested,
         x: 5,
@@ -2079,6 +2088,7 @@ describe("whiteboard", function () {
       assert.deepEqual((await reload(message._id)).comment, {
         x: at.x + 3,
         y: at.y + 4,
+        detachedFrom: card._id,
       });
     });
 
@@ -2097,6 +2107,7 @@ describe("whiteboard", function () {
       assert.deepEqual((await reload(message._id)).comment, {
         x: 200,
         y: 150,
+        detachedFrom: node,
       });
     });
 
@@ -2220,6 +2231,54 @@ describe("whiteboard", function () {
         await Puzzles.findAllowingDeleted({ hunt: huntId }).countAsync(),
         0,
       );
+    });
+
+    it("purges versions and chunks with the hunt", async function () {
+      await upsertNodes(member, boardId, [
+        { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
+      ]);
+      assert.equal(await WhiteboardVersions.find({}).countAsync(), 1);
+      assert.isAbove(await WhiteboardVersionChunks.find({}).countAsync(), 0);
+      // Keep the purge away from Google Drive
+      await FeatureFlags.insertAsync({
+        name: "disable.google",
+        type: "on",
+        createdBy: operator,
+      });
+
+      await runJob(purgeHuntJob, { huntId }, { userId: operator });
+
+      assert.equal(await WhiteboardVersions.find({}).countAsync(), 0);
+      assert.equal(await WhiteboardVersionChunks.find({}).countAsync(), 0);
+    });
+
+    it("reassigns whiteboard version users", async function () {
+      const source = await makeUser("source@example.com", []);
+      const target = await makeUser("target@example.com", []);
+      await upsertNodes(source, boardId, [
+        { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
+      ]);
+      await upsertNodes(member, boardId, [
+        { _id: Random.id(), type: "sticky", position: { x: 300, y: 0 } },
+      ]);
+      await upsertNodes(target, boardId, [
+        { _id: Random.id(), type: "sticky", position: { x: 600, y: 0 } },
+      ]);
+
+      await runJob(
+        mergeUsersJob,
+        { sourceUser: source, targetUser: target },
+        { userId: target },
+      );
+
+      const [version, ...rest] = await WhiteboardVersions.find({}).fetchAsync();
+      assert.isEmpty(rest);
+      // Whoever started it stays first
+      assert.deepEqual(
+        version!.users.map((u) => u.user),
+        [target, member, target],
+      );
+      assert.equal(version!.createdBy, target);
     });
 
     it("carries attribution over to the merged account and drops live state", async function () {

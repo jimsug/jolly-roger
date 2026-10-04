@@ -3,6 +3,7 @@ import { Random } from "meteor/random";
 import { useTracker } from "meteor/react-meteor-data";
 import { faArrowPointer } from "@fortawesome/free-solid-svg-icons/faArrowPointer";
 import { faCircleCheck } from "@fortawesome/free-solid-svg-icons/faCircleCheck";
+import { faClockRotateLeft } from "@fortawesome/free-solid-svg-icons/faClockRotateLeft";
 import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
 import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
 import { faDiagramProject } from "@fortawesome/free-solid-svg-icons/faDiagramProject";
@@ -55,6 +56,7 @@ import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
 import FormSelect from "react-bootstrap/FormSelect";
+import Modal from "react-bootstrap/Modal";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import styled, { css, useTheme } from "styled-components";
@@ -71,6 +73,7 @@ import WhiteboardNodes, {
   WhiteboardStrokeWidths,
 } from "../../../lib/models/WhiteboardNodes";
 import type { WhiteboardEditPolicy } from "../../../lib/models/Whiteboards";
+import type { WhiteboardVersionType } from "../../../lib/models/WhiteboardVersions";
 import type {
   WhiteboardAccess,
   WhiteboardAccessReason,
@@ -140,6 +143,7 @@ import { miniMapColor } from "../../../lib/whiteboard/minimap";
 import type { BoardSearchHit } from "../../../lib/whiteboard/search";
 import deleteWhiteboardEdges from "../../../methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
+import restoreWhiteboardVersion from "../../../methods/restoreWhiteboardVersion";
 import type { WhiteboardLiveState } from "../../../methods/setWhiteboardLive";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
 import upsertWhiteboardEdges from "../../../methods/upsertWhiteboardEdges";
@@ -188,6 +192,8 @@ import FeederFocusContext from "./FeederFocusContext";
 import FrameLabelLayer from "./FrameLabelLayer";
 import FrameNode from "./FrameNode";
 import { boxOf } from "./floatingEdgeParams";
+import type { VersionPreview } from "./HistoryPanel";
+import HistoryPanel, { loadVersion, versionMoment } from "./HistoryPanel";
 import InkNode from "./InkNode";
 import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
 import LineStyleIcon from "./LineStyleIcon";
@@ -280,6 +286,9 @@ const DEFAULT_SIZES: Record<PlaceTool, { width: number; height: number }> = {
 };
 // A press that moves less than this (in screen pixels) is a click.
 const CLICK_SLOP = 4;
+// A finger wobbles more than a mouse or pen does, so a touch gets more room
+// before it counts as a pan rather than a tap.
+const TOUCH_SLOP = 10;
 // The parts of the canvas that sit over the board, where presses are the
 // controls' own rather than a tool's.
 const OVERLAYS =
@@ -495,6 +504,20 @@ const CommentHint = styled.output`
   .btn {
     min-height: 44px;
   }
+`;
+
+const PreviewBanner = styled.output`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  max-width: 560px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: ${({ theme }) => theme.colors.background};
+  border: 2px solid ${({ theme }) => theme.colors.primary};
+  box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
+  font-size: 13px;
 `;
 
 const AccessNotice = styled(Alert)`
@@ -744,6 +767,9 @@ interface Drawing {
   parent?: string;
 }
 
+const NO_REMOTE_DRAGS = new Map<string, RemoteDrag>();
+const NO_PINS: CommentPin[] = [];
+
 // Reasons for less access that come from the screen or the connection, not
 // from anyone's choice, and aren't announced.
 const unannounced = (reason: WhiteboardAccessReason | undefined) =>
@@ -809,12 +835,28 @@ const CanvasInner = ({
   onInitialTargetShown,
 }: CanvasProps) => {
   const theme = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const flow = useReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>();
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const readOnly = access !== "edit";
-  const canComment = access === "edit" || access === "comment";
+  // An earlier version of the board being looked at, which can't be edited
+  // or commented on.
+  const [preview, setPreview] = useState<VersionPreview>();
+  // The version being fetched to preview. Picking another, or going back to
+  // now, drops it.
+  const [previewLoading, setPreviewLoading] = useState<string>();
+  const previewRequest = useRef(0);
+  const backToNow = useCallback(() => {
+    previewRequest.current += 1;
+    setPreviewLoading(undefined);
+    setPreview(undefined);
+  }, []);
+  // Restoring the version being previewed asks first. The confirmation
+  // stays up until the server answers, and shows why if it refuses.
+  const [confirmingRestore, setConfirmingRestore] = useState(false);
+  const mayComment = access === "edit" || access === "comment";
+  const readOnly = access !== "edit" || !!preview;
+  const canComment = !preview && mayComment;
 
   // The hunt's puzzles and tags come from the puzzle page around the canvas,
   // which only shows it once they've loaded (puzzleForPuzzlePage), and the
@@ -831,7 +873,12 @@ const CanvasInner = ({
   });
   // Commenters send their cursor too; the server keeps only an editor's
   // drags and strokes.
-  const live = useWhiteboardLive(boardId, liveEnabled && canComment);
+  const live = useWhiteboardLive(boardId, liveEnabled && mayComment);
+  // Someone looking at an earlier version isn't pointing at anything on the
+  // board as it is, so their cursor comes off it until they're back.
+  useEffect(() => {
+    if (preview) live.setCursor(null);
+  }, [preview, live]);
 
   // Cursors move constantly, but only what people are dragging matters here
   // (CursorLayer draws the rest). Reading just that means cursor moves don't
@@ -937,7 +984,7 @@ const CanvasInner = ({
   // banner. The reason is tracked even when edit rights don't change, so a
   // later change is judged against the current one. Time offline isn't
   // tracked, so a change made meanwhile is announced on reconnecting.
-  const mayEdit = !readOnly;
+  const mayEdit = access === "edit";
   const [seenAccess, setSeenAccess] = useState({
     mayEdit,
     reason: accessReason,
@@ -964,7 +1011,9 @@ const CanvasInner = ({
   const [penWidth, setPenWidth] = useWhiteboardPenWidth();
   // The panel at the top right, under any open thread: what isn't on the
   // board, or the list of comments. Only one shows at a time.
-  const [sidePanel, setSidePanel] = useState<"hidden" | "comments">();
+  const [sidePanel, setSidePanel] = useState<
+    "hidden" | "comments" | "history"
+  >();
   const closeHiddenPanel = useCallback(
     () =>
       setSidePanel((current) => (current === "hidden" ? undefined : current)),
@@ -1072,10 +1121,12 @@ const CanvasInner = ({
     boardId,
     livePuzzleIds,
     showFeederArrows,
-    remoteDrags,
+    // Other people's drags are on the board as it is, not the version.
+    remoteDrags: preview ? NO_REMOTE_DRAGS : remoteDrags,
     erasingStrokes,
     lineColors,
     lineLabels,
+    override: preview,
   });
 
   // The cards whose feeder arrows stand out: the one under the pointer and
@@ -2488,24 +2539,27 @@ const CanvasInner = ({
     return Meteor.absoluteUrl(`hunts/${huntId}/whiteboard?${query}`);
   }, [flow, paneCenter, huntId]);
 
-  // A short message under the toolbar about a link that couldn't be
-  // followed, gone after a while.
-  const [linkNotice, setLinkNotice] = useState<{ id: number; text: string }>();
-  const showLinkNotice = useCallback(
-    (text: string) => {
+  // A short message under the toolbar, gone after a while: a link that
+  // couldn't be followed, a version that couldn't be loaded, or a restore
+  // that worked.
+  const [notice, setNotice] = useState<{
+    id: number;
+    text: string;
+    variant: "warning" | "success";
+  }>();
+  const showNotice = useCallback(
+    (text: string, variant: "warning" | "success" = "warning") => {
       const id = Date.now();
-      setLinkNotice({ id, text });
+      setNotice({ id, text, variant });
       tidyLater(
         () =>
-          setLinkNotice((current) =>
-            current?.id === id ? undefined : current,
-          ),
+          setNotice((current) => (current?.id === id ? undefined : current)),
         NOTICE_MS,
       );
     },
     [tidyLater],
   );
-  const dismissLinkNotice = useCallback(() => setLinkNotice(undefined), []);
+  const dismissNotice = useCallback(() => setNotice(undefined), []);
 
   // Once the board's chat has loaded, a thread that isn't in it is gone.
   const commentsLoaded = useContext(ChatLoadedContext);
@@ -2548,7 +2602,7 @@ const CanvasInner = ({
     if (!pendingFocus) return;
     if (commentsLoaded && !threads.has(pendingFocus)) {
       setPendingFocus(undefined);
-      showLinkNotice(t("whiteboard.link.commentGone", "That comment is gone."));
+      showNotice(t("whiteboard.link.commentGone", "That comment is gone."));
       if (pendingFocus === initialComment) onInitialCommentShown?.();
       return;
     }
@@ -2556,7 +2610,7 @@ const CanvasInner = ({
     setPendingFocus(undefined);
     if (!showComment(pendingFocus)) {
       // What the comment was on has been hidden or deleted.
-      showLinkNotice(
+      showNotice(
         t("whiteboard.link.nodeGone", "That isn't on the board any more."),
       );
     }
@@ -2567,7 +2621,7 @@ const CanvasInner = ({
     threads,
     readyToShow,
     showComment,
-    showLinkNotice,
+    showNotice,
     t,
     initialComment,
     onInitialCommentShown,
@@ -2617,7 +2671,7 @@ const CanvasInner = ({
       !!doc.hidden ||
       (doc.type === "puzzle" && !livePuzzleIds.has(doc.puzzle ?? ""));
     if (gone) {
-      showLinkNotice(
+      showNotice(
         pendingTarget.kind === "puzzle"
           ? t("whiteboard.link.puzzleGone", "That puzzle isn't on the board.")
           : t("whiteboard.link.nodeGone", "That isn't on the board any more."),
@@ -2637,7 +2691,7 @@ const CanvasInner = ({
     nodeDocs,
     livePuzzleIds,
     showNode,
-    showLinkNotice,
+    showNotice,
     t,
     initialTarget,
     initialViewport,
@@ -2912,13 +2966,13 @@ const CanvasInner = ({
         Math.hypot(
           event.clientX - press.clientX,
           event.clientY - press.clientY,
-        ) > CLICK_SLOP
+        ) > (press.pointerType === "touch" ? TOUCH_SLOP : CLICK_SLOP)
       ) {
         commentPress.current = undefined;
       }
       if (!onBoard(event)) return;
       const point = flowPoint(event);
-      if (event.pointerType !== "touch") live.setCursor(point);
+      if (!preview && event.pointerType !== "touch") live.setCursor(point);
       if (clickConnectFrom.current) setClickConnectPointer(point);
       // Over the toolbars, panels and pins a press doesn't start anything.
       lastPointer.current = (event.target as HTMLElement).closest(OVERLAYS)
@@ -2983,6 +3037,7 @@ const CanvasInner = ({
       onBoard,
       flowPoint,
       live,
+      preview,
       tool,
       placing,
       connecting,
@@ -3045,6 +3100,9 @@ const CanvasInner = ({
         setOpenThread(undefined);
         closeHiddenPanel();
         setTool("select");
+        // The new comment's sheet would cover a pin low on a phone's screen,
+        // so the board moves it up, as it does for a pin that's opened.
+        if (compact) panToPin(press.point, flow.getZoom());
         return;
       }
       if (isPlaceTool(tool)) {
@@ -3081,6 +3139,8 @@ const CanvasInner = ({
       commitSegment,
       live,
       closeHiddenPanel,
+      compact,
+      panToPin,
     ],
   );
 
@@ -3345,16 +3405,26 @@ const CanvasInner = ({
         searchRef.current.select();
         return;
       }
-      // Escape closes an open thread first, then the Comments list; then it
-      // drops a comment being started, a line being drawn or joined, or an
-      // erase, and goes back to Select. The thread's panel closes itself on
-      // Escape from inside it.
+      // Escape closes an open thread first, then the Comments list, then
+      // leaves a preview, then closes History; then it drops a comment being
+      // started, a line being drawn or joined, or an erase, and goes back to
+      // Select. The thread's panel closes itself on Escape from inside it,
+      // and the restore confirmation does the same.
       if (event.key === "Escape" && !isTyping(event.target)) {
+        if (confirmingRestore) return;
         if (openThreadId) {
           dismissComment();
           return;
         }
         if (commentListShown) {
+          setSidePanel(undefined);
+          return;
+        }
+        if (preview || previewLoading) {
+          backToNow();
+          return;
+        }
+        if (sidePanel === "history") {
           setSidePanel(undefined);
           return;
         }
@@ -3464,6 +3534,11 @@ const CanvasInner = ({
     deleteNodes,
     openThreadId,
     commentListShown,
+    confirmingRestore,
+    preview,
+    previewLoading,
+    backToNow,
+    sidePanel,
     dismissComment,
     cancelClickConnect,
     selectAll,
@@ -3523,6 +3598,105 @@ const CanvasInner = ({
     setSidePanel("comments");
     closeComment();
   }, [commentListShown, closeComment]);
+  const toggleHistory = useCallback(() => {
+    setSidePanel((current) => (current === "history" ? undefined : "history"));
+    closeComment();
+  }, [closeComment]);
+
+  const showVersion = useCallback(
+    (version: WhiteboardVersionType) => {
+      previewRequest.current += 1;
+      const request = previewRequest.current;
+      const failed = (reason: string) =>
+        showNotice(
+          t(
+            "whiteboard.history.loadFailed",
+            "Couldn't load that version: {{reason}}",
+            {
+              reason,
+              // React escapes text, so i18next's escaping would only show
+              // entities. Goes once both i18n inits stop escaping.
+              interpolation: { escapeValue: false },
+            },
+          ),
+        );
+      // Versions are gzipped, and only newer browsers can unpack that
+      if (typeof DecompressionStream === "undefined") {
+        setPreviewLoading(undefined);
+        failed(
+          t(
+            "whiteboard.history.browserTooOld",
+            "this browser can't open saved versions",
+          ),
+        );
+        return;
+      }
+      setPreviewLoading(version._id);
+      closeComment();
+      void loadVersion(boardId, version).then(
+        (loaded) => {
+          if (previewRequest.current !== request) return;
+          setPreviewLoading(undefined);
+          setPreview(loaded);
+        },
+        (error: unknown) => {
+          if (previewRequest.current !== request) return;
+          setPreviewLoading(undefined);
+          if (error instanceof Meteor.Error) {
+            failed(error.reason ?? error.message);
+            return;
+          }
+          // oxlint-disable-next-line no-console
+          console.error("Couldn't load a whiteboard version", error);
+          failed(t("whiteboard.history.unreadable", "it couldn't be read"));
+        },
+      );
+    },
+    [boardId, closeComment, showNotice, t],
+  );
+  const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState<string>();
+  const askRestore = useCallback(() => {
+    setRestoreError(undefined);
+    setConfirmingRestore(true);
+  }, []);
+  const cancelRestore = useCallback(() => {
+    if (!restoring) setConfirmingRestore(false);
+  }, [restoring]);
+  const previewTime = preview
+    ? versionMoment(preview.version.createdAt, t, i18n.language)
+    : "";
+  const restore = useCallback(() => {
+    if (!preview) return;
+    const versionId = preview.version._id;
+    setRestoreError(undefined);
+    setRestoring(true);
+    restoreWhiteboardVersion.call({ boardId, versionId }, (error) => {
+      setRestoring(false);
+      if (error) {
+        setRestoreError(error.reason ?? error.message);
+        return;
+      }
+      setConfirmingRestore(false);
+      setPreview((current) =>
+        current?.version._id === versionId ? undefined : current,
+      );
+      showNotice(
+        t("whiteboard.history.restored", "Board restored to {{time}}.", {
+          time: previewTime,
+        }),
+        "success",
+      );
+    });
+  }, [preview, boardId, showNotice, t, previewTime]);
+
+  // A phone-sized screen has no history (see historyButton), so a preview
+  // or the panel open when the screen shrinks goes.
+  useEffect(() => {
+    if (!compact) return;
+    backToNow();
+    setSidePanel((current) => (current === "history" ? undefined : current));
+  }, [compact, backToNow]);
   const onPenWidth = useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>) => {
       const width = WhiteboardStrokeWidths.find(
@@ -3579,14 +3753,14 @@ const CanvasInner = ({
       "Editing needs a wider screen. You can still comment.",
     ),
   };
-  const linkNoticeAlert = linkNotice ? (
+  const noticeAlert = notice ? (
     <AccessNotice
-      variant="warning"
+      variant={notice.variant}
       dismissible
       closeLabel={t("common.close", "Close")}
-      onClose={dismissLinkNotice}
+      onClose={dismissNotice}
     >
-      {linkNotice.text}
+      {notice.text}
     </AccessNotice>
   ) : null;
   const searchTools = (
@@ -3720,6 +3894,38 @@ const CanvasInner = ({
       <UnreadBadge count={listUnread} />
     </Button>
   );
+  const historyTitle = t("whiteboard.history.title", "History");
+  // Not on a phone, where the board can't be restored and a preview would
+  // cover it.
+  const historyButton = compact ? null : (
+    <Button
+      variant={sidePanel === "history" ? "secondary" : "outline-secondary"}
+      onClick={toggleHistory}
+      title={historyTitle}
+      aria-label={historyTitle}
+      aria-pressed={sidePanel === "history"}
+    >
+      <FontAwesomeIcon icon={faClockRotateLeft} />
+    </Button>
+  );
+  const restoreBlocked =
+    access === "edit"
+      ? undefined
+      : accessReason === "archived"
+        ? t("whiteboard.history.archived", "This hunt is archived.")
+        : accessReason === "offline"
+          ? t(
+              "whiteboard.offline",
+              "Offline: the board is view-only until you reconnect",
+            )
+          : t(
+              "whiteboard.history.cantEdit",
+              "Only people who can edit the board can restore it.",
+            );
+  const restoreLabel = t(
+    "whiteboard.history.restoreButton",
+    "Restore this version",
+  );
   const alignModes = [
     ["left", t("whiteboard.arrange.left", "Align left edges")],
     ["center", t("whiteboard.arrange.center", "Align centres horizontally")],
@@ -3840,9 +4046,11 @@ const CanvasInner = ({
                   />
                 )}
                 <FrameLabelLayer />
-                <CursorLayer boardId={boardId} liveEnabled={liveEnabled} />
+                {!preview && (
+                  <CursorLayer boardId={boardId} liveEnabled={liveEnabled} />
+                )}
                 <CommentLayer
-                  pins={commentPins}
+                  pins={preview ? NO_PINS : commentPins}
                   openId={openThreadId ?? (draft ? "draft" : undefined)}
                   pulseId={pulse}
                   onOpen={openComment}
@@ -3967,6 +4175,7 @@ const CanvasInner = ({
                             {resolvedCount}
                           </Button>
                         )}
+                        {historyButton}
                       </ReadOnlyButtons>
                       {mayChangeEditPolicy && !compact && (
                         <EditPolicyButton
@@ -3994,7 +4203,7 @@ const CanvasInner = ({
                     {offlineAlert}
                     {accessNoticeAlert}
                     {saveErrorAlert}
-                    {linkNoticeAlert}
+                    {noticeAlert}
                   </Panel>
                 ) : (
                   <Panel position="top-left">
@@ -4163,6 +4372,7 @@ const CanvasInner = ({
                           <FontAwesomeIcon icon={faEyeSlash} />
                           {notOnBoardCount > 0 && ` ${notOnBoardCount}`}
                         </Button>
+                        {historyButton}
                       </ButtonGroup>
                       {mayChangeEditPolicy && (
                         <EditPolicyButton
@@ -4174,7 +4384,7 @@ const CanvasInner = ({
                     {offlineAlert}
                     {accessNoticeAlert}
                     {saveErrorAlert}
-                    {linkNoticeAlert}
+                    {noticeAlert}
                   </Panel>
                 )}
                 {!readOnly && tool === "select" && selectedLines.length > 0 && (
@@ -4239,6 +4449,54 @@ const CanvasInner = ({
                     </ToolBox>
                   </Panel>
                 )}
+                {preview && !compact && (
+                  <Panel position="top-center">
+                    <PreviewBanner>
+                      <span>
+                        {t(
+                          "whiteboard.history.previewBanner",
+                          "Viewing the board as it was at {{time}}.",
+                          { time: previewTime },
+                        )}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={!!restoreBlocked || restoring}
+                        onClick={askRestore}
+                      >
+                        {restoreLabel}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline-secondary"
+                        onClick={backToNow}
+                      >
+                        {t("whiteboard.history.backToNow", "Back to now")}
+                      </Button>
+                      {restoreBlocked && (
+                        <ReadOnlyReason>{restoreBlocked}</ReadOnlyReason>
+                      )}
+                    </PreviewBanner>
+                  </Panel>
+                )}
+                {sidePanel === "history" &&
+                  !compact &&
+                  !draft &&
+                  !openThreadData && (
+                    <Panel position="top-right">
+                      <SidePanel className="nodrag nowheel nopan">
+                        <strong>{historyTitle}</strong>
+                        <HistoryPanel
+                          boardId={boardId}
+                          previewId={preview?.version._id}
+                          loadingId={previewLoading}
+                          onPreview={showVersion}
+                          onBackToNow={backToNow}
+                        />
+                      </SidePanel>
+                    </Panel>
+                  )}
                 {(draft ?? openThreadData) && (
                   <CommentPanelPlace compact={compact}>
                     <CommentPanel
@@ -4369,6 +4627,62 @@ const CanvasInner = ({
                 onHide={closeEditPolicy}
               />
             )}
+            <Modal
+              show={confirmingRestore}
+              onHide={cancelRestore}
+              backdrop={restoring ? "static" : true}
+              keyboard={!restoring}
+            >
+              <Modal.Header closeButton={!restoring}>
+                <Modal.Title>
+                  {t(
+                    "whiteboard.history.confirmTitle",
+                    "Restore the board to {{time}}?",
+                    { time: previewTime },
+                  )}
+                </Modal.Title>
+              </Modal.Header>
+              <Modal.Body>
+                {t(
+                  "whiteboard.history.confirmBody",
+                  "Changes since then, by anyone, are undone. Comments are kept. The board as it is now is saved in history, so you can come back to it.",
+                )}
+                {restoreError && (
+                  <Alert variant="danger" className="mt-3 mb-0">
+                    {t(
+                      "whiteboard.history.restoreFailed",
+                      "Couldn't restore the board: {{reason}}",
+                      {
+                        reason: restoreError,
+                        // React escapes text, so i18next's escaping would
+                        // only show entities. Goes once both i18n inits stop
+                        // escaping.
+                        interpolation: { escapeValue: false },
+                      },
+                    )}
+                  </Alert>
+                )}
+              </Modal.Body>
+              <Modal.Footer>
+                <Button
+                  variant="secondary"
+                  onClick={cancelRestore}
+                  disabled={restoring}
+                >
+                  {t("common.cancel", "Cancel")}
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={restore}
+                  disabled={restoring}
+                  aria-busy={restoring}
+                >
+                  {restoring
+                    ? t("whiteboard.history.restoring", "Restoring…")
+                    : restoreLabel}
+                </Button>
+              </Modal.Footer>
+            </Modal>
           </RoundStateContext>
         </FeederFocusContext>
       </PeopleContext>

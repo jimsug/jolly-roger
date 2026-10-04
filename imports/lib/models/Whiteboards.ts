@@ -23,6 +23,12 @@ const Whiteboard = withCommon(
     // The people besides operators who may edit under "operatorsAndEditors".
     // Kept under the other policies, so switching back doesn't lose it.
     editors: foreignKey.array().optional(),
+    // Set when pruning drops versions from the board's history: the newest
+    // one it dropped was taken then.
+    versionsPrunedBefore: z.date().optional(),
+    // When a reset or restore last finished rewriting the board. Edits after
+    // it never extend or join a version from before it.
+    lastRewrittenAt: z.date().optional(),
   }),
 );
 

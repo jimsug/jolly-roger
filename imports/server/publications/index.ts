@@ -37,3 +37,4 @@ import "./userStatusForHuntApp";
 import "./whiteboardContents";
 import "./whiteboardForHunt";
 import "./whiteboardPresence";
+import "./whiteboardVersions";

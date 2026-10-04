@@ -69,6 +69,11 @@ const setHuntArchived = new TypedMethod<
   void
 >("test.methods.whiteboard.setHuntArchived");
 
+// Starts a board's history afresh, so a test knows which versions it made.
+const clearWhiteboardVersions = new TypedMethod<{ boardId: string }, void>(
+  "test.methods.whiteboard.clearVersions",
+);
+
 // Solving or unsolving a puzzle without going through guesses.
 const setPuzzleAnswers = new TypedMethod<
   { puzzleId: string; answers: string[] },
@@ -90,6 +95,26 @@ if (Meteor.isServer) {
         throw new Meteor.Error(500, "This code must not run in production");
       }
       await Puzzles.updateAsync(puzzleId, { $set: { answers } });
+    },
+  });
+
+  const WhiteboardVersions: typeof import("../../imports/lib/models/WhiteboardVersions").default =
+    require("../../imports/lib/models/WhiteboardVersions").default;
+  const WhiteboardVersionChunks: typeof import("../../imports/server/models/WhiteboardVersionChunks").default =
+    require("../../imports/server/models/WhiteboardVersionChunks").default;
+
+  defineMethod(clearWhiteboardVersions, {
+    validate(arg: unknown) {
+      check(arg, { boardId: String });
+      return arg;
+    },
+
+    async run({ boardId }) {
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+      await WhiteboardVersions.removeAsync({ board: boardId });
+      await WhiteboardVersionChunks.removeAsync({ board: boardId });
     },
   });
 
@@ -3164,6 +3189,57 @@ if (Meteor.isClient) {
           screen.getByText("Tap where your comment goes");
         });
 
+        it("counts a touch that wobbles a few pixels as a tap", async function () {
+          this.timeout(30000);
+          await openPhoneBoard();
+          await armComment();
+          const at = middleOf(pane());
+          // Further than a mouse may move for a click, but not a pan
+          const wobbled = { x: at.x + 6, y: at.y + 5 };
+          await act(async () => {
+            fireEvent.pointerDown(pane(), touch(at, 1));
+            fireEvent.pointerMove(pane(), touch(wobbled, 1));
+            fireEvent.pointerUp(pane(), touch(wobbled, 1));
+            await stabilize();
+          });
+          await waitFor(() => {
+            assert.exists(draftPin());
+            assert.include(
+              sheet()?.querySelector("dialog[open]")?.textContent ?? "",
+              "New comment",
+            );
+          });
+        });
+
+        it("pans a new comment placed low on the board up above the sheet", async function () {
+          this.timeout(30000);
+          await openPhoneBoard();
+          await armComment();
+          const box = pane().getBoundingClientRect();
+          const at = {
+            x: box.left + box.width / 2,
+            y: box.top + box.height * 0.8,
+          };
+          await act(async () => {
+            fireEvent.pointerDown(pane(), touch(at, 1));
+            fireEvent.pointerUp(pane(), touch(at, 1));
+            await stabilize();
+          });
+          const panel = await waitFor(() => {
+            const found = sheet()?.querySelector<HTMLElement>("dialog[open]");
+            assert.exists(found);
+            return found;
+          });
+          await waitFor(
+            () => {
+              const pin = draftPin()!.getBoundingClientRect();
+              assert.isBelow(pin.bottom, panel.getBoundingClientRect().top);
+              assert.closeTo(pin.bottom, box.top + box.height * 0.2, 4);
+            },
+            { timeout: 5000 },
+          );
+        });
+
         it("doesn't leave a draft after a cancelled touch", async function () {
           this.timeout(30000);
           await openPhoneBoard();
@@ -3937,6 +4013,138 @@ if (Meteor.isClient) {
             upload.restore();
             enabled.restore();
           }
+        });
+
+        it("history lists a version after an edit and restores it", async function () {
+          this.timeout(30000);
+          await clearWhiteboardVersions.callPromise({ boardId });
+          const note = Random.id();
+          const base = { x: 29000, y: 29000 };
+          // Two edits by two people, a few seconds apart, share a version
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: note,
+                type: "sticky",
+                position: base,
+                width: 200,
+                height: 160,
+                text: "Added before the history was read",
+              },
+            ],
+          });
+          await other.callAsync(upsertWhiteboardNodes.name, {
+            boardId,
+            nodes: [{ _id: note, text: "Edited by them" }],
+          });
+          lookAt(base);
+          await openBoard();
+          await nodeShown(note);
+
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "History" }));
+            await stabilize();
+          });
+          const row = await waitFor(
+            () => {
+              const found = [
+                ...document.querySelectorAll<HTMLElement>(
+                  ".react-flow__panel.top.right button",
+                ),
+              ].find((b) => b.textContent?.includes(OTHER_NAME));
+              assert.exists(found);
+              return found;
+            },
+            { timeout: 10000 },
+          );
+          assert.match(
+            row.textContent ?? "",
+            /^Before edits by .* and Second Member, .* \(2 changes\)$/,
+          );
+          assert.exists(
+            screen.getByRole("button", { name: "Now", pressed: true }),
+          );
+
+          // Escape leaves a preview and leaves History open
+          await act(async () => {
+            fireEvent.click(row);
+            await stabilize();
+          });
+          await screen.findByText(
+            /^Viewing the board as it was at /,
+            {},
+            { timeout: 10000 },
+          );
+          await press(document.body, { key: "Escape" });
+          assert.isNull(screen.queryByText(/^Viewing the board as it was at /));
+          assert.exists(
+            screen.getByRole("button", { name: "Now", pressed: true }),
+          );
+
+          await act(async () => {
+            fireEvent.click(row);
+            await stabilize();
+          });
+          // The board as it was, before the note, and nothing can be edited
+          const banner = await screen.findByText(
+            /^Viewing the board as it was at /,
+            {},
+            { timeout: 10000 },
+          );
+          await waitFor(() => assert.isNull(nodeElement(note)));
+          assert.equal(row.getAttribute("aria-pressed"), "true");
+          assert.isNull(
+            screen.queryByRole("button", { name: /^Select and move/ }),
+          );
+
+          await act(async () => {
+            fireEvent.click(
+              within(banner.parentElement!).getByRole("button", {
+                name: "Restore this version",
+              }),
+            );
+            await stabilize();
+          });
+          const dialog = await waitFor(() => {
+            const found = document.querySelector<HTMLElement>(
+              ".modal.show .modal-content",
+            );
+            assert.exists(found);
+            return found;
+          });
+          assert.include(
+            dialog.textContent ?? "",
+            "Changes since then, by anyone, are undone.",
+          );
+          await act(async () => {
+            fireEvent.click(
+              within(dialog).getByRole("button", {
+                name: "Restore this version",
+              }),
+            );
+            await stabilize();
+          });
+
+          await waitFor(
+            async () => {
+              assert.notOk(await WhiteboardNodes.findOneAsync(note));
+              assert.isNull(
+                screen.queryByText(/^Viewing the board as it was at /),
+              );
+            },
+            { timeout: 10000 },
+          );
+          await screen.findByText(/^Board restored to /);
+          await screen.findByRole("button", { name: /^Select and move/ });
+          assert.isNull(nodeElement(note));
+          await waitFor(() =>
+            assert.isNull(document.querySelector(".modal.show")),
+          );
+
+          // With no preview, Escape closes History
+          await press(document.body, { key: "Escape" });
+          assert.isNull(screen.queryByRole("button", { name: "Now" }));
         });
       });
     });

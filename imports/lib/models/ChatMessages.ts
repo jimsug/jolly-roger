@@ -63,6 +63,9 @@ export function contentFromMessage(msg: string): ChatMessageContentType {
 // coordinates.
 const CommentAnchor = z.object({
   node: foreignKey.optional(),
+  // The node a free pin came off when that node left the board, so a
+  // restore that brings the node back can put the pin back on it.
+  detachedFrom: foreignKey.optional(),
   x: z.number(),
   y: z.number(),
   resolvedAt: z.date().optional(),

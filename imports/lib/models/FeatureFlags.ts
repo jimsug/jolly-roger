@@ -16,6 +16,7 @@ export const FlagNames = [
   "disable.webrtc",
   "disable.whiteboard",
   "disable.whiteboard_live",
+  "disable.whiteboard_versions",
   "test",
 ] as const;
 

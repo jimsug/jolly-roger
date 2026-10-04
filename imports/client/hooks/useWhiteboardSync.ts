@@ -239,6 +239,7 @@ export default function useWhiteboardSync({
   erasingStrokes,
   lineColors,
   lineLabels,
+  override,
 }: {
   boardId: string;
   livePuzzleIds: Set<string>;
@@ -248,19 +249,21 @@ export default function useWhiteboardSync({
   // Theme colours for lines with no colour of their own, and feeder arrows.
   lineColors: { text: string; muted: string };
   lineLabels: LineLabels;
+  // Shown instead of the board, as an earlier version of it is previewed.
+  override?: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] };
 }) {
-  const nodeDocs = useUnchangedDocs(
-    useTracker(
-      () => WhiteboardNodes.find({ board: boardId }).fetch(),
-      [boardId],
-    ),
+  // The board is still tracked while an override shows, so the hooks run the
+  // same either way and coming back to it needs no fresh read.
+  const trackedNodes = useTracker(
+    () => WhiteboardNodes.find({ board: boardId }).fetch(),
+    [boardId],
   );
-  const edgeDocs = useUnchangedDocs(
-    useTracker(
-      () => WhiteboardEdges.find({ board: boardId }).fetch(),
-      [boardId],
-    ),
+  const trackedEdges = useTracker(
+    () => WhiteboardEdges.find({ board: boardId }).fetch(),
+    [boardId],
   );
+  const nodeDocs = useUnchangedDocs(override?.nodes ?? trackedNodes);
+  const edgeDocs = useUnchangedDocs(override?.edges ?? trackedEdges);
   // What's on the board: anything not taken off it, and a card only while its
   // puzzle is still in the hunt.
   const shownDocs = useMemo(

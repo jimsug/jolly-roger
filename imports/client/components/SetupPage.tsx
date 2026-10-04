@@ -27,6 +27,7 @@ import type { SettingType } from "../../lib/models/Settings";
 import Settings from "../../lib/models/Settings";
 import discordGuildsAll from "../../lib/publications/discordGuildsAll";
 import settingsAll from "../../lib/publications/settingsAll";
+import { MAX_VERSION_BYTES_PER_BOARD } from "../../lib/whiteboard/limits";
 import configureClearGdriveCreds from "../../methods/configureClearGdriveCreds";
 import configureDefaultHuntTags from "../../methods/configureDefaultHuntTags";
 import configureDiscordBot from "../../methods/configureDiscordBot";
@@ -2723,6 +2724,27 @@ const CircuitBreakerSection = () => {
           {t(
             "serverSetup.circuitBreakers.whiteboardLive.disabled",
             "Disabling this feature stops those updates. The board still works and every edit is still saved and shown to everyone, but pointers disappear and moves and drawings only show up once they're finished.",
+          )}
+        </p>
+      </CircuitBreakerControl>
+      <CircuitBreakerControl
+        title={t(
+          "serverSetup.circuitBreakers.whiteboardVersions.title",
+          "Whiteboard history",
+        )}
+        flagName="disable.whiteboard_versions"
+      >
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.whiteboardVersions.description",
+            "Each whiteboard keeps a history of earlier versions of itself, so anyone in the hunt can look back at how it was and people who can edit it can put it back. A version is a compressed copy of the whole board, taken before someone's first edit in a while; drawings make up most of its size. Older versions are thinned out hourly, and a board's history is capped at {{cap}} MiB.",
+            { cap: MAX_VERSION_BYTES_PER_BOARD / (1024 * 1024) },
+          )}
+        </p>
+        <p>
+          {t(
+            "serverSetup.circuitBreakers.whiteboardVersions.disabled",
+            "Disabling this feature stops recording board versions, hides the history and turns off Reset layout. Versions already recorded are kept.",
           )}
         </p>
       </CircuitBreakerControl>

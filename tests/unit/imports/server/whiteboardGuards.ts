@@ -61,6 +61,7 @@ import dismissChatNotificationsForPuzzle from "../../../../imports/methods/dismi
 import dismissPendingAnnouncement from "../../../../imports/methods/dismissPendingAnnouncement";
 import dismissPuzzleNotification from "../../../../imports/methods/dismissPuzzleNotification";
 import ensurePuzzleDocument from "../../../../imports/methods/ensurePuzzleDocument";
+import fetchWhiteboardVersion from "../../../../imports/methods/fetchWhiteboardVersion";
 import generateHuntInvitationCode from "../../../../imports/methods/generateHuntInvitationCode";
 import generateUploadToken from "../../../../imports/methods/generateUploadToken";
 import insertDocumentImage from "../../../../imports/methods/insertDocumentImage";
@@ -86,6 +87,7 @@ import removePuzzleAnswer from "../../../../imports/methods/removePuzzleAnswer";
 import removePuzzleTag from "../../../../imports/methods/removePuzzleTag";
 import removeUserAccountEmail from "../../../../imports/methods/removeUserAccountEmail";
 import renameTag from "../../../../imports/methods/renameTag";
+import restoreWhiteboardVersion from "../../../../imports/methods/restoreWhiteboardVersion";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import sendUserVerificationEmail from "../../../../imports/methods/sendUserVerificationEmail";
 import setChatMessagePin from "../../../../imports/methods/setChatMessagePin";
@@ -171,6 +173,7 @@ const METHODS = {
   dismissPendingAnnouncement,
   dismissPuzzleNotification,
   ensurePuzzleDocument,
+  fetchWhiteboardVersion,
   generateHuntInvitationCode,
   generateUploadToken,
   insertDocumentImage,
@@ -196,6 +199,7 @@ const METHODS = {
   removePuzzleTag,
   removeUserAccountEmail,
   renameTag,
+  restoreWhiteboardVersion,
   sendChatMessage,
   sendUserVerificationEmail,
   setChatMessagePin,

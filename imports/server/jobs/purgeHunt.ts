@@ -55,6 +55,7 @@ import UserStatuses from "../../lib/models/UserStatuses";
 import WhiteboardEdges from "../../lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../lib/models/WhiteboardNodes";
 import Whiteboards from "../../lib/models/Whiteboards";
+import WhiteboardVersions from "../../lib/models/WhiteboardVersions";
 import type Model from "../../lib/typedModel/Model";
 import { AllModels } from "../../lib/typedModel/Model";
 import { purgeDocumentCache } from "../documentCache";
@@ -68,6 +69,7 @@ import Locks from "../models/Locks";
 import Subscribers from "../models/Subscribers";
 import UploadTokens from "../models/UploadTokens";
 import WhiteboardPresence from "../models/WhiteboardPresence";
+import WhiteboardVersionChunks from "../models/WhiteboardVersionChunks";
 import defineJob from "./framework/defineJob";
 
 const COLLECTIONS_TO_PURGE = [
@@ -95,6 +97,8 @@ const COLLECTIONS_TO_PURGE = [
   Tags,
   UserStatuses,
   WhiteboardPresence,
+  WhiteboardVersions,
+  WhiteboardVersionChunks,
   WhiteboardEdges,
   WhiteboardNodes,
   Whiteboards,

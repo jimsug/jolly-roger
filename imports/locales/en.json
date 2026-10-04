@@ -81,6 +81,10 @@
     "frame": {
       "finishedUnsolved_one": "Finished, {{count}} unsolved",
       "finishedUnsolved_other": "Finished, {{count}} unsolved"
+    },
+    "history": {
+      "changes_one": "{{count}} change",
+      "changes_other": "{{count}} changes"
     }
   }
 }

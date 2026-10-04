@@ -15,6 +15,7 @@ files:
   - imports/client/components/whiteboard/FeederFocusContext.ts
   - imports/client/components/whiteboard/FrameLabelLayer.tsx
   - imports/client/components/whiteboard/FrameNode.tsx
+  - imports/client/components/whiteboard/HistoryPanel.tsx
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
   - imports/client/components/whiteboard/RoundStateContext.ts
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
@@ -23,9 +24,11 @@ files:
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useKeyboardInset.ts
   - imports/client/hooks/useRoundStates.ts
+  - imports/client/hooks/useWhiteboardSync.ts
   - imports/lib/chatMessagePath.ts
   - imports/lib/models/WhiteboardEdges.ts
   - imports/lib/models/WhiteboardNodes.ts
+  - imports/lib/models/WhiteboardVersions.ts
   - imports/lib/models/Whiteboards.ts
   - imports/lib/permission_stubs.ts
   - imports/lib/puzzleTagStatus.ts
@@ -37,15 +40,24 @@ files:
   - imports/lib/whiteboard/minimap.ts
   - imports/lib/whiteboard/rounds.ts
   - imports/lib/whiteboard/search.ts
+  - imports/lib/whiteboard/versions.ts
+  - imports/methods/fetchWhiteboardVersion.ts
+  - imports/methods/restoreWhiteboardVersion.ts
   - imports/methods/setWhiteboardEditPolicy.ts
   - imports/methods/upsertWhiteboardEdges.ts
+  - imports/server/daemons/whiteboardVersions.ts
+  - imports/server/methods/fetchWhiteboardVersion.ts
+  - imports/server/methods/restoreWhiteboardVersion.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
   - imports/server/models/WhiteboardPresence.ts
+  - imports/server/models/WhiteboardVersionChunks.ts
+  - imports/server/publications/whiteboardVersions.ts
   - imports/server/whiteboard.ts
   - imports/server/whiteboardEdits.ts
   - imports/server/whiteboardLive.ts
   - imports/server/whiteboardPolicy.ts
   - imports/server/whiteboardShared.ts
+  - imports/server/whiteboardVersions.ts
 updated: 2026-10-04
 ---
 
@@ -290,7 +302,7 @@ hunt, or while offline) there's no Comment tool, so the Comments button
 carries it instead.
 
 The toolbar's Comments button opens a panel in the same place as the "Not on
-the board" panel, so only one of them shows at a time. It lists the board's
+the board" and History panels, so only one of them shows at a time. It lists the board's
 threads with unread ones first and then the most recent activity first,
 leaving out resolved threads unless the resolved toggle is on, as the pins
 do. Each row shows what the comment is on, the first line of the comment,
@@ -361,7 +373,7 @@ tooltip shows its key.
 | N | Go to the next comment thread with something unread (see Comments) | |
 | 1, 2, 3 | Thin, medium or thick pen | edit |
 | Ctrl+A (Cmd+A on a Mac) | Select everything but frames (a selected frame carries its contents anyway) and no lines, switching to Select | edit |
-| Escape | Close an open comment thread, then the Comments list; with neither open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
+| Escape | Close an open comment thread, then the Comments list, then leave a preview, then close History; with none of those open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
 | / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
 | Delete or Backspace | Delete the selection | edit |
 | Arrow keys | Move the selection 5 units, 20 with Shift; it joins or leaves a frame as a drop would | edit |
@@ -469,6 +481,143 @@ every reply to it go and that it can't be undone. Cancel leaves the thread as
 it was. Who may delete is unchanged: the author until someone else replies,
 and operators at any time.
 
+## History
+
+The board keeps earlier versions of itself, so anyone can see how it was and
+someone who can edit it can put it back. The History button (a clock with an
+arrow) sits beside "Not on the board" in the toolbar, and in the read-only
+toolbar, so archived hunts and people who can't edit can look too. It isn't
+shown on a phone, and a screen that becomes phone-sized closes the panel and
+any preview.
+
+### What a version is
+
+A version is a copy of every node and line on the board, hidden ones
+included, taken just before an edit. Taking it before the write means
+nothing has to run later to finish one off, and the live board is always the
+newest state. It doesn't hold comments, cursors, the board's own document or
+its edit policy, so a restore never changes who may edit.
+
+Node and line edits (`upsertNodes`, `deleteNodes`, `upsertEdges` and
+`deleteEdges`) call `recordVersionBeforeEdit` in
+`imports/server/whiteboardVersions.ts` after their checks and before their
+first write. Comments, live drags and strokes, and placement from puzzle
+hooks never record one. The rule for whether an edit records a version is
+`versionDecision` in `imports/lib/whiteboard/versions.ts`. Each version
+lists who edited after it and when each of them started:
+
+1. If someone has edited in the last 10 minutes (`VERSION_INTERVAL_MS`,
+   counted from when they joined the version, not when it started), their
+   edit counts towards that version and nothing new is stored.
+2. Otherwise, if the newest version is less than a minute old
+   (`VERSION_JOIN_MS`), they join it. A crowd starting together costs at most
+   one version a minute.
+3. Otherwise the board is serialised and hashed; if it's the same as the
+   newest version, they join that one rather than storing it again.
+4. Otherwise a new version is stored.
+
+Only ordinary edits made since the last restore count for 1 to 3, so the
+first edit after a restore always records the restored board. A restore
+always records the board it's about to change. Someone editing steadily gets
+a version every 10 minutes, and a burst of edits is one version. The fast
+path (rule 1) is one indexed read with no lock; the rest takes the board's
+`whiteboard:<boardId>` lock, which placement also takes, so a version never
+sees half a placement. A failure to record is logged and the edit goes
+ahead: a missing version beats a refused edit. User edits don't take the lock
+for their own writes, so a version can catch part of someone else's batch;
+restore cleans up what that can leave.
+
+### The History panel
+
+The panel lists versions by day, newest first. A version is the board before
+the edits it lists, so each row names a state: "Now", then "Before edits by
+Alice and Bob, 14:20 to 14:29 (37 changes)" (a change is one save, whatever
+it held) or "Before Carol restored the 12:10 version · 13:40". When older
+versions have been pruned, the panel ends with "Older history was cleared to
+save space". With history turned off it says so instead.
+
+Picking a row previews it. The client fetches the version's chunks with
+`Whiteboards.methods.fetchVersion`, one call per chunk, joins them, unpacks
+them with `DecompressionStream("gzip")` and hands the nodes and lines to
+`useWhiteboardSync` in place of the live board. While previewing, the board
+can't be edited or commented on, comment pins, cursors and other people's
+drags are hidden, the viewer's own cursor comes off everyone else's screens,
+and a banner at the top says "Viewing the board as it was
+at 14:20." with "Restore this version" and "Back to now". Restore asks first:
+"Restore the board to 14:20? Changes since then, by anyone, are undone.
+Comments are kept. The board as it is now is saved in history, so you can
+come back to it." The question stays up, its buttons disabled, until the
+server answers; a refusal shows in it. Once it's done, the preview closes and
+a notice says "Board restored to 14:20." For anyone who can't edit, Restore
+is disabled with the reason beside it. Rows give only the time, under their
+day; the banner, the question, the notice and a restore row's "restored the
+… version" add the day when it isn't today. Escape leaves a preview, and
+then closes the panel. A browser without `DecompressionStream` can list
+versions but not preview them, and says so.
+
+### Restoring
+
+`Whiteboards.methods.restoreVersion` needs edit access and history turned on.
+Under the board's lock it checks both again, reads the version and checks
+every document against today's schemas, refusing with "This version is from
+an older layout and can't be restored" if anything doesn't fit. User ids in
+`createdBy`, `updatedBy` and `contributors` are mapped through completed
+account merges, so a restore never writes a merged-away account back.
+
+`planRestore` then matches documents by what they are rather than by id: a
+card by its puzzle, a round's frame by its tag, Ungrouped by its kind, a
+feeder arrow by its feeder and meta, and anything else by id. Where the
+version and the board have the same thing under different ids, the board's id
+wins and the version's references are remapped to it. Parents that are
+missing or would make a loop are dropped (the node goes to the top level), as
+are lines with a missing end and free ends no line uses. A restore that would
+take the board past its node or line limit is refused.
+
+Only after that does it record the board as it is (a version of kind
+`restore`), so a refused restore records nothing. Then:
+
+- Cards for puzzles the version doesn't have stay, moved to the top level at
+  the same place on screen and no longer marked as moved by hand. After the
+  lock, a placement sync of the hunt's puzzles puts them in their rounds and
+  redraws feeder arrows.
+- Comments on nodes the restore removes or hides become free pins where they
+  were, remembering the node in `comment.detachedFrom`. Deleting a node does
+  the same.
+- Everything else is put back as the version has it.
+- Free pins that came off a node the restore brings back or unhides go back
+  on it.
+- The board's `lastRewrittenAt` is set.
+
+Documents a restore changes draw on top of anything else at their level,
+since their `updatedAt` is new; documents it puts back keep the `updatedAt`
+they had in the version, and draw where that puts them. Edits that land while a restore runs may survive on top
+or be overwritten. Pins that came off a node before this feature have no
+`detachedFrom` and stay free.
+
+### Retention and storage
+
+A version's payload is `gzip(EJSON.stringify({ format: 1, nodes, edges }))`,
+with documents sorted by id and keys in a fixed order, and its sha256 hash
+says whether the board has changed. The payload is stored in 4 MiB chunks
+(`WhiteboardVersionChunks`, server only), written before the version's
+header, so a listed version always has its data. A typical board's version
+is about half a megabyte; ink is most of it.
+
+Every hour, `imports/server/daemons/whiteboardVersions.ts` prunes each
+board's history under its lock (`pruneWhiteboardVersions` in
+`imports/server/whiteboardVersions.ts`, rules in `versionsToPrune`): everything from the last two hours stays; before that,
+the first version in each UTC hour stays, as does every restore; and the
+newest versions are kept up to 256 MiB of compressed payload per board
+(`MAX_VERSION_BYTES_PER_BOARD`), never dropping the newest. Once the hunt is
+archived, or the board has gone 14 days without a new version, its history
+thins to the newest 10 versions plus every restore. Anything pruned sets the
+board's `versionsPrunedBefore`. A recording that takes the board over the cap
+prunes there and then, and never refuses the edit. The daemon also removes
+chunks over an hour old that have no version (left by a write that didn't
+finish), and logs each board's history size once a day, so an ink-heavy
+board shows up before it reaches the cap. A board that fails is logged and
+left for the next pass, and the rest carry on.
+
 ## Phones
 
 A phone gets the board read-only plus comments. `WhiteboardPage` treats the
@@ -495,9 +644,10 @@ still comment." under it, and its Comment, Comments and resolved buttons are
 A tap places the comment. With the tool out on a phone the board still pans
 under a finger: React Flow's `panOnDrag` stays on, and the canvas leaves a
 touch press to React Flow rather than taking it over as it does a mouse
-press. A press that moves more than a few pixels, a second finger, or a
+press. A press that moves further than a tap can, a second finger, or a
 cancelled touch drops it without a comment, so panning and pinching never
-leave a stray draft. The click the browser makes from the tap is ignored, so
+leave a stray draft. A touch gets 10px of room before it counts as a pan; a
+mouse or pen gets 4px. The click the browser makes from the tap is ignored, so
 a tap on a card's link places the comment without opening the puzzle.
 
 A thread opens in a sheet along the bottom of the board, as wide as the
@@ -506,8 +656,9 @@ board, with rounded top corners, at most 60% of its height, never within
 its header stays in view when the keyboard lifts it. The sheet and the
 top-right panel a wider screen uses are one element, so the screen changing
 size while a comment is being written keeps what's written. Its buttons are full size and it scrolls
-without dragging the page with it. Opening a pin, or showing a comment from
-chat or the Comments list, pans the board so the pin sits above the sheet. A
+without dragging the page with it. Opening a pin, placing a new comment, or
+showing a comment from chat or the Comments list, pans the board so the pin
+sits above the sheet. A
 new comment's composer takes focus, which brings up the keyboard; opening an
 existing thread doesn't. `useKeyboardInset` (in `imports/client/hooks/`)
 follows `window.visualViewport`, and the sheet sits that far up from the
@@ -619,13 +770,18 @@ did, so existing boards only change in where new cards land.
   Ordinary chat on the hidden puzzle isn't gated.
 - `disable.whiteboard_live` turns off cursors, live drags and strokes: the
   presence publication returns nothing and `setLive` does nothing.
+- `disable.whiteboard_versions` ("Whiteboard history" on the Setup page)
+  stops recording versions, empties the history list (the publication returns
+  nothing), and refuses fetching and restoring versions. Versions already
+  recorded are kept.
 
 There is no flag for the edit policy: `members` is already the off position.
 
 ## Data model
 
 - `Whiteboards` (`jr_whiteboards`): one per hunt (a unique `hunt` index), with
-  the hidden puzzle in `puzzle`, and the optional `editPolicy` and `editors`.
+  the hidden puzzle in `puzzle`, the optional `editPolicy` and `editors`, and
+  the optional `versionsPrunedBefore` and `lastRewrittenAt` from history.
 - `WhiteboardNodes` (`jr_whiteboard_nodes`): cards, frames, sticky notes, text,
   ink segments and the free ends of lines. A node inside a frame has `parent`
   set and a position relative to it. `hidden` marks a card or seeded frame
@@ -638,13 +794,24 @@ There is no flag for the edit policy: `members` is already the off position.
 - `WhiteboardPresence` (`jr_whiteboard_presence`, server only): one document
   per connection per board, with the cursor, drag and stroke. It goes when the
   connection closes, the presence subscription stops or its server dies.
+- `WhiteboardVersions` (`jr_whiteboard_versions`): one per version, with its
+  `kind` (`edits` or `restore`; `reset` is reserved for Reset layout), the
+  `users` who edited after it and when each started, `changeCount`,
+  `lastEditAt`, `restoredFromAt` for a restore, counts, the compressed `size`,
+  `chunkCount` and the payload's `hash`. Published to members without the
+  hash.
+- `WhiteboardVersionChunks` (`jr_whiteboard_version_chunks`, server only): the
+  pieces of each version's payload, by `version` and `index`.
 - Comments are `ChatMessages` on the hidden puzzle with a `comment` anchor
-  (`node`, `x`, `y`, and `resolvedAt` and `resolvedBy` once resolved). Replies
-  carry `thread`, the root's id.
+  (`node`, `x`, `y`, `resolvedAt` and `resolvedBy` once resolved, and
+  `detachedFrom` on a free pin that came off a node). Replies carry `thread`,
+  the root's id.
 
 The server enforces the limits in `imports/lib/whiteboard/limits.ts` (batch
 sizes, nodes and lines per board, text lengths, ink points, coordinate range,
-frame depth, the edit list), and the client keeps to the ones it can. Purging
-a hunt removes all four collections, and merging users carries `createdBy`,
-`contributors` and the `editors` list over to the merged account and drops the
-source account's presence.
+frame depth, the edit list, history's intervals and caps), and the client
+keeps to the ones it can. Purging a hunt removes all six collections, and
+merging users carries `createdBy`, `contributors`, the `editors` list and
+versions' `users` over to the merged account and drops the source account's
+presence. User ids inside a version's payload aren't rewritten; a restore maps
+them instead.
