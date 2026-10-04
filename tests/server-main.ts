@@ -74,6 +74,7 @@ import "./unit/imports/server/Model";
 import "./unit/imports/server/NewPuzzleNotificationHooks";
 import "./unit/imports/server/publishJoinedQuery";
 import "./unit/imports/server/puzzleHistory";
+import "./unit/imports/server/removeTagAlias";
 import "./unit/imports/server/repairLegacyUrls";
 import "./unit/imports/server/sendChatMessage";
 import "./unit/imports/server/subscriberPresence";

@@ -1,6 +1,9 @@
 import { assert } from "chai";
 import { PASSIVE_VIEWER_WINDOW_MS } from "../../../../imports/lib/presenceStatus";
-import computePuzzleViewers from "../../../../imports/lib/puzzleViewers";
+import computePuzzleViewers, {
+  puzzleViewerInputs,
+  puzzleViewerPeople,
+} from "../../../../imports/lib/puzzleViewers";
 
 const now = new Date(Date.UTC(2026, 0, 1, 12, 0));
 const ago = (ms: number) => new Date(now.getTime() - ms);
@@ -204,5 +207,102 @@ describe("computePuzzleViewers", function () {
       passiveViewers: [],
     });
     assert.deepEqual(viewers.p2?.activeViewers, ["alice"]);
+  });
+});
+
+// The puzzle list's rows and the whiteboard's cards both take the hunt's
+// presence rows through puzzleViewerInputs, computePuzzleViewers and
+// puzzleViewerPeople, so for one set of rows a card shows its row's people.
+describe("the people on a puzzle's card and list row", function () {
+  const names: Record<string, string> = {
+    alice: "Alice",
+    bob: "Bob",
+    carol: "Carol",
+    dave: "Dave",
+    erin: "Erin",
+  };
+  const userOf = (id: string) =>
+    Object.hasOwn(names, id) ? { displayName: names[id] } : { displayName: "" };
+
+  const rows = {
+    peers: [{ call: "p1", createdBy: "dave" }],
+    subscribers: [
+      // Alice has the puzzle open
+      { name: "puzzle:p1", user: "alice", visible: true, updatedAt: ago(0) },
+      // Bob's only trace is a tab hidden ten minutes ago
+      {
+        name: "puzzle:p1",
+        user: "bob",
+        visible: false,
+        updatedAt: ago(10 * MINUTE),
+      },
+      // Carol hid her tab a couple of minutes ago
+      {
+        name: "puzzle:p1",
+        user: "carol",
+        visible: false,
+        updatedAt: ago(2 * MINUTE),
+      },
+      // Dave is on the call and has the puzzle open too
+      { name: "puzzle:p1", user: "dave", visible: true, updatedAt: ago(0) },
+      // Erin has p2 hidden, but last did something on p1
+      {
+        name: "puzzle:p2",
+        user: "erin",
+        visible: false,
+        updatedAt: ago(3 * MINUTE),
+      },
+      // Frank has no display name
+      { name: "puzzle:p1", user: "frank", visible: true, updatedAt: ago(0) },
+      // Not a puzzle
+      { name: "hunt:h1", user: "alice", visible: true, updatedAt: ago(0) },
+    ],
+    statuses: [
+      { puzzle: "p1", user: "erin", updatedAt: ago(MINUTE) },
+      { user: "alice", updatedAt: ago(0) },
+    ],
+  };
+
+  const shown = (puzzle: string, rtcDisabled: boolean) => {
+    const byPuzzle = computePuzzleViewers({
+      ...puzzleViewerInputs({ ...rows, rtcDisabled }),
+      now,
+    });
+    const { callers, viewers } = puzzleViewerPeople(byPuzzle[puzzle], userOf);
+    return {
+      callers: callers.map((p) => p._id),
+      viewers: viewers.map((p) => [p._id, p.isPassive]),
+    };
+  };
+
+  it("shows callers, then open tabs, then faded recent ones", function () {
+    assert.deepEqual(shown("p1", false), {
+      callers: ["dave"],
+      viewers: [
+        ["alice", false],
+        ["carol", true],
+        ["erin", true],
+      ],
+    });
+    assert.deepEqual(shown("p2", false), { callers: [], viewers: [] });
+  });
+
+  it("shows callers as viewers while calls are off", function () {
+    assert.deepEqual(shown("p1", true), {
+      callers: [],
+      viewers: [
+        ["alice", false],
+        ["dave", false],
+        ["carol", true],
+        ["erin", true],
+      ],
+    });
+  });
+
+  it("shows nobody for a puzzle nobody is on", function () {
+    assert.deepEqual(puzzleViewerPeople(undefined, userOf), {
+      callers: [],
+      viewers: [],
+    });
   });
 });

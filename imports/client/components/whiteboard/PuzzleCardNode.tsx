@@ -8,7 +8,7 @@ import { faStar } from "@fortawesome/free-solid-svg-icons/faStar";
 import { faUpRightFromSquare } from "@fortawesome/free-solid-svg-icons/faUpRightFromSquare";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Node, NodeProps } from "@xyflow/react";
-import React, { useContext, useMemo } from "react";
+import React, { useContext } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import styled, { css } from "styled-components";
@@ -20,7 +20,7 @@ import { puzzleStatusFromTags } from "../../../lib/puzzleTagStatus";
 import type { Solvedness } from "../../../lib/solvedness";
 import { computeSolvedness } from "../../../lib/solvedness";
 import { isLocationTag } from "../../../lib/tagNames";
-import useAvatarUsers from "../../hooks/useAvatarUsers";
+import usePuzzleViewerUsers from "../../hooks/usePuzzleViewerUsers";
 import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import AvatarStack from "../AvatarStack";
 import PuzzleAnswer from "../PuzzleAnswer";
@@ -221,18 +221,9 @@ const Far = styled.div`
 `;
 
 const People = ({ puzzleId }: { puzzleId: string }) => {
-  const people = useContext(PeopleContext).get(puzzleId);
-  const callers = useMemo(() => people?.callers ?? [], [people]);
-  const viewerIds = useMemo(
-    () => people?.viewers.map((v) => v.user) ?? [],
-    [people],
-  );
-  const passive = useMemo(
-    () => new Set(people?.viewers.filter((v) => v.passive).map((v) => v.user)),
-    [people],
-  );
-  const callerUsers = useAvatarUsers(callers);
-  const viewerUsers = useAvatarUsers(viewerIds, passive);
+  const viewers = useContext(PeopleContext)?.[puzzleId];
+  const { callers: callerUsers, viewers: viewerUsers } =
+    usePuzzleViewerUsers(viewers);
 
   if (callerUsers.length === 0 && viewerUsers.length === 0) return null;
   return (

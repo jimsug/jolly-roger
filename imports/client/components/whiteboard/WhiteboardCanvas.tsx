@@ -161,7 +161,7 @@ import {
   useWhiteboardViewport,
 } from "../../hooks/persisted-state";
 import useKeyboardInset from "../../hooks/useKeyboardInset";
-import usePuzzlePeople from "../../hooks/usePuzzlePeople";
+import usePuzzleViewers from "../../hooks/usePuzzleViewers";
 import useRoundStates from "../../hooks/useRoundStates";
 import useTypedSubscribe from "../../hooks/useTypedSubscribe";
 import useWhiteboardComments, {
@@ -826,6 +826,20 @@ interface CanvasProps {
   onInitialTargetShown?: () => void;
 }
 
+// Who is on each puzzle, worked out once for the board as the puzzle list
+// does it. Its own component, so the minute clock and presence changes
+// re-render only the cards whose people changed, not the whole canvas.
+const PuzzlePeopleProvider = ({
+  huntId,
+  children,
+}: {
+  huntId: string;
+  children: React.ReactNode;
+}) => {
+  const people = usePuzzleViewers(huntId, true);
+  return <PeopleContext value={people}>{children}</PeopleContext>;
+};
+
 const CanvasInner = ({
   boardId,
   huntId,
@@ -870,8 +884,8 @@ const CanvasInner = ({
 
   // The hunt's puzzles and tags come from the puzzle page around the canvas,
   // which only shows it once they've loaded (puzzleForPuzzlePage), and the
-  // board's nodes and lines from the whiteboard page.
-  const people = usePuzzlePeople(huntId);
+  // board's nodes and lines from the whiteboard page. Who is on each puzzle
+  // comes from PuzzlePeopleProvider.
   const rounds = useRoundStates(boardId, huntId);
 
   const liveEnabled = useTracker(
@@ -4053,7 +4067,7 @@ const CanvasInner = ({
 
   return (
     <WhiteboardContext value={actions}>
-      <PeopleContext value={people}>
+      <PuzzlePeopleProvider huntId={huntId}>
         <FeederFocusContext value={feederFocusIds}>
           <RoundStateContext value={rounds}>
             <CanvasWrapper
@@ -4785,7 +4799,7 @@ const CanvasInner = ({
             </Modal>
           </RoundStateContext>
         </FeederFocusContext>
-      </PeopleContext>
+      </PuzzlePeopleProvider>
     </WhiteboardContext>
   );
 };

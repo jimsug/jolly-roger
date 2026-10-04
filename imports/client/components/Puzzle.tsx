@@ -32,7 +32,6 @@ import { Link } from "react-router";
 import styled, { css, useTheme } from "styled-components";
 import { indexedById } from "../../lib/listUtils";
 import Hunts from "../../lib/models/Hunts";
-import MeteorUsers from "../../lib/models/MeteorUsers";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import { puzzleStatusFromTags } from "../../lib/puzzleTagStatus";
@@ -47,7 +46,7 @@ import {
 import updatePuzzle from "../../methods/updatePuzzle";
 import { useOperatorActionsHiddenForHunt } from "../hooks/persisted-state";
 import usePuzzleInterest from "../hooks/usePuzzleInterest";
-import type { AvatarStackUser } from "./AvatarStack";
+import usePuzzleViewerUsers from "../hooks/usePuzzleViewerUsers";
 import AvatarStack from "./AvatarStack";
 import BookmarkButton from "./BookmarkButton";
 import PuzzleActivity from "./PuzzleActivity";
@@ -304,11 +303,6 @@ const ViewerTooltipLine = styled.div<{ $passive?: boolean }>`
     `}
 `;
 
-const NO_VIEWER_USERS: {
-  callerUsers: AvatarStackUser[];
-  viewerUsers: AvatarStackUser[];
-} = { callerUsers: [], viewerUsers: [] };
-
 const NOTE_PREVIEW_LENGTH = 250;
 const truncateNote = (text: string) =>
   text.length <= NOTE_PREVIEW_LENGTH
@@ -505,32 +499,9 @@ const Puzzle = React.memo(
     const tooltipId = useId();
 
     // Display names and avatars come from the list page's subscriptions
-    const { callerUsers, viewerUsers } = useTracker(() => {
-      if (!showViewers || !viewers) {
-        return NO_VIEWER_USERS;
-      }
-      const toUsers = (ids: string[], isPassive: boolean): AvatarStackUser[] =>
-        ids.flatMap((id) => {
-          const user = MeteorUsers.findOne(id);
-          return user?.displayName
-            ? [
-                {
-                  _id: id,
-                  displayName: user.displayName,
-                  discordAccount: user.discordAccount,
-                  isPassive,
-                },
-              ]
-            : [];
-        });
-      return {
-        callerUsers: toUsers(viewers.rtcViewers, false),
-        viewerUsers: [
-          ...toUsers(viewers.activeViewers, false),
-          ...toUsers(viewers.passiveViewers, true),
-        ],
-      };
-    }, [showViewers, viewers]);
+    const { callers: callerUsers, viewers: viewerUsers } = usePuzzleViewerUsers(
+      showViewers ? viewers : undefined,
+    );
     const activeViewers = viewerUsers.filter((u) => !u.isPassive);
     const passiveViewers = viewerUsers.filter((u) => u.isPassive);
     const viewersTooltip = (

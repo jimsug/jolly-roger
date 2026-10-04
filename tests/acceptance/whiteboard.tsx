@@ -81,6 +81,17 @@ const setPuzzleAnswers = new TypedMethod<
   void
 >("test.methods.whiteboard.setPuzzleAnswers");
 
+// Puts a user on a puzzle as if they'd opened it in a tab ageMs ago, visible
+// or not, with no connection behind it, until clearPuzzleSubscribers.
+const addPuzzleSubscriber = new TypedMethod<
+  { puzzleId: string; userId: string; visible: boolean; ageMs: number },
+  void
+>("test.methods.whiteboard.addPuzzleSubscriber");
+
+const clearPuzzleSubscribers = new TypedMethod<{ userIds: string[] }, void>(
+  "test.methods.whiteboard.clearPuzzleSubscribers",
+);
+
 if (Meteor.isServer) {
   const defineMethod: typeof import("../../imports/server/methods/defineMethod").default =
     require("../../imports/server/methods/defineMethod").default;
@@ -96,6 +107,59 @@ if (Meteor.isServer) {
         throw new Meteor.Error(500, "This code must not run in production");
       }
       await Puzzles.updateAsync(puzzleId, { $set: { answers } });
+    },
+  });
+
+  const Subscribers: typeof import("../../imports/server/models/Subscribers").default =
+    require("../../imports/server/models/Subscribers").default;
+  const serverId: typeof import("../../imports/server/serverId").default =
+    require("../../imports/server/serverId").default;
+
+  defineMethod(addPuzzleSubscriber, {
+    validate(arg: unknown) {
+      check(arg, {
+        puzzleId: String,
+        userId: String,
+        visible: Boolean,
+        ageMs: Number,
+      });
+      return arg;
+    },
+
+    async run({ puzzleId, userId, visible, ageMs }) {
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+      const puzzle = await Puzzles.findOneAsync(puzzleId);
+      if (!puzzle) {
+        throw new Meteor.Error(404, "Unknown puzzle");
+      }
+      // Straight to the collection, since the model stamps updatedAt itself
+      const at = new Date(Date.now() - ageMs);
+      await Subscribers.collection.insertAsync({
+        _id: Random.id(),
+        server: serverId,
+        connection: Random.id(),
+        user: userId,
+        name: `puzzle:${puzzleId}`,
+        context: { hunt: puzzle.hunt, puzzle: puzzleId, visible },
+        createdAt: at,
+        updatedAt: at,
+      });
+    },
+  });
+
+  defineMethod(clearPuzzleSubscribers, {
+    validate(arg: unknown) {
+      check(arg, { userIds: [String] });
+      return arg;
+    },
+
+    async run({ userIds }) {
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+      await Subscribers.removeAsync({ user: { $in: userIds } });
     },
   });
 
@@ -1181,6 +1245,58 @@ if (Meteor.isClient) {
         await waitFor(() => assert.notInclude(header(), "Finished"), {
           timeout: 10000,
         });
+      });
+
+      it("shows the people the puzzle list would on a card", async function () {
+        this.timeout(30000);
+        const cardId = await nodeFor({ puzzle: robber });
+        const viewer = await createTestUser.callPromise({
+          email: "card-viewer@example.com",
+          password: "password",
+          displayName: "Vic",
+        });
+        const gone = await createTestUser.callPromise({
+          email: "card-gone@example.com",
+          password: "password",
+          displayName: "Gail",
+        });
+        await addHuntUser.callPromise({
+          huntId,
+          email: "card-viewer@example.com",
+        });
+        await addHuntUser.callPromise({
+          huntId,
+          email: "card-gone@example.com",
+        });
+        // Vic has the puzzle open; Gail's only trace is a tab she hid ten
+        // minutes ago, which the puzzle list no longer counts
+        await addPuzzleSubscriber.callPromise({
+          puzzleId: robber,
+          userId: viewer,
+          visible: true,
+          ageMs: 0,
+        });
+        await addPuzzleSubscriber.callPromise({
+          puzzleId: robber,
+          userId: gone,
+          visible: false,
+          ageMs: 10 * 60 * 1000,
+        });
+        try {
+          render(<TestApp />);
+          await goTo(`${boardPath}?puzzle=${robber}`);
+          await waitFor(
+            () => {
+              const eye = nodeElement(cardId)?.querySelector("svg.fa-eye");
+              assert.exists(eye);
+              // The eye's group holds the viewers' avatars, here initials
+              assert.equal(eye.parentElement?.textContent, "V");
+            },
+            { timeout: 20000 },
+          );
+        } finally {
+          await clearPuzzleSubscribers.callPromise({ userIds: [viewer, gone] });
+        }
       });
 
       it("shows a card's priority, stuck flag and needs: tags", async function () {

@@ -1,6 +1,15 @@
 import { promisify } from "node:util";
 import { Meteor } from "meteor/meteor";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { assert } from "chai";
+import { MemoryRouter } from "react-router";
 import type { EditableHuntType } from "../../imports/lib/models/Hunts";
 import PuzzleNotifications from "../../imports/lib/models/PuzzleNotifications";
 import Puzzles from "../../imports/lib/models/Puzzles";
@@ -19,9 +28,11 @@ import renameTag from "../../imports/methods/renameTag";
 import updateProfile from "../../imports/methods/updateProfile";
 import resetDatabase from "../lib/resetDatabase";
 import createUser from "./createTestUser";
-import { USER_EMAIL, USER_PASSWORD } from "./lib";
+import { stabilize, USER_EMAIL, USER_PASSWORD } from "./lib";
 
 if (Meteor.isClient) {
+  const Routes: typeof import("../../imports/client/components/Routes").default =
+    require("../../imports/client/components/Routes").default;
   const typedSubscribe = require("../../imports/client/typedSubscribe")
     .default as typeof import("../../imports/client/typedSubscribe").default;
 
@@ -295,6 +306,63 @@ if (Meteor.isClient) {
           }),
           /not a member/,
         );
+      });
+    });
+
+    describe("tag manager", function () {
+      afterEach(function () {
+        cleanup();
+      });
+
+      it("removes an alias once confirmed", async function () {
+        this.timeout(20000);
+        const { huntId } = await setUpHunt("tag manager alias removal", [
+          ["cryptic"],
+        ]);
+        const sub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+        });
+        const tag = await Tags.findOneAsync({ hunt: huntId });
+        assert.isDefined(tag);
+        await renameTag.callPromise({
+          tagId: tag._id,
+          name: "cryptics",
+          keepOldNameAsAlias: true,
+        });
+        await renameTag.callPromise({
+          tagId: tag._id,
+          name: "crypto",
+          keepOldNameAsAlias: true,
+        });
+
+        render(
+          <MemoryRouter initialEntries={[`/hunts/${huntId}/tags`]}>
+            <Routes />
+          </MemoryRouter>,
+        );
+        await act(async () => {
+          await stabilize();
+        });
+        const remove = await screen.findByRole(
+          "button",
+          { name: "Remove alias “cryptic”" },
+          { timeout: 10000 },
+        );
+        screen.getByRole("button", { name: "Remove alias “cryptics”" });
+        fireEvent.click(remove);
+        await screen.findByText(/^Remove “cryptic” from “crypto”\?/);
+        fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+        await waitFor(async () => {
+          assert.deepEqual((await Tags.findOneAsync(tag._id))?.aliases, [
+            "cryptics",
+          ]);
+          assert.isNull(
+            screen.queryByRole("button", { name: "Remove alias “cryptic”" }),
+          );
+        });
+        screen.getByRole("button", { name: "Remove alias “cryptics”" });
+        sub.stop();
       });
     });
 

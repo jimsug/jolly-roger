@@ -16,6 +16,7 @@ files:
   - imports/client/components/whiteboard/FrameLabelLayer.tsx
   - imports/client/components/whiteboard/FrameNode.tsx
   - imports/client/components/whiteboard/HistoryPanel.tsx
+  - imports/client/components/whiteboard/PeopleContext.ts
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
   - imports/client/components/whiteboard/ResetLayoutModal.tsx
   - imports/client/components/whiteboard/RoundStateContext.ts
@@ -24,6 +25,8 @@ files:
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useKeyboardInset.ts
+  - imports/client/hooks/usePuzzleViewers.ts
+  - imports/client/hooks/usePuzzleViewerUsers.ts
   - imports/client/hooks/useRoundStates.ts
   - imports/client/hooks/useWhiteboardSync.ts
   - imports/lib/chatMessagePath.ts
@@ -33,6 +36,7 @@ files:
   - imports/lib/models/Whiteboards.ts
   - imports/lib/permission_stubs.ts
   - imports/lib/puzzleTagStatus.ts
+  - imports/lib/puzzleViewers.ts
   - imports/lib/tagNames.ts
   - imports/lib/whiteboard/comments.ts
   - imports/lib/whiteboard/feederFocus.ts
@@ -770,8 +774,8 @@ edge, a 44px target, without looking any bigger.
 
 ## What cards and rounds show
 
-Everything here is display only: it reads puzzles, tags and the board's
-nodes, all already on the client, and writes nothing.
+Everything here is display only: it reads puzzles, tags, the board's nodes
+and the hunt's presence, and writes nothing.
 
 ### Cards
 
@@ -789,6 +793,27 @@ A card shows less as the board zooms out (`useWhiteboardDetail`):
   card gets a red inner edge, since the flag would be too small to see.
 - **Far** (below 0.3): the first answer, or failing that the first word of the
   title.
+
+The people on a card are the ones the puzzle list's viewers column shows on
+that puzzle's row. The canvas works them out once for the board in
+`PuzzlePeopleProvider` with `usePuzzleViewers`
+(`imports/client/hooks/usePuzzleViewers.ts`), the hook the puzzle list uses,
+which subscribes to the hunt's puzzle subscribers, call peers and
+`UserStatuses` and runs `computePuzzleViewers`
+(`imports/lib/puzzleViewers.ts`) again every minute while the tab is
+visible. Only the provider and the cards whose people changed re-render on
+that clock. Each card reads its own puzzle's entry from `PeopleContext` and
+turns it into users with `usePuzzleViewerUsers`
+(`imports/client/hooks/usePuzzleViewerUsers.ts`), as the list's row does. So
+each person is placed once: on every puzzle they have open in a visible tab,
+failing that on the puzzle of their latest chat message, call or document
+edit in the last five minutes, or failing that the hidden tab they last had
+open in that time. Callers come first with the phone icon (none while
+`disable.webrtc` is set), then viewers with the eye, with those placed by a
+hidden tab or an interaction drawn faded. Anyone without a display name is
+left out. Having the board open in a visible tab puts someone on the board's
+own puzzle, so while they look at the board they drop off the card of any
+puzzle they only have open in a hidden tab or last did something on.
 
 The badge, icons and chips come from `puzzleStatusFromTags` in
 `imports/lib/puzzleTagStatus.ts`, which the puzzle list's rows use too, so the

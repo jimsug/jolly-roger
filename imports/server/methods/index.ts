@@ -73,6 +73,7 @@ import "./removeChatReaction";
 import "./removeUserAccountEmail";
 import "./removePuzzleAnswer";
 import "./removePuzzleTag";
+import "./removeTagAlias";
 import "./renameTag";
 import "./resetWhiteboardLayout";
 import "./restoreWhiteboardVersion";

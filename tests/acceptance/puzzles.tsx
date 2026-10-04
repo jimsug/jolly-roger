@@ -1,6 +1,8 @@
 import { promisify } from "node:util";
 import { Meteor } from "meteor/meteor";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { assert } from "chai";
+import { MemoryRouter } from "react-router";
 import type { EditableHuntType } from "../../imports/lib/models/Hunts";
 import PuzzleInterests from "../../imports/lib/models/PuzzleInterests";
 import Puzzles from "../../imports/lib/models/Puzzles";
@@ -17,9 +19,11 @@ import updatePuzzle from "../../imports/methods/updatePuzzle";
 import withdrawPuzzleInterest from "../../imports/methods/withdrawPuzzleInterest";
 import resetDatabase from "../lib/resetDatabase";
 import createUser from "./createTestUser";
-import { USER_EMAIL, USER_PASSWORD } from "./lib";
+import { stabilize, USER_EMAIL, USER_PASSWORD } from "./lib";
 
 if (Meteor.isClient) {
+  const Routes: typeof import("../../imports/client/components/Routes").default =
+    require("../../imports/client/components/Routes").default;
   const typedSubscribe = require("../../imports/client/typedSubscribe")
     .default as typeof import("../../imports/client/typedSubscribe").default;
 
@@ -303,6 +307,34 @@ if (Meteor.isClient) {
         assert.isDefined(updated);
         assert.notProperty(updated, "url");
         assert.notProperty(updated, "completedWithNoAnswer");
+      });
+    });
+
+    describe("puzzle list", function () {
+      afterEach(function () {
+        cleanup();
+      });
+
+      it("offers Show and Hide for solved puzzles, as for viewers", async function () {
+        this.timeout(10000);
+        const huntId = await setUpHunt("puzzle list solved toggle");
+        render(
+          <MemoryRouter initialEntries={[`/hunts/${huntId}/puzzles`]}>
+            <Routes />
+          </MemoryRouter>,
+        );
+        await act(async () => {
+          await stabilize();
+        });
+        await screen.findByText("Solved puzzles", {}, { timeout: 5000 });
+        const labelFor = (suffix: string) =>
+          document
+            .querySelector(`label[for$="-${suffix}"]`)
+            ?.textContent?.trim();
+        assert.equal(labelFor("solved-show-button"), "Show");
+        assert.equal(labelFor("solved-hide-button"), "Hide");
+        assert.equal(labelFor("viewers-show-button"), "Show");
+        assert.equal(labelFor("viewers-hide-button"), "Hide");
       });
     });
   });

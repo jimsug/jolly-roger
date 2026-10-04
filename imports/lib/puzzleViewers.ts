@@ -1,6 +1,8 @@
+import type { DiscordAccountType } from "./models/DiscordAccount";
 import { PASSIVE_VIEWER_WINDOW_MS } from "./presenceStatus";
 
-// Works out who is on which puzzle for the puzzle list's viewers column.
+// Works out who is on which puzzle, for the puzzle list's viewers column and
+// the whiteboard's puzzle cards.
 
 export type PuzzleViewers = {
   // Users in the puzzle's audio call
@@ -158,4 +160,101 @@ export default function computePuzzleViewers({
     Object.keys(previous).length === Object.keys(viewers).length
     ? previous
     : viewers;
+}
+
+const PUZZLE_TOPIC_PREFIX = "puzzle:";
+
+// computePuzzleViewers's input, from the hunt's call peers, puzzle topic
+// subscribers and puzzle status rows. Calls are off while disable.webrtc is
+// set, so then there are no callers.
+export function puzzleViewerInputs({
+  peers,
+  subscribers,
+  statuses,
+  rtcDisabled,
+}: {
+  peers: { call: string; createdBy: string }[];
+  subscribers: {
+    name: string;
+    user: string;
+    visible?: boolean;
+    updatedAt?: Date;
+  }[];
+  statuses: { puzzle?: string; user: string; updatedAt: Date }[];
+  rtcDisabled: boolean;
+}): {
+  callers: ViewerCaller[];
+  subscriptions: ViewerSubscription[];
+  interactions: ViewerInteraction[];
+} {
+  return {
+    callers: rtcDisabled
+      ? []
+      : peers.map((peer) => ({ puzzle: peer.call, user: peer.createdBy })),
+    subscriptions: subscribers
+      .filter((s) => s.name.startsWith(PUZZLE_TOPIC_PREFIX))
+      .map((s) => ({
+        puzzle: s.name.slice(PUZZLE_TOPIC_PREFIX.length),
+        user: s.user,
+        visible: s.visible ?? false,
+        updatedAt: s.updatedAt,
+      })),
+    interactions: statuses.flatMap((status) =>
+      status.puzzle
+        ? [
+            {
+              puzzle: status.puzzle,
+              user: status.user,
+              updatedAt: status.updatedAt,
+            },
+          ]
+        : [],
+    ),
+  };
+}
+
+type ViewerPerson = {
+  _id: string;
+  displayName: string;
+  discordAccount?: DiscordAccountType | undefined;
+  // Placed here by a hidden tab or a recent interaction rather than a
+  // visible tab, so drawn faded
+  isPassive: boolean;
+};
+
+// The people a puzzle's viewers stand for, as the puzzle list's row and the
+// whiteboard's card both show them: callers, then viewers with a visible tab,
+// then the passive ones. Anyone without a display name is left out.
+export function puzzleViewerPeople(
+  viewers: PuzzleViewers | undefined,
+  userOf: (
+    id: string,
+  ) =>
+    | { displayName?: string; discordAccount?: DiscordAccountType | undefined }
+    | undefined,
+): { callers: ViewerPerson[]; viewers: ViewerPerson[] } {
+  if (!viewers) {
+    return { callers: [], viewers: [] };
+  }
+  const toPeople = (ids: string[], isPassive: boolean): ViewerPerson[] =>
+    ids.flatMap((id) => {
+      const user = userOf(id);
+      return user?.displayName
+        ? [
+            {
+              _id: id,
+              displayName: user.displayName,
+              discordAccount: user.discordAccount,
+              isPassive,
+            },
+          ]
+        : [];
+    });
+  return {
+    callers: toPeople(viewers.rtcViewers, false),
+    viewers: [
+      ...toPeople(viewers.activeViewers, false),
+      ...toPeople(viewers.passiveViewers, true),
+    ],
+  };
 }

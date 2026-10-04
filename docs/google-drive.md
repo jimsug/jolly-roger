@@ -46,7 +46,7 @@ files:
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-05T09:00:00Z
+updated: 2026-10-05T12:00:00Z
 ---
 
 # Google Drive Integration
@@ -298,10 +298,10 @@ bucket.
 When an edit can be attributed to a Jolly Roger user, the fetcher also records
 it as that user's most recent puzzle interaction in the `UserStatuses` model
 (`imports/server/recordPuzzleStatus.ts`), which feeds the hunter list's "last
-active on" button and the puzzle list's viewers column. That happens once per
-activity bucket, when the `DocumentActivities` record is first inserted: every
-poll re-reads the same trailing window, and each status write is published to
-everyone with those lists open. Edits more than a few minutes old (a backfill
+active on" button, the puzzle list's viewers column and the whiteboard's puzzle
+cards. That happens once per activity bucket, when the `DocumentActivities`
+record is first inserted: every poll re-reads the same trailing window, and
+each status write is published to everyone with those lists or a board open. Edits more than a few minutes old (a backfill
 after an outage) and edits that can't be matched to a user don't get a status
 row.
 

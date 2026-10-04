@@ -1,5 +1,5 @@
 import { Meteor } from "meteor/meteor";
-import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { useTracker } from "meteor/react-meteor-data";
 import { faClock } from "@fortawesome/free-regular-svg-icons/faClock";
 import { faEye } from "@fortawesome/free-regular-svg-icons/faEye";
 import { faEyeSlash } from "@fortawesome/free-regular-svg-icons/faEyeSlash";
@@ -34,28 +34,21 @@ import Tooltip from "react-bootstrap/Tooltip";
 import { Trans, useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import styled, { css } from "styled-components";
-import Flags from "../../Flags";
 import { sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import Hunts from "../../lib/models/Hunts";
-import Peers from "../../lib/models/mediasoup/Peers";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
-import UserStatuses from "../../lib/models/UserStatuses";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import puzzleActivityForHunt from "../../lib/publications/puzzleActivityForHunt";
 import puzzleInterestsForHunt from "../../lib/publications/puzzleInterestsForHunt";
 import puzzlesForPuzzleList from "../../lib/publications/puzzlesForPuzzleList";
-import userStatusesForHunt from "../../lib/publications/userStatusesForHunt";
 import {
   filteredPuzzleGroups,
   puzzleGroupsByRelevance,
 } from "../../lib/puzzle-sort-and-group";
 import { findPuzzleForUrl } from "../../lib/puzzleUrl";
-import computePuzzleViewers, {
-  type PuzzleViewers,
-} from "../../lib/puzzleViewers";
 import createPuzzle from "../../methods/createPuzzle";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import {
@@ -66,18 +59,14 @@ import {
   useHuntPuzzleListShowViewers,
   useOperatorActionsHiddenForHunt,
 } from "../hooks/persisted-state";
-import useDocumentVisible from "../hooks/useDocumentVisible";
 import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
-import useNow from "../hooks/useNow";
-import useSubscribeAvatars from "../hooks/useSubscribeAvatars";
-import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
+import usePuzzleViewers from "../hooks/usePuzzleViewers";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import {
   puzzlesMatchingSearchString,
   puzzlesMatchingSolvedFilter,
 } from "../search";
-import { Subscribers } from "../subscribers";
 import HuntNav from "./HuntNav";
 import PressEnterHint from "./PressEnterHint";
 import PuzzleList from "./PuzzleList";
@@ -262,88 +251,10 @@ const PuzzleListView = ({
   const [huntPuzzleListCollapseGroups, setHuntPuzzleListCollapseGroups] =
     useHuntPuzzleListCollapseGroups(huntId);
 
-  // Calls are off while disable.webrtc is set, so there are no callers to
-  // list (ChatPeople checks the same flag)
-  const rtcDisabled = useTracker(() => Flags.active("disable.webrtc"), []);
-
-  // Who is on each puzzle, from the hunt-wide presence publications (only
-  // while the column is shown). The puzzle rows read the users themselves
-  // from the display name and avatar subscriptions.
-  useSubscribe(viewersShown ? "subscribers.fetchAll" : undefined, huntId);
-  useSubscribe(
-    viewersShown && !rtcDisabled ? "mediasoup:metadataAll" : undefined,
-    huntId,
-  );
-  useTypedSubscribe(viewersShown ? userStatusesForHunt : undefined, {
-    huntId,
-  });
-  useSubscribeDisplayNames(viewersShown ? huntId : undefined);
-  useSubscribeAvatars(viewersShown ? huntId : undefined);
-  // Presence ages out, so recompute every minute even without new data, while
-  // the column is shown and the tab is visible
-  const documentVisible = useDocumentVisible();
-  const now = useNow(viewersShown && documentVisible ? 60 * 1000 : null);
-  const presence = useTracker(() => {
-    if (!viewersShown) {
-      return undefined;
-    }
-    const topicPrefix = "puzzle:";
-    return {
-      callers: rtcDisabled
-        ? []
-        : Peers.find({ hunt: huntId }).map((peer) => ({
-            puzzle: peer.call,
-            user: peer.createdBy,
-          })),
-      subscriptions: Subscribers.find({})
-        .fetch()
-        .filter((s) => s.name.startsWith(topicPrefix))
-        .map((s) => ({
-          puzzle: s.name.slice(topicPrefix.length),
-          user: s.user,
-          visible: s.visible ?? false,
-          updatedAt: s.updatedAt,
-        })),
-      interactions: UserStatuses.find({
-        hunt: huntId,
-        type: "puzzleStatus",
-        puzzle: { $exists: true },
-      })
-        .fetch()
-        .flatMap((status) =>
-          status.puzzle
-            ? [
-                {
-                  puzzle: status.puzzle,
-                  user: status.user,
-                  updatedAt: status.updatedAt,
-                },
-              ]
-            : [],
-        ),
-    };
-  }, [viewersShown, rtcDisabled, huntId]);
-  // Any presence change in the hunt re-runs the tracker. Computing against
-  // the previous result hands back the same objects for the puzzles whose
-  // viewers didn't change, so their memoised rows don't re-render. That
-  // result lives in state, updated while rendering (React's pattern for
-  // state that depends on earlier renders).
-  const [lastViewers, setLastViewers] = useState<{
-    presence: typeof presence;
-    now: Date;
-    byPuzzle: Record<string, PuzzleViewers> | undefined;
-  }>({ presence: undefined, now, byPuzzle: undefined });
-  let viewersByPuzzle = lastViewers.byPuzzle;
-  if (presence !== lastViewers.presence || now !== lastViewers.now) {
-    viewersByPuzzle =
-      presence &&
-      computePuzzleViewers({
-        ...presence,
-        now,
-        previous: lastViewers.byPuzzle,
-      });
-    setLastViewers({ presence, now, byPuzzle: viewersByPuzzle });
-  }
+  // Who is on each puzzle, while the column is shown. The puzzle rows read
+  // the users themselves from the display name and avatar subscriptions this
+  // makes.
+  const viewersByPuzzle = usePuzzleViewers(huntId, viewersShown);
   const displayNames = useTracker(
     () => (viewersShown ? indexedDisplayNames() : new Map<string, string>()),
     [viewersShown],
@@ -854,7 +765,7 @@ const PuzzleListView = ({
         </FormGroup>
         <FormGroup>
           <FormLabel>
-            {t("puzzleList.solvedPuzzles", "Solved puzzles")}
+            {t("puzzleList.solvedPuzzles.label", "Solved puzzles")}
           </FormLabel>
           <ButtonToolbar>
             <ResponsiveToggleButtonGroup
@@ -869,14 +780,14 @@ const PuzzleListView = ({
                 variant="outline-info"
                 value="hide"
               >
-                {t("common.hidden", "Hidden")}
+                {t("puzzleList.solvedPuzzles.hide", "Hide")}
               </ToggleButton>
               <ToggleButton
                 id={`${idPrefix}-solved-show-button`}
                 variant="outline-info"
                 value="show"
               >
-                {t("common.shown", "Shown")}
+                {t("puzzleList.solvedPuzzles.show", "Show")}
               </ToggleButton>
             </ResponsiveToggleButtonGroup>
           </ButtonToolbar>

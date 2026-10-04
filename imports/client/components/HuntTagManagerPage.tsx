@@ -42,10 +42,12 @@ import { computeSolvedness } from "../../lib/solvedness";
 import { normalizeTagName, tagNameMatcher } from "../../lib/tagNames";
 import addPuzzleTag from "../../methods/addPuzzleTag";
 import removePuzzleTag from "../../methods/removePuzzleTag";
+import removeTagAlias from "../../methods/removeTagAlias";
 import renameTag from "../../methods/renameTag";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import { compilePuzzleMatcher } from "../search";
+import ModalForm, { type ModalFormHandle } from "./ModalForm";
 import { mediaBreakpointDown } from "./styling/responsive";
 import TagList from "./TagList";
 
@@ -309,6 +311,185 @@ const RenameTagSection = ({ huntId }: { huntId: string }) => {
           </FormText>
         </FormGroup>
       </Form>
+    </section>
+  );
+};
+
+const AliasList = styled.ul`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+`;
+
+const AliasItem = styled.li`
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 6px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 4px;
+`;
+
+const AliasChip = ({
+  tag,
+  alias,
+  onRemove,
+}: {
+  tag: TagType;
+  alias: string;
+  onRemove: (tag: TagType, alias: string) => void;
+}) => {
+  const { t } = useTranslation();
+  const onClick = useCallback(
+    () => onRemove(tag, alias),
+    [onRemove, tag, alias],
+  );
+  const removeLabel = t(
+    "tags.aliasesSection.remove",
+    "Remove alias “{{alias}}”",
+    {
+      alias,
+      // Attributes, so escaping only shows entities; goes once i18n stops escaping
+      interpolation: { escapeValue: false },
+    },
+  );
+  return (
+    <AliasItem>
+      {alias}
+      <Button
+        variant="link"
+        size="sm"
+        title={removeLabel}
+        aria-label={removeLabel}
+        onClick={onClick}
+      >
+        <FontAwesomeIcon icon={faTimes} />
+      </Button>
+    </AliasItem>
+  );
+};
+
+const AliasesSection = ({
+  huntId,
+  loading,
+}: {
+  huntId: string;
+  loading: boolean;
+}) => {
+  const tagsWithAliases = useTracker(
+    () =>
+      Tags.find({ hunt: huntId })
+        .fetch()
+        .filter((tag) => (tag.aliases?.length ?? 0) > 0)
+        .sort((a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+        ),
+    [huntId],
+  );
+
+  const modalRef = useRef<ModalFormHandle>(null);
+  const [pending, setPending] = useState<{ tag: TagType; alias: string }>();
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const confirmRemove = useCallback((tag: TagType, alias: string) => {
+    setPending({ tag, alias });
+    setErrorMessage("");
+    modalRef.current?.show();
+  }, []);
+
+  const onRemove = useCallback(
+    (hide: () => void) => {
+      if (!pending) return;
+      setSubmitting(true);
+      removeTagAlias.call(
+        { tagId: pending.tag._id, alias: pending.alias },
+        (error?: Error) => {
+          setSubmitting(false);
+          if (error) {
+            setErrorMessage(error.message);
+          } else {
+            setErrorMessage("");
+            hide();
+          }
+        },
+      );
+    },
+    [pending],
+  );
+
+  const { t } = useTranslation();
+
+  return (
+    <section>
+      <h2>{t("tags.aliasesSection.title", "Aliases")}</h2>
+      <p>
+        {t(
+          "tags.aliasesSection.description",
+          "Adding a tag by one of these names finds the tag it belongs to. Remove an alias to stop that.",
+        )}
+      </p>
+      <ModalForm
+        ref={modalRef}
+        title={t("tags.aliasesSection.confirmTitle", "Remove alias")}
+        submitLabel={t("tags.aliasesSection.confirmButton", "Remove")}
+        submitStyle="danger"
+        submitting={submitting}
+        onSubmit={onRemove}
+      >
+        {errorMessage && <Alert variant="danger">{errorMessage}</Alert>}
+        {pending &&
+          t(
+            "tags.aliasesSection.confirmBody",
+            "Remove “{{alias}}” from “{{tag}}”? Adding a tag named “{{alias}}” will no longer find “{{tag}}” through this alias.",
+            {
+              alias: pending.alias,
+              tag: pending.tag.name,
+              // Text node, so escaping only shows entities; goes once i18n stops escaping
+              interpolation: { escapeValue: false },
+            },
+          )}
+      </ModalForm>
+      {!loading &&
+        (tagsWithAliases.length === 0 ? (
+          <p>
+            {t(
+              "tags.aliasesSection.none",
+              "No tags have aliases. Renaming a tag can keep its old name as one.",
+            )}
+          </p>
+        ) : (
+          <Table size="sm">
+            <thead>
+              <tr>
+                <th>{t("tags.aliasesSection.tag", "Tag")}</th>
+                <th>{t("tags.aliasesSection.aliases", "Aliases")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tagsWithAliases.map((tag) => (
+                <tr key={tag._id}>
+                  <td>{tag.name}</td>
+                  <td>
+                    <AliasList>
+                      {tag.aliases?.map((alias) => (
+                        <AliasChip
+                          key={alias}
+                          tag={tag}
+                          alias={alias}
+                          onRemove={confirmRemove}
+                        />
+                      ))}
+                    </AliasList>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        ))}
     </section>
   );
 };
@@ -777,6 +958,8 @@ const HuntTagManagerPage = React.memo(() => {
     <Container>
       <h1>{t("tags.title", "Tag Manager")}</h1>
       <RenameTagSection huntId={huntId} />
+      <hr />
+      <AliasesSection loading={loading} huntId={huntId} />
       <hr />
       <BulkAddRemoveSection loading={loading} huntId={huntId} />
     </Container>

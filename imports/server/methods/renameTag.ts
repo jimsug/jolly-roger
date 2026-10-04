@@ -95,10 +95,14 @@ defineMethod(renameTag, {
       );
 
       // The merged tag's own aliases carry over, and its name does too when
-      // requested, so names people already use keep resolving.
+      // requested, so names people already use keep resolving. They're read
+      // again here so an alias removed since the start isn't brought back.
       const targetMatcher = tagNameMatcher(target.name);
+      const current = await Tags.findOneAsync(tagId, {
+        projection: { aliases: 1 },
+      });
       const aliases = [
-        ...(tag.aliases ?? []),
+        ...(current?.aliases ?? []),
         ...(keepOldNameAsAlias ? [tag.name] : []),
       ].filter((a) => !targetMatcher.test(a));
       if (aliases.length > 0) {
@@ -123,8 +127,16 @@ defineMethod(renameTag, {
     if (newName === tag.name && aliases.length === (tag.aliases?.length ?? 0)) {
       return;
     }
+    // Aliases change in place rather than being written back whole, so an
+    // alias removed while this ran stays removed
     Logger.info("Renaming tag", { tag: tagId, name: newName });
-    await Tags.updateAsync(tagId, { $set: { name: newName, aliases } });
+    await Tags.updateAsync(tagId, {
+      $set: { name: newName },
+      $pull: { aliases: matcher },
+    });
+    if (keepOldNameAsAlias && !matcher.test(tag.name)) {
+      await Tags.updateAsync(tagId, { $addToSet: { aliases: tag.name } });
+    }
     deferSyncPuzzlesOnBoard(tag.hunt, affectedPuzzles);
   },
 });

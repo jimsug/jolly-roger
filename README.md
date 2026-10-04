@@ -137,7 +137,8 @@ on.
 
 Renaming a tag can keep the old name as an alias, so adding a tag by either
 name finds the same tag, and renaming a tag to another tag's name merges the
-two. `where:` tags record a puzzle's location. A new tag named with `loc:` or
+two. The tag manager lists each tag's aliases and can remove one, after which
+that name no longer finds the tag through it. `where:` tags record a puzzle's location. A new tag named with `loc:` or
 `location:` is filed under `where:`, and a bare `stuck` under `is:stuck`, so
 the different spellings end up as one tag. Renaming a tag to one of those
 spellings files it the same way. `group:`, `meta-for:` and

@@ -86,6 +86,7 @@ import registerPuzzleInterest from "../../../../imports/methods/registerPuzzleIn
 import removeChatReaction from "../../../../imports/methods/removeChatReaction";
 import removePuzzleAnswer from "../../../../imports/methods/removePuzzleAnswer";
 import removePuzzleTag from "../../../../imports/methods/removePuzzleTag";
+import removeTagAlias from "../../../../imports/methods/removeTagAlias";
 import removeUserAccountEmail from "../../../../imports/methods/removeUserAccountEmail";
 import renameTag from "../../../../imports/methods/renameTag";
 import resetWhiteboardLayout from "../../../../imports/methods/resetWhiteboardLayout";
@@ -200,6 +201,7 @@ const METHODS = {
   removeChatReaction,
   removePuzzleAnswer,
   removePuzzleTag,
+  removeTagAlias,
   removeUserAccountEmail,
   renameTag,
   resetWhiteboardLayout,
