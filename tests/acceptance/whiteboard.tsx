@@ -1,10 +1,13 @@
 import { promisify } from "node:util";
+import { Accounts } from "meteor/accounts-base";
 import { check } from "meteor/check";
+import { DDP } from "meteor/ddp";
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { Tracker } from "meteor/tracker";
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -40,6 +43,7 @@ import {
 } from "../../imports/lib/whiteboard/layout";
 import addHuntUser from "../../imports/methods/addHuntUser";
 import addPuzzleTag from "../../imports/methods/addPuzzleTag";
+import createChatImageUpload from "../../imports/methods/createChatImageUpload";
 import createFixtureHunt from "../../imports/methods/createFixtureHunt";
 import createWhiteboard from "../../imports/methods/createWhiteboard";
 import deleteWhiteboardComment from "../../imports/methods/deleteWhiteboardComment";
@@ -51,6 +55,7 @@ import removePuzzleTag from "../../imports/methods/removePuzzleTag";
 import sendChatMessage from "../../imports/methods/sendChatMessage";
 import setWhiteboardCommentResolved from "../../imports/methods/setWhiteboardCommentResolved";
 import setWhiteboardEditPolicy from "../../imports/methods/setWhiteboardEditPolicy";
+import setWhiteboardLive from "../../imports/methods/setWhiteboardLive";
 import TypedMethod from "../../imports/methods/TypedMethod";
 import upsertWhiteboardNodes from "../../imports/methods/upsertWhiteboardNodes";
 import resetDatabase from "../lib/resetDatabase";
@@ -2029,10 +2034,36 @@ if (Meteor.isClient) {
           { timeout: 10000 },
         );
 
+        // With feeder arrows turned off, the panel says why putting them back
+        // shows nothing
+        const arrowsOff =
+          "Feeder arrows are hidden for you; turn them on in the toolbar to see these.";
+        const toggleArrows = async () => {
+          await act(async () => {
+            fireEvent.click(
+              screen.getByRole("button", { name: "Show feeder arrows" }),
+            );
+            await stabilize();
+          });
+        };
+        try {
+          assert.notInclude(sidePanel().textContent ?? "", arrowsOff);
+          await toggleArrows();
+          await waitFor(() =>
+            assert.include(sidePanel().textContent ?? "", arrowsOff),
+          );
+          await toggleArrows();
+          await waitFor(() =>
+            assert.notInclude(sidePanel().textContent ?? "", arrowsOff),
+          );
+        } finally {
+          localStorage.removeItem("whiteboard:feederArrows");
+        }
+
         await act(async () => {
           fireEvent.click(
             within(sidePanel()).getByRole("button", {
-              name: "Show all feeder arrows",
+              name: "Put back all feeder arrows",
             }),
           );
           await stabilize();
@@ -2192,6 +2223,1145 @@ if (Meteor.isClient) {
           status.restore();
           await setHuntArchived.callPromise({ huntId, isArchived: false });
         }
+      });
+
+      // Opens the board with board point `at` near the top left of the
+      // canvas at `zoom`, and gives back how to find a board point on screen.
+      const lookAt = (at: { x: number; y: number }, zoom = 1) => {
+        const viewport = { x: 150 - at.x * zoom, y: 150 - at.y * zoom, zoom };
+        localStorage.setItem(
+          `whiteboard:viewport:${boardId}`,
+          JSON.stringify(viewport),
+        );
+        return (x: number, y: number) => {
+          const box = pane().getBoundingClientRect();
+          return {
+            clientX: box.left + viewport.x + x * zoom,
+            clientY: box.top + viewport.y + y * zoom,
+          };
+        };
+      };
+      const forgetView = () =>
+        localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+      const removeNodes = (nodeIds: string[]) =>
+        deleteWhiteboardNodes.callPromise({ boardId, nodeIds });
+      const nodeShown = (id: string) =>
+        waitFor(
+          () => {
+            const found = nodeElement(id);
+            assert.isNotNull(found);
+            return found as HTMLElement;
+          },
+          { timeout: 20000 },
+        );
+      const select = async (id: string) => {
+        await act(async () => {
+          fireEvent.click(await nodeShown(id));
+          await stabilize();
+        });
+      };
+      const savedNode = (id: string) => WhiteboardNodes.findOneAsync(id);
+
+      it("erases a whole stroke from a press on any part of it", async function () {
+        this.timeout(30000);
+        const stroke = Random.id();
+        const segments = [Random.id(), Random.id()];
+        const base = { x: 20000, y: 20000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: segments.map((_id, i) => ({
+            _id,
+            type: "ink" as const,
+            position: { x: base.x + i * 200, y: base.y },
+            width: 200,
+            height: 20,
+            // Sampled every few units, as a drawn stroke is
+            points: Array.from(
+              { length: 41 },
+              (_, j): [number, number, number] => [j * 5, 10, 0.5],
+            ),
+            strokeWidth: "medium" as const,
+            color: "black" as const,
+            stroke,
+          })),
+        });
+        const screenAt = lookAt(base);
+        try {
+          await openBoard();
+          await nodeShown(segments[0]!);
+          await act(async () => {
+            fireEvent.click(
+              screen.getByRole("button", { name: "Erase strokes" }),
+            );
+            await stabilize();
+          });
+          const at = {
+            button: 0,
+            buttons: 1,
+            pointerId: 1,
+            ...screenAt(base.x + 100, base.y + 10),
+          };
+          await act(async () => {
+            fireEvent.pointerDown(pane(), at);
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.pointerUp(pane(), { ...at, buttons: 0 });
+            await stabilize();
+          });
+          await waitFor(
+            async () =>
+              assert.equal(
+                await WhiteboardNodes.find({
+                  _id: { $in: segments },
+                }).countAsync(),
+                0,
+              ),
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await removeNodes(segments);
+        }
+      });
+
+      it("makes a frame the size it's dragged out to", async function () {
+        this.timeout(30000);
+        const base = { x: 21000, y: 21000 };
+        const screenAt = lookAt(base);
+        const made = () =>
+          WhiteboardNodes.find({
+            board: boardId,
+            type: "frame",
+            "position.x": { $gte: base.x - 1, $lte: base.x + 1 },
+            "position.y": { $gte: base.y - 1, $lte: base.y + 1 },
+          }).fetchAsync();
+        try {
+          await openBoard();
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: /^Frame:/ }));
+            await stabilize();
+          });
+          const from = { button: 0, buttons: 1, pointerId: 1 };
+          await act(async () => {
+            fireEvent.pointerDown(pane(), {
+              ...from,
+              ...screenAt(base.x, base.y),
+            });
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.pointerMove(pane(), {
+              ...from,
+              ...screenAt(base.x + 400, base.y + 300),
+            });
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.pointerUp(pane(), {
+              ...from,
+              buttons: 0,
+              ...screenAt(base.x + 400, base.y + 300),
+            });
+            await stabilize();
+          });
+          const frame = await waitFor(
+            async () => {
+              const [found] = await made();
+              assert.ok(found);
+              return found;
+            },
+            { timeout: 10000 },
+          );
+          assert.equal(frame.frameKind, "user");
+          assert.closeTo(frame.width ?? 0, 400, 1);
+          assert.closeTo(frame.height ?? 0, 300, 1);
+        } finally {
+          forgetView();
+          await removeNodes((await made()).map((f) => f._id));
+        }
+      });
+
+      it("keeps a frame's contents still when it's resized from the top left or deleted", async function () {
+        this.timeout(30000);
+        const frame = Random.id();
+        const sticky = Random.id();
+        const base = { x: 22000, y: 22000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: frame,
+              type: "frame",
+              position: base,
+              width: 600,
+              height: 400,
+              label: "Resize me",
+            },
+            {
+              _id: sticky,
+              type: "sticky",
+              parent: frame,
+              position: { x: 100, y: 100 },
+              width: 200,
+              height: 160,
+            },
+          ],
+        });
+        lookAt({ x: base.x - 200, y: base.y - 100 });
+        try {
+          await openBoard();
+          await nodeShown(sticky);
+          await select(frame);
+          const corner = await waitFor(() => {
+            const found = nodeElement(frame)?.querySelector(
+              ".react-flow__resize-control.handle.top.left",
+            );
+            assert.exists(found);
+            return found;
+          });
+          const box = corner.getBoundingClientRect();
+          const start = {
+            clientX: box.left + box.width / 2,
+            clientY: box.top + box.height / 2,
+          };
+          const mouse = { button: 0, view: window };
+          await act(async () => {
+            fireEvent.mouseDown(corner, { ...mouse, ...start });
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.mouseMove(window, {
+              ...mouse,
+              clientX: start.clientX - 100,
+              clientY: start.clientY - 50,
+            });
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.mouseUp(window, {
+              ...mouse,
+              clientX: start.clientX - 100,
+              clientY: start.clientY - 50,
+            });
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const resized = await savedNode(frame);
+              const child = await savedNode(sticky);
+              assert.closeTo(resized?.position.x ?? 0, base.x - 100, 1);
+              assert.closeTo(resized?.position.y ?? 0, base.y - 50, 1);
+              assert.closeTo(resized?.width ?? 0, 700, 1);
+              assert.closeTo(resized?.height ?? 0, 450, 1);
+              // Where it was on the board
+              assert.closeTo(
+                (resized?.position.x ?? 0) + (child?.position.x ?? 0),
+                base.x + 100,
+                1,
+              );
+              assert.closeTo(
+                (resized?.position.y ?? 0) + (child?.position.y ?? 0),
+                base.y + 100,
+                1,
+              );
+            },
+            { timeout: 10000 },
+          );
+
+          await press(document.body, { key: "Delete" });
+          await waitFor(
+            async () => {
+              assert.isUndefined(await savedNode(frame));
+              const child = await savedNode(sticky);
+              assert.isUndefined(child?.parent);
+              assert.closeTo(child?.position.x ?? 0, base.x + 100, 1);
+              assert.closeTo(child?.position.y ?? 0, base.y + 100, 1);
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await removeNodes([sticky, frame]);
+        }
+      });
+
+      it("saves edits and colour changes to notes and text", async function () {
+        this.timeout(30000);
+        const sticky = Random.id();
+        const text = Random.id();
+        const base = { x: 23000, y: 23000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: sticky,
+              type: "sticky",
+              position: base,
+              width: 200,
+              height: 160,
+              text: "Before",
+            },
+            {
+              _id: text,
+              type: "text",
+              position: { x: base.x + 300, y: base.y },
+              width: 240,
+              height: 48,
+              text: "Words",
+            },
+          ],
+        });
+        lookAt(base);
+        const edit = async (id: string, from: string, to: string) => {
+          const node = await nodeShown(id);
+          await act(async () => {
+            fireEvent.doubleClick(within(node).getByText(from));
+            await stabilize();
+          });
+          const editor = within(node).getByRole("textbox");
+          await act(async () => {
+            fireEvent.change(editor, { target: { value: to } });
+            fireEvent.blur(editor);
+            await stabilize();
+          });
+        };
+        const recolour = async (id: string, colour: string) => {
+          await select(id);
+          const toolbar = await waitFor(() => {
+            const found = document.querySelector<HTMLElement>(
+              ".react-flow__node-toolbar",
+            );
+            assert.exists(found);
+            return found;
+          });
+          await act(async () => {
+            fireEvent.click(
+              within(toolbar).getByRole("button", { name: colour }),
+            );
+            await stabilize();
+          });
+        };
+        try {
+          await openBoard();
+          await edit(sticky, "Before", "After");
+          await edit(text, "Words", "Other words");
+          await recolour(sticky, "Blue");
+          await recolour(text, "Red");
+          await waitFor(
+            async () => {
+              const note = await savedNode(sticky);
+              const words = await savedNode(text);
+              assert.equal(note?.text, "After");
+              assert.equal(note?.color, "blue");
+              assert.equal(words?.text, "Other words");
+              assert.equal(words?.color, "red");
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await removeNodes([sticky, text]);
+        }
+      });
+
+      it("spaces out and lines up a selection", async function () {
+        this.timeout(30000);
+        const ids = [Random.id(), Random.id(), Random.id()];
+        const base = { x: 24000, y: 24000 };
+        const xs = [0, 150, 500];
+        const ys = [0, 60, 120];
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: ids.map((_id, i) => ({
+            _id,
+            type: "sticky" as const,
+            position: { x: base.x + xs[i]!, y: base.y + ys[i]! },
+            width: 100,
+            height: 80,
+          })),
+        });
+        lookAt(base);
+        try {
+          await openBoard();
+          await select(ids[0]!);
+          // React Flow adds to the selection while Control is held
+          await act(async () => {
+            fireEvent.keyDown(document, {
+              key: "Control",
+              code: "ControlLeft",
+            });
+            await stabilize();
+          });
+          await select(ids[1]!);
+          await select(ids[2]!);
+          await act(async () => {
+            fireEvent.keyUp(document, { key: "Control", code: "ControlLeft" });
+            await stabilize();
+          });
+          const arrange = async (name: string) => {
+            const button = await screen.findByRole("button", { name });
+            await act(async () => {
+              fireEvent.click(button);
+              await stabilize();
+            });
+          };
+          // The gaps even out with the ends kept still
+          await arrange("Space evenly left to right");
+          await waitFor(
+            async () => {
+              const saved = await Promise.all(ids.map(savedNode));
+              assert.deepEqual(
+                saved.map((n) => Math.round(n?.position.x ?? 0)),
+                [base.x, base.x + 250, base.x + 500],
+              );
+            },
+            { timeout: 10000 },
+          );
+          await arrange("Align top edges");
+          await waitFor(
+            async () => {
+              const saved = await Promise.all(ids.map(savedNode));
+              assert.deepEqual(
+                saved.map((n) => Math.round(n?.position.y ?? 0)),
+                [base.y, base.y, base.y],
+              );
+              // Only along the one axis
+              assert.deepEqual(
+                saved.map((n) => Math.round(n?.position.x ?? 0)),
+                [base.x, base.x + 250, base.x + 500],
+              );
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await removeNodes(ids);
+        }
+      });
+
+      it("shows resolved pins only while the resolved toggle is on", async function () {
+        this.timeout(30000);
+        const board = await ensureBoard();
+        localStorage.setItem("whiteboard:showResolvedComments", "false");
+        lookAt({ x: 25000, y: 25000 });
+        let thread: string | undefined;
+        const pin = () =>
+          document.querySelector(`.jr-comment-pin[data-thread="${thread}"]`);
+        const toggle = async () => {
+          await act(async () => {
+            fireEvent.click(
+              screen.getByRole("button", { name: /^Show resolved comments/ }),
+            );
+            await stabilize();
+          });
+        };
+        try {
+          await openBoard();
+          await sendChatMessage.callPromise({
+            puzzleId: board.puzzle,
+            content: JSON.stringify({
+              type: "message",
+              children: [{ text: "All sorted" }],
+            }),
+            comment: { x: 25000, y: 25000 },
+          });
+          thread = await waitFor(
+            async () => {
+              const found = await ChatMessages.findOneAsync({
+                "comment.x": 25000,
+              });
+              assert.ok(found);
+              return found._id;
+            },
+            { timeout: 10000 },
+          );
+          await waitFor(() => assert.isNotNull(pin()), { timeout: 10000 });
+          await setWhiteboardCommentResolved.callPromise({
+            messageId: thread,
+            resolved: true,
+          });
+          await waitFor(() => assert.isNull(pin()), { timeout: 10000 });
+          await toggle();
+          await waitFor(() => assert.isNotNull(pin()));
+          await toggle();
+          await waitFor(() => assert.isNull(pin()));
+        } finally {
+          forgetView();
+          localStorage.removeItem("whiteboard:showResolvedComments");
+          if (thread) {
+            await deleteWhiteboardComment.callPromise({ messageId: thread });
+          }
+        }
+      });
+
+      it("shows less on cards as the board zooms out", async function () {
+        this.timeout(60000);
+        // The board's cards and puzzles reach this client with the page
+        await openBoard();
+        await waitFor(
+          () =>
+            assert.isNotNull(
+              document.querySelector(".react-flow__node-puzzle"),
+            ),
+          { timeout: 20000 },
+        );
+        const card = await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          type: "puzzle",
+          hidden: { $ne: true },
+        });
+        assert.ok(card);
+        const puzzle = await Puzzles.findOneAsync(card.puzzle ?? "");
+        assert.ok(puzzle);
+        let absolute = { ...card.position };
+        let parent = card.parent;
+        while (parent) {
+          const frame = await WhiteboardNodes.findOneAsync(parent);
+          assert.ok(frame);
+          absolute = {
+            x: absolute.x + frame.position.x,
+            y: absolute.y + frame.position.y,
+          };
+          parent = frame.parent;
+        }
+        const openAt = async (zoom: number) => {
+          cleanup();
+          lookAt(absolute, zoom);
+          await openBoard();
+          return nodeShown(card._id);
+        };
+        const answers = puzzle.answers;
+        try {
+          // Unsolved to start with, so the far view shows the title's first
+          // word, then solved, when it shows the answer instead
+          await setPuzzleAnswers.callPromise({
+            puzzleId: puzzle._id,
+            answers: [],
+          });
+          const full = await openAt(1);
+          await waitFor(() => {
+            assert.exists(full.querySelector('a[title="Open puzzle"]'));
+            assert.include(full.textContent ?? "", puzzle.title);
+            assert.include(full.textContent ?? "", "Answer");
+          });
+
+          const mid = await openAt(0.45);
+          await waitFor(() => {
+            assert.isNull(mid.querySelector('a[title="Open puzzle"]'));
+            assert.include(mid.textContent ?? "", puzzle.title);
+            assert.notInclude(mid.textContent ?? "", "Answer");
+          });
+
+          const far = await openAt(0.2);
+          await waitFor(() => {
+            assert.isNull(far.querySelector('a[title="Open puzzle"]'));
+            assert.exists(
+              far.querySelector(`[title="${CSS.escape(puzzle.title)}"]`),
+            );
+            assert.equal(far.textContent?.trim(), puzzle.title.split(/\s+/)[0]);
+          });
+          await setPuzzleAnswers.callPromise({
+            puzzleId: puzzle._id,
+            answers: ["SKYLARK", "SECOND"],
+          });
+          await waitFor(
+            () => assert.equal(far.textContent?.trim(), "SKYLARK"),
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await setPuzzleAnswers.callPromise({ puzzleId: puzzle._id, answers });
+        }
+      });
+
+      it("keeps each viewer's view of the board for next time", async function () {
+        this.timeout(30000);
+        const key = `whiteboard:viewport:${boardId}`;
+        localStorage.setItem(
+          key,
+          JSON.stringify({ x: -100, y: -50, zoom: 0.9 }),
+        );
+        const scale = () =>
+          document.querySelector<HTMLElement>(".react-flow__viewport")?.style
+            .transform ?? "";
+        try {
+          await openBoard();
+          await waitFor(() => assert.include(scale(), "scale(0.9)"));
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+            await stabilize();
+          });
+          const saved = await waitFor(
+            () => {
+              const viewport = JSON.parse(localStorage.getItem(key) ?? "{}");
+              assert.isAbove(viewport.zoom, 0.9);
+              return viewport as { zoom: number };
+            },
+            { timeout: 5000 },
+          );
+
+          cleanup();
+          await openBoard();
+          await waitFor(() => assert.include(scale(), `scale(${saved.zoom})`));
+        } finally {
+          forgetView();
+        }
+      });
+
+      it("moves a node into and out of a frame with the arrow keys", async function () {
+        this.timeout(30000);
+        const frame = Random.id();
+        const sticky = Random.id();
+        const base = { x: 26000, y: 26000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: frame,
+              type: "frame",
+              position: base,
+              width: 400,
+              height: 300,
+            },
+            {
+              _id: sticky,
+              type: "sticky",
+              // Its middle is 20 past the frame's right edge
+              position: { x: base.x + 420, y: base.y + 100 },
+              width: 100,
+              height: 80,
+            },
+          ],
+        });
+        lookAt(base);
+        const nudge = async (key: string, times: number) => {
+          const node = await nodeShown(sticky);
+          for (let i = 0; i < times; i++) {
+            await press(node, { key, shiftKey: true });
+          }
+        };
+        try {
+          await openBoard();
+          await select(sticky);
+          await nudge("ArrowLeft", 4);
+          await waitFor(
+            async () => {
+              const moved = await savedNode(sticky);
+              assert.equal(moved?.parent, frame);
+              assert.deepEqual(moved?.position, { x: 340, y: 100 });
+            },
+            { timeout: 10000 },
+          );
+          await nudge("ArrowRight", 4);
+          await waitFor(
+            async () => {
+              const moved = await savedNode(sticky);
+              assert.isUndefined(moved?.parent);
+              assert.deepEqual(moved?.position, {
+                x: base.x + 420,
+                y: base.y + 100,
+              });
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          forgetView();
+          await removeNodes([sticky, frame]);
+        }
+      });
+
+      it("switches between the board and chat on a narrow screen", async function () {
+        this.timeout(30000);
+        const width = Object.getOwnPropertyDescriptor(window, "innerWidth");
+        Object.defineProperty(window, "innerWidth", {
+          configurable: true,
+          value: 500,
+        });
+        const realMatchMedia = window.matchMedia.bind(window);
+        const matchMedia = sinon
+          .stub(window, "matchMedia")
+          .callsFake((query: string) => {
+            if (!query.includes("min-width")) return realMatchMedia(query);
+            return {
+              matches: false,
+              media: query,
+              onchange: null,
+              addEventListener: sinon.fake(),
+              removeEventListener: sinon.fake(),
+              addListener: sinon.fake(),
+              removeListener: sinon.fake(),
+              dispatchEvent: () => false,
+            } as MediaQueryList;
+          });
+        try {
+          render(<TestApp />);
+          await goTo(boardPath);
+          const boardButton = await screen.findByRole(
+            "button",
+            { name: "Board" },
+            { timeout: 20000 },
+          );
+          const chatButton = screen.getByRole("button", { name: "Chat" });
+          await waitFor(
+            () => assert.isNotNull(document.querySelector(".react-flow")),
+            { timeout: 20000 },
+          );
+          await act(async () => {
+            fireEvent.click(chatButton);
+            await stabilize();
+          });
+          await waitFor(() => {
+            assert.isNull(document.querySelector(".react-flow"));
+            assert.isNotNull(document.querySelector("[data-slate-editor]"));
+          });
+          await act(async () => {
+            fireEvent.click(boardButton);
+            await stabilize();
+          });
+          await waitFor(() =>
+            assert.isNotNull(document.querySelector(".react-flow")),
+          );
+          // Narrow screens can comment but not edit
+          await screen.findByText(
+            "Editing needs a wider screen. You can still comment.",
+          );
+        } finally {
+          matchMedia.restore();
+          if (width) {
+            Object.defineProperty(window, "innerWidth", width);
+          } else {
+            delete (window as { innerWidth?: number }).innerWidth;
+          }
+        }
+      });
+
+      describe("with someone else on the board", function () {
+        const OTHER_EMAIL = "second-member@example.com";
+        const OTHER_PASSWORD = "password";
+        const OTHER_NAME = "Second Member";
+        let other: ReturnType<typeof DDP.connect>;
+        let puzzleId: string;
+
+        before(async function () {
+          this.timeout(20000);
+          puzzleId = (await ensureBoard()).puzzle;
+          await createTestUser.callPromise({
+            email: OTHER_EMAIL,
+            password: OTHER_PASSWORD,
+            displayName: OTHER_NAME,
+          });
+          await addHuntUser.callPromise({ huntId, email: OTHER_EMAIL });
+          // Their own connection, as a second browser would have
+          other = DDP.connect(Meteor.absoluteUrl());
+          await other.callAsync("login", {
+            user: { email: OTHER_EMAIL },
+            password: (
+              Accounts as unknown as {
+                _hashPassword: (password: string) => unknown;
+              }
+            )._hashPassword(OTHER_PASSWORD),
+          });
+        });
+
+        after(function () {
+          other.disconnect();
+        });
+
+        // Their threads from each test, which they delete afterwards so later
+        // tests (and later runs) start with nothing unread from them.
+        const theirThreads: string[] = [];
+        afterEach(async function () {
+          for (const messageId of theirThreads.splice(0)) {
+            await other.callAsync(deleteWhiteboardComment.name, { messageId });
+          }
+        });
+
+        // A comment from them, found once it reaches this client.
+        const theyComment = async (text: string, x: number) => {
+          await other.callAsync(sendChatMessage.name, {
+            puzzleId,
+            content: JSON.stringify({
+              type: "message",
+              children: [{ text }],
+            }),
+            comment: { x, y: x },
+          });
+          const thread = await waitFor(
+            async () => {
+              const found = await ChatMessages.findOneAsync({
+                "comment.x": x,
+              });
+              assert.ok(found);
+              return found._id;
+            },
+            { timeout: 10000 },
+          );
+          theirThreads.push(thread);
+          return thread;
+        };
+        const commentTool = () =>
+          screen.getByRole("button", { name: /^Comment:/ });
+        const unread = () =>
+          Number(
+            commentTool().querySelector(".jr-unread-comments")?.textContent ??
+              0,
+          );
+        const pinFor = (thread: string) =>
+          document.querySelector<HTMLElement>(
+            `.jr-comment-pin[data-thread="${thread}"]`,
+          );
+
+        it("counts their new comment as unread until it's opened", async function () {
+          this.timeout(30000);
+          await openBoard();
+          await act(async () => {
+            await stabilize();
+          });
+          const before = unread();
+          const thread = await theyComment("Unread for now", 27000);
+          await waitFor(() => assert.equal(unread(), before + 1), {
+            timeout: 10000,
+          });
+          await act(async () => {
+            fireEvent.click(pinFor(thread)!);
+            await stabilize();
+          });
+          await waitFor(() => {
+            assert.include(panelText(), "Unread for now");
+            assert.equal(unread(), before);
+          });
+        });
+
+        it("lists comments newest first and shows the one picked", async function () {
+          this.timeout(30000);
+          await openBoard();
+          const older = await theyComment("Older thread", 27100);
+          const newer = await theyComment("Newer thread", 27200);
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Comments" }));
+            await stabilize();
+          });
+          const rows = () =>
+            [
+              ...document.querySelectorAll<HTMLElement>(
+                ".react-flow__panel.top.right button[data-thread]",
+              ),
+            ].map((row) => row.dataset.thread);
+          await waitFor(() =>
+            assert.deepEqual(rows().slice(0, 2), [newer, older]),
+          );
+          const row = document.querySelector<HTMLElement>(
+            `.react-flow__panel.top.right button[data-thread="${older}"]`,
+          )!;
+          assert.include(row.textContent ?? "", "Older thread");
+          assert.include(row.textContent ?? "", "0 replies");
+          await act(async () => {
+            fireEvent.click(row);
+            await stabilize();
+          });
+          const listButton = screen.getByRole("button", { name: "Comments" });
+          await waitFor(() => {
+            assert.include(panelText(), "Older thread");
+            assert.equal(pinFor(older)?.getAttribute("aria-expanded"), "true");
+            // The thread has the list's place, so the button isn't pressed
+            assert.equal(listButton.getAttribute("aria-pressed"), "false");
+          });
+          // and takes the viewer back to the list rather than closing both
+          await act(async () => {
+            fireEvent.click(listButton);
+            await stabilize();
+          });
+          await waitFor(() => {
+            assert.equal(pinFor(older)?.getAttribute("aria-expanded"), "false");
+            assert.deepEqual(rows().slice(0, 2), [newer, older]);
+            assert.equal(listButton.getAttribute("aria-pressed"), "true");
+          });
+        });
+
+        it("goes to the next unread comment on N, and on from there", async function () {
+          this.timeout(30000);
+          await openBoard();
+          const older = await theyComment("Jump here second", 27300);
+          const newer = await theyComment("Jump here first", 27400);
+          await pressBoard();
+          await press(pane(), { key: "n" });
+          await waitFor(() => {
+            assert.include(panelText(), "Jump here first");
+            assert.equal(pinFor(newer)?.getAttribute("aria-expanded"), "true");
+          });
+          // Focus stays out of the reply box, so the next N isn't typed there
+          const focused = await waitFor(() => {
+            const active = document.activeElement;
+            assert.instanceOf(active, HTMLDialogElement);
+            return active;
+          });
+          await press(focused, { key: "n" });
+          await waitFor(() => {
+            assert.include(panelText(), "Jump here second");
+            assert.equal(pinFor(older)?.getAttribute("aria-expanded"), "true");
+          });
+        });
+
+        it("lists comments and goes to them on N on a board that can only be viewed", async function () {
+          this.timeout(30000);
+          const thread = await theyComment("Seen by a viewer", 27500);
+          await setHuntArchived.callPromise({ huntId, isArchived: true });
+          try {
+            render(<TestApp />);
+            await goTo(boardPath);
+            await screen.findByText("Viewing only", {}, { timeout: 20000 });
+            await act(async () => {
+              await stabilize();
+            });
+            assert.isNull(screen.queryByRole("button", { name: /^Comment:/ }));
+            const list = await waitFor(
+              () => {
+                const button = screen.getByRole("button", {
+                  name: /^Comments \(1 unread\)$/,
+                });
+                assert.equal(
+                  button.querySelector(".jr-unread-comments")?.textContent,
+                  "1",
+                );
+                return button;
+              },
+              { timeout: 10000 },
+            );
+            await act(async () => {
+              fireEvent.click(list);
+              await stabilize();
+            });
+            const row = await waitFor(() => {
+              const found = document.querySelector<HTMLElement>(
+                `.react-flow__panel.top.right button[data-thread="${thread}"]`,
+              );
+              assert.ok(found);
+              return found;
+            });
+            assert.include(row.textContent ?? "", "Seen by a viewer");
+            await act(async () => {
+              fireEvent.click(list);
+              await stabilize();
+            });
+            assert.isNull(
+              document.querySelector(
+                `.react-flow__panel.top.right button[data-thread="${thread}"]`,
+              ),
+            );
+            await pressBoard();
+            await press(pane(), { key: "n" });
+            await waitFor(() => {
+              assert.include(panelText(), "Seen by a viewer");
+              assert.equal(
+                pinFor(thread)?.getAttribute("aria-expanded"),
+                "true",
+              );
+            });
+          } finally {
+            await setHuntArchived.callPromise({ huntId, isArchived: false });
+          }
+        });
+
+        it("shows their cursor and what they drag", async function () {
+          this.timeout(30000);
+          const sticky = Random.id();
+          const base = { x: 28000, y: 28000 };
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: sticky,
+                type: "sticky",
+                position: base,
+                width: 200,
+                height: 160,
+              },
+            ],
+          });
+          lookAt(base);
+          try {
+            await openBoard();
+            const node = await nodeShown(sticky);
+            await other.callAsync(setWhiteboardLive.name, {
+              boardId,
+              cursor: { x: base.x + 50, y: base.y + 60 },
+              drag: [
+                { node: sticky, x: base.x + 300, y: base.y, parent: null },
+              ],
+              stroke: null,
+            });
+            await waitFor(
+              () => {
+                const cursor = [
+                  ...document.querySelectorAll<HTMLElement>(
+                    ".react-flow__viewport-portal div",
+                  ),
+                ].find((el) =>
+                  el.style.transform.startsWith(
+                    `translate(${base.x + 50}px, ${base.y + 60}px)`,
+                  ),
+                );
+                assert.exists(cursor);
+                assert.include(cursor?.textContent ?? "", OTHER_NAME);
+                assert.include(
+                  node.style.transform,
+                  `translate(${base.x + 300}px`,
+                );
+              },
+              { timeout: 1500 },
+            );
+          } finally {
+            await other.callAsync(setWhiteboardLive.name, {
+              boardId,
+              cursor: null,
+              drag: null,
+              stroke: null,
+            });
+            forgetView();
+            await removeNodes([sticky]);
+          }
+        });
+
+        const EnabledChatImage: typeof import("../../imports/client/EnabledChatImage").default =
+          require("../../imports/client/EnabledChatImage").default;
+        const imagesEnabled = (enabled: boolean) =>
+          sinon
+            .stub(EnabledChatImage, "findOne")
+            .returns({ _id: "enabledChatImage", enabled });
+
+        // Starts a comment and pastes a PNG into it, giving back its editor.
+        const pasteImageIntoComment = async () => {
+          await openBoard();
+          await act(async () => {
+            fireEvent.click(commentTool());
+            await stabilize();
+          });
+          const at = paneAt(0.6, 0.6);
+          await act(async () => {
+            fireEvent.pointerDown(pane(), at);
+            fireEvent.pointerUp(pane(), at);
+            await stabilize();
+          });
+          const editor = await waitFor(() => {
+            const found = document.querySelector<HTMLElement>(
+              "dialog[open] [data-slate-editor]",
+            );
+            assert.ok(found);
+            return found;
+          });
+          await act(async () => {
+            editor.focus();
+            await stabilize();
+          });
+          const pasted = new DataTransfer();
+          pasted.items.add(
+            new File([new Uint8Array([137, 80, 78, 71])], "pasted.png", {
+              type: "image/png",
+            }),
+          );
+          await act(async () => {
+            editor.dispatchEvent(
+              new InputEvent("beforeinput", {
+                inputType: "insertFromPaste",
+                dataTransfer: pasted,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+            await stabilize();
+          });
+          return editor;
+        };
+
+        it("uploads an image pasted into a comment and puts it in", async function () {
+          this.timeout(30000);
+          const enabled = imagesEnabled(true);
+          const publicUrl = "https://images.example.com/pasted.png";
+          const uploadUrl = "https://upload.example.com/";
+          const upload = sinon
+            .stub(createChatImageUpload, "call")
+            .callsFake((...args: unknown[]) => {
+              const callback = args.at(-1);
+              if (typeof callback === "function") {
+                Meteor.defer(() =>
+                  callback(undefined, { publicUrl, uploadUrl, fields: {} }),
+                );
+              }
+            });
+          const realFetch = window.fetch.bind(window);
+          const fetch = sinon
+            .stub(window, "fetch")
+            .callsFake((input, init) =>
+              input === uploadUrl
+                ? Promise.resolve(new Response(null))
+                : realFetch(input, init),
+            );
+          try {
+            const editor = await pasteImageIntoComment();
+            await waitFor(() => {
+              assert.isTrue(upload.calledOnce);
+              assert.deepEqual(upload.firstCall.args[0], {
+                puzzleId,
+                mimeType: "image/png",
+              });
+              assert.exists(editor.querySelector(`img[src="${publicUrl}"]`));
+            });
+          } finally {
+            fetch.restore();
+            upload.restore();
+            enabled.restore();
+          }
+        });
+
+        it("says why an image upload failed, and won't send the failed image", async function () {
+          this.timeout(30000);
+          const enabled = imagesEnabled(true);
+          const upload = refuseCalls(createChatImageUpload);
+          try {
+            const editor = await pasteImageIntoComment();
+            await waitFor(() => {
+              const note = document.querySelector("dialog[open] output");
+              assert.equal(
+                note?.textContent,
+                "Couldn't add the image: Refused for the test",
+              );
+            });
+            assert.isTrue(upload.calledOnce);
+            const send = within(
+              editor.closest<HTMLElement>("dialog")!,
+            ).getByRole("button", { name: "Send" });
+            assert.isTrue((send as HTMLButtonElement).disabled);
+          } finally {
+            upload.restore();
+            enabled.restore();
+          }
+        });
+
+        it("says so, and uploads nothing, when the server has nowhere for images", async function () {
+          this.timeout(30000);
+          const enabled = imagesEnabled(false);
+          const upload = sinon.spy(createChatImageUpload, "call");
+          try {
+            const editor = await pasteImageIntoComment();
+            await waitFor(() => {
+              const note = document.querySelector("dialog[open] output");
+              assert.include(
+                note?.textContent ?? "",
+                "S3 presignedPost creation failed",
+              );
+            });
+            assert.isTrue(upload.notCalled);
+            assert.isNull(editor.querySelector("img"));
+            const send = within(
+              editor.closest<HTMLElement>("dialog")!,
+            ).getByRole("button", { name: "Send" });
+            assert.isTrue((send as HTMLButtonElement).disabled);
+          } finally {
+            upload.restore();
+            enabled.restore();
+          }
+        });
       });
     });
   });

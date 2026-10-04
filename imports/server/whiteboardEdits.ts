@@ -31,6 +31,7 @@ import {
 import type { CommentAnchorInput } from "../methods/sendChatMessage";
 import type { WhiteboardEdgeInput } from "../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../methods/upsertWhiteboardNodes";
+import { deferSyncRoundsOnBoard } from "./whiteboard";
 import {
   assertMayCommentOnBoard,
   assertMayEditBoard,
@@ -365,6 +366,18 @@ export async function upsertNodes(
       await insertNode(userId, board, input);
     }
   }
+
+  // A round's frame that comes back takes its cards back with it.
+  const restoredRounds = inputs.flatMap((input) => {
+    const existing = existingById.get(input._id);
+    return input.hidden === false &&
+      existing?.type === "frame" &&
+      existing.hidden &&
+      existing.tag
+      ? [existing.tag]
+      : [];
+  });
+  deferSyncRoundsOnBoard(board.hunt, restoredRounds);
 }
 
 // A line's free end only exists for that line. Once nothing uses it, it goes.

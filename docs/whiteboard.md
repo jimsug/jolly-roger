@@ -1,9 +1,13 @@
 ---
 files:
+  - imports/client/chatEditorContent.ts
+  - imports/client/components/ChatMessageReactions.tsx
+  - imports/client/components/HighlightsPanel.tsx
   - imports/client/components/WhiteboardPage.tsx
   - imports/client/components/tagColors.ts
   - imports/client/components/whiteboard/BoardSearch.tsx
   - imports/client/components/whiteboard/CommentComposer.tsx
+  - imports/client/components/whiteboard/CommentList.tsx
   - imports/client/components/whiteboard/CommentPanel.tsx
   - imports/client/components/whiteboard/EditPolicyModal.tsx
   - imports/client/components/whiteboard/EditableText.tsx
@@ -15,6 +19,7 @@ files:
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
   - imports/client/components/whiteboard/WhiteboardCanvas.tsx
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
+  - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useRoundStates.ts
   - imports/lib/chatMessagePath.ts
   - imports/lib/models/WhiteboardEdges.ts
@@ -22,6 +27,7 @@ files:
   - imports/lib/models/Whiteboards.ts
   - imports/lib/permission_stubs.ts
   - imports/lib/puzzleTagStatus.ts
+  - imports/lib/whiteboard/comments.ts
   - imports/lib/whiteboard/feederFocus.ts
   - imports/lib/whiteboard/layout.ts
   - imports/lib/whiteboard/limits.ts
@@ -179,7 +185,8 @@ is disconnected the page also lowers any access to `view`, with the reason
 `offline` (see Offline).
 
 A read-only board's toolbar says "Viewing only", gives the reason on the line
-below, and keeps the Comment tool for anyone who can comment. When the
+below, and keeps the Comment tool for anyone who can comment, and the
+Comments button (see Comments) for everyone. When the
 viewer's edit rights come or go while the board is open, a notice says so,
 and a note being edited closes, keeping what was typed as "Not saved" until
 it can be retried (see When a save is refused). A screen narrowing past the
@@ -269,11 +276,70 @@ backgrounds so they show at that size, and frames take the strong version of
 their colour. Free line ends are left off, and everything else is grey
 (`miniMapColor` in `imports/lib/whiteboard/minimap.ts`).
 
+## Comments
+
+### Unread comments and the Comments panel
+
+A thread is unread when someone else has written in it since this viewer
+last opened it. That is kept per device, in local storage, as before; the
+viewer's own messages never count. The Comment tool carries a badge with the
+number of unread threads. On a board the viewer can only view (an archived
+hunt, or while offline) there's no Comment tool, so the Comments button
+carries it instead.
+
+The toolbar's Comments button opens a panel in the same place as the "Not on
+the board" panel, so only one of them shows at a time. It lists the board's
+threads with unread ones first and then the most recent activity first,
+leaving out resolved threads unless the resolved toggle is on, as the pins
+do. Each row shows what the comment is on, the first line of the comment,
+the number of replies and, for an unread thread, a dot. Picking a row shows
+the thread the way "Show on board" in chat does: the board pans to the pin,
+the thread opens and the pin pulses. The panel comes back when the thread is
+closed. While a thread or a new comment has the list's place, the Comments
+button closes it and goes back to the list; it shows as pressed only while
+the list itself is showing. The list and N work for anyone who can see the
+board.
+
+N goes to the next unread thread: the newest one if none is open, otherwise
+the next older unread one after the open thread, starting again from the
+newest after the oldest. With nothing unread it does nothing. A thread N
+opens takes focus on its panel rather than its composer, as on a touch
+screen, so the next N carries on; the Comments button's tooltip names the
+key. `threadList` and `nextUnread` in `imports/lib/whiteboard/comments.ts` do
+the ordering.
+
+### Reactions and images
+
+A thread's panel shows reactions with the chat's own reaction pills
+(`ChatMessageReactions`), under the message they're on, and anyone who can
+comment gets a React button on the comment and each reply that opens the
+chat's emoji picker. Someone who can only view sees the pills and gets no
+way to add or take back a reaction. The server refuses a new reaction on an
+archived hunt's board, since a reaction is a reply; taking one back goes
+through `removeChatReaction`, which only checks that it's the caller's own.
+
+Pasting or dropping an image into the comment composer uploads it the way
+chat does (`createChatImageUpload`, then a POST to the bucket) and puts it in
+the comment, which can't be sent until the upload finishes. Both use
+`useChatImageUpload` in `imports/client/hooks/`, and each shows a failure its
+own way: chat in a dialog, the composer in a line under it. A failed image
+doesn't count as something to send, so a comment that is only a failed image
+can't be sent. When the server has no S3 image bucket, the image isn't
+uploaded and the composer shows the same message chat gives in that case.
+
+### Highlights
+
+On the board, the chat's Highlights panel has a Comments tab listing the
+threads the viewer started or replied to (reactions don't count), by their
+first comment. Picking a row scrolls chat to the comment, as in the other
+tabs, and each row's "Show on board" closes the panel and shows the thread
+on the board.
+
 ## Editing
 
 ### Keyboard
 
-The tool keys, 1 to 3 and Ctrl+A only work while the board has focus (the
+The tool keys, 1 to 3, N and Ctrl+A only work while the board has focus (the
 last press or focus was on it) and nothing is being typed: not in a text box,
 a note being edited, the comment composer or the search field. Each tool's
 tooltip shows its key.
@@ -288,6 +354,7 @@ tooltip shows its key.
 | T | Text | edit |
 | F | Frame | edit |
 | C | Comment | comment |
+| N | Go to the next comment thread with something unread (see Comments) | |
 | 1, 2, 3 | Thin, medium or thick pen | edit |
 | Ctrl+A (Cmd+A on a Mac) | Select everything but frames (a selected frame carries its contents anyway) and no lines, switching to Select | edit |
 | Escape | Close an open comment thread; with none open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
@@ -332,16 +399,27 @@ opens a panel in three parts, for anyone who can edit:
   with no card. "Put back" puts the card at the middle of the screen.
 - **Frames**: rounds' frames (seeded frames and Ungrouped) someone deleted,
   which only hides them. Their contents moved out to the frame around them
-  when they went, so a frame comes back empty, at the top level, centred on
-  the screen. Placement puts new cards for that round in it again. Cards
-  that left with it and haven't been moved by hand since come back too, one
-  at a time: moving out with the frame doesn't mark a card as moved by hand,
-  so the next sync of its puzzle (a tag change, say) places it in the frame
-  again.
+  when they went, so a frame comes back at the top level, centred on the
+  screen, and placement puts new cards for that round in it again. When a
+  round's frame (one with a tag) comes back, the server queues a placement
+  sync of that round's puzzles (those with the frame's tag, and for a
+  `group:X` frame those tagged `meta-for:X`), so the cards that left with it
+  go back in together. Moving out with the frame doesn't mark a card as
+  moved by hand, so only cards someone has moved since stay where they are.
+  A puzzle with more than one round tag goes where placement would put it,
+  which may be another of its rounds.
 - **Feeder arrows**: arrows someone deleted, which only hides them, named
-  "feeder → meta". "Put back" brings one back, and "Show all feeder arrows"
-  brings back every one the panel lists. Neither changes the toolbar's feeder
-  arrows toggle, so with it off the arrows come back unseen.
+  "feeder → meta". "Put back" brings one back, and "Put back all feeder
+  arrows" brings back every one the panel lists. Neither changes the
+  toolbar's feeder arrows toggle, so with it off the arrows come back unseen;
+  the panel says so while the viewer has them turned off ("Feeder arrows are
+  hidden for you; turn them on in the toolbar to see these.").
+
+`deferSyncRoundsOnBoard` in `imports/server/whiteboard.ts` does the round's
+sync, started from `upsertNodes` once the frame is back and run after the
+method returns, so a failure there is logged rather than failing the
+put-back; the tags come from
+`roundTags` in `imports/lib/whiteboard/layout.ts`.
 
 `Whiteboards.methods.upsertEdges` takes `hidden: false` on a feeder arrow to
 put it back. Anything else to do with `hidden` on a line is refused: lines

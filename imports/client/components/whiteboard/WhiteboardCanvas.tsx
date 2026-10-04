@@ -4,6 +4,7 @@ import { useTracker } from "meteor/react-meteor-data";
 import { faArrowPointer } from "@fortawesome/free-solid-svg-icons/faArrowPointer";
 import { faCircleCheck } from "@fortawesome/free-solid-svg-icons/faCircleCheck";
 import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
+import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
 import { faDiagramProject } from "@fortawesome/free-solid-svg-icons/faDiagramProject";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faEyeSlash } from "@fortawesome/free-solid-svg-icons/faEyeSlash";
@@ -50,6 +51,7 @@ import React, {
   useState,
 } from "react";
 import Alert from "react-bootstrap/Alert";
+import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
 import FormSelect from "react-bootstrap/FormSelect";
@@ -87,7 +89,12 @@ import {
   distributeItems,
   sortParentsFirst,
 } from "../../../lib/whiteboard/arrange";
-import { commentPosition, isUnread } from "../../../lib/whiteboard/comments";
+import {
+  commentPosition,
+  isUnread,
+  nextUnread,
+  threadList,
+} from "../../../lib/whiteboard/comments";
 import type { AttachHit } from "../../../lib/whiteboard/connectors";
 import {
   attachHit,
@@ -170,6 +177,7 @@ import ChatLoadedContext from "./ChatLoadedContext";
 import ColorPicker from "./ColorPicker";
 import type { CommentPin } from "./CommentLayer";
 import CommentLayer from "./CommentLayer";
+import CommentList from "./CommentList";
 import CommentPanel from "./CommentPanel";
 import CursorLayer from "./CursorLayer";
 import colors from "./colors";
@@ -482,12 +490,15 @@ const ToolButton = ({
   tool,
   active,
   title,
+  label = title,
   onSelect,
   children,
 }: {
   tool: Tool;
   active: boolean;
   title: string;
+  // The name for screen readers, when it says more than the title.
+  label?: string;
   onSelect: (tool: Tool) => void;
   children: React.ReactNode;
 }) => {
@@ -505,7 +516,7 @@ const ToolButton = ({
       variant={active ? "primary" : "outline-secondary"}
       onClick={onClick}
       title={withKey}
-      aria-label={title}
+      aria-label={label}
       aria-keyshortcuts={TOOL_KEYS[tool]}
       aria-pressed={active}
     >
@@ -514,27 +525,55 @@ const ToolButton = ({
   );
 };
 
+// How many threads have something the viewer hasn't read, on the button
+// that leads to them.
+const UnreadBadge = ({ count }: { count: number }) =>
+  count > 0 ? (
+    <Badge pill bg="danger" className="ms-1 jr-unread-comments">
+      {count > 99 ? "99+" : count}
+    </Badge>
+  ) : null;
+
 // The Comment tool, on the full toolbar and on a board that can only be
-// commented on.
+// commented on, with the count of unread threads.
 const CommentToolButton = ({
   active,
+  unread,
   onSelect,
 }: {
   active: boolean;
+  unread: number;
   onSelect: (tool: Tool) => void;
 }) => {
   const { t } = useTranslation();
+  const title = t(
+    "whiteboard.toolbar.comment",
+    "Comment: click on something to start a thread about it",
+  );
   return (
     <ToolButton
       tool="comment"
       active={active}
       onSelect={onSelect}
-      title={t(
-        "whiteboard.toolbar.comment",
-        "Comment: click on something to start a thread about it",
-      )}
+      title={title}
+      label={
+        unread > 0
+          ? t(
+              "whiteboard.toolbar.commentUnread",
+              "{{title}} ({{count}} unread)",
+              {
+                title,
+                count: unread,
+                // React escapes attributes, so i18next's escaping would only
+                // show entities. Goes once both i18n inits stop escaping.
+                interpolation: { escapeValue: false },
+              },
+            )
+          : title
+      }
     >
       <FontAwesomeIcon icon={faComment} />
+      <UnreadBadge count={unread} />
     </ToolButton>
   );
 };
@@ -824,7 +863,14 @@ const CanvasInner = ({
   const closeEditPolicy = useCallback(() => setEditingPolicy(false), []);
   const [penColor, setPenColor] = useWhiteboardPenColor();
   const [penWidth, setPenWidth] = useWhiteboardPenWidth();
-  const [showHidden, setShowHidden] = useState(false);
+  // The panel at the top right, under any open thread: what isn't on the
+  // board, or the list of comments. Only one shows at a time.
+  const [sidePanel, setSidePanel] = useState<"hidden" | "comments">();
+  const closeHiddenPanel = useCallback(
+    () =>
+      setSidePanel((current) => (current === "hidden" ? undefined : current)),
+    [],
+  );
   const [showResolved, setShowResolved] = useWhiteboardShowResolvedComments();
   const [openThread, setOpenThread] = useState<string>();
   const [draft, setDraft] = useState<ChatMessageCommentAnchorType>();
@@ -2054,9 +2100,30 @@ const CanvasInner = ({
   const selfId = useTracker(() => Meteor.userId() ?? undefined, []);
   const threads = useWhiteboardComments(puzzleId);
   const [seenComments, markCommentSeen] = useSeenComments(boardId, threads);
+  // The threads the Comments panel lists, and N steps through, leaving
+  // resolved ones out unless they're being shown, as the pins do.
+  const threadRows = useMemo(
+    () =>
+      threadList(threads.values(), {
+        seen: seenComments,
+        selfId,
+        showResolved,
+      }),
+    [threads, seenComments, selfId, showResolved],
+  );
+  const unreadCount = useMemo(
+    () => threadRows.filter((row) => row.unread).length,
+    [threadRows],
+  );
   // A thread that has gone (deleted, say) counts as closed.
   const openThreadData = openThread ? threads.get(openThread) : undefined;
   const openThreadId = openThreadData?.root._id;
+  // The thread N last went to, whose panel takes focus itself rather than
+  // giving it to the composer, so that N goes on to the next one.
+  const [steppedThread, setSteppedThread] = useState<string>();
+  // An open thread or a comment being started takes the list's place.
+  const commentListShown =
+    sidePanel === "comments" && !draft && !openThreadData;
 
   // A comment goes on the topmost thing under it (anything but ink and line
   // ends), so it moves with it; otherwise it's pinned to the board.
@@ -2090,15 +2157,20 @@ const CanvasInner = ({
     [flow, absoluteRect],
   );
 
-  const openComment = useCallback((id: string) => {
-    if (id === "draft") return;
-    setOpenThread(id);
-    setDraft(undefined);
-    setShowHidden(false);
-  }, []);
+  const openComment = useCallback(
+    (id: string) => {
+      if (id === "draft") return;
+      setOpenThread(id);
+      setSteppedThread(undefined);
+      setDraft(undefined);
+      closeHiddenPanel();
+    },
+    [closeHiddenPanel],
+  );
 
   const closeComment = useCallback(() => {
     setOpenThread(undefined);
+    setSteppedThread(undefined);
     setDraft(undefined);
   }, []);
 
@@ -2231,7 +2303,7 @@ const CanvasInner = ({
         anchor.node ? absoluteRect(anchor.node) : undefined,
       );
       if (!at) return false;
-      setShowHidden(false);
+      closeHiddenPanel();
       setDraft(undefined);
       setOpenThread(threadId);
       panTo(at);
@@ -2243,7 +2315,7 @@ const CanvasInner = ({
       );
       return true;
     },
-    [threads, absoluteRect, panTo],
+    [threads, absoluteRect, panTo, closeHiddenPanel],
   );
 
   // What picking something the search found does: pan to it, or put a
@@ -2814,7 +2886,7 @@ const CanvasInner = ({
         if (press) {
           setDraft(commentAnchorAt(press));
           setOpenThread(undefined);
-          setShowHidden(false);
+          closeHiddenPanel();
           setTool("select");
         }
         return;
@@ -2852,6 +2924,7 @@ const CanvasInner = ({
       flowPoint,
       commitSegment,
       live,
+      closeHiddenPanel,
     ],
   );
 
@@ -3133,6 +3206,17 @@ const CanvasInner = ({
           setPenWidth(width);
           return;
         }
+        // N goes to the next thread with something unread, for anyone who
+        // can see the board.
+        if (key === "n") {
+          const next = nextUnread(threadRows, openThreadId);
+          if (next) {
+            event.preventDefault();
+            setSteppedThread(next);
+            focusComment(next);
+          }
+          return;
+        }
       }
       if (
         modified &&
@@ -3203,6 +3287,8 @@ const CanvasInner = ({
     cancelClickConnect,
     selectAll,
     setPenWidth,
+    threadRows,
+    focusComment,
   ]);
 
   // Double-clicking a card opens its puzzle, on any board, as long as nothing
@@ -3239,9 +3325,19 @@ const CanvasInner = ({
     [setShowFeederArrows],
   );
   const toggleHidden = useCallback(() => {
-    setShowHidden((current) => !current);
+    setSidePanel((current) => (current === "hidden" ? undefined : "hidden"));
     closeComment();
   }, [closeComment]);
+  // With a thread (or a comment being started) in the list's place, the
+  // button closes it and goes back to the list.
+  const toggleCommentList = useCallback(() => {
+    if (commentListShown) {
+      setSidePanel(undefined);
+      return;
+    }
+    setSidePanel("comments");
+    closeComment();
+  }, [commentListShown, closeComment]);
   const onPenWidth = useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>) => {
       const width = WhiteboardStrokeWidths.find(
@@ -3404,6 +3500,41 @@ const CanvasInner = ({
           { count: notOnBoardCount },
         )
       : notOnBoardTitle;
+  const commentListTitle = t("whiteboard.toolbar.commentList", "Comments");
+  const commentListHint = t(
+    "whiteboard.toolbar.commentListHint",
+    "Comments (N goes to the next unread)",
+  );
+  // On a board that can't be commented on there's no Comment tool to carry
+  // the unread count, so this does.
+  const listUnread = canComment ? 0 : unreadCount;
+  const commentListButton = (
+    <Button
+      variant={commentListShown ? "secondary" : "outline-secondary"}
+      onClick={toggleCommentList}
+      title={commentListHint}
+      aria-keyshortcuts="N"
+      aria-label={
+        listUnread > 0
+          ? t(
+              "whiteboard.toolbar.commentUnread",
+              "{{title}} ({{count}} unread)",
+              {
+                title: commentListTitle,
+                count: listUnread,
+                // React escapes attributes, so i18next's escaping would only
+                // show entities. Goes once both i18n inits stop escaping.
+                interpolation: { escapeValue: false },
+              },
+            )
+          : commentListTitle
+      }
+      aria-pressed={commentListShown}
+    >
+      <FontAwesomeIcon icon={faComments} />
+      <UnreadBadge count={listUnread} />
+    </Button>
+  );
   const alignModes = [
     ["left", t("whiteboard.arrange.left", "Align left edges")],
     ["center", t("whiteboard.arrange.center", "Align centres horizontally")],
@@ -3626,30 +3757,30 @@ const CanvasInner = ({
                           </ReadOnlyReason>
                         )}
                       </ReadOnlyNote>
-                      {(canComment || resolvedCount > 0) && (
-                        <ButtonGroup size="sm">
-                          {canComment && (
-                            <CommentToolButton
-                              active={tool === "comment"}
-                              onSelect={setTool}
-                            />
-                          )}
-                          {resolvedCount > 0 && (
-                            <Button
-                              variant={
-                                showResolved ? "secondary" : "outline-secondary"
-                              }
-                              onClick={toggleShowResolved}
-                              title={showResolvedTitle}
-                              aria-label={showResolvedLabel}
-                              aria-pressed={showResolved}
-                            >
-                              <FontAwesomeIcon icon={faCircleCheck} />{" "}
-                              {resolvedCount}
-                            </Button>
-                          )}
-                        </ButtonGroup>
-                      )}
+                      <ButtonGroup size="sm">
+                        {canComment && (
+                          <CommentToolButton
+                            active={tool === "comment"}
+                            unread={unreadCount}
+                            onSelect={setTool}
+                          />
+                        )}
+                        {commentListButton}
+                        {resolvedCount > 0 && (
+                          <Button
+                            variant={
+                              showResolved ? "secondary" : "outline-secondary"
+                            }
+                            onClick={toggleShowResolved}
+                            title={showResolvedTitle}
+                            aria-label={showResolvedLabel}
+                            aria-pressed={showResolved}
+                          >
+                            <FontAwesomeIcon icon={faCircleCheck} />{" "}
+                            {resolvedCount}
+                          </Button>
+                        )}
+                      </ButtonGroup>
                       {mayChangeEditPolicy && (
                         <EditPolicyButton
                           policy={editPolicy}
@@ -3786,8 +3917,10 @@ const CanvasInner = ({
                       <ButtonGroup size="sm">
                         <CommentToolButton
                           active={tool === "comment"}
+                          unread={unreadCount}
                           onSelect={setTool}
                         />
+                        {commentListButton}
                         <Button
                           variant={
                             showResolved ? "secondary" : "outline-secondary"
@@ -3815,12 +3948,14 @@ const CanvasInner = ({
                         </Button>
                         <Button
                           variant={
-                            showHidden ? "secondary" : "outline-secondary"
+                            sidePanel === "hidden"
+                              ? "secondary"
+                              : "outline-secondary"
                           }
                           onClick={toggleHidden}
                           title={notOnBoardTitle}
                           aria-label={notOnBoardLabel}
-                          aria-pressed={showHidden}
+                          aria-pressed={sidePanel === "hidden"}
                         >
                           <FontAwesomeIcon icon={faEyeSlash} />
                           {notOnBoardCount > 0 && ` ${notOnBoardCount}`}
@@ -3916,6 +4051,9 @@ const CanvasInner = ({
                       targetLabel={commentTarget}
                       canComment={canComment}
                       offline={accessReason === "offline"}
+                      focusPanel={
+                        !!openThreadId && openThreadId === steppedThread
+                      }
                       onClose={dismissComment}
                       onDeleted={closeDeletedComment}
                       onDraftSent={onDraftSent}
@@ -3923,78 +4061,97 @@ const CanvasInner = ({
                     />
                   </Panel>
                 )}
-                {showHidden && !readOnly && !draft && !openThreadData && (
+                {commentListShown && (
                   <Panel position="top-right">
-                    <SidePanel>
-                      <strong>{notOnBoardTitle}</strong>
-                      <HiddenSection>
-                        {t("whiteboard.hidden.puzzles", "Puzzles")}
-                      </HiddenSection>
-                      {hiddenCards.length === 0 && (
-                        <HiddenNone>
-                          {t(
-                            "whiteboard.hidden.none",
-                            "Every puzzle is on the board.",
-                          )}
-                        </HiddenNone>
-                      )}
-                      {hiddenCards.map((card) => (
-                        <PutBackRow
-                          key={card.puzzle}
-                          item={card}
-                          onPutBack={putBack}
-                        />
-                      ))}
-                      <HiddenSection>
-                        {t("whiteboard.hidden.frames", "Frames")}
-                      </HiddenSection>
-                      {hiddenFrames.length === 0 && (
-                        <HiddenNone>
-                          {t(
-                            "whiteboard.hidden.noFrames",
-                            "Every round's frame is on the board.",
-                          )}
-                        </HiddenNone>
-                      )}
-                      {hiddenFrames.map((frame) => (
-                        <PutBackRow
-                          key={frame.id}
-                          item={frame}
-                          onPutBack={putBackHiddenFrame}
-                        />
-                      ))}
-                      <HiddenSection>
-                        {t("whiteboard.hidden.arrows", "Feeder arrows")}
-                      </HiddenSection>
-                      {hiddenArrows.length === 0 ? (
-                        <HiddenNone>
-                          {t(
-                            "whiteboard.hidden.noArrows",
-                            "Every feeder arrow is on the board.",
-                          )}
-                        </HiddenNone>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline-secondary"
-                          onClick={putBackAllArrows}
-                        >
-                          {t(
-                            "whiteboard.hidden.showAllArrows",
-                            "Show all feeder arrows",
-                          )}
-                        </Button>
-                      )}
-                      {hiddenArrows.map((arrow) => (
-                        <PutBackRow
-                          key={arrow.id}
-                          item={arrow}
-                          onPutBack={putBackArrow}
-                        />
-                      ))}
+                    <SidePanel className="nodrag nowheel nopan">
+                      <strong>{commentListTitle}</strong>
+                      <CommentList rows={threadRows} onShow={focusComment} />
                     </SidePanel>
                   </Panel>
                 )}
+                {sidePanel === "hidden" &&
+                  !readOnly &&
+                  !draft &&
+                  !openThreadData && (
+                    <Panel position="top-right">
+                      <SidePanel>
+                        <strong>{notOnBoardTitle}</strong>
+                        <HiddenSection>
+                          {t("whiteboard.hidden.puzzles", "Puzzles")}
+                        </HiddenSection>
+                        {hiddenCards.length === 0 && (
+                          <HiddenNone>
+                            {t(
+                              "whiteboard.hidden.none",
+                              "Every puzzle is on the board.",
+                            )}
+                          </HiddenNone>
+                        )}
+                        {hiddenCards.map((card) => (
+                          <PutBackRow
+                            key={card.puzzle}
+                            item={card}
+                            onPutBack={putBack}
+                          />
+                        ))}
+                        <HiddenSection>
+                          {t("whiteboard.hidden.frames", "Frames")}
+                        </HiddenSection>
+                        {hiddenFrames.length === 0 && (
+                          <HiddenNone>
+                            {t(
+                              "whiteboard.hidden.noFrames",
+                              "Every round's frame is on the board.",
+                            )}
+                          </HiddenNone>
+                        )}
+                        {hiddenFrames.map((frame) => (
+                          <PutBackRow
+                            key={frame.id}
+                            item={frame}
+                            onPutBack={putBackHiddenFrame}
+                          />
+                        ))}
+                        <HiddenSection>
+                          {t("whiteboard.hidden.arrows", "Feeder arrows")}
+                        </HiddenSection>
+                        {!showFeederArrows && hiddenArrows.length > 0 && (
+                          <HiddenNone>
+                            {t(
+                              "whiteboard.hidden.arrowsOff",
+                              "Feeder arrows are hidden for you; turn them on in the toolbar to see these.",
+                            )}
+                          </HiddenNone>
+                        )}
+                        {hiddenArrows.length === 0 ? (
+                          <HiddenNone>
+                            {t(
+                              "whiteboard.hidden.noArrows",
+                              "Every feeder arrow is on the board.",
+                            )}
+                          </HiddenNone>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={putBackAllArrows}
+                          >
+                            {t(
+                              "whiteboard.hidden.putBackAllArrows",
+                              "Put back all feeder arrows",
+                            )}
+                          </Button>
+                        )}
+                        {hiddenArrows.map((arrow) => (
+                          <PutBackRow
+                            key={arrow.id}
+                            item={arrow}
+                            onPutBack={putBackArrow}
+                          />
+                        ))}
+                      </SidePanel>
+                    </Panel>
+                  )}
               </ReactFlow>
             </CanvasWrapper>
             {/* Outside the wrapper, whose pointer handlers would otherwise see

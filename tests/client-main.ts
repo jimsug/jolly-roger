@@ -43,6 +43,7 @@ import "./unit/imports/Logger";
 
 import "./unit/imports/client/bookmarkButton";
 import "./unit/imports/client/breadcrumb";
+import "./unit/imports/client/chatEditorContent";
 import "./unit/imports/client/CommentPanel";
 import "./unit/imports/client/DocumentDisplay";
 import "./unit/imports/client/EditableText";

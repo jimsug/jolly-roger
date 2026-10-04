@@ -22,10 +22,12 @@ export const emptyEditorContent = (): Descendant[] => [
 const children = (content: Descendant[]) =>
   content.length > 0 ? (content[0]! as MessageElement).children : [];
 
+// A failed image doesn't count, since cleanEditorMessage drops it; one still
+// uploading does, and hasLoadingImage holds the send back until it's done.
 export function hasSendableContent(content: Descendant[]): boolean {
   return children(content).some(
     (child) =>
-      nodeIsImage(child) ||
+      (nodeIsImage(child) && child.status !== "error") ||
       nodeIsMention(child) ||
       nodeIsRoleMention(child) ||
       nodeIsPuzzle(child) ||

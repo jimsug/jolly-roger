@@ -86,3 +86,59 @@ export function isUnread(
     .reduce((max, m) => Math.max(max, +m.timestamp), 0);
   return latest > (seenAt ?? 0);
 }
+
+export interface ThreadListRow<T extends CommentThread = CommentThread> {
+  thread: T;
+  unread: boolean;
+}
+
+// A board's threads as its Comments panel lists them: unread first, then the
+// most recent activity first, leaving out resolved threads unless they're
+// being shown. seen holds when the viewer last read each thread.
+export function threadList<T extends CommentThread>(
+  threads: Iterable<T>,
+  {
+    seen,
+    selfId,
+    showResolved,
+  }: {
+    seen: Record<string, number>;
+    selfId: string | undefined;
+    showResolved: boolean;
+  },
+): ThreadListRow<T>[] {
+  return [...threads]
+    .filter((thread) => showResolved || !thread.resolved)
+    .map((thread) => ({
+      thread,
+      unread: isUnread(thread, seen[thread.root._id], selfId),
+    }))
+    .toSorted(
+      (a, b) =>
+        Number(b.unread) - Number(a.unread) ||
+        +b.thread.lastActivity - +a.thread.lastActivity ||
+        a.thread.root._id.localeCompare(b.thread.root._id),
+    );
+}
+
+// The unread thread to go to after `current`, taking threads newest activity
+// first and starting again from the newest after the oldest. With no current
+// thread (or one not listed) it's the newest unread one.
+export function nextUnread(
+  rows: ThreadListRow[],
+  current: string | undefined,
+): string | undefined {
+  const byActivity = rows.toSorted(
+    (a, b) =>
+      +b.thread.lastActivity - +a.thread.lastActivity ||
+      a.thread.root._id.localeCompare(b.thread.root._id),
+  );
+  const start = byActivity.findIndex((r) => r.thread.root._id === current);
+  for (let step = 1; step <= byActivity.length; step++) {
+    const row = byActivity[(start + step) % byActivity.length];
+    if (row?.unread && row.thread.root._id !== current) {
+      return row.thread.root._id;
+    }
+  }
+  return undefined;
+}

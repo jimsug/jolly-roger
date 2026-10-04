@@ -209,6 +209,27 @@ export function computeFeederPairs(
   return pairs;
 }
 
+// The meta-for:X tags for a frame tagged group:X. A frame for any other tag,
+// or none, has none.
+function roundMetaTags(
+  frameTag: string | undefined,
+  tags: Pick<TagType, "_id" | "name">[],
+): Set<string> {
+  const groupName = tags.find((t) => t._id === frameTag)?.name;
+  if (!groupName?.startsWith(GROUP_PREFIX)) return new Set();
+  const metaName = `${META_FOR_PREFIX}${groupName.slice(GROUP_PREFIX.length)}`;
+  return new Set(tags.filter((t) => t.name === metaName).map((t) => t._id));
+}
+
+// The tags that place a puzzle in a round's frame: the frame's own tag, and
+// for a group:X frame, meta-for:X too (see chooseFrameForPuzzle).
+export function roundTags(
+  frameTag: string,
+  tags: Pick<TagType, "_id" | "name">[],
+): string[] {
+  return [frameTag, ...roundMetaTags(frameTag, tags)];
+}
+
 // A round's metas: the puzzles tagged meta-for:X, for a frame tagged
 // group:X. A frame for any other tag, or none, has none.
 export function roundMetas(
@@ -216,12 +237,8 @@ export function roundMetas(
   tags: Pick<TagType, "_id" | "name">[],
   puzzles: Pick<PuzzleType, "_id" | "tags">[],
 ): Set<string> {
-  const groupName = tags.find((t) => t._id === frameTag)?.name;
-  if (!groupName?.startsWith(GROUP_PREFIX)) return new Set();
-  const metaName = `${META_FOR_PREFIX}${groupName.slice(GROUP_PREFIX.length)}`;
-  const metaTags = new Set(
-    tags.filter((t) => t.name === metaName).map((t) => t._id),
-  );
+  const metaTags = roundMetaTags(frameTag, tags);
+  if (metaTags.size === 0) return new Set();
   return new Set(
     puzzles
       .filter((p) => p.tags.some((id) => metaTags.has(id)))

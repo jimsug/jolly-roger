@@ -14,6 +14,7 @@ import {
   isMetaForTag,
   placeIntoFrame,
   roundMetas,
+  roundTags,
   type SeedNode,
   seedLayout,
   topLevelSlot,
@@ -360,6 +361,31 @@ describe("whiteboard roundMetas", function () {
     assert.equal(roundMetas(undefined, tags, puzzles).size, 0);
     assert.equal(roundMetas(tag("administrivia")._id, tags, puzzles).size, 0);
     assert.equal(roundMetas("gone", tags, puzzles).size, 0);
+  });
+});
+
+describe("whiteboard roundTags", function () {
+  it("adds meta-for:X to a group:X frame's own tag", function () {
+    const { tags, tag } = fixtures();
+    const group = tag("group:one")._id;
+    const metaFor = tag("meta-for:one")._id;
+    tag("meta-for:two");
+    assert.sameMembers(roundTags(group, tags), [group, metaFor]);
+  });
+
+  it("gives just the frame's tag for a tag that isn't a round, or an unknown one", function () {
+    const { tags, tag } = fixtures();
+    const administrivia = tag("administrivia")._id;
+    tag("meta-for:administrivia");
+    tag("group:one");
+    assert.deepEqual(roundTags(administrivia, tags), [administrivia]);
+    assert.deepEqual(roundTags("gone", tags), ["gone"]);
+  });
+
+  it("gives just the frame's tag for a round with no meta-for: tag yet", function () {
+    const { tags, tag } = fixtures();
+    const group = tag("group:one")._id;
+    assert.deepEqual(roundTags(group, tags), [group]);
   });
 });
 

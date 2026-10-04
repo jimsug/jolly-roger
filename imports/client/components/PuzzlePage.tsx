@@ -88,7 +88,6 @@ import { computeSolvedness } from "../../lib/solvedness";
 import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import addPuzzleAnswer from "../../methods/addPuzzleAnswer";
 import addPuzzleTag from "../../methods/addPuzzleTag";
-import createChatImageUpload from "../../methods/createChatImageUpload";
 import createGuess from "../../methods/createGuess";
 import ensurePuzzleDocument from "../../methods/ensurePuzzleDocument";
 import removePuzzleAnswer from "../../methods/removePuzzleAnswer";
@@ -112,6 +111,8 @@ import {
 import useBlockUpdate from "../hooks/useBlockUpdate";
 import type { Action, CallState, JoinCallOptions } from "../hooks/useCallState";
 import useCallState from "../hooks/useCallState";
+import type { ChatImageUploadFailure } from "../hooks/useChatImageUpload";
+import useChatImageUpload from "../hooks/useChatImageUpload";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import useDocumentVisible from "../hooks/useDocumentVisible";
 import useMentionableUsers from "../hooks/useMentionableUsers";
@@ -1261,51 +1262,22 @@ const ChatInput = React.memo(
       fileInputRef.current?.click();
     }, []);
 
-    const uploadImageFile = useCallback(
-      (file: File) => {
-        const tempId = Random.id();
-        fancyEditorRef.current?.insertImage("", tempId, "loading");
-
-        createChatImageUpload.call(
-          {
-            puzzleId,
-            mimeType: file.type,
-          },
-          (err, upload) => {
-            if (err || !upload) {
-              fancyEditorRef.current?.replaceImage("", tempId, "error");
-              setUploadImageError(
-                err?.message ??
-                  "S3 presignedPost creation failed, check server settings to ensure S3 image bucket is configured correctly.",
-              );
-            } else {
-              const { publicUrl, uploadUrl, fields } = upload;
-              const formData = new FormData();
-              for (const [key, value] of Object.entries(fields)) {
-                formData.append(key, value);
-              }
-              formData.append("file", file);
-              fetch(uploadUrl, {
-                method: "POST",
-                mode: "no-cors",
-                body: formData,
-              })
-                .then(() => {
-                  fancyEditorRef.current?.replaceImage(
-                    publicUrl,
-                    tempId,
-                    "success",
-                  );
-                })
-                .catch((uploadErr) => {
-                  fancyEditorRef.current?.replaceImage("", tempId, "error");
-                  setUploadImageError(`S3 upload failed: ${uploadErr.message}`);
-                });
-            }
-          },
+    const onUploadFailed = useCallback((failure: ChatImageUploadFailure) => {
+      if (failure.stage === "request") {
+        setUploadImageError(
+          failure.error?.message ??
+            "S3 presignedPost creation failed, check server settings to ensure S3 image bucket is configured correctly.",
         );
-      },
-      [puzzleId],
+      } else {
+        setUploadImageError(
+          `S3 upload failed: ${(failure.error as Error).message}`,
+        );
+      }
+    }, []);
+    const uploadImageFile = useChatImageUpload(
+      puzzleId,
+      fancyEditorRef,
+      onUploadFailed,
     );
 
     function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {

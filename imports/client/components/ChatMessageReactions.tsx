@@ -97,6 +97,7 @@ const ChatMessageReactions = ({
   showPicker,
   onHidePicker,
   onError,
+  disabled = false,
 }: {
   messageId: string;
   puzzleId: string;
@@ -108,6 +109,8 @@ const ChatMessageReactions = ({
   showPicker: boolean;
   onHidePicker: () => void;
   onError: (error: unknown) => void;
+  // Shows the reactions without letting the viewer add or take one back.
+  disabled?: boolean;
 }) => {
   // emoji -> reacting user -> that user's reactions (one, apart from
   // duplicates written before the server kept them out)
@@ -221,7 +224,7 @@ const ChatMessageReactions = ({
                 .toSorted()
                 .join("\n")}
               count={users.size}
-              disabled={callsInFlight > 0}
+              disabled={disabled || callsInFlight > 0}
               onToggle={toggleReaction}
             />
           ))}

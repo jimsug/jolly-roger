@@ -499,6 +499,134 @@ describe("whiteboard", function () {
       }
     });
 
+    it("brings a round's cards back when its frame is put back", async function () {
+      const added = await newPuzzle("Comes back", [groupTag._id]);
+      await syncPuzzlesOnBoard(huntId, [added]);
+      const frame = await frameFor(groupTag._id);
+      const cards = await WhiteboardNodes.find({
+        board: boardId,
+        parent: frame._id,
+        type: "puzzle",
+      }).fetchAsync();
+      const metaTag = FixtureHunt.tags.find(
+        (t) => t.name === "meta-for:anger",
+      )!;
+      // The meta is placed by its meta-for: tag rather than the frame's own
+      const meta = (await Puzzles.findOneAsync({ tags: metaTag._id }))!;
+      assert.include(
+        cards.map((c) => c.puzzle),
+        meta._id,
+      );
+      // Cards whose puzzles placement would put in this frame rather than
+      // another of their rounds'
+      const frameTags = new Set(
+        FixtureHunt.tags
+          .filter(
+            (t) => t.name.startsWith("group:") || t.name === "administrivia",
+          )
+          .map((t) => t._id),
+      );
+      const puzzles = await Puzzles.find({
+        _id: { $in: cards.map((c) => c.puzzle!) },
+      }).fetchAsync();
+      const onlyHere = new Set(
+        puzzles
+          .filter(
+            (p) =>
+              p._id === meta._id ||
+              p.tags.filter((t) => frameTags.has(t)).join(",") === groupTag._id,
+          )
+          .map((p) => p._id),
+      );
+      const moved = cards.find(
+        (c) => c.puzzle !== meta._id && c.puzzle !== added,
+      );
+      const rest = cards.filter((c) => c !== moved && onlyHere.has(c.puzzle!));
+      assert.isAtLeast(rest.length, 2);
+
+      await deleteNodes(member, boardId, [frame._id]);
+      assert.equal((await cardFor(moved!.puzzle!)).parent, frame.parent);
+      // Moved by hand while the frame was gone, so it stays where it was put
+      await upsertNodes(member, boardId, [
+        { _id: moved!._id, position: { x: -5000, y: -5000 } },
+      ]);
+      await upsertNodes(member, boardId, [
+        {
+          _id: frame._id,
+          hidden: false,
+          parent: null,
+          position: { x: 9000, y: 9000 },
+        },
+      ]);
+      await waitForAssertion(async () => {
+        for (const card of rest) {
+          assert.equal((await cardFor(card.puzzle!)).parent, frame._id);
+        }
+      }, 5000);
+      assert.equal((await cardFor(moved!.puzzle!)).parent, frame.parent);
+    });
+
+    describe("bringing a round back only when its frame is put back", function () {
+      // A card taken out of its round's frame without being marked as moved
+      // by hand, which a sync of its round would put straight back.
+      const strayCard = async (frameId: string) => {
+        const card = (await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          parent: frameId,
+          type: "puzzle",
+        }))!;
+        await WhiteboardNodes.updateAsync(card._id, {
+          $set: { position: { x: -7000, y: -7000 } },
+          $unset: { parent: 1 },
+        });
+        return card._id;
+      };
+      // Room for a deferred sync to have run, had one been asked for.
+      const settle = () =>
+        new Promise((resolve) => {
+          setTimeout(resolve, 500);
+        });
+
+      it("leaves the cards for an edit to a frame that's on the board", async function () {
+        const frame = await frameFor(groupTag._id);
+        const card = await strayCard(frame._id);
+        await upsertNodes(member, boardId, [
+          {
+            _id: frame._id,
+            position: { x: frame.position.x + 100, y: frame.position.y },
+          },
+        ]);
+        await settle();
+        const after = await WhiteboardNodes.findOneAsync(card);
+        assert.isUndefined(after?.parent);
+        assert.deepEqual(after?.position, { x: -7000, y: -7000 });
+      });
+
+      it("leaves the cards when putting the frame back is refused", async function () {
+        const frame = await frameFor(groupTag._id);
+        const card = (await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          parent: frame._id,
+          type: "puzzle",
+        }))!;
+        // Its cards stay where they were, outside it
+        await deleteNodes(member, boardId, [frame._id]);
+        await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            { _id: frame._id, hidden: false, parent: null },
+          ]),
+          /archived/,
+        );
+        await settle();
+        assert.isTrue((await WhiteboardNodes.findOneAsync(frame._id))?.hidden);
+        assert.equal(
+          (await WhiteboardNodes.findOneAsync(card._id))?.parent,
+          frame.parent,
+        );
+      });
+    });
+
     it("drops feeder arrows when the tag goes, and keeps hidden ones hidden", async function () {
       const edge = (await WhiteboardEdges.findOneAsync({
         board: boardId,

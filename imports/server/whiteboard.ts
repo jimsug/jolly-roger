@@ -29,6 +29,7 @@ import {
   MIN_FRAME_WIDTH,
   placeIntoFrame,
   roundMetas,
+  roundTags,
   seedLayout,
   topLevelSlot,
 } from "../lib/whiteboard/layout";
@@ -412,6 +413,39 @@ export function deferSyncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
       }
     }
     pendingSyncs.delete(huntId);
+  });
+}
+
+// Puts the puzzles of rounds whose frames have just come back through a
+// deferred sync, so cards that left with a frame (and haven't been moved by
+// hand since) go back into it together. Looking the puzzles up is deferred
+// too, so the caller's write stands whatever happens here.
+export function deferSyncRoundsOnBoard(huntId: string, tagIds: string[]) {
+  if (tagIds.length === 0) return;
+  Meteor.defer(async () => {
+    try {
+      const tags = await Tags.find(
+        { hunt: huntId },
+        { projection: { name: 1 } },
+      ).fetchAsync();
+      const wanted = [
+        ...new Set(tagIds.flatMap((tag) => roundTags(tag, tags))),
+      ];
+      const puzzles = await Puzzles.find(
+        { hunt: huntId, tags: { $in: wanted } },
+        { projection: { _id: 1 } },
+      ).fetchAsync();
+      deferSyncPuzzlesOnBoard(
+        huntId,
+        puzzles.map((p) => p._id),
+      );
+    } catch (error) {
+      Logger.error("Failed to sync restored rounds onto whiteboard", {
+        hunt: huntId,
+        tags: tagIds.join(","),
+        error,
+      });
+    }
   });
 }
 

@@ -1,5 +1,6 @@
 import React, {
   useCallback,
+  useContext,
   useId,
   useLayoutEffect,
   useMemo,
@@ -18,10 +19,18 @@ import type { ChatMessageType } from "../../lib/models/ChatMessages";
 import nodeIsMention from "../../lib/nodeIsMention";
 import ChatMessage from "./ChatMessage";
 import { PuzzlePagePadding } from "./styling/constants";
+import BoardFocusContext from "./whiteboard/BoardFocusContext";
 
 type HighlightMessage = Pick<
   ChatMessageType,
-  "_id" | "sender" | "content" | "timestamp" | "pinTs" | "parentId"
+  | "_id"
+  | "sender"
+  | "content"
+  | "timestamp"
+  | "pinTs"
+  | "parentId"
+  | "comment"
+  | "thread"
 >;
 
 const HighlightsRow = styled.div`
@@ -69,6 +78,12 @@ const HighlightTimestamp = styled.span`
   color: #666;
 `;
 
+// Sits above the button stretched over the row, like the message's links
+const RowAction = styled.div`
+  position: relative;
+  z-index: 1;
+`;
+
 // Stretched over the whole row, so picking anywhere on it goes to the message
 const GoToMessageButton = styled.button`
   border: none;
@@ -96,12 +111,15 @@ const HighlightListItem = ({
   selfUserId,
   roles,
   onPick,
+  action,
 }: {
   message: HighlightMessage;
   displayNames: Map<string, string>;
   selfUserId: string;
   roles: string[];
   onPick: (messageId: string) => void;
+  // Something more to do with the message, under it.
+  action?: React.ReactNode;
 }) => {
   const { t, i18n } = useTranslation();
   const messageId = message._id;
@@ -130,13 +148,32 @@ const HighlightListItem = ({
         selfUserId={selfUserId}
         roles={roles}
       />
+      {action ? <RowAction>{action}</RowAction> : null}
     </HighlightRow>
+  );
+};
+
+// Shows a comment thread on the board, closing the panel first.
+const ShowOnBoardButton = ({
+  threadId,
+  onShow,
+}: {
+  threadId: string;
+  onShow: (threadId: string) => void;
+}) => {
+  const { t } = useTranslation();
+  const show = useCallback(() => onShow(threadId), [onShow, threadId]);
+  return (
+    <Button size="sm" variant="link" className="p-0" onClick={show}>
+      {t("whiteboard.chat.showOnBoard", "Show on board")}
+    </Button>
   );
 };
 
 // A button under the chat input that opens a panel of the messages worth a
 // second look: replies to the user, mentions of them, pins and system
-// messages. Picking one scrolls the history to it.
+// messages, and on the whiteboard the comment threads they're in. Picking
+// one scrolls the history to it.
 const HighlightsPanel = React.memo(
   ({
     chatMessages,
@@ -154,6 +191,7 @@ const HighlightsPanel = React.memo(
     onHeightChange: () => void;
   }) => {
     const { t } = useTranslation();
+    const boardFocus = useContext(BoardFocusContext);
     const [show, setShow] = useState(false);
     const open = useCallback(() => setShow(true), []);
     const close = useCallback(() => setShow(false), []);
@@ -198,8 +236,24 @@ const HighlightsPanel = React.memo(
           messages: messages.filter((m) => !m.sender),
         },
       ];
+      if (boardFocus) {
+        // Threads the user started or replied to, by their first comment
+        const repliedIn = new Set(
+          messages.flatMap((m) =>
+            m.thread && m.sender === selfUserId ? [m.thread] : [],
+          ),
+        );
+        all.push({
+          key: "comments",
+          title: t("chat.highlights.comments", "Comments"),
+          messages: messages.filter(
+            (m) =>
+              m.comment && (m.sender === selfUserId || repliedIn.has(m._id)),
+          ),
+        });
+      }
       return all.filter((tab) => tab.messages.length > 0);
-    }, [chatMessages, selfUserId, t]);
+    }, [chatMessages, selfUserId, boardFocus, t]);
     const total = tabs.reduce((sum, tab) => sum + tab.messages.length, 0);
 
     // The row takes its height from the history, so it says when it comes and
@@ -215,6 +269,14 @@ const HighlightsPanel = React.memo(
         scrollToMessage(messageId);
       },
       [scrollToMessage],
+    );
+
+    const showOnBoard = useCallback(
+      (threadId: string) => {
+        setShow(false);
+        boardFocus?.focusComment(threadId);
+      },
+      [boardFocus],
     );
 
     const idPrefix = useId();
@@ -266,6 +328,14 @@ const HighlightsPanel = React.memo(
                       selfUserId={selfUserId}
                       roles={roles}
                       onPick={pick}
+                      action={
+                        key === "comments" ? (
+                          <ShowOnBoardButton
+                            threadId={message._id}
+                            onShow={showOnBoard}
+                          />
+                        ) : undefined
+                      }
                     />
                   ))}
                 </Tab>

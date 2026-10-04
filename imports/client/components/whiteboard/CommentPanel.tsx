@@ -1,5 +1,6 @@
 import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
+import { faFaceSmile } from "@fortawesome/free-solid-svg-icons/faFaceSmile";
 import { faXmark } from "@fortawesome/free-solid-svg-icons/faXmark";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import React, {
@@ -13,11 +14,11 @@ import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 import { useTranslation } from "react-i18next";
 import styled from "styled-components";
-import chatMessagePlainText from "../../../lib/chatMessagePlainText";
 import type {
   ChatMessageCommentAnchorType,
   ChatMessageType,
 } from "../../../lib/models/ChatMessages";
+import type { DiscordAccountType } from "../../../lib/models/DiscordAccount";
 import Hunts from "../../../lib/models/Hunts";
 import MeteorUsers from "../../../lib/models/MeteorUsers";
 import {
@@ -31,6 +32,7 @@ import setWhiteboardCommentResolved from "../../../methods/setWhiteboardCommentR
 import indexedDisplayNames from "../../indexedDisplayNames";
 import Avatar from "../Avatar";
 import ChatMessage from "../ChatMessage";
+import ChatMessageReactions from "../ChatMessageReactions";
 import RelativeTime from "../RelativeTime";
 import CommentComposer from "./CommentComposer";
 
@@ -93,6 +95,19 @@ const Meta = styled.div`
   font-size: 12px;
 `;
 
+const MetaRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+`;
+
+const ReactButton = styled(Button)`
+  margin-left: auto;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1.4;
+`;
+
 const Footer = styled.div`
   padding: 6px 8px;
   border-top: 1px solid ${({ theme }) => theme.colors.border};
@@ -104,12 +119,109 @@ const ResolvedNote = styled.div`
   color: ${({ theme }) => theme.colors.textSecondary};
 `;
 
+// One message in a thread, with its reactions and, for anyone who can
+// comment, a button to react, as in chat.
+const CommentEntry = ({
+  message,
+  puzzleId,
+  reactions,
+  displayNames,
+  discordAccount,
+  selfUserId,
+  roles,
+  canComment,
+  onError,
+}: {
+  message: ChatMessageType;
+  puzzleId: string;
+  reactions: ChatMessageType[];
+  displayNames: Map<string, string>;
+  discordAccount: DiscordAccountType | undefined;
+  selfUserId: string;
+  roles: string[];
+  canComment: boolean;
+  onError: (error: Meteor.Error) => void;
+}) => {
+  const { t } = useTranslation();
+  const [showPicker, setShowPicker] = useState(false);
+  const pickerTarget = useRef<HTMLButtonElement>(null);
+  const togglePicker = useCallback(() => setShowPicker((shown) => !shown), []);
+  const hidePicker = useCallback(() => setShowPicker(false), []);
+  const reportReactionError = useCallback(
+    (error: unknown) =>
+      onError(
+        error instanceof Meteor.Error
+          ? error
+          : new Meteor.Error(
+              "reaction-failed",
+              error instanceof Error ? error.message : String(error),
+            ),
+      ),
+    [onError],
+  );
+  const react = t("chat.react", "React");
+  return (
+    <Entry>
+      <Avatar
+        size={20}
+        _id={message.sender}
+        displayName={
+          message.sender ? displayNames.get(message.sender) : undefined
+        }
+        discordAccount={discordAccount}
+        rounded
+      />
+      <EntryBody>
+        <MetaRow>
+          <Meta>
+            {(message.sender && displayNames.get(message.sender)) ??
+              t("whiteboard.comments.unknownAuthor", "Someone")}{" "}
+            · <RelativeTime date={message.timestamp} minimumUnit="minute" />
+          </Meta>
+          {canComment && (
+            <ReactButton
+              ref={pickerTarget}
+              size="sm"
+              variant="link"
+              title={react}
+              aria-label={react}
+              onClick={togglePicker}
+            >
+              <FontAwesomeIcon icon={faFaceSmile} />
+            </ReactButton>
+          )}
+        </MetaRow>
+        <ChatMessage
+          message={message.content}
+          displayNames={displayNames}
+          selfUserId={selfUserId}
+          roles={roles}
+        />
+        <ChatMessageReactions
+          messageId={message._id}
+          puzzleId={puzzleId}
+          reactions={reactions}
+          displayNames={displayNames}
+          selfUserId={selfUserId}
+          pickerTarget={pickerTarget}
+          showPicker={canComment && showPicker}
+          onHidePicker={hidePicker}
+          onError={reportReactionError}
+          disabled={!canComment}
+        />
+      </EntryBody>
+    </Entry>
+  );
+};
+
+const NO_REACTIONS: ChatMessageType[] = [];
+
 // A comment thread on the board, or a new comment being written. Messages
 // render exactly as they do in chat, and stay in the board's chat too. It's
 // a dialog beside the board: when it opens, focus goes to its composer (or
-// the panel itself, with nothing to write in, or for a thread opened on a
-// touch screen, which would otherwise bring up the keyboard), and Escape
-// closes it.
+// the panel itself, with nothing to write in, for a thread opened on a
+// touch screen, which would otherwise bring up the keyboard, or for one
+// stepped to with N, so the next N still works), and Escape closes it.
 const CommentPanel = ({
   huntId,
   puzzleId,
@@ -118,6 +230,7 @@ const CommentPanel = ({
   targetLabel,
   canComment,
   offline,
+  focusPanel = false,
   onClose,
   onDeleted,
   onDraftSent,
@@ -132,6 +245,8 @@ const CommentPanel = ({
   canComment: boolean;
   // The connection is down, which takes commenting away until it's back.
   offline: boolean;
+  // Focus goes to the panel rather than its composer when it opens.
+  focusPanel?: boolean;
   onClose: () => void;
   // Closes the panel once its thread has been deleted.
   onDeleted: () => void;
@@ -146,6 +261,7 @@ const CommentPanel = ({
   const [focusComposer] = useState(
     () =>
       canComment &&
+      !focusPanel &&
       (!!draft || !window.matchMedia("(pointer: coarse)").matches),
   );
   const composerFocusPending = useRef(focusComposer);
@@ -203,6 +319,16 @@ const CommentPanel = ({
     () => (thread ? [thread.root, ...thread.replies] : []),
     [thread],
   );
+  const reactionsByMessage = useMemo(() => {
+    const byMessage = new Map<string, ChatMessageType[]>();
+    thread?.reactions.forEach((reaction) => {
+      if (!reaction.parentId) return;
+      const list = byMessage.get(reaction.parentId) ?? [];
+      list.push(reaction);
+      byMessage.set(reaction.parentId, list);
+    });
+    return byMessage;
+  }, [thread]);
   // Authors can take back a comment until someone else replies; operators
   // can always remove one.
   const canDelete =
@@ -376,44 +502,28 @@ const CommentPanel = ({
       {messages.length > 0 && (
         <Messages>
           {messages.map((m) => (
-            <Entry key={m._id}>
-              <Avatar
-                size={20}
-                _id={m.sender}
-                displayName={m.sender ? displayNames.get(m.sender) : undefined}
-                discordAccount={
-                  m.sender ? discordAccounts.get(m.sender) : undefined
-                }
-                rounded
-              />
-              <EntryBody>
-                <Meta>
-                  {(m.sender && displayNames.get(m.sender)) ??
-                    t("whiteboard.comments.unknownAuthor", "Someone")}{" "}
-                  · <RelativeTime date={m.timestamp} minimumUnit="minute" />
-                </Meta>
-                <ChatMessage
-                  message={m.content}
-                  displayNames={displayNames}
-                  selfUserId={selfUserId}
-                  roles={roles}
-                />
-              </EntryBody>
-            </Entry>
+            <CommentEntry
+              key={m._id}
+              message={m}
+              puzzleId={puzzleId}
+              reactions={reactionsByMessage.get(m._id) ?? NO_REACTIONS}
+              displayNames={displayNames}
+              discordAccount={
+                m.sender ? discordAccounts.get(m.sender) : undefined
+              }
+              selfUserId={selfUserId}
+              roles={roles}
+              canComment={canComment}
+              onError={onError}
+            />
           ))}
-          {thread && thread.reactions.length > 0 && (
-            <Meta>
-              {thread.reactions
-                .map((r) => chatMessagePlainText(r.content))
-                .join(" ")}
-            </Meta>
-          )}
         </Messages>
       )}
       {composerShown && (
         <Footer>
           <CommentComposer
             huntId={huntId}
+            puzzleId={puzzleId}
             placeholder={
               draft
                 ? t("whiteboard.comments.writePlaceholder", "Write a comment")
