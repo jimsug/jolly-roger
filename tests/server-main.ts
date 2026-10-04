@@ -33,6 +33,7 @@ import "./unit/imports/lib/whiteboard-connectors";
 import "./unit/imports/lib/whiteboard-contributors";
 import "./unit/imports/lib/whiteboard-ink";
 import "./unit/imports/lib/whiteboard-layout";
+import "./unit/imports/lib/whiteboard-liveDrags";
 
 // Disable rate limiting
 if (!Meteor.isAppTest) {
@@ -43,6 +44,7 @@ Accounts.removeDefaultRateLimit();
 
 import "./unit/imports/server/backfillHuntAdminFields";
 import "./unit/imports/server/backfillPuzzleNotifications";
+import "./unit/imports/server/bulkAddHuntUsers";
 import "./unit/imports/server/chatMessagePins";
 import "./unit/imports/server/chatReactions";
 import "./unit/imports/server/dingwordSuppression";
@@ -61,6 +63,7 @@ import "./unit/imports/server/Model";
 import "./unit/imports/server/NewPuzzleNotificationHooks";
 import "./unit/imports/server/publishJoinedQuery";
 import "./unit/imports/server/puzzleHistory";
+import "./unit/imports/server/repairLegacyUrls";
 import "./unit/imports/server/sendChatMessage";
 import "./unit/imports/server/subscriberPresence";
 import "./unit/imports/server/TagNotificationHooks";

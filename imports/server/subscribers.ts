@@ -11,6 +11,7 @@ import type { Subscription } from "meteor/meteor";
 import { Meteor } from "meteor/meteor";
 import type { Mongo } from "meteor/mongo";
 import MeteorUsers from "../lib/models/MeteorUsers";
+import { Id } from "../lib/typedModel/regexes";
 import { registerPeriodicCleanupHook } from "./garbage-collection";
 import type { SubscriberType } from "./models/Subscribers";
 import Subscribers from "./models/Subscribers";
@@ -21,6 +22,11 @@ async function cleanupHook(deadServer: string) {
   await Subscribers.removeAsync({ server: deadServer });
 }
 registerPeriodicCleanupHook(cleanupHook);
+
+// A puzzle page's topic, "puzzle:<id>" (Id's pattern without its leading ^).
+// Names are whatever the subscriber sends, and the puzzle list reads puzzle
+// ids back out of them, so a puzzle topic has to name one.
+const PUZZLE_TOPIC = new RegExp(`^puzzle:${Id.source.slice(1)}`);
 
 const contextMatcher = Match.Where(
   (val: unknown): val is Record<string, string | boolean> => {
@@ -39,6 +45,9 @@ Meteor.publish("subscribers.inc", async function (name, context) {
   check(context, contextMatcher);
 
   if (!this.userId) {
+    return [];
+  }
+  if (name.startsWith("puzzle:") && !PUZZLE_TOPIC.test(name)) {
     return [];
   }
 
@@ -76,51 +85,53 @@ Meteor.publish("subscribers.counts", async function (q: Record<string, any>) {
   });
 
   let initialized = false;
-  const counters: Record<string, Record<string, number>> = {};
+  // Connections per user per name. Maps, since a name can be any string
+  // ("__proto__" included).
+  const counters = new Map<string, Map<string, number>>();
 
   const cursor = Subscribers.find(query);
   const handle = await cursor.observeAsync({
     added: (doc) => {
       const { name, user } = doc;
-      if (!Object.hasOwn(counters, name)) {
-        counters[name] = {};
+      let users = counters.get(name);
+      if (!users) {
+        users = new Map();
+        counters.set(name, users);
 
         if (initialized) {
           this.added("subscribers.counts", name, { value: 0 });
         }
       }
 
-      if (!Object.hasOwn(counters[name]!, user)) {
-        counters[name]![user] = 0;
-      }
-
-      counters[name]![user]! += 1;
+      users.set(user, (users.get(user) ?? 0) + 1);
       if (initialized) {
-        this.changed("subscribers.counts", name, {
-          value: Object.keys(counters[name]!).length,
-        });
+        this.changed("subscribers.counts", name, { value: users.size });
       }
     },
 
     removed: (doc) => {
       const { name, user } = doc;
+      const users = counters.get(name);
+      if (!users) {
+        return;
+      }
 
-      counters[name]![user]! -= 1;
-      if (counters[name]![user] === 0) {
-        delete counters[name]![user];
+      const remaining = (users.get(user) ?? 0) - 1;
+      if (remaining > 0) {
+        users.set(user, remaining);
+      } else {
+        users.delete(user);
       }
 
       if (initialized) {
-        this.changed("subscribers.counts", name, {
-          value: Object.keys(counters[name]!).length,
-        });
+        this.changed("subscribers.counts", name, { value: users.size });
       }
     },
   });
   this.onStop(() => handle.stop());
 
-  Object.entries(counters).forEach(([key, val]) => {
-    this.added("subscribers.counts", key, { value: Object.keys(val).length });
+  counters.forEach((users, name) => {
+    this.added("subscribers.counts", name, { value: users.size });
   });
   initialized = true;
   this.ready();
@@ -253,9 +264,11 @@ Meteor.publish("subscribers.fetchAll", async function (hunt) {
     return [];
   }
 
+  // Only well-formed puzzle topics, which are all the puzzle list and the
+  // board read. A row's name and context are whatever its subscriber sent.
   await publishAggregatedSubscribers(
     this,
-    { "context.hunt": hunt },
+    { "context.hunt": hunt, name: PUZZLE_TOPIC },
     (doc) => `${doc.name}:${doc.user}`,
   );
   return undefined;

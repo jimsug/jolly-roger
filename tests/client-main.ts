@@ -31,6 +31,7 @@ import "./unit/imports/lib/whiteboard-connectors";
 import "./unit/imports/lib/whiteboard-contributors";
 import "./unit/imports/lib/whiteboard-ink";
 import "./unit/imports/lib/whiteboard-layout";
+import "./unit/imports/lib/whiteboard-liveDrags";
 
 import "./unit/imports/client/bookmarkButton";
 import "./unit/imports/client/breadcrumb";

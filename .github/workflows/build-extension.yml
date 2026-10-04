@@ -79,7 +79,7 @@ jobs:
 
       - name: Sign Firefox extension
         if: startsWith(github.ref, 'refs/tags/')
-        uses: wdzeng/firefox-addon@v1
+        uses: wdzeng/firefox-addon@3184ee491b500e080885e046051366a4228c6e5d # v1
         with:
           addon-guid: "{2bf7bc48-4f7d-4c16-9a88-58bb9f1c6ff5}"
           xpi-path: extension/dist/firefox/jolly-roger-firefox.xpi
@@ -88,7 +88,7 @@ jobs:
           jwt-secret: ${{ secrets.FIREFOX_JWT_SECRET }}
 
       - name: Package Chrome Extension
-        uses: cardinalby/webext-buildtools-chrome-crx-action@v2
+        uses: cardinalby/webext-buildtools-chrome-crx-action@2d3b64d6a82a252eac2dc82ee90760c5217024fa # v2
         with:
           zipFilePath: 'extension/dist/chrome/jolly-roger-chrome.zip'
           crxFilePath: 'extension/dist/jolly-roger-chrome.crx'
@@ -98,7 +98,7 @@ jobs:
           updateXmlCodebaseUrl: 'https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/jolly-roger-chrome.crx'
 
       - name: Create Release and Upload Artifacts
-        uses: ncipollo/release-action@v1
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           artifacts: |

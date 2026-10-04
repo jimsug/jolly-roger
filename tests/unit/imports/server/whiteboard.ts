@@ -29,6 +29,7 @@ import {
 } from "../../../../imports/lib/whiteboard/layout";
 import {
   MAX_BATCH,
+  MAX_FRAME_DEPTH,
   MAX_NODES_PER_BOARD,
 } from "../../../../imports/lib/whiteboard/limits";
 import addPuzzleTag from "../../../../imports/methods/addPuzzleTag";
@@ -48,6 +49,7 @@ import { cleanupDeadServer } from "../../../../imports/server/garbage-collection
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
 import WhiteboardPresence from "../../../../imports/server/models/WhiteboardPresence";
 import {
+  deferSyncPuzzlesOnBoard,
   ensureWhiteboard,
   syncPuzzlesOnBoard,
 } from "../../../../imports/server/whiteboard";
@@ -431,6 +433,57 @@ describe("whiteboard", function () {
         assert.ok(frame);
         assert.equal((await cardFor(puzzleId)).parent, frame._id);
       }, 5000);
+    });
+
+    it("doesn't touch the tag or the board for a rename that changes nothing", async function () {
+      const tag = (await Tags.findOneAsync(groupTag._id))!;
+      const lookups = sinon.spy(Whiteboards, "findOneAsync");
+      try {
+        for (const keepOldNameAsAlias of [false, true, false]) {
+          await asUser(member, () =>
+            renameTag.callPromise({
+              tagId: tag._id,
+              name: ` ${tag.name} `,
+              keepOldNameAsAlias,
+            }),
+          );
+        }
+        // Deferred callbacks run in order, so a sync any of those deferred
+        // would have started by now
+        await new Promise<void>((resolve) => {
+          Meteor.defer(resolve);
+        });
+        assert.isFalse(lookups.calledWithMatch({ hunt: huntId }));
+      } finally {
+        lookups.restore();
+      }
+      const after = await Tags.findOneAsync(tag._id);
+      assert.deepEqual(after?.updatedAt, tag.updatedAt);
+      assert.deepEqual(after?.aliases, tag.aliases);
+    });
+
+    it("folds a burst of deferred syncs for a hunt into one", async function () {
+      const ids = await Promise.all(
+        ["One", "Two", "Three", "Four", "Five"].map((title) =>
+          newPuzzle(title, [groupTag._id]),
+        ),
+      );
+      const frame = await frameFor(groupTag._id);
+      const lookups = sinon.spy(Whiteboards, "findOneAsync");
+      try {
+        ids.forEach((id) => deferSyncPuzzlesOnBoard(huntId, [id]));
+        await waitForAssertion(async () => {
+          for (const id of ids) {
+            assert.equal((await cardFor(id))?.parent, frame._id);
+          }
+        }, 5000);
+        assert.lengthOf(
+          lookups.getCalls().filter((c) => c.calledWithMatch({ hunt: huntId })),
+          1,
+        );
+      } finally {
+        lookups.restore();
+      }
     });
 
     it("drops feeder arrows when the tag goes, and keeps hidden ones hidden", async function () {
@@ -909,6 +962,52 @@ describe("whiteboard", function () {
         upsertNodes(member, boardId, [{ _id: outer, parent: inner }]),
         /itself/,
       );
+    });
+
+    it("won't nest anything more than MAX_FRAME_DEPTH frames deep", async function () {
+      const chain = Array.from({ length: MAX_FRAME_DEPTH }, () => Random.id());
+      await upsertNodes(
+        member,
+        boardId,
+        chain.map((_id, i) => ({
+          _id,
+          type: "frame" as const,
+          position: { x: 0, y: 0 },
+          parent: chain[i - 1],
+        })),
+      );
+      const deepest = chain.at(-1)!;
+      const inner = Random.id();
+      await upsertNodes(member, boardId, [
+        {
+          _id: inner,
+          type: "frame",
+          position: { x: 0, y: 0 },
+          parent: deepest,
+        },
+      ]);
+      await assert.isRejected(
+        upsertNodes(member, boardId, [
+          {
+            _id: Random.id(),
+            type: "sticky",
+            position: { x: 0, y: 0 },
+            parent: inner,
+          },
+        ]),
+        /nested/,
+      );
+
+      // Wrapping the chain in one more frame would push its far end too deep
+      const wrapper = Random.id();
+      await upsertNodes(member, boardId, [
+        { _id: wrapper, type: "frame", position: { x: 0, y: 0 } },
+      ]);
+      await assert.isRejected(
+        upsertNodes(member, boardId, [{ _id: chain[0]!, parent: wrapper }]),
+        /nested/,
+      );
+      assert.notOk((await WhiteboardNodes.findOneAsync(chain[0]))?.parent);
     });
 
     it("takes back a frame move that closes a loop with a concurrent one", async function () {
@@ -1571,6 +1670,34 @@ describe("whiteboard", function () {
       await setResolved(member, root._id, true);
       await setResolved(member, root._id, false);
       assert.notOk((await reload(root._id)).comment?.resolvedAt);
+    });
+
+    it("won't take a reply in a thread on a board that can't be written", async function () {
+      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const first = await reply(operator, root._id, "first reply");
+      const plain = await send(member, "plain chat");
+      await setResolved(member, root._id, true);
+
+      await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+      await assert.isRejected(reply(member, root._id, "reopen"), /archived/);
+      await assert.isRejected(reply(member, first._id, "deeper"), /archived/);
+      await assert.isRejected(reply(member, root._id, "👍"), /archived/);
+      // Chat outside the threads carries on as usual
+      await reply(member, plain._id, "plain reply");
+      await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
+
+      await FeatureFlags.insertAsync({
+        name: "disable.whiteboard",
+        type: "on",
+        createdBy: operator,
+      });
+      await assert.isRejected(reply(member, root._id, "flag"), /disabled/);
+
+      assert.ok((await reload(root._id)).comment?.resolvedAt);
+      assert.equal(
+        await ChatMessages.find({ thread: root._id }).countAsync(),
+        1,
+      );
     });
 
     it("only resolves root comments, for people who can edit the board", async function () {

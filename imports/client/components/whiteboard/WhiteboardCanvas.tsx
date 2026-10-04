@@ -103,6 +103,8 @@ import {
   MAX_LIVE_DRAG_NODES,
 } from "../../../lib/whiteboard/limits";
 import type { LineStyle } from "../../../lib/whiteboard/lineStyle";
+import type { SeenDrag } from "../../../lib/whiteboard/liveDrags";
+import { liveDrags, seeDrags } from "../../../lib/whiteboard/liveDrags";
 import deleteWhiteboardEdges from "../../../methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
 import type { WhiteboardLiveState } from "../../../methods/setWhiteboardLive";
@@ -534,16 +536,30 @@ const CanvasInner = ({
     [boardId, liveEnabled],
     sameDrags,
   );
-  const remoteDrags = useMemo(
-    () =>
-      new Map(
-        drags.map(({ node, x, y, parent }): [string, RemoteDrag] => [
-          node,
-          { x, y, parent: parent ?? undefined },
-        ]),
-      ),
-    [drags],
+  // Only drags that are still moving count (see LIVE_DRAG_TIMEOUT_MS), and
+  // what they show is never saved by anything done here (remoteDragged).
+  const seenDrags = useRef(new Map<string, SeenDrag>());
+  const remoteDragged = useRef(new Set<string>());
+  const [remoteDrags, setRemoteDrags] = useState(
+    () => new Map<string, RemoteDrag>(),
   );
+  useEffect(() => {
+    let timer: number | undefined;
+    const update = () => {
+      const now = Date.now();
+      seenDrags.current = seeDrags(seenDrags.current, drags, now);
+      const { live, staleAt } = liveDrags(seenDrags.current, now);
+      remoteDragged.current = new Set(live.keys());
+      setRemoteDrags((previous) =>
+        previous.size === 0 && live.size === 0 ? previous : live,
+      );
+      if (staleAt !== undefined) {
+        timer = window.setTimeout(update, staleAt - now);
+      }
+    };
+    update();
+    return () => window.clearTimeout(timer);
+  }, [drags]);
 
   const livePuzzles = useTracker(
     () =>
@@ -734,9 +750,16 @@ const CanvasInner = ({
         { _id: id, position: node.position, width, height },
       ];
       markPending(id, { position: node.position, width, height });
+      // A child someone else is dragging shows where they have it, which is
+      // theirs to save
+      const draggedByOthers: string[] = [];
       all
         .filter((n) => n.parentId === id)
         .forEach((child) => {
+          if (remoteDragged.current.has(child.id)) {
+            draggedByOthers.push(child.id);
+            return;
+          }
           const saved = child.data.doc.position;
           if (
             Math.abs(saved.x - child.position.x) > 0.01 ||
@@ -746,9 +769,10 @@ const CanvasInner = ({
             markPending(child.id, { position: child.position });
           }
         });
+      if (draggedByOthers.length > 0) clearPending(draggedByOthers);
       updateNodes(inputs);
     },
-    [flow, markPending, updateNodes],
+    [flow, markPending, clearPending, updateNodes],
   );
 
   const clearEditOnAppear = useCallback(() => setEditOnAppear(undefined), []);
@@ -989,7 +1013,14 @@ const CanvasInner = ({
     const nudgedIds = new Set(nudged.current);
     const frames = frameRects();
     const moves: NodeMoves = new Map();
+    // Something someone else is dragging shows where they have it, which is
+    // theirs to save, so a nudge made from there is dropped
+    const draggedByOthers: string[] = [];
     nudgedIds.forEach((id) => {
+      if (remoteDragged.current.has(id)) {
+        draggedByOthers.push(id);
+        return;
+      }
       const node = flow.getNode(id);
       if (!node) return;
       // Like a drop, something nudged into or out of a frame joins or leaves
@@ -1013,6 +1044,7 @@ const CanvasInner = ({
     });
     nudged.current.clear();
     companions.current.clear();
+    if (draggedByOthers.length > 0) clearPending(draggedByOthers);
     showMoves(moves);
     updateNodes(inputs);
   }, [
@@ -1022,6 +1054,7 @@ const CanvasInner = ({
     absoluteRect,
     placementFor,
     markPending,
+    clearPending,
     showMoves,
     updateNodes,
   ]);
@@ -1477,6 +1510,8 @@ const CanvasInner = ({
           return;
         }
         members.forEach((m) => {
+          // Something someone else is dragging stays theirs to save
+          if (remoteDragged.current.has(m.id)) return;
           // Like a drop: whatever lands in a frame joins it, and whatever
           // leaves its frame leaves it. Frames being arranged themselves
           // aren't candidates, since they're moving too.

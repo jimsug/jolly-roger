@@ -77,7 +77,7 @@ jobs:
         run: meteor build --directory ~/${{ github.sha }} --architecture os.linux.x86_64
 
       - name: Setup SSH
-        uses: godaddy-wordpress/setup-secure-shell@v1
+        uses: godaddy-wordpress/setup-secure-shell@271a5975ce9568a792ece5aef4f5f89f441b0d70 # v1
         env:
           PRIVATE_KEY: ${{ secrets.JR_VPS_KEY }}
         with:

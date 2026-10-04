@@ -58,3 +58,4 @@ import "./56-drop-puzzle-marked-complete";
 import "./57-google-account-id-index";
 import "./58-drop-chat-message-attachments";
 import "./59-rerun-call-activity-speaking-backfill";
+import "./60-repair-legacy-urls";

@@ -140,6 +140,32 @@ describe("usePushToTalk", function () {
     assert.deepEqual(actions, [UNMUTE, MUTE]);
   });
 
+  it("mutes again when it goes away mid-press", function () {
+    const { unmount } = renderPushToTalk(MUTED);
+    press();
+    unmount();
+    assert.deepEqual(actions, [UNMUTE, MUTE]);
+    release();
+    assert.deepEqual(actions, [UNMUTE, MUTE]);
+  });
+
+  it("mutes again when the call ends mid-press", function () {
+    const { rerender } = renderHook(
+      ({ inCall }: { inCall: boolean }) =>
+        usePushToTalk({ inCall, audioControls: MUTED, callDispatch }),
+      { initialProps: { inCall: true } },
+    );
+    press();
+    rerender({ inCall: false });
+    assert.deepEqual(actions, [UNMUTE, MUTE]);
+  });
+
+  it("leaves the mic alone when it goes away without a press", function () {
+    const { unmount } = renderPushToTalk(MUTED);
+    unmount();
+    assert.deepEqual(actions, []);
+  });
+
   it("only listens during a call", function () {
     renderPushToTalk(MUTED, false);
     press();

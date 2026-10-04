@@ -6,7 +6,10 @@ import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import sendChatMessage from "../../methods/sendChatMessage";
 import sendChatMessageInternal from "../sendChatMessageInternal";
-import { assertValidCommentAnchor } from "../whiteboardEdits";
+import {
+  assertMayReplyInThread,
+  assertValidCommentAnchor,
+} from "../whiteboardEdits";
 import defineMethod from "./defineMethod";
 
 // "/pin <message>" pins the message as it is sent; a bare "/pin" or "/unpin"
@@ -82,6 +85,8 @@ defineMethod(sendChatMessage, {
         throw new Meteor.Error(400, "A reply can't start a comment thread");
       }
       await assertValidCommentAnchor(this.userId, puzzleId, comment);
+    } else if (parentId !== undefined) {
+      await assertMayReplyInThread(this.userId, puzzleId, parentId);
     }
 
     let pinTs: Date | undefined;

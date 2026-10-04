@@ -49,6 +49,15 @@ const whiteboardTitle = () =>
 const ungroupedLabel = () =>
   i18n.t("whiteboard.frame.ungrouped", "Ungrouped", { lng: serverLanguage });
 
+// Placement never reads ink, text or attribution, which are most of a busy
+// board.
+const PLACEMENT_PROJECTION = {
+  points: 0,
+  contributors: 0,
+  text: 0,
+  label: 0,
+} as const;
+
 function nodeRect(node: WhiteboardNodeType): Rect {
   return {
     ...node.position,
@@ -114,16 +123,18 @@ async function insertTopLevelFrame(
   return WhiteboardNodes.findOneAsync(_id);
 }
 
+// Places one puzzle of a batch. nodesById is the board as the batch read it,
+// and is kept up to date with what this writes, for the puzzles after it.
 async function placePuzzle(
   board: WhiteboardType,
   puzzle: PuzzleType,
   tags: TagType[],
-  nodes: WhiteboardNodeType[],
+  nodesById: Map<string, WhiteboardNodeType>,
 ) {
+  const nodes = [...nodesById.values()];
   const card = nodes.find((n) => n.puzzle === puzzle._id);
   if (card?.hidden || card?.manual) return;
 
-  const nodesById = new Map(nodes.map((n) => [n._id, n]));
   const frames = nodes.filter((n) => n.type === "frame");
   const visibleFrames = frames.filter((f) => !f.hidden);
   const choice = chooseFrameForPuzzle(
@@ -165,6 +176,7 @@ async function placePuzzle(
       );
     }
   }
+  if (frame) nodesById.set(frame._id, frame);
 
   if (card && frame && card.parent === frame._id) return;
   if (card && !frame && !card.parent) return;
@@ -189,6 +201,7 @@ async function placePuzzle(
       await WhiteboardNodes.updateAsync(frame._id, {
         $set: { width: placed.frame.width, height: placed.frame.height },
       });
+      nodesById.set(frame._id, { ...frame, ...placed.frame });
       await growAncestors(frame, placed.frame, nodesById);
     }
   } else {
@@ -223,30 +236,45 @@ async function placePuzzle(
       }),
     );
   }
+
+  // The card as it is now, whether this moved it or someone else just did
+  const placedCard = await WhiteboardNodes.findOneAsync(
+    { board: board._id, puzzle: puzzle._id },
+    { projection: PLACEMENT_PROJECTION },
+  );
+  if (placedCard) nodesById.set(placedCard._id, placedCard);
 }
 
-async function syncAutoEdges(board: WhiteboardType, puzzle: PuzzleType) {
-  const cards = await WhiteboardNodes.find({
-    board: board._id,
-    type: "puzzle",
-  }).fetchAsync();
+// Redraws the feeder arrows to and from a batch of puzzles.
+async function syncAutoEdges(
+  board: WhiteboardType,
+  batch: PuzzleType[],
+  tags: TagType[],
+) {
+  if (batch.length === 0) return;
+  const batchById = new Map(batch.map((p) => [p._id, p]));
+  const cards = await WhiteboardNodes.find(
+    { board: board._id, type: "puzzle" },
+    { projection: { puzzle: 1 } },
+  ).fetchAsync();
   const cardsByPuzzle = new Map(
     cards.flatMap((c) => (c.puzzle ? [[c.puzzle, c] as const] : [])),
   );
-  const puzzles = await Puzzles.find({
-    hunt: board.hunt,
-    _id: { $in: [...cardsByPuzzle.keys()] },
-  }).fetchAsync();
-  const tags = await Tags.find({ hunt: board.hunt }).fetchAsync();
+  // Only their tags, which is all feeder pairs need
+  const puzzles = await Puzzles.find(
+    { hunt: board.hunt, _id: { $in: [...cardsByPuzzle.keys()] } },
+    { projection: { tags: 1 } },
+  ).fetchAsync();
 
   const wanted = computeFeederPairs(puzzles, tags).filter(
-    (p) => p.feeder === puzzle._id || p.meta === puzzle._id,
+    (p) => batchById.has(p.feeder) || batchById.has(p.meta),
   );
   const wantedKeys = new Set(wanted.map((p) => `${p.feeder}:${p.meta}`));
+  const batchIds = [...batchById.keys()];
   const existing = await WhiteboardEdges.find({
     board: board._id,
     auto: true,
-    $or: [{ feeder: puzzle._id }, { meta: puzzle._id }],
+    $or: [{ feeder: { $in: batchIds } }, { meta: { $in: batchIds } }],
   }).fetchAsync();
   const existingKeys = new Set(existing.map((e) => `${e.feeder}:${e.meta}`));
 
@@ -263,7 +291,8 @@ async function syncAutoEdges(board: WhiteboardType, puzzle: PuzzleType) {
     if (existingKeys.has(`${pair.feeder}:${pair.meta}`)) continue;
     const source = cardsByPuzzle.get(pair.feeder);
     const target = cardsByPuzzle.get(pair.meta);
-    if (!source || !target) continue;
+    const drawnFor = batchById.get(pair.feeder) ?? batchById.get(pair.meta);
+    if (!source || !target || !drawnFor) continue;
     // Only a sync that outlasted the board's lock can have drawn it since.
     await ignoringDuplicateKeyErrors(() =>
       WhiteboardEdges.insertAsync({
@@ -274,7 +303,7 @@ async function syncAutoEdges(board: WhiteboardType, puzzle: PuzzleType) {
         auto: true,
         feeder: pair.feeder,
         meta: pair.meta,
-        createdBy: puzzle.createdBy,
+        createdBy: drawnFor.createdBy,
       }),
     );
   }
@@ -290,36 +319,76 @@ export async function syncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
   if (await Flags.activeAsync("disable.whiteboard")) return;
 
   await withLock(`whiteboard:${board._id}`, async (renew) => {
+    // The switch may have been flipped while this waited for the lock
+    if (await Flags.activeAsync("disable.whiteboard")) return;
+
+    // Everything is read once for the batch, so a batch costs one read of
+    // the board rather than one per puzzle
     const tags = await Tags.find({ hunt: huntId }).fetchAsync();
+    const puzzlesById = new Map(
+      (
+        await Puzzles.find({
+          hunt: huntId,
+          _id: { $in: puzzleIds },
+        }).fetchAsync()
+      ).map((p) => [p._id, p]),
+    );
+    const nodesById = new Map(
+      (
+        await WhiteboardNodes.find(
+          { board: board._id },
+          { projection: PLACEMENT_PROJECTION },
+        ).fetchAsync()
+      ).map((n) => [n._id, n]),
+    );
+    const batch: PuzzleType[] = [];
     for (const puzzleId of puzzleIds) {
-      const puzzle = await Puzzles.findOneAsync(puzzleId);
+      const puzzle = puzzlesById.get(puzzleId);
       if (!puzzle) continue;
-      // Placement never reads ink, text or attribution, which are most of a
-      // busy board.
-      const nodes = await WhiteboardNodes.find(
-        { board: board._id },
-        { projection: { points: 0, contributors: 0, text: 0, label: 0 } },
-      ).fetchAsync();
-      await placePuzzle(board, puzzle, tags, nodes);
-      await syncAutoEdges(board, puzzle);
+      batch.push(puzzle);
+      await placePuzzle(board, puzzle, tags, nodesById);
       // A long batch (a renamed round) would otherwise outlast the lock and
       // let another sync place cards in the same slots.
       await renew();
     }
+    await syncAutoEdges(board, batch, tags);
   });
 }
+
+// Puzzles waiting for each hunt's deferred sync. A hunt is in here from the
+// first request until its sync finds nothing more to do; each pass takes
+// everything asked for by then, so a burst of requests (a run of tag edits,
+// say) costs a pass or two rather than a queue of syncs on the board's lock,
+// as with documentCache's refills.
+const pendingSyncs = new Map<string, Set<string>>();
 
 // For callers that shouldn't wait on the board (hooks and the methods that
 // fire them).
 export function deferSyncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
-  Meteor.defer(() => {
-    syncPuzzlesOnBoard(huntId, puzzleIds).catch((error: unknown) => {
-      Logger.error("Failed to sync puzzles onto whiteboard", {
-        hunt: huntId,
-        puzzles: puzzleIds.join(","),
-        error,
-      });
-    });
+  if (puzzleIds.length === 0) return;
+  const queued = pendingSyncs.get(huntId);
+  if (queued) {
+    puzzleIds.forEach((id) => queued.add(id));
+    return;
+  }
+
+  const pending = new Set(puzzleIds);
+  pendingSyncs.set(huntId, pending);
+  Meteor.defer(async () => {
+    while (pending.size > 0) {
+      const batch = [...pending];
+      pending.clear();
+      try {
+        await syncPuzzlesOnBoard(huntId, batch);
+      } catch (error) {
+        Logger.error("Failed to sync puzzles onto whiteboard", {
+          hunt: huntId,
+          puzzles: batch.join(","),
+          error,
+        });
+      }
+    }
+    pendingSyncs.delete(huntId);
   });
 }
 

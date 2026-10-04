@@ -65,6 +65,39 @@ describe("subscriber presence", function () {
     return sub;
   };
 
+  describe("subscribers.inc", function () {
+    it("only records a puzzle topic that names a puzzle", async function () {
+      const context = { puzzle: puzzleId, hunt: huntId, visible: true };
+      for (const name of [
+        "puzzle:__proto__",
+        "puzzle:constructor",
+        `${topic}x`,
+      ]) {
+        await publishHandler("subscribers.inc").call(
+          stub(memberId),
+          name,
+          context,
+        );
+      }
+      assert.equal(await Subscribers.find({}).countAsync(), 0);
+
+      await publishHandler("subscribers.inc").call(
+        stub(memberId),
+        topic,
+        context,
+      );
+      await publishHandler("subscribers.inc").call(
+        stub(memberId),
+        "operators",
+        { [huntId]: true },
+      );
+      assert.sameMembers(
+        (await Subscribers.find({}).fetchAsync()).map((s) => s.name),
+        [topic, "operators"],
+      );
+    });
+  });
+
   describe("subscribers.fetch", function () {
     it("folds a user's connections into one record", async function () {
       const hiddenId = await addSubscriber(memberId, false);
@@ -141,6 +174,27 @@ describe("subscriber presence", function () {
         [...sub.published("subscribers").keys()],
         [`${topic}:${memberId}`],
         "Only rows with this hunt in their context are published",
+      );
+    });
+
+    it("only publishes topics that name a puzzle", async function () {
+      await addSubscriber(memberId, true);
+      // Inserted directly, past subscribers.inc's own check
+      for (const name of ["puzzle:__proto__", "puzzle:constructor", "chat"]) {
+        await Subscribers.insertAsync({
+          server: serverId,
+          connection: Random.id(),
+          user: outsiderId,
+          name,
+          context: { hunt: huntId, visible: true },
+        });
+      }
+
+      const sub = stub(memberId);
+      await publishHandler("subscribers.fetchAll").call(sub, huntId);
+      assert.sameMembers(
+        [...sub.published("subscribers").keys()],
+        [`${topic}:${memberId}`],
       );
     });
 

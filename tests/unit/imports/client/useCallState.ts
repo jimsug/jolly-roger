@@ -71,6 +71,50 @@ describe("useCallState reducer", function () {
       assert.isTrue(state.initialMuted);
     });
 
+    it("keeps a mute chosen while joining when the server says active", function () {
+      // A push-to-talk press and release before the peer document arrives
+      const pressed = reducer(join(true), { type: "set-muted", muted: false });
+      const released = reducer(pressed, { type: "set-muted", muted: true });
+      const joined = reducer(released, {
+        type: "set-peers",
+        selfPeer: peer("self", "active"),
+        otherPeers: [],
+      });
+      assert.isTrue(joined.audioControls.muted);
+
+      // Joining unmuted and muting straight away is a choice too
+      const muted = reducer(join(), { type: "toggle-mute" });
+      assert.isTrue(
+        reducer(muted, {
+          type: "set-peers",
+          selfPeer: peer("self", "active"),
+          otherPeers: [],
+        }).audioControls.muted,
+      );
+    });
+
+    it("leaves a press held across the join to its release", function () {
+      const pressed = reducer(join(true), { type: "set-muted", muted: false });
+      const joined = reducer(pressed, {
+        type: "set-peers",
+        selfPeer: peer("self", "active"),
+        otherPeers: [],
+      });
+      assert.isFalse(joined.audioControls.muted);
+      const released = reducer(joined, { type: "set-muted", muted: true });
+      assert.isTrue(released.audioControls.muted);
+    });
+
+    it("keeps a deafen chosen while joining when the server says active", function () {
+      const deafened = reducer(join(), { type: "toggle-deafen" });
+      const joined = reducer(deafened, {
+        type: "set-peers",
+        selfPeer: peer("self", "active"),
+        otherPeers: [],
+      });
+      assert.isTrue(joined.audioControls.deafened);
+    });
+
     it("still honours a server-imposed mute on a normal join", function () {
       const state = reducer(join(), {
         type: "set-peers",

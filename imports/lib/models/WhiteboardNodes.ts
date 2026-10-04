@@ -89,6 +89,9 @@ const WhiteboardNode = withCommon(
 
 const WhiteboardNodes = new Model("jr_whiteboard_nodes", WhiteboardNode);
 WhiteboardNodes.addIndex({ board: 1 });
+// A frame's contents: moving a frame checks how deep they go, and deleting
+// one moves them out
+WhiteboardNodes.addIndex({ board: 1, parent: 1 });
 WhiteboardNodes.addIndex(
   { board: 1, puzzle: 1 },
   { unique: true, partialFilterExpression: { puzzle: { $exists: true } } },

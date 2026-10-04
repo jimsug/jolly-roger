@@ -103,8 +103,9 @@ export type CallState = (
   // after a server disconnection (rather than a user hang-up) since the state
   // there shouldn't be considered to have changed.
   allowInitialPeerStateNotification: boolean;
-  // Whether the user asked to join muted. The server's initial peer state
-  // must not undo that; cleared once the user changes their own mute.
+  // Whether the user asked to join muted, so the notice about being muted on
+  // joining a big call isn't shown for a mute they chose; cleared once the
+  // user changes their own mute.
   initialMuted: boolean;
   remoteMutedBy: string | undefined;
   error: Error | undefined;
@@ -316,11 +317,9 @@ function reducer(state: CallState, action: Action): CallState {
 
         switch (action.selfPeer.initialPeerState) {
           case "active":
-            // Unless we asked to start out muted
-            audioControls = {
-              muted: state.initialMuted,
-              deafened: false,
-            };
+            // Nothing to impose, so whatever the user has chosen stands: a
+            // muted join, a push-to-talk press made while joining, or their
+            // state from before a reconnect
             break;
           case "muted":
             audioControls = {

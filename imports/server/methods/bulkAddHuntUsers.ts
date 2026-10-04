@@ -1,5 +1,6 @@
 import { check } from "meteor/check";
 import { Meteor } from "meteor/meteor";
+import Logger from "../../Logger";
 import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import { userMayAddUsersToHunt } from "../../lib/permission_stubs";
@@ -45,7 +46,17 @@ defineMethod(bulkAddHuntUsers, {
       const message = errors
         .map(({ email, error }) => {
           const err = error.sanitizedError ?? error;
-          return `${email}: ${err}`;
+          // A Meteor.Error is written for whoever made the call. Anything
+          // else (a mail server's reply, say) stays in the server's logs.
+          if (err instanceof Meteor.Error) {
+            return `${email}: ${err}`;
+          }
+          Logger.warn("Failed to invite a user to a hunt", {
+            hunt: huntId,
+            email,
+            error,
+          });
+          return `${email}: couldn't send the invite`;
         })
         .join("\n");
       throw new Meteor.Error(

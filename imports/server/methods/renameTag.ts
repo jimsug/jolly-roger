@@ -99,13 +99,18 @@ defineMethod(renameTag, {
       return;
     }
 
-    Logger.info("Renaming tag", { tag: tagId, name: newName });
     // The new name can't also be one of the tag's own aliases, and a rename
     // that only changes case doesn't need the old spelling kept.
     const aliases = (tag.aliases ?? []).filter((a) => !matcher.test(a));
     if (keepOldNameAsAlias && !matcher.test(tag.name)) {
       aliases.push(tag.name);
     }
+    // Renaming a tag to the name it has changes nothing, so there's nothing
+    // to write and no board to resync
+    if (newName === tag.name && aliases.length === (tag.aliases?.length ?? 0)) {
+      return;
+    }
+    Logger.info("Renaming tag", { tag: tagId, name: newName });
     await Tags.updateAsync(tagId, { $set: { name: newName, aliases } });
     deferSyncPuzzlesOnBoard(tag.hunt, affectedPuzzles);
   },

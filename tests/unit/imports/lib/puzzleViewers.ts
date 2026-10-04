@@ -150,6 +150,44 @@ describe("computePuzzleViewers", function () {
     assert.strictEqual(fewer.p1, first.p1);
   });
 
+  it("copes with puzzle ids that are Object.prototype's property names", function () {
+    // Topic names are whatever a subscriber sends, "puzzle:__proto__" included
+    const input = {
+      callers: [{ puzzle: "constructor", user: "bob" }],
+      subscriptions: [
+        {
+          puzzle: "__proto__",
+          user: "mallory",
+          visible: true,
+          updatedAt: ago(0),
+        },
+        { puzzle: "toString", user: "dave", visible: false, updatedAt: ago(0) },
+        { puzzle: "p1", user: "alice", visible: true, updatedAt: ago(0) },
+      ],
+      interactions: [
+        { puzzle: "hasOwnProperty", user: "carol", updatedAt: ago(0) },
+      ],
+      now,
+    };
+    const viewers = computePuzzleViewers(input);
+    const own = (puzzle: string) =>
+      Object.hasOwn(viewers, puzzle) ? viewers[puzzle] : undefined;
+    assert.deepEqual(own("p1")?.activeViewers, ["alice"]);
+    assert.deepEqual(own("__proto__")?.activeViewers, ["mallory"]);
+    assert.deepEqual(own("constructor")?.rtcViewers, ["bob"]);
+    assert.deepEqual(own("toString")?.passiveViewers, ["dave"]);
+    assert.deepEqual(own("hasOwnProperty")?.passiveViewers, ["carol"]);
+    assert.notProperty(Object.prototype, "activeViewers");
+
+    // And again with the previous result, as the puzzle list does, or with
+    // one that has none of these puzzles
+    assert.strictEqual(
+      computePuzzleViewers({ ...input, previous: viewers }),
+      viewers,
+    );
+    assert.deepEqual(computePuzzleViewers({ ...input, previous: {} }), viewers);
+  });
+
   it("doesn't list callers as viewers of the puzzle they're calling on", function () {
     const viewers = computePuzzleViewers({
       callers: [{ puzzle: "p1", user: "alice" }],

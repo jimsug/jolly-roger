@@ -121,36 +121,67 @@ async function assertMayWriteBoard(
   return { board, hunt };
 }
 
-// Whether putting a node inside parent would put it inside itself: parent is
-// the node or sits somewhere inside it. A chain deeper than any board should
-// have counts as a loop.
-async function wouldContainItself(
+// How many frames a node inside parent would be in: parent and each frame
+// above it. Infinity if the node would be inside itself, being parent or
+// somewhere above it. A chain deeper than any board should have counts as a
+// loop.
+async function depthInside(
   nodeId: string,
   parent: WhiteboardNodeType | undefined,
 ) {
-  let current = parent;
-  for (let depth = 0; current; depth++) {
-    if (current._id === nodeId || depth > MAX_FRAME_DEPTH) return true;
+  let depth = 0;
+  for (let current = parent; current; depth++) {
+    if (current._id === nodeId || depth > MAX_FRAME_DEPTH) return Infinity;
     current = current.parent
       ? await WhiteboardNodes.findOneAsync(current.parent)
       : undefined;
   }
-  return false;
+  return depth;
 }
 
-// Parents must be frames on the same board, and a frame can't end up inside
-// itself.
+async function wouldContainItself(
+  nodeId: string,
+  parent: WhiteboardNodeType | undefined,
+) {
+  return (await depthInside(nodeId, parent)) === Infinity;
+}
+
+// How many levels of nodes sit inside a frame (0 for an empty one), counted
+// no further than any board allows.
+async function depthBelow(boardId: string, frameId: string) {
+  let depth = 0;
+  let level = [frameId];
+  while (level.length > 0 && depth <= MAX_FRAME_DEPTH) {
+    const children = await WhiteboardNodes.find(
+      { board: boardId, parent: { $in: level } },
+      { projection: { type: 1 } },
+    ).fetchAsync();
+    if (children.length === 0) break;
+    depth += 1;
+    level = children.filter((c) => c.type === "frame").map((c) => c._id);
+  }
+  return depth;
+}
+
+// Parents must be frames on the same board, a frame can't end up inside
+// itself, and nothing can end up inside more than MAX_FRAME_DEPTH frames,
+// counting the levels already inside the node (contentDepth).
 async function assertValidParent(
   boardId: string,
   nodeId: string,
   parentId: string,
+  contentDepth = 0,
 ) {
   const parent = await WhiteboardNodes.findOneAsync(parentId);
   if (!parent || parent.board !== boardId || parent.type !== "frame") {
     throw badRequest("Parent must be a frame on this board");
   }
-  if (await wouldContainItself(nodeId, parent)) {
+  const depth = await depthInside(nodeId, parent);
+  if (depth === Infinity) {
     throw badRequest("A frame can't contain itself");
+  }
+  if (depth + contentDepth > MAX_FRAME_DEPTH) {
+    throw badRequest("Frames can't be nested that deeply");
   }
 }
 
@@ -200,7 +231,14 @@ async function updateNode(
     if (input.parent === null) {
       $unset.parent = "";
     } else {
-      await assertValidParent(existing.board, existing._id, input.parent);
+      await assertValidParent(
+        existing.board,
+        existing._id,
+        input.parent,
+        existing.type === "frame"
+          ? await depthBelow(existing.board, existing._id)
+          : 0,
+      );
       $set.parent = input.parent;
     }
     $set.manual = true;
@@ -652,6 +690,22 @@ export async function deleteEdges(
     boardId,
     doomed.flatMap((e) => [e.source, e.target]),
   );
+}
+
+// A reply (or reaction) that joins a comment thread adds to the board, so it
+// needs a board that can be written to, as a new comment does. A resolved
+// thread would otherwise reopen on a board nobody can resolve it on again.
+export async function assertMayReplyInThread(
+  userId: string,
+  puzzleId: string,
+  parentId: string,
+) {
+  const parent = await ChatMessages.findOneAsync(parentId, {
+    projection: { puzzle: 1, comment: 1, thread: 1 },
+  });
+  if (parent?.puzzle === puzzleId && (parent.comment || parent.thread)) {
+    await assertMayWriteBoard(userId, { puzzle: puzzleId });
+  }
 }
 
 // Checks a new comment's pin before it's sent. It has to be on the board

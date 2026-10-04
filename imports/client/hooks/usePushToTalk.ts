@@ -98,7 +98,9 @@ export default function usePushToTalk({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", release);
-      pushToTalkHeld.current = false;
+      // So would going away mid-press (minimising the chat, say), with no
+      // listener left to hear the release
+      release();
     };
   }, [inCall, callDispatch]);
 }

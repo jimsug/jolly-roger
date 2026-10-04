@@ -68,8 +68,20 @@ describe("scrubSecretUrls", function () {
     );
   });
 
+  it("filters SockJS session ids", function () {
+    assert.equal(
+      scrubSecretUrls("POST /sockjs/123/a1b2c3d4/xhr_send"),
+      "POST /sockjs/123/[Filtered]/xhr_send",
+    );
+    assert.equal(
+      scrubSecretUrls("https://jr.example.com/sockjs/456/sess_0/websocket"),
+      "https://jr.example.com/sockjs/456/[Filtered]/websocket",
+    );
+  });
+
   it("leaves everything else alone", function () {
     for (const text of [
+      "/sockjs/info?cb=abc123",
       "",
       "/hunts/abc/puzzles/def",
       "/join",
@@ -149,7 +161,11 @@ describe("scrubTelemetry", function () {
     const scrubbed: unknown = scrubTelemetry({
       contexts: {
         trace: {
-          data: { "http.client_ip": "203.0.113.7", "http.flavor": "1.1" },
+          data: {
+            "http.client_ip": "203.0.113.7",
+            "net.peer.ip": "203.0.113.7",
+            "http.flavor": "1.1",
+          },
         },
       },
       spans: [{ data: { "http.client_ip": "203.0.113.7" } }],
@@ -158,6 +174,68 @@ describe("scrubTelemetry", function () {
       contexts: { trace: { data: { "http.flavor": "1.1" } } },
       spans: [{ data: {} }],
     });
+  });
+
+  it("drops credentials and the body from a request", function () {
+    const login = JSON.stringify({
+      msg: "method",
+      method: "login",
+      params: [{ resume: "RESUME-TOKEN" }],
+      id: "1",
+    });
+    const scrubbed: unknown = scrubTelemetry({
+      request: {
+        url: "https://jr.example.com/sockjs/123/a1b2c3d4/xhr_send",
+        method: "POST",
+        headers: {
+          authorization: "Bearer API-KEY",
+          Cookie: "session=abc",
+          "user-agent": "Firefox",
+        },
+        cookies: { session: "abc" },
+        data: JSON.stringify([login]),
+      },
+    });
+    assert.deepEqual(scrubbed, {
+      request: {
+        url: "https://jr.example.com/sockjs/123/[Filtered]/xhr_send",
+        method: "POST",
+        headers: { "user-agent": "Firefox" },
+      },
+    });
+  });
+
+  it("leaves out breadcrumbs that quote a DDP message", function () {
+    const login = {
+      msg: "method",
+      method: "login",
+      params: [{ resume: "RESUME-TOKEN" }],
+      id: "1",
+    };
+    const navigation = {
+      category: "navigation",
+      data: { from: "/hunts", to: "/hunts/abc/puzzles" },
+    };
+    const scrubbed = scrubTelemetry({
+      breadcrumbs: [
+        {
+          category: "console",
+          message: "Received DDP",
+          data: { arguments: ["Received DDP", JSON.stringify(login)] },
+        },
+        {
+          category: "console",
+          message: "Internal exception while processing message",
+          data: { arguments: ["Internal exception", login] },
+        },
+        {
+          category: "console",
+          message: `a[${JSON.stringify(JSON.stringify(login))}]`,
+        },
+        navigation,
+      ],
+    });
+    assert.deepEqual(scrubbed, { breadcrumbs: [navigation] });
   });
 
   it("passes through values that aren't plain objects or strings", function () {

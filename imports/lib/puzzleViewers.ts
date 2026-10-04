@@ -59,7 +59,9 @@ export default function computePuzzleViewers({
   now?: Date;
   previous?: Record<string, PuzzleViewers> | undefined;
 }): Record<string, PuzzleViewers> {
-  const viewers: Record<string, PuzzleViewers> = {};
+  // Puzzle ids here come from subscriber topic names, which the subscriber
+  // chooses, so the result has no prototype for "__proto__" to reach
+  const viewers = Object.create(null) as Record<string, PuzzleViewers>;
   const forPuzzle = (puzzle: string) => {
     viewers[puzzle] ??= {
       rtcViewers: [],
@@ -143,7 +145,9 @@ export default function computePuzzleViewers({
   }
   let unchanged = true;
   for (const [puzzle, entry] of Object.entries(viewers)) {
-    const before = previous[puzzle];
+    const before = Object.hasOwn(previous, puzzle)
+      ? previous[puzzle]
+      : undefined;
     if (before && sameViewers(before, entry)) {
       viewers[puzzle] = before;
     } else {

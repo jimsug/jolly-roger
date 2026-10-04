@@ -161,14 +161,16 @@ const ChatNotificationHooks: Hookset = {
           continue;
         }
 
-        // Leave out the words the user has muted on this puzzle.
-        const suppressed =
-          u.suppressedDingwords?.[chatMessage.hunt]?.[chatMessage.puzzle] ?? [];
-        if (suppressed.includes(SUPPRESS_ALL_DINGWORDS)) {
+        // Leave out the words the user has muted on this puzzle. A set, so
+        // the filter costs the matches plus the mutes, not their product.
+        const suppressed = new Set(
+          u.suppressedDingwords?.[chatMessage.hunt]?.[chatMessage.puzzle],
+        );
+        if (suppressed.has(SUPPRESS_ALL_DINGWORDS)) {
           continue;
         }
         const matches = dingwordsMatchingMessage(normalizedText, u).filter(
-          (word) => !suppressed.includes(word),
+          (word) => !suppressed.has(word),
         );
         if (matches.length > 0) {
           notifyDingwords(u._id, matches);

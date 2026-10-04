@@ -68,10 +68,11 @@ of environment variables.
 - `$SENTRY_DSN` - a [Sentry](https://sentry.io/) DSN to report server and
   browser errors to (any Sentry-compatible service, like Better Stack, works
   too). Every request and page load is also traced, which counts against the
-  service's quota. Unset, nothing is reported. Before anything is sent, tokens
-  in account and invitation links, Google document ids, the page URL the
-  browser extension and bookmarklet pass in `url=`, and client IP addresses are
-  filtered out.
+  service's quota. Unset, nothing is reported. Request bodies, cookies and
+  `Authorization` headers (which carry API keys) aren't collected, and before
+  anything is sent, tokens in account and invitation links, Google document
+  ids, SockJS session ids, the page URL the browser extension and bookmarklet
+  pass in `url=`, client IP addresses and logged DDP messages are filtered out.
 
 - `$TURN_SERVER` - the URL of a [TURN
   server](https://webrtc.org/getting-started/turn-server) for robust audio chat
