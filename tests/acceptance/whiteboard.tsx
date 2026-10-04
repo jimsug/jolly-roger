@@ -23,6 +23,8 @@ import {
 import FixtureHunt from "../../imports/FixtureHunt";
 import ChatMessages from "../../imports/lib/models/ChatMessages";
 import Hunts from "../../imports/lib/models/Hunts";
+import Puzzles from "../../imports/lib/models/Puzzles";
+import Tags from "../../imports/lib/models/Tags";
 import WhiteboardEdges from "../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../imports/lib/models/WhiteboardNodes";
 import type { WhiteboardEditPolicy } from "../../imports/lib/models/Whiteboards";
@@ -35,12 +37,14 @@ import {
   GAP,
 } from "../../imports/lib/whiteboard/layout";
 import addHuntUser from "../../imports/methods/addHuntUser";
+import addPuzzleTag from "../../imports/methods/addPuzzleTag";
 import createFixtureHunt from "../../imports/methods/createFixtureHunt";
 import createWhiteboard from "../../imports/methods/createWhiteboard";
 import deleteWhiteboardComment from "../../imports/methods/deleteWhiteboardComment";
 import deleteWhiteboardNodes from "../../imports/methods/deleteWhiteboardNodes";
 import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
+import removePuzzleTag from "../../imports/methods/removePuzzleTag";
 import sendChatMessage from "../../imports/methods/sendChatMessage";
 import setWhiteboardEditPolicy from "../../imports/methods/setWhiteboardEditPolicy";
 import TypedMethod from "../../imports/methods/TypedMethod";
@@ -56,9 +60,29 @@ const setHuntArchived = new TypedMethod<
   void
 >("test.methods.whiteboard.setHuntArchived");
 
+// Solving or unsolving a puzzle without going through guesses.
+const setPuzzleAnswers = new TypedMethod<
+  { puzzleId: string; answers: string[] },
+  void
+>("test.methods.whiteboard.setPuzzleAnswers");
+
 if (Meteor.isServer) {
   const defineMethod: typeof import("../../imports/server/methods/defineMethod").default =
     require("../../imports/server/methods/defineMethod").default;
+
+  defineMethod(setPuzzleAnswers, {
+    validate(arg: unknown) {
+      check(arg, { puzzleId: String, answers: [String] });
+      return arg;
+    },
+
+    async run({ puzzleId, answers }) {
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+      await Puzzles.updateAsync(puzzleId, { $set: { answers } });
+    },
+  });
 
   defineMethod(setHuntArchived, {
     validate(arg: unknown) {
@@ -935,6 +959,300 @@ if (Meteor.isClient) {
           { timeout: 20000 },
         );
         await waitFor(() => assert.equal(location.current?.search, ""));
+      });
+    });
+
+    describe("what cards and rounds show", function () {
+      // From the fixture hunt: The Robber is the unsolved meta of the Games
+      // Island round, some of whose feeders are unsolved too. Cross Words is
+      // an ordinary puzzle.
+      const gamesIsland = "nPbTi6DPvjAkot94n";
+      const gamesIslandMetaFor = "5rMx6AkFJnTxxn9g3";
+      const robber = "3zTi6pDY9mHJSbLoS";
+      const crossWords = "eQpPRTrHJdYrGStFY";
+      let boardId: string;
+
+      before(async function () {
+        this.timeout(10000);
+        boardId = (await ensureBoard())._id;
+        subs.push(await typedSubscribe.async(whiteboardContents, { boardId }));
+      });
+
+      const nodeFor = async (selector: { tag?: string; puzzle?: string }) => {
+        const node = await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          ...selector,
+        });
+        assert.ok(node);
+        return node._id;
+      };
+
+      it("counts a round's solved cards and marks it finished once its meta is solved", async function () {
+        this.timeout(30000);
+        const frameId = await nodeFor({ tag: gamesIsland });
+        render(<TestApp />);
+        await goTo(`${boardPath}?node=${frameId}`);
+        const header = () =>
+          nodeElement(frameId)?.textContent?.replaceAll(/\s+/g, " ") ?? "";
+        await waitFor(
+          () => {
+            assert.match(header(), /\d+\/\d+ solved/);
+            assert.notInclude(header(), "Finished");
+          },
+          { timeout: 20000 },
+        );
+        try {
+          await setPuzzleAnswers.callPromise({
+            puzzleId: robber,
+            answers: ["MONEY"],
+          });
+          await waitFor(
+            () => {
+              assert.match(header(), /Finished, [1-9]\d* unsolved/);
+              assert.isNotNull(
+                nodeElement(frameId)!.querySelector("svg.fa-check"),
+              );
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          await setPuzzleAnswers.callPromise({ puzzleId: robber, answers: [] });
+        }
+        await waitFor(() => assert.notInclude(header(), "Finished"), {
+          timeout: 10000,
+        });
+      });
+
+      it("shows a card's priority, stuck flag and needs: tags", async function () {
+        this.timeout(30000);
+        const cardId = await nodeFor({ puzzle: crossWords });
+        const added = ["priority:high", "stuck", "needs:extraction"];
+        for (const tagName of added) {
+          await addPuzzleTag.callPromise({ puzzleId: crossWords, tagName });
+        }
+        try {
+          render(<TestApp />);
+          await goTo(`${boardPath}?puzzle=${crossWords}`);
+          await waitFor(
+            () => {
+              const card = nodeElement(cardId) as HTMLElement | null;
+              assert.isNotNull(card);
+              within(card).getByTitle("High priority");
+              within(card).getByTitle("Stuck");
+              within(card).getByText("needs:extraction");
+            },
+            { timeout: 20000 },
+          );
+        } finally {
+          const tags = await Tags.find({
+            hunt: huntId,
+            name: { $in: added },
+          }).fetchAsync();
+          for (const tag of tags) {
+            await removePuzzleTag.callPromise({
+              puzzleId: crossWords,
+              tagId: tag._id,
+            });
+          }
+        }
+      });
+
+      it("brings out a meta's feeder arrows while it's hovered", async function () {
+        this.timeout(30000);
+        const metaCard = await nodeFor({ puzzle: robber });
+        const arrows = await WhiteboardEdges.find({
+          board: boardId,
+          auto: true,
+        }).fetchAsync();
+        const intoMeta = new Set(
+          arrows.filter((a) => a.target === metaCard).map((a) => a._id),
+        );
+        assert.isNotEmpty(intoMeta);
+        render(<TestApp />);
+        await goTo(`${boardPath}?puzzle=${robber}`);
+        const card = await waitFor(
+          () => {
+            const found = nodeElement(metaCard);
+            assert.isNotNull(found);
+            // Its arrows are drawn
+            assert.isNotNull(
+              document.querySelector(
+                `.react-flow__edge[data-id="${[...intoMeta][0]}"]`,
+              ),
+            );
+            return found;
+          },
+          { timeout: 20000 },
+        );
+        const emphasis = (id: string) => {
+          const path = document.querySelector(
+            `.react-flow__edge[data-id="${id}"] path.react-flow__edge-path`,
+          );
+          if (path?.classList.contains("jr-feeder-raised")) return "raised";
+          if (path?.classList.contains("jr-feeder-faded")) return "faded";
+          return path ? "plain" : undefined;
+        };
+        await act(async () => {
+          fireEvent.mouseEnter(card);
+          await stabilize();
+        });
+        await waitFor(() => {
+          arrows.forEach((arrow) => {
+            const shown = emphasis(arrow._id);
+            if (!shown) return;
+            assert.equal(
+              shown,
+              intoMeta.has(arrow._id) || arrow.source === metaCard
+                ? "raised"
+                : "faded",
+              arrow._id,
+            );
+          });
+        });
+        await act(async () => {
+          fireEvent.mouseLeave(card);
+          await stabilize();
+        });
+        await waitFor(() => {
+          intoMeta.forEach((id) => {
+            const shown = emphasis(id);
+            if (shown) assert.equal(shown, "plain");
+          });
+        });
+      });
+
+      it("brings out a meta's feeder arrows while it's selected", async function () {
+        this.timeout(30000);
+        const metaCard = await nodeFor({ puzzle: robber });
+        const intoMeta = (
+          await WhiteboardEdges.find({
+            board: boardId,
+            auto: true,
+            target: metaCard,
+          }).fetchAsync()
+        ).map((a) => a._id);
+        assert.isNotEmpty(intoMeta);
+        render(<TestApp />);
+        await goTo(`${boardPath}?puzzle=${robber}`);
+        const arrowPath = (id: string) =>
+          document.querySelector(
+            `.react-flow__edge[data-id="${id}"] path.react-flow__edge-path`,
+          );
+        const card = await waitFor(
+          () => {
+            const found = nodeElement(metaCard);
+            assert.isNotNull(found);
+            assert.isNotNull(arrowPath(intoMeta[0]!));
+            return found;
+          },
+          { timeout: 20000 },
+        );
+        assert.isFalse(
+          arrowPath(intoMeta[0]!)!.classList.contains("jr-feeder-raised"),
+        );
+        // A click with no pointer movement selects without hovering.
+        await act(async () => {
+          fireEvent.click(card);
+          await stabilize();
+        });
+        await waitFor(() => {
+          assert.isTrue(card.classList.contains("selected"));
+          intoMeta.forEach((id) => {
+            const path = arrowPath(id);
+            if (path)
+              assert.isTrue(path.classList.contains("jr-feeder-raised"));
+          });
+        });
+      });
+
+      it("says a round is ready to meta once every feeder is solved", async function () {
+        this.timeout(30000);
+        const frameId = await nodeFor({ tag: gamesIsland });
+        render(<TestApp />);
+        await goTo(`${boardPath}?node=${frameId}`);
+        const header = () =>
+          nodeElement(frameId)?.textContent?.replaceAll(/\s+/g, " ") ?? "";
+        await waitFor(
+          () => {
+            assert.match(header(), /\d+\/\d+ solved/);
+            assert.notInclude(header(), "Ready to meta");
+          },
+          { timeout: 20000 },
+        );
+        const feeders = await Puzzles.find({
+          hunt: huntId,
+          $and: [{ tags: gamesIsland }, { tags: { $ne: gamesIslandMetaFor } }],
+        }).fetchAsync();
+        assert.isNotEmpty(feeders);
+        try {
+          for (const feeder of feeders) {
+            await setPuzzleAnswers.callPromise({
+              puzzleId: feeder._id,
+              answers: Array.from(
+                { length: Math.max(feeder.expectedAnswerCount, 1) },
+                (_, i) => `ANSWER${i}`,
+              ),
+            });
+          }
+          await waitFor(
+            () => {
+              assert.include(header(), "Ready to meta");
+              assert.notInclude(header(), "Finished");
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          for (const feeder of feeders) {
+            await setPuzzleAnswers.callPromise({
+              puzzleId: feeder._id,
+              answers: feeder.answers,
+            });
+          }
+        }
+        await waitFor(() => assert.notInclude(header(), "Ready to meta"), {
+          timeout: 10000,
+        });
+      });
+
+      it("shows a round's count and finished tick zoomed right out", async function () {
+        this.timeout(30000);
+        localStorage.setItem(
+          `whiteboard:viewport:${boardId}`,
+          JSON.stringify({ x: 0, y: 0, zoom: 0.1 }),
+        );
+        render(<TestApp />);
+        await goTo(boardPath);
+        const pill = () =>
+          [
+            ...document.querySelectorAll(".react-flow__viewport-portal span"),
+          ].find((el) => el.textContent?.includes("games-island"));
+        await waitFor(
+          () => {
+            const found = pill();
+            assert.ok(found);
+            assert.match(found.textContent ?? "", /games-island \d+\/\d+/);
+            assert.isNull(found.querySelector("svg.fa-check"));
+          },
+          { timeout: 20000 },
+        );
+        try {
+          await setPuzzleAnswers.callPromise({
+            puzzleId: robber,
+            answers: ["MONEY"],
+          });
+          await waitFor(
+            () => {
+              const found = pill();
+              assert.ok(found);
+              assert.isNotNull(found.querySelector("svg.fa-check"));
+              assert.match(found.textContent ?? "", /\d+\/\d+/);
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          await setPuzzleAnswers.callPromise({ puzzleId: robber, answers: [] });
+          localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+        }
       });
     });
 

@@ -10,6 +10,7 @@ import {
   FRAME_HEADER,
   FRAME_PADDING,
   frameLabel,
+  GAP,
   placeIntoFrame,
   type SeedNode,
   seedLayout,
@@ -150,11 +151,50 @@ describe("whiteboard seedLayout", function () {
     const meta = nodesByKey.get("puzzle:puz_metaA")!;
     assert.equal(meta.parentKey, "frame:tag_group:A");
     assert.deepEqual(meta.position, cardSlot(0));
-    assert.deepEqual(nodesByKey.get("puzzle:puz_a1")!.position, cardSlot(1));
+    // Feeders start on the row below the metas.
+    assert.deepEqual(nodesByKey.get("puzzle:puz_a1")!.position, cardSlot(4));
     // The metameta has its own Final frame to head.
     assert.equal(
       nodesByKey.get("puzzle:puz_metameta")!.parentKey,
       "frame:tag_group:Final",
+    );
+  });
+
+  it("puts a round's metas on their own row above its feeders", function () {
+    const { tags, puzzles, puzzle } = fixtures();
+    for (let i = 0; i < 5; i++) puzzle(`f${i}`, ["group:A"]);
+    for (let i = 0; i < 5; i++) puzzle(`m${i}`, ["group:A", "meta-for:A"]);
+    puzzle("b1", ["group:A", "group:A-sub"]);
+    const { nodes } = seedLayout(puzzles, tags, UNGROUPED);
+    const nodesByKey = byKey(nodes);
+    const at = (title: string) =>
+      nodesByKey.get(`puzzle:puz_${title}`)!.position;
+    // Five metas take two rows; the feeders start on the third.
+    [0, 1, 2, 3, 4].forEach((i) => {
+      assert.deepEqual(at(`m${i}`), cardSlot(i));
+      assert.deepEqual(at(`f${i}`), cardSlot(8 + i));
+    });
+    // The subframe sits below the feeders, inside the round's frame.
+    const sub = nodesByKey.get("frame:tag_group:A-sub")!;
+    const round = nodesByKey.get("frame:tag_group:A")!;
+    assert.isAtLeast(sub.position.y, at("f4").y + CARD_HEIGHT);
+    assert.isAtMost(sub.position.y + sub.height, round.height);
+  });
+
+  it("keeps a round with no meta in plain rows", function () {
+    const { tags, puzzles, puzzle } = fixtures();
+    for (let i = 0; i < 5; i++) puzzle(`f${i}`, ["group:A"]);
+    const { nodes } = seedLayout(puzzles, tags, UNGROUPED);
+    const nodesByKey = byKey(nodes);
+    [0, 1, 2, 3, 4].forEach((i) => {
+      assert.deepEqual(
+        nodesByKey.get(`puzzle:puz_f${i}`)!.position,
+        cardSlot(i),
+      );
+    });
+    assert.equal(
+      nodesByKey.get("frame:tag_group:A")!.height,
+      FRAME_HEADER + 2 * CARD_HEIGHT + GAP + FRAME_PADDING,
     );
   });
 

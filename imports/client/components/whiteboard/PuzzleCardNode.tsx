@@ -1,4 +1,6 @@
 import { useTracker } from "meteor/react-meteor-data";
+import { faAngleDoubleUp } from "@fortawesome/free-solid-svg-icons/faAngleDoubleUp";
+import { faAngleDown } from "@fortawesome/free-solid-svg-icons/faAngleDown";
 import { faEye } from "@fortawesome/free-solid-svg-icons/faEye";
 import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
 import { faPhone } from "@fortawesome/free-solid-svg-icons/faPhone";
@@ -14,12 +16,17 @@ import Hunts from "../../../lib/models/Hunts";
 import Puzzles from "../../../lib/models/Puzzles";
 import Tags from "../../../lib/models/Tags";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
+import {
+  isLocationTag,
+  puzzleStatusFromTags,
+} from "../../../lib/puzzleTagStatus";
 import type { Solvedness } from "../../../lib/solvedness";
 import { computeSolvedness } from "../../../lib/solvedness";
 import useAvatarUsers from "../../hooks/useAvatarUsers";
 import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import AvatarStack from "../AvatarStack";
 import PuzzleAnswer from "../PuzzleAnswer";
+import { LOCATION_TAG_COLOR, NEEDS_TAG_COLOR } from "../tagColors";
 import NodeHandles from "./NodeHandles";
 import PeopleContext from "./PeopleContext";
 
@@ -29,6 +36,7 @@ const Card = styled.div<{
   $solvedness: Solvedness;
   $locked: boolean;
   $selected: boolean;
+  $stuckEdge: boolean;
 }>`
   width: 100%;
   height: 100%;
@@ -37,10 +45,15 @@ const Card = styled.div<{
   border: 1px solid
     ${({ theme, $selected }) =>
       $selected ? theme.colors.primary : theme.colors.border};
-  box-shadow: ${({ $selected, theme }) =>
-    $selected
-      ? `0 0 0 2px ${theme.colors.primary}`
-      : "0 1px 2px rgb(0 0 0 / 15%)"};
+  box-shadow:
+    ${({ $selected, theme }) =>
+      $selected
+        ? `0 0 0 2px ${theme.colors.primary}`
+        : "0 1px 2px rgb(0 0 0 / 15%)"}
+    ${({ $stuckEdge, theme }) =>
+      $stuckEdge
+        ? `, inset 0 0 0 4px ${theme.colors.whiteboardStuckEdge}`
+        : ""};
   background-color: ${({ theme, $solvedness }) =>
     theme.colors.solvedness[$solvedness]};
   color: ${({ theme }) => theme.colors.text};
@@ -84,8 +97,44 @@ const MetaBadge = styled.span`
   text-transform: uppercase;
 `;
 
-const OpenLink = styled(Link)`
+// needs: and location tags, coloured as the puzzle list's tag chips are.
+const Chips = styled.span`
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+`;
+
+const Chip = styled.span<{ $location: boolean }>`
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #000;
+  background-color: ${({ $location }) =>
+    $location ? LOCATION_TAG_COLOR : NEEDS_TAG_COLOR};
+`;
+
+// Priority, stuck and the open link, at the right of the top row.
+const TopRight = styled.span`
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-left: auto;
+  flex: 0 0 auto;
+  color: ${({ theme }) => theme.colors.textSecondary};
+`;
+
+const PriorityHigh = styled.span`
+  color: ${({ theme }) => theme.colors.priorityHighIcon};
+`;
+
+const OpenLink = styled(Link)`
   color: ${({ theme }) => theme.colors.textSecondary};
 `;
 
@@ -218,24 +267,29 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
     () => (huntId ? Hunts.findOne(huntId) : undefined),
     [huntId],
   );
-  // The same tags make a meta or metameta as in the puzzle list.
-  const metaKind = useTracker(() => {
-    if (!puzzle) return undefined;
-    const names = Tags.find({ _id: { $in: puzzle.tags } }).map(
-      (tag) => tag.name,
+  // The same tags make a meta, a priority or a stuck flag as in the puzzle
+  // list.
+  const tagKey = puzzle?.tags.join(",") ?? "";
+  const status = useTracker(() => {
+    const tagIds = tagKey ? tagKey.split(",") : [];
+    const names = new Map(
+      Tags.find({ _id: { $in: tagIds } }).map((tag) => [tag._id, tag.name]),
     );
-    if (names.includes("is:metameta")) {
-      return t("puzzleList.metameta", "Metameta");
-    }
-    if (names.some((n) => n === "is:meta" || n.startsWith("meta-for:"))) {
-      return t("puzzleList.meta", "Meta");
-    }
-    return undefined;
-  }, [puzzle, t]);
+    return puzzleStatusFromTags(tagIds.map((id) => names.get(id)));
+  }, [tagKey]);
 
   if (!puzzle) return null;
 
   const openPuzzle = t("whiteboard.card.openPuzzle", "Open puzzle");
+  let metaKind: string | undefined;
+  if (status.meta === "metameta") {
+    metaKind = t("puzzleList.metameta", "Metameta");
+  } else if (status.meta === "meta") {
+    metaKind = t("puzzleList.meta", "Meta");
+  }
+  const highPriority = t("puzzleList.highPriority", "High priority");
+  const lowPriority = t("puzzleList.lowPriority", "Low priority");
+  const stuck = t("puzzleList.stuck", "Stuck");
   const solvedness = computeSolvedness(puzzle);
   const locked = !!puzzle.locked && !!hunt?.allowUnlockablePuzzles;
   const answers =
@@ -278,14 +332,43 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
               <FontAwesomeIcon icon={faStar} /> {metaKind}
             </MetaBadge>
           )}
-          <OpenLink
-            to={`/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`}
-            className="nodrag"
-            title={openPuzzle}
-            aria-label={openPuzzle}
-          >
-            <FontAwesomeIcon icon={faUpRightFromSquare} />
-          </OpenLink>
+          {status.chips.length > 0 && (
+            <Chips>
+              {status.chips.map((chip) => (
+                <Chip key={chip} $location={isLocationTag(chip)} title={chip}>
+                  {chip}
+                </Chip>
+              ))}
+            </Chips>
+          )}
+          <TopRight>
+            {status.priority === "high" && (
+              <PriorityHigh title={highPriority}>
+                <FontAwesomeIcon icon={faAngleDoubleUp} />
+                <span className="visually-hidden">{highPriority}</span>
+              </PriorityHigh>
+            )}
+            {status.priority === "low" && (
+              <span title={lowPriority}>
+                <FontAwesomeIcon icon={faAngleDown} />
+                <span className="visually-hidden">{lowPriority}</span>
+              </span>
+            )}
+            {status.stuck && (
+              <span title={stuck}>
+                <span aria-hidden>🤷</span>
+                <span className="visually-hidden">{stuck}</span>
+              </span>
+            )}
+            <OpenLink
+              to={`/hunts/${puzzle.hunt}/puzzles/${puzzle._id}`}
+              className="nodrag"
+              title={openPuzzle}
+              aria-label={openPuzzle}
+            >
+              <FontAwesomeIcon icon={faUpRightFromSquare} />
+            </OpenLink>
+          </TopRight>
         </TopRow>
         <Title>{puzzle.title}</Title>
         {locked ? (
@@ -311,7 +394,14 @@ const PuzzleCardNode = ({ data, selected }: NodeProps<PuzzleCardNodeType>) => {
   }
 
   return (
-    <Card $solvedness={solvedness} $locked={locked} $selected={selected}>
+    <Card
+      $solvedness={solvedness}
+      $locked={locked}
+      $selected={selected}
+      // At mid zoom the stuck flag is too small to see, so the card's edge
+      // shows it instead.
+      $stuckEdge={detail === "mid" && status.stuck}
+    >
       <NodeHandles />
       {body}
     </Card>

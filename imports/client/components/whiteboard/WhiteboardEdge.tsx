@@ -8,15 +8,20 @@ import {
   useInternalNode,
   useStore,
 } from "@xyflow/react";
-import React, { useCallback } from "react";
+import React, { useCallback, useContext } from "react";
 import { useTranslation } from "react-i18next";
 import styled, { useTheme } from "styled-components";
+import {
+  feederArrowEmphasis,
+  feederArrowLook,
+} from "../../../lib/whiteboard/feederFocus";
 import { MAX_LABEL_LENGTH } from "../../../lib/whiteboard/limits";
 import useHoverIntent from "../../hooks/useHoverIntent";
 import useWhiteboardDetail from "../../hooks/useWhiteboardDetail";
 import type { WhiteboardFlowEdge } from "../../hooks/useWhiteboardSync";
 import colors from "./colors";
 import EditableText from "./EditableText";
+import FeederFocusContext from "./FeederFocusContext";
 import floatingEdgeParams from "./floatingEdgeParams";
 import NodeContributors from "./NodeContributors";
 import { useWhiteboard } from "./WhiteboardContext";
@@ -103,6 +108,10 @@ const WhiteboardEdge = ({
   const doc = data?.doc;
   const auto = !!doc?.auto;
   const label = doc?.label;
+  const feederFocus = useContext(FeederFocusContext);
+  const emphasis = auto
+    ? feederArrowEmphasis({ source, target }, feederFocus)
+    : undefined;
   const showGrips = !auto && !!selected && !readOnly;
   // Grips stay the same size on screen whatever the zoom. Only a line showing
   // them follows the zoom, so zooming doesn't redraw every line.
@@ -133,6 +142,11 @@ const WhiteboardEdge = ({
   const showLabel =
     !auto && detail !== "far" && (!!label || (!!selected && !readOnly));
   const showAttribution = !auto && (hover.hovered || !!selected);
+  // A hovered or selected meta brings out its feeders' arrows, and a feeder
+  // its metas', fading the rest.
+  const look = auto
+    ? feederArrowLook(emphasis, !!selected)
+    : { strokeWidth: 2, opacity: 1 };
 
   return (
     <>
@@ -142,13 +156,14 @@ const WhiteboardEdge = ({
         markerEnd={markerEnd}
         markerStart={markerStart}
         interactionWidth={16}
+        className={emphasis && `jr-feeder-${emphasis}`}
         onMouseEnter={hover.onMouseEnter}
         onMouseLeave={hover.onMouseLeave}
         style={{
           stroke,
-          strokeWidth: auto ? 1 : 2,
+          strokeWidth: look.strokeWidth,
           strokeDasharray: doc?.dashed ? "8 6" : undefined,
-          opacity: auto && !selected ? 0.55 : 1,
+          opacity: look.opacity,
         }}
       />
       {(showLabel || showGrips || showAttribution) && (

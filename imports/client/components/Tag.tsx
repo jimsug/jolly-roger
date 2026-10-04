@@ -26,10 +26,12 @@ import { indexedById } from "../../lib/listUtils";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import { sortPuzzlesByRelevanceWithinPuzzleGroup } from "../../lib/puzzle-sort-and-group";
+import { isLocationTag } from "../../lib/puzzleTagStatus";
 import useIsOffsite from "../hooks/useIsOffsite";
 import CopyToClipboardButton from "./CopyToClipboardButton";
 import { removePunctuation } from "./PuzzleAnswer";
 import RelatedPuzzleTable from "./RelatedPuzzleTable";
+import { LOCATION_TAG_COLOR, NEEDS_TAG_COLOR } from "./tagColors";
 
 const RemoveTagButton: FC<ComponentPropsWithRef<typeof Button>> = styled(
   Button,
@@ -133,7 +135,7 @@ const TagDiv = styled.div<{
   ${({ $isNeeds }) =>
     $isNeeds &&
     css`
-      background-color: #ffc0cb;
+      background-color: ${NEEDS_TAG_COLOR};
     `}
   ${({ $isPriority }) =>
     $isPriority &&
@@ -143,7 +145,7 @@ const TagDiv = styled.div<{
   ${({ $isLocation }) =>
     $isLocation &&
     css`
-      background-color: #aaffc3;
+      background-color: ${LOCATION_TAG_COLOR};
     `}
 `;
 
@@ -336,10 +338,7 @@ const Tag = (props: TagProps) => {
   const isMetaFor = name.startsWith("meta-for:");
   const isNeeds = name.startsWith("needs:");
   const isPriority = name.startsWith("priority:");
-  const isLocation =
-    name.startsWith("location:") ||
-    name.startsWith("loc:") ||
-    name.startsWith("where:");
+  const isLocation = isLocationTag(name);
 
   // Group, meta-for and location prefixes are drawn as an icon instead of the
   // prefix text (see the legend on the puzzle list).

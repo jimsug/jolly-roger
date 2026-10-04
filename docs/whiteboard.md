@@ -1,16 +1,28 @@
 ---
 files:
   - imports/client/components/WhiteboardPage.tsx
+  - imports/client/components/tagColors.ts
   - imports/client/components/whiteboard/BoardSearch.tsx
   - imports/client/components/whiteboard/EditPolicyModal.tsx
+  - imports/client/components/whiteboard/FeederFocusContext.ts
+  - imports/client/components/whiteboard/FrameLabelLayer.tsx
+  - imports/client/components/whiteboard/FrameNode.tsx
+  - imports/client/components/whiteboard/PuzzleCardNode.tsx
+  - imports/client/components/whiteboard/RoundStateContext.ts
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
+  - imports/client/components/whiteboard/WhiteboardEdge.tsx
+  - imports/client/hooks/useRoundStates.ts
   - imports/lib/chatMessagePath.ts
   - imports/lib/models/WhiteboardEdges.ts
   - imports/lib/models/WhiteboardNodes.ts
   - imports/lib/models/Whiteboards.ts
+  - imports/lib/puzzleTagStatus.ts
+  - imports/lib/whiteboard/feederFocus.ts
+  - imports/lib/whiteboard/layout.ts
   - imports/lib/whiteboard/limits.ts
   - imports/lib/whiteboard/links.ts
   - imports/lib/whiteboard/minimap.ts
+  - imports/lib/whiteboard/rounds.ts
   - imports/lib/whiteboard/search.ts
   - imports/methods/setWhiteboardEditPolicy.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
@@ -247,6 +259,92 @@ colours are the theme's `miniMapSolvedness`, stronger than the card
 backgrounds so they show at that size, and frames take the strong version of
 their colour. Free line ends are left off, and everything else is grey
 (`miniMapColor` in `imports/lib/whiteboard/minimap.ts`).
+
+## What cards and rounds show
+
+Everything here is display only: it reads puzzles, tags and the board's
+nodes, all already on the client, and writes nothing.
+
+### Cards
+
+A card shows less as the board zooms out (`useWhiteboardDetail`):
+
+- **Full** (zoom 0.6 and up): a lock on a locked puzzle, the Meta or Metameta
+  badge, any `needs:` and location (`where:`, `loc:` or `location:`) tags as
+  small chips in the puzzle list's tag colours (shared through
+  `imports/client/components/tagColors.ts`), then at the right a priority icon (a red double chevron for
+  `priority:high`, a single one for `priority:low`), the stuck flag (🤷, for
+  `stuck` or `is:stuck`) and the link that opens the puzzle. Below them come
+  the title, the answers (or the locked summary), and the people on its call
+  or looking at it while it's unsolved and unlocked.
+- **Mid** (0.3 to 0.6): the title and answers in larger type. A stuck puzzle's
+  card gets a red inner edge, since the flag would be too small to see.
+- **Far** (below 0.3): the first answer, or failing that the first word of the
+  title.
+
+The badge, icons and chips come from `puzzleStatusFromTags` in
+`imports/lib/puzzleTagStatus.ts`, which the puzzle list's rows use too, so the
+two agree on which tags make a meta, a priority or a stuck puzzle. The list
+leaves those tags out of its chips (`shownAsStatus`).
+
+### Rounds
+
+A frame's header shows "n/m solved" over the cards directly inside it, the
+way the puzzle list's group headings count, so a sub-round's cards count in
+its own frame and not its parent's. Puzzles with nothing to solve
+(`computeSolvedness` says `noAnswers`) count neither way, and a frame with no
+solved or unsolved cards in it shows no count. Zoomed right out, the round's label pill shows the
+same count.
+
+The rest comes from `roundState` in `imports/lib/whiteboard/rounds.ts`. A
+round is a frame with a tag. Its metas are the puzzles tagged `meta-for:X` for
+its `group:X` tag, wherever their cards are, which is how feeder arrows pair
+them; its feeders are the other puzzles tagged `group:X`.
+
+- **Ready to meta**: every feeder is solved, at least one is, and a meta
+  isn't. The header shows a "Ready to meta" badge in the meta badge's colours.
+- **Finished**: the round has a meta and every meta is solved, or, with no
+  meta, at least one of its cards is solved and none, at any depth, is
+  unsolved. Solvedness is `computeSolvedness`, so a locked puzzle with no
+  answer and one with an unknown number of answers are both unsolved. Solving
+  the meta finishes a round even with feeders left, since that's what closes
+  it for a team.
+
+A finished round recedes rather than disappearing: a tick before its label,
+"Finished" after it in place of the count (or "Finished, N unsolved" while
+cards inside it, counted at any depth, are unsolved), its fill at 20% alpha
+instead of 40%, and its label in the secondary text colour. The far-zoom pill
+keeps the count and gets the tick and the same grey. In a narrow frame the
+count and status are cut short before the round's name is. Nothing else about a finished round changes: its cards,
+lines and comments behave as before. `finishedFrames` lists the finished
+rounds on a board, for folding them later.
+
+The counts are worked out on the client once per board, in the canvas's
+`useTracker` (`useRoundStates` in `imports/client/hooks/useRoundStates.ts`),
+reading only the fields they need, so moving a card or renaming a puzzle
+doesn't recount. Frame headers and the far-zoom pills read their frame's
+state from `RoundStateContext`.
+
+### Feeder arrows
+
+Feeder arrows are thin, grey and at 55% opacity. Hovering or selecting a
+meta's card brings its arrows up to full opacity and 2px and fades every other
+feeder arrow; hovering a feeder brings out its arrows to its metas the same
+way. Hovering a card with no feeder arrows changes nothing. The canvas tracks
+the hovered card and passes the cards in focus to the lines through
+`FeederFocusContext`; `feederFocus`, `feederArrowEmphasis` and
+`feederArrowLook` in `imports/lib/whiteboard/feederFocus.ts` decide which
+arrows stand out and how.
+
+### Where metas go on a new board
+
+When a board is created, `seedLayout` puts each round's metas on their own
+row (or rows, past four) at the top of its frame, with the feeders starting
+on the row below, so the arrows have somewhere to run. A round without a meta
+is laid out four to a row as before. This only applies when a board is laid
+out: boards that already exist keep their cards where they are, and a puzzle
+added later goes in the first free slot of its frame, which may be beside a
+meta.
 
 ## Flags
 

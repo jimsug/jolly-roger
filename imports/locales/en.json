@@ -77,6 +77,10 @@
     "comments": {
       "replies_one": "{{count}} reply",
       "replies_other": "{{count}} replies"
+    },
+    "frame": {
+      "finishedUnsolved_one": "Finished, {{count}} unsolved",
+      "finishedUnsolved_other": "Finished, {{count}} unsolved"
     }
   }
 }

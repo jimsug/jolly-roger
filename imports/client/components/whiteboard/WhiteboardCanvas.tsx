@@ -17,6 +17,7 @@ import type {
   AriaLabelConfig,
   EdgeChange,
   NodeChange,
+  NodeMouseHandler,
   OnBeforeDelete,
   OnConnectEnd,
   OnConnectStart,
@@ -91,6 +92,7 @@ import {
   contains,
   snapAngle,
 } from "../../../lib/whiteboard/connectors";
+import { feederFocus } from "../../../lib/whiteboard/feederFocus";
 import type { InkPoint } from "../../../lib/whiteboard/ink";
 import {
   distanceToInk,
@@ -140,6 +142,7 @@ import {
   useWhiteboardViewport,
 } from "../../hooks/persisted-state";
 import usePuzzlePeople from "../../hooks/usePuzzlePeople";
+import useRoundStates from "../../hooks/useRoundStates";
 import useTypedSubscribe from "../../hooks/useTypedSubscribe";
 import useWhiteboardComments, {
   useSeenComments,
@@ -167,6 +170,7 @@ import CursorLayer from "./CursorLayer";
 import colors from "./colors";
 import describeCommentTarget from "./describeCommentTarget";
 import EditPolicyModal, { EditPolicyButton } from "./EditPolicyModal";
+import FeederFocusContext from "./FeederFocusContext";
 import FrameLabelLayer from "./FrameLabelLayer";
 import FrameNode from "./FrameNode";
 import { boxOf } from "./floatingEdgeParams";
@@ -178,6 +182,7 @@ import NodePulse from "./NodePulse";
 import PeopleContext from "./PeopleContext";
 import PointNode from "./PointNode";
 import PuzzleCardNode from "./PuzzleCardNode";
+import RoundStateContext from "./RoundStateContext";
 import StickyNode from "./StickyNode";
 import TextNode from "./TextNode";
 import type { WhiteboardActions } from "./WhiteboardContext";
@@ -605,6 +610,7 @@ const CanvasInner = ({
   // which only shows it once they've loaded (puzzleForPuzzlePage), and the
   // board's nodes and lines from the whiteboard page.
   const people = usePuzzlePeople(huntId);
+  const rounds = useRoundStates(boardId, huntId);
 
   const liveEnabled = useTracker(
     () => !Flags.active("disable.whiteboard_live"),
@@ -833,6 +839,36 @@ const CanvasInner = ({
     lineColors,
     lineLabels,
   });
+
+  // The cards whose feeder arrows stand out: the one under the pointer and
+  // any selected. Kept as a string between renders so a drag, which makes
+  // new node objects every frame, doesn't redraw every line.
+  const [hoveredCard, setHoveredCard] = useState<string>();
+  const onNodeMouseEnter = useCallback<NodeMouseHandler<WhiteboardFlowNode>>(
+    (_event, node) => {
+      if (node.type === "puzzle") setHoveredCard(node.id);
+    },
+    [],
+  );
+  const onNodeMouseLeave = useCallback<NodeMouseHandler<WhiteboardFlowNode>>(
+    (_event, node) => {
+      setHoveredCard((current) => (current === node.id ? undefined : current));
+    },
+    [],
+  );
+  const feederFocusKey = feederFocus(
+    [
+      hoveredCard,
+      ...nodes
+        .filter((n) => n.selected && n.type === "puzzle")
+        .map((n) => n.id),
+    ],
+    edges.filter((e) => e.data?.doc.auto),
+  ).join(" ");
+  const feederFocusIds = useMemo(
+    () => new Set(feederFocusKey ? feederFocusKey.split(" ") : []),
+    [feederFocusKey],
+  );
 
   const updateNodes = useCallback(
     (inputs: WhiteboardNodeInput[], onDone?: () => void) => {
@@ -3010,153 +3046,305 @@ const CanvasInner = ({
   return (
     <WhiteboardContext value={actions}>
       <PeopleContext value={people}>
-        <CanvasWrapper
-          ref={wrapperRef}
-          $tool={tool}
-          $readOnly={readOnly}
-          onPointerDownCapture={onPointerDownCapture}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerCancel}
-          onPointerLeave={onPointerLeave}
-        >
-          <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onBeforeDelete={onBeforeDelete}
-            onConnectEnd={onConnectEnd}
-            onClickConnectStart={onClickConnectStart}
-            onClickConnectEnd={onClickConnectEnd}
-            onNodeDragStart={onNodeDragStart}
-            onNodeDrag={onNodeDrag}
-            onNodeDragStop={onNodeDragStop}
-            onMove={onMove}
-            onMoveEnd={onMoveEnd}
-            connectionMode={ConnectionMode.Loose}
-            // onConnectEnd decides where a line from a handle ends, so the
-            // line being dragged shouldn't snap to a nearby handle either.
-            connectionRadius={0}
-            colorMode={theme.basicMode === "dark" ? "dark" : "light"}
-            defaultViewport={initialViewport}
-            fitView={!initialViewport && !openedAt}
-            minZoom={MIN_ZOOM}
-            maxZoom={MAX_ZOOM}
-            nodesDraggable={!readOnly && !drawingTool}
-            nodesConnectable={!readOnly && !drawingTool}
-            elementsSelectable={!readOnly && !drawingTool}
-            panOnDrag={!drawingTool}
-            selectionOnDrag={false}
-            deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
-            onlyRenderVisibleElements
-            ariaLabelConfig={ariaLabelConfig}
-          >
-            <Background />
-            <Controls showInteractive={false} />
-            {showMiniMap && (
-              <MiniMap<WhiteboardFlowNode>
-                pannable
-                zoomable
-                nodeColor={miniMapNodeColor}
-              />
-            )}
-            <FrameLabelLayer />
-            <CursorLayer boardId={boardId} liveEnabled={liveEnabled} />
-            <CommentLayer
-              pins={commentPins}
-              openId={openThreadId ?? (draft ? "draft" : undefined)}
-              pulseId={pulse}
-              onOpen={openComment}
-            />
-            {nodePulse && (
-              <NodePulse node={nodePulse.node} point={nodePulse.point} />
-            )}
-            {localStroke && localStroke.points.length > 0 && (
-              <ViewportPortal>
-                <LocalStroke>
-                  <path
-                    d={inkPath(
-                      localStroke.points,
-                      localStroke.strokeWidth,
-                      false,
-                    )}
-                    fill={colors.stroke[localStroke.color] ?? theme.colors.text}
+        <FeederFocusContext value={feederFocusIds}>
+          <RoundStateContext value={rounds}>
+            <CanvasWrapper
+              ref={wrapperRef}
+              $tool={tool}
+              $readOnly={readOnly}
+              onPointerDownCapture={onPointerDownCapture}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
+              onPointerLeave={onPointerLeave}
+            >
+              <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onBeforeDelete={onBeforeDelete}
+                onConnectEnd={onConnectEnd}
+                onClickConnectStart={onClickConnectStart}
+                onClickConnectEnd={onClickConnectEnd}
+                onNodeDragStart={onNodeDragStart}
+                onNodeDrag={onNodeDrag}
+                onNodeDragStop={onNodeDragStop}
+                onNodeMouseEnter={onNodeMouseEnter}
+                onNodeMouseLeave={onNodeMouseLeave}
+                onMove={onMove}
+                onMoveEnd={onMoveEnd}
+                connectionMode={ConnectionMode.Loose}
+                // onConnectEnd decides where a line from a handle ends, so the
+                // line being dragged shouldn't snap to a nearby handle either.
+                connectionRadius={0}
+                colorMode={theme.basicMode === "dark" ? "dark" : "light"}
+                defaultViewport={initialViewport}
+                fitView={!initialViewport && !openedAt}
+                minZoom={MIN_ZOOM}
+                maxZoom={MAX_ZOOM}
+                nodesDraggable={!readOnly && !drawingTool}
+                nodesConnectable={!readOnly && !drawingTool}
+                elementsSelectable={!readOnly && !drawingTool}
+                panOnDrag={!drawingTool}
+                selectionOnDrag={false}
+                deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
+                onlyRenderVisibleElements
+                ariaLabelConfig={ariaLabelConfig}
+              >
+                <Background />
+                <Controls showInteractive={false} />
+                {showMiniMap && (
+                  <MiniMap<WhiteboardFlowNode>
+                    pannable
+                    zoomable
+                    nodeColor={miniMapNodeColor}
                   />
-                </LocalStroke>
-              </ViewportPortal>
-            )}
-            {lineFrom && lineTo && (
-              <ViewportPortal>
-                <LocalStroke>
-                  {lineOrigin && (
-                    <AttachOutline key={lineOrigin} id={lineOrigin} />
-                  )}
-                  {lineAttached && lineAttached !== lineOrigin && (
-                    <AttachOutline key={lineAttached} id={lineAttached} />
-                  )}
-                  <line
-                    x1={lineFrom.x}
-                    y1={lineFrom.y}
-                    x2={lineTo.x}
-                    y2={lineTo.y}
-                    stroke={theme.colors.primary}
-                    strokeWidth={2}
-                    strokeDasharray="6 4"
-                  />
-                  <circle
-                    cx={lineTo.x}
-                    cy={lineTo.y}
-                    r={4}
-                    fill={theme.colors.primary}
-                  />
-                </LocalStroke>
-              </ViewportPortal>
-            )}
-            {!connecting && attachPreview && (
-              <ViewportPortal>
-                <LocalStroke>
-                  <AttachOutline id={attachPreview} />
-                </LocalStroke>
-              </ViewportPortal>
-            )}
-            {isPlaceTool(tool) && placeGhost && (
-              <ViewportPortal>
-                <PlaceGhost
-                  $tool={tool}
-                  style={{
-                    transform: `translate(${placeGhost.x}px, ${placeGhost.y}px)`,
-                    width: placeGhost.width,
-                    height: placeGhost.height,
-                  }}
+                )}
+                <FrameLabelLayer />
+                <CursorLayer boardId={boardId} liveEnabled={liveEnabled} />
+                <CommentLayer
+                  pins={commentPins}
+                  openId={openThreadId ?? (draft ? "draft" : undefined)}
+                  pulseId={pulse}
+                  onOpen={openComment}
                 />
-              </ViewportPortal>
-            )}
-            {readOnly ? (
-              <Panel position="top-left">
-                <ToolBox>
-                  {searchTools}
-                  <ReadOnlyNote>
-                    <span>
-                      {t("whiteboard.toolbar.viewingOnly", "Viewing only")}
-                    </span>
-                    {accessReason && (
-                      <ReadOnlyReason>
-                        {accessReasons[accessReason]}
-                      </ReadOnlyReason>
-                    )}
-                  </ReadOnlyNote>
-                  {(canComment || resolvedCount > 0) && (
-                    <ButtonGroup size="sm">
-                      {canComment && (
+                {nodePulse && (
+                  <NodePulse node={nodePulse.node} point={nodePulse.point} />
+                )}
+                {localStroke && localStroke.points.length > 0 && (
+                  <ViewportPortal>
+                    <LocalStroke>
+                      <path
+                        d={inkPath(
+                          localStroke.points,
+                          localStroke.strokeWidth,
+                          false,
+                        )}
+                        fill={
+                          colors.stroke[localStroke.color] ?? theme.colors.text
+                        }
+                      />
+                    </LocalStroke>
+                  </ViewportPortal>
+                )}
+                {lineFrom && lineTo && (
+                  <ViewportPortal>
+                    <LocalStroke>
+                      {lineOrigin && (
+                        <AttachOutline key={lineOrigin} id={lineOrigin} />
+                      )}
+                      {lineAttached && lineAttached !== lineOrigin && (
+                        <AttachOutline key={lineAttached} id={lineAttached} />
+                      )}
+                      <line
+                        x1={lineFrom.x}
+                        y1={lineFrom.y}
+                        x2={lineTo.x}
+                        y2={lineTo.y}
+                        stroke={theme.colors.primary}
+                        strokeWidth={2}
+                        strokeDasharray="6 4"
+                      />
+                      <circle
+                        cx={lineTo.x}
+                        cy={lineTo.y}
+                        r={4}
+                        fill={theme.colors.primary}
+                      />
+                    </LocalStroke>
+                  </ViewportPortal>
+                )}
+                {!connecting && attachPreview && (
+                  <ViewportPortal>
+                    <LocalStroke>
+                      <AttachOutline id={attachPreview} />
+                    </LocalStroke>
+                  </ViewportPortal>
+                )}
+                {isPlaceTool(tool) && placeGhost && (
+                  <ViewportPortal>
+                    <PlaceGhost
+                      $tool={tool}
+                      style={{
+                        transform: `translate(${placeGhost.x}px, ${placeGhost.y}px)`,
+                        width: placeGhost.width,
+                        height: placeGhost.height,
+                      }}
+                    />
+                  </ViewportPortal>
+                )}
+                {readOnly ? (
+                  <Panel position="top-left">
+                    <ToolBox>
+                      {searchTools}
+                      <ReadOnlyNote>
+                        <span>
+                          {t("whiteboard.toolbar.viewingOnly", "Viewing only")}
+                        </span>
+                        {accessReason && (
+                          <ReadOnlyReason>
+                            {accessReasons[accessReason]}
+                          </ReadOnlyReason>
+                        )}
+                      </ReadOnlyNote>
+                      {(canComment || resolvedCount > 0) && (
+                        <ButtonGroup size="sm">
+                          {canComment && (
+                            <CommentToolButton
+                              active={tool === "comment"}
+                              onSelect={setTool}
+                            />
+                          )}
+                          {resolvedCount > 0 && (
+                            <Button
+                              variant={
+                                showResolved ? "secondary" : "outline-secondary"
+                              }
+                              onClick={toggleShowResolved}
+                              title={showResolvedTitle}
+                              aria-label={showResolvedLabel}
+                              aria-pressed={showResolved}
+                            >
+                              <FontAwesomeIcon icon={faCircleCheck} />{" "}
+                              {resolvedCount}
+                            </Button>
+                          )}
+                        </ButtonGroup>
+                      )}
+                      {mayChangeEditPolicy && (
+                        <EditPolicyButton
+                          policy={editPolicy}
+                          onClick={openEditPolicy}
+                        />
+                      )}
+                    </ToolBox>
+                    {accessNoticeAlert}
+                    {linkNoticeAlert}
+                  </Panel>
+                ) : (
+                  <Panel position="top-left">
+                    <ToolBox>
+                      {searchTools}
+                      <ButtonGroup size="sm">
+                        <ToolButton
+                          tool="select"
+                          active={tool === "select"}
+                          onSelect={setTool}
+                          title={t(
+                            "whiteboard.toolbar.select",
+                            "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add)",
+                          )}
+                        >
+                          <FontAwesomeIcon icon={faArrowPointer} />
+                        </ToolButton>
+                        <ToolButton
+                          tool="pen"
+                          active={tool === "pen"}
+                          onSelect={setTool}
+                          title={t(
+                            "whiteboard.toolbar.pen",
+                            "Draw (hold Space to pan)",
+                          )}
+                        >
+                          <FontAwesomeIcon icon={faPen} />
+                        </ToolButton>
+                        <ToolButton
+                          tool="eraser"
+                          active={tool === "eraser"}
+                          onSelect={setTool}
+                          title={t(
+                            "whiteboard.toolbar.eraser",
+                            "Erase strokes",
+                          )}
+                        >
+                          <FontAwesomeIcon icon={faEraser} />
+                        </ToolButton>
+                        <ToolButton
+                          tool="connector"
+                          active={tool === "connector"}
+                          onSelect={setTool}
+                          title={t(
+                            "whiteboard.toolbar.line",
+                            "Line: drag between two things to connect them, or anywhere for a free line (Shift snaps the angle)",
+                          )}
+                        >
+                          <LineStyleIcon kind="end" />
+                        </ToolButton>
+                      </ButtonGroup>
+                      {tool === "connector" && (
+                        <LineStyleControls
+                          value={lineStyle}
+                          onChange={updateLineStyle}
+                        />
+                      )}
+                      {tool === "pen" && (
+                        <>
+                          <ColorPicker
+                            value={penColor}
+                            palette={colors.stroke}
+                            onChange={setPenColor}
+                            fallback={theme.colors.text}
+                          />
+                          <PenWidthSelect
+                            size="sm"
+                            value={penWidth}
+                            onChange={onPenWidth}
+                            aria-label={t(
+                              "whiteboard.toolbar.penWidth",
+                              "Pen width",
+                            )}
+                          >
+                            {WhiteboardStrokeWidths.map((w) => (
+                              <option key={w} value={w}>
+                                {penWidthNames[w]}
+                              </option>
+                            ))}
+                          </PenWidthSelect>
+                        </>
+                      )}
+                      <ButtonGroup size="sm">
+                        <ToolButton
+                          tool="sticky"
+                          active={tool === "sticky"}
+                          onSelect={setTool}
+                          title={t(
+                            "whiteboard.toolbar.sticky",
+                            "Sticky note: click to place, or drag to size",
+                          )}
+                        >
+                          <FontAwesomeIcon icon={faNoteSticky} />
+                        </ToolButton>
+                        <ToolButton
+                          tool="text"
+                          active={tool === "text"}
+                          onSelect={setTool}
+                          title={t(
+                            "whiteboard.toolbar.text",
+                            "Text: click to place, or drag to size",
+                          )}
+                        >
+                          <FontAwesomeIcon icon={faFont} />
+                        </ToolButton>
+                        <ToolButton
+                          tool="frame"
+                          active={tool === "frame"}
+                          onSelect={setTool}
+                          title={t(
+                            "whiteboard.toolbar.frame",
+                            "Frame: click to place, or drag to size",
+                          )}
+                        >
+                          <FontAwesomeIcon icon={faObjectGroup} />
+                        </ToolButton>
+                      </ButtonGroup>
+                      <ButtonGroup size="sm">
                         <CommentToolButton
                           active={tool === "comment"}
                           onSelect={setTool}
                         />
-                      )}
-                      {resolvedCount > 0 && (
                         <Button
                           variant={
                             showResolved ? "secondary" : "outline-secondary"
@@ -3166,303 +3354,166 @@ const CanvasInner = ({
                           aria-label={showResolvedLabel}
                           aria-pressed={showResolved}
                         >
-                          <FontAwesomeIcon icon={faCircleCheck} />{" "}
-                          {resolvedCount}
+                          <FontAwesomeIcon icon={faCircleCheck} />
+                          {resolvedCount > 0 && ` ${resolvedCount}`}
                         </Button>
+                      </ButtonGroup>
+                      <ButtonGroup size="sm">
+                        <Button
+                          variant={
+                            showFeederArrows ? "secondary" : "outline-secondary"
+                          }
+                          onClick={toggleFeederArrows}
+                          title={feederArrowsTitle}
+                          aria-label={feederArrowsTitle}
+                          aria-pressed={showFeederArrows}
+                        >
+                          <FontAwesomeIcon icon={faDiagramProject} />
+                        </Button>
+                        <Button
+                          variant={
+                            showHidden ? "secondary" : "outline-secondary"
+                          }
+                          onClick={toggleHidden}
+                          title={hiddenPuzzlesTitle}
+                          aria-label={hiddenPuzzlesLabel}
+                          aria-pressed={showHidden}
+                        >
+                          <FontAwesomeIcon icon={faEyeSlash} />
+                          {hiddenCards.length > 0 && ` ${hiddenCards.length}`}
+                        </Button>
+                      </ButtonGroup>
+                      {mayChangeEditPolicy && (
+                        <EditPolicyButton
+                          policy={editPolicy}
+                          onClick={openEditPolicy}
+                        />
                       )}
-                    </ButtonGroup>
-                  )}
-                  {mayChangeEditPolicy && (
-                    <EditPolicyButton
-                      policy={editPolicy}
-                      onClick={openEditPolicy}
-                    />
-                  )}
-                </ToolBox>
-                {accessNoticeAlert}
-                {linkNoticeAlert}
-              </Panel>
-            ) : (
-              <Panel position="top-left">
-                <ToolBox>
-                  {searchTools}
-                  <ButtonGroup size="sm">
-                    <ToolButton
-                      tool="select"
-                      active={tool === "select"}
-                      onSelect={setTool}
-                      title={t(
-                        "whiteboard.toolbar.select",
-                        "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add)",
-                      )}
-                    >
-                      <FontAwesomeIcon icon={faArrowPointer} />
-                    </ToolButton>
-                    <ToolButton
-                      tool="pen"
-                      active={tool === "pen"}
-                      onSelect={setTool}
-                      title={t(
-                        "whiteboard.toolbar.pen",
-                        "Draw (hold Space to pan)",
-                      )}
-                    >
-                      <FontAwesomeIcon icon={faPen} />
-                    </ToolButton>
-                    <ToolButton
-                      tool="eraser"
-                      active={tool === "eraser"}
-                      onSelect={setTool}
-                      title={t("whiteboard.toolbar.eraser", "Erase strokes")}
-                    >
-                      <FontAwesomeIcon icon={faEraser} />
-                    </ToolButton>
-                    <ToolButton
-                      tool="connector"
-                      active={tool === "connector"}
-                      onSelect={setTool}
-                      title={t(
-                        "whiteboard.toolbar.line",
-                        "Line: drag between two things to connect them, or anywhere for a free line (Shift snaps the angle)",
-                      )}
-                    >
-                      <LineStyleIcon kind="end" />
-                    </ToolButton>
-                  </ButtonGroup>
-                  {tool === "connector" && (
-                    <LineStyleControls
-                      value={lineStyle}
-                      onChange={updateLineStyle}
-                    />
-                  )}
-                  {tool === "pen" && (
-                    <>
-                      <ColorPicker
-                        value={penColor}
-                        palette={colors.stroke}
-                        onChange={setPenColor}
-                        fallback={theme.colors.text}
+                    </ToolBox>
+                    {accessNoticeAlert}
+                    {linkNoticeAlert}
+                  </Panel>
+                )}
+                {!readOnly && tool === "select" && selectedLines.length > 0 && (
+                  <Panel position="bottom-center">
+                    <ToolBox>
+                      <LineStyleControls
+                        value={selectedLineStyle}
+                        onChange={restyleLines}
                       />
-                      <PenWidthSelect
+                    </ToolBox>
+                  </Panel>
+                )}
+                {!readOnly && tool === "select" && selectedUnitCount >= 2 && (
+                  <Panel position="top-center">
+                    <ToolBox>
+                      <ButtonGroup
                         size="sm"
-                        value={penWidth}
-                        onChange={onPenWidth}
+                        aria-label={t("whiteboard.arrange.align", "Align")}
+                      >
+                        {alignModes.map(([mode, title]) => (
+                          <ArrangeButton
+                            key={mode}
+                            kind={mode}
+                            title={title}
+                            label={title}
+                            onArrange={alignBy}
+                          />
+                        ))}
+                      </ButtonGroup>
+                      <ButtonGroup
+                        size="sm"
                         aria-label={t(
-                          "whiteboard.toolbar.penWidth",
-                          "Pen width",
+                          "whiteboard.arrange.distribute",
+                          "Distribute",
                         )}
                       >
-                        {WhiteboardStrokeWidths.map((w) => (
-                          <option key={w} value={w}>
-                            {penWidthNames[w]}
-                          </option>
+                        {distributeAxes.map(([axis, title]) => (
+                          <ArrangeButton
+                            key={axis}
+                            kind={axis}
+                            title={
+                              selectedUnitCount < 3
+                                ? t(
+                                    "whiteboard.arrange.needThree",
+                                    "{{action}} (select three or more)",
+                                    {
+                                      action: title,
+                                      // React escapes attributes, so i18next's
+                                      // escaping would only show entities. Goes
+                                      // once both i18n inits stop escaping.
+                                      interpolation: { escapeValue: false },
+                                    },
+                                  )
+                                : title
+                            }
+                            label={title}
+                            disabled={selectedUnitCount < 3}
+                            onArrange={distributeBy}
+                          />
                         ))}
-                      </PenWidthSelect>
-                    </>
-                  )}
-                  <ButtonGroup size="sm">
-                    <ToolButton
-                      tool="sticky"
-                      active={tool === "sticky"}
-                      onSelect={setTool}
-                      title={t(
-                        "whiteboard.toolbar.sticky",
-                        "Sticky note: click to place, or drag to size",
-                      )}
-                    >
-                      <FontAwesomeIcon icon={faNoteSticky} />
-                    </ToolButton>
-                    <ToolButton
-                      tool="text"
-                      active={tool === "text"}
-                      onSelect={setTool}
-                      title={t(
-                        "whiteboard.toolbar.text",
-                        "Text: click to place, or drag to size",
-                      )}
-                    >
-                      <FontAwesomeIcon icon={faFont} />
-                    </ToolButton>
-                    <ToolButton
-                      tool="frame"
-                      active={tool === "frame"}
-                      onSelect={setTool}
-                      title={t(
-                        "whiteboard.toolbar.frame",
-                        "Frame: click to place, or drag to size",
-                      )}
-                    >
-                      <FontAwesomeIcon icon={faObjectGroup} />
-                    </ToolButton>
-                  </ButtonGroup>
-                  <ButtonGroup size="sm">
-                    <CommentToolButton
-                      active={tool === "comment"}
-                      onSelect={setTool}
-                    />
-                    <Button
-                      variant={showResolved ? "secondary" : "outline-secondary"}
-                      onClick={toggleShowResolved}
-                      title={showResolvedTitle}
-                      aria-label={showResolvedLabel}
-                      aria-pressed={showResolved}
-                    >
-                      <FontAwesomeIcon icon={faCircleCheck} />
-                      {resolvedCount > 0 && ` ${resolvedCount}`}
-                    </Button>
-                  </ButtonGroup>
-                  <ButtonGroup size="sm">
-                    <Button
-                      variant={
-                        showFeederArrows ? "secondary" : "outline-secondary"
+                      </ButtonGroup>
+                    </ToolBox>
+                  </Panel>
+                )}
+                {(draft ?? openThreadData) && (
+                  <Panel position="top-right">
+                    <CommentPanel
+                      key={
+                        draft
+                          ? `draft:${draft.node ?? ""}:${draft.x}:${draft.y}`
+                          : (openThreadId ?? "")
                       }
-                      onClick={toggleFeederArrows}
-                      title={feederArrowsTitle}
-                      aria-label={feederArrowsTitle}
-                      aria-pressed={showFeederArrows}
-                    >
-                      <FontAwesomeIcon icon={faDiagramProject} />
-                    </Button>
-                    <Button
-                      variant={showHidden ? "secondary" : "outline-secondary"}
-                      onClick={toggleHidden}
-                      title={hiddenPuzzlesTitle}
-                      aria-label={hiddenPuzzlesLabel}
-                      aria-pressed={showHidden}
-                    >
-                      <FontAwesomeIcon icon={faEyeSlash} />
-                      {hiddenCards.length > 0 && ` ${hiddenCards.length}`}
-                    </Button>
-                  </ButtonGroup>
-                  {mayChangeEditPolicy && (
-                    <EditPolicyButton
-                      policy={editPolicy}
-                      onClick={openEditPolicy}
+                      huntId={huntId}
+                      puzzleId={puzzleId}
+                      thread={openThreadData}
+                      draft={draft}
+                      targetLabel={commentTarget}
+                      canComment={canComment}
+                      onClose={closeComment}
+                      onDraftSent={onDraftSent}
                     />
-                  )}
-                </ToolBox>
-                {accessNoticeAlert}
-                {linkNoticeAlert}
-              </Panel>
-            )}
-            {!readOnly && tool === "select" && selectedLines.length > 0 && (
-              <Panel position="bottom-center">
-                <ToolBox>
-                  <LineStyleControls
-                    value={selectedLineStyle}
-                    onChange={restyleLines}
-                  />
-                </ToolBox>
-              </Panel>
-            )}
-            {!readOnly && tool === "select" && selectedUnitCount >= 2 && (
-              <Panel position="top-center">
-                <ToolBox>
-                  <ButtonGroup
-                    size="sm"
-                    aria-label={t("whiteboard.arrange.align", "Align")}
-                  >
-                    {alignModes.map(([mode, title]) => (
-                      <ArrangeButton
-                        key={mode}
-                        kind={mode}
-                        title={title}
-                        label={title}
-                        onArrange={alignBy}
-                      />
-                    ))}
-                  </ButtonGroup>
-                  <ButtonGroup
-                    size="sm"
-                    aria-label={t(
-                      "whiteboard.arrange.distribute",
-                      "Distribute",
-                    )}
-                  >
-                    {distributeAxes.map(([axis, title]) => (
-                      <ArrangeButton
-                        key={axis}
-                        kind={axis}
-                        title={
-                          selectedUnitCount < 3
-                            ? t(
-                                "whiteboard.arrange.needThree",
-                                "{{action}} (select three or more)",
-                                {
-                                  action: title,
-                                  // React escapes attributes, so i18next's
-                                  // escaping would only show entities. Goes
-                                  // once both i18n inits stop escaping.
-                                  interpolation: { escapeValue: false },
-                                },
-                              )
-                            : title
-                        }
-                        label={title}
-                        disabled={selectedUnitCount < 3}
-                        onArrange={distributeBy}
-                      />
-                    ))}
-                  </ButtonGroup>
-                </ToolBox>
-              </Panel>
-            )}
-            {(draft ?? openThreadData) && (
-              <Panel position="top-right">
-                <CommentPanel
-                  key={
-                    draft
-                      ? `draft:${draft.node ?? ""}:${draft.x}:${draft.y}`
-                      : (openThreadId ?? "")
-                  }
-                  huntId={huntId}
-                  puzzleId={puzzleId}
-                  thread={openThreadData}
-                  draft={draft}
-                  targetLabel={commentTarget}
-                  canComment={canComment}
-                  onClose={closeComment}
-                  onDraftSent={onDraftSent}
-                />
-              </Panel>
-            )}
-            {showHidden && !readOnly && !draft && !openThreadData && (
-              <Panel position="top-right">
-                <SidePanel>
-                  <strong>
-                    {t("whiteboard.hidden.title", "Not on the board")}
-                  </strong>
-                  {hiddenCards.length === 0 && (
-                    <div>
-                      {t(
-                        "whiteboard.hidden.none",
-                        "Every puzzle is on the board.",
+                  </Panel>
+                )}
+                {showHidden && !readOnly && !draft && !openThreadData && (
+                  <Panel position="top-right">
+                    <SidePanel>
+                      <strong>
+                        {t("whiteboard.hidden.title", "Not on the board")}
+                      </strong>
+                      {hiddenCards.length === 0 && (
+                        <div>
+                          {t(
+                            "whiteboard.hidden.none",
+                            "Every puzzle is on the board.",
+                          )}
+                        </div>
                       )}
-                    </div>
-                  )}
-                  {hiddenCards.map((card) => (
-                    <MissingCardRow
-                      key={card.puzzle}
-                      card={card}
-                      onPutBack={putBack}
-                    />
-                  ))}
-                </SidePanel>
-              </Panel>
-            )}
-          </ReactFlow>
-        </CanvasWrapper>
-        {/* Outside the wrapper, whose pointer handlers would otherwise see
+                      {hiddenCards.map((card) => (
+                        <MissingCardRow
+                          key={card.puzzle}
+                          card={card}
+                          onPutBack={putBack}
+                        />
+                      ))}
+                    </SidePanel>
+                  </Panel>
+                )}
+              </ReactFlow>
+            </CanvasWrapper>
+            {/* Outside the wrapper, whose pointer handlers would otherwise see
             presses in the dialog through React's tree. */}
-        {editingPolicy && (
-          <EditPolicyModal
-            boardId={boardId}
-            huntId={huntId}
-            initialPolicy={editPolicy}
-            initialEditors={editors}
-            onHide={closeEditPolicy}
-          />
-        )}
+            {editingPolicy && (
+              <EditPolicyModal
+                boardId={boardId}
+                huntId={huntId}
+                initialPolicy={editPolicy}
+                initialEditors={editors}
+                onHide={closeEditPolicy}
+              />
+            )}
+          </RoundStateContext>
+        </FeederFocusContext>
       </PeopleContext>
     </WhiteboardContext>
   );

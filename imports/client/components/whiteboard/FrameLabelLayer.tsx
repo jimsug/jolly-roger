@@ -1,7 +1,10 @@
 import { useTracker } from "meteor/react-meteor-data";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { InternalNode } from "@xyflow/react";
 import { useStore, ViewportPortal } from "@xyflow/react";
-import React from "react";
+import React, { useContext } from "react";
+import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import Tags from "../../../lib/models/Tags";
 import { frameLabel } from "../../../lib/whiteboard/layout";
@@ -9,6 +12,7 @@ import useWhiteboardDetail, {
   useWhiteboardZoom,
 } from "../../hooks/useWhiteboardDetail";
 import type { WhiteboardFlowNode } from "../../hooks/useWhiteboardSync";
+import RoundStateContext from "./RoundStateContext";
 
 const Label = styled.div`
   position: absolute;
@@ -21,7 +25,7 @@ const Label = styled.div`
   z-index: 900;
 `;
 
-const Pill = styled.span`
+const Pill = styled.span<{ $finished: boolean }>`
   max-width: 100%;
   padding: 0.1em 0.4em;
   border-radius: 0.3em;
@@ -29,7 +33,8 @@ const Pill = styled.span`
   line-height: 1.1;
   text-align: center;
   overflow-wrap: anywhere;
-  color: ${({ theme }) => theme.colors.text};
+  color: ${({ theme, $finished }) =>
+    $finished ? theme.colors.textSecondary : theme.colors.text};
 
   /* The theme's background is a CSS variable, so it can't take an alpha
      suffix. */
@@ -38,6 +43,14 @@ const Pill = styled.span`
     ${({ theme }) => theme.colors.background} 80%,
     transparent
   );
+`;
+
+const Count = styled.span`
+  font-weight: normal;
+`;
+
+const FinishedTick = styled(FontAwesomeIcon)`
+  color: ${({ theme }) => theme.colors.whiteboardFinishedTick};
 `;
 
 // A frame, with the document every node on the board carries (see
@@ -63,6 +76,8 @@ const FrameLabelLayer = () => {
     () => new Map(Tags.find().map((tag) => [tag._id, tag.name])),
     [],
   );
+  const { t } = useTranslation();
+  const rounds = useContext(RoundStateContext);
 
   if (detail !== "far") return null;
 
@@ -84,6 +99,15 @@ const FrameLabelLayer = () => {
         const { x, y } = frame.internals.positionAbsolute;
         const fontSize = Math.min(28 / zoom, height / 4);
         const above = parents.has(frame.id);
+        const round = rounds.get(frame.id);
+        const cardCount = round ? round.cards.solved + round.cards.unsolved : 0;
+        const count =
+          round && cardCount > 0
+            ? t("whiteboard.frame.solvedShort", "{{solved}}/{{total}}", {
+                solved: round.cards.solved,
+                total: cardCount,
+              })
+            : undefined;
         const bandHeight = above
           ? fontSize * 1.6
           : Math.min(height, 160 / zoom);
@@ -97,7 +121,18 @@ const FrameLabelLayer = () => {
               fontSize,
             }}
           >
-            <Pill>{label}</Pill>
+            <Pill $finished={!!round?.finished}>
+              {round?.finished && (
+                <>
+                  <FinishedTick icon={faCheck} />
+                  <span className="visually-hidden">
+                    {t("whiteboard.frame.finished", "Finished")}
+                  </span>{" "}
+                </>
+              )}
+              {label}
+              {count && <Count> {count}</Count>}
+            </Pill>
           </Label>
         );
       })}

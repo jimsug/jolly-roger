@@ -35,6 +35,7 @@ import Hunts from "../../lib/models/Hunts";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
+import { puzzleStatusFromTags } from "../../lib/puzzleTagStatus";
 import type { PuzzleViewers } from "../../lib/puzzleViewers";
 import type { Solvedness } from "../../lib/solvedness";
 import { computeSolvedness } from "../../lib/solvedness";
@@ -473,30 +474,7 @@ const Puzzle = React.memo(
     );
 
     // Some tags are shown as icons in their own columns rather than as chips.
-    const isMetameta = tagNames.has("is:metameta");
-    const isMeta =
-      !isMetameta &&
-      (tagNames.has("is:meta") ||
-        [...tagNames].some((name) => name?.startsWith("meta-for:")));
-    const isHighPriority = tagNames.has("priority:high");
-    const isLowPriority = !isHighPriority && tagNames.has("priority:low");
-    const isStuck = tagNames.has("stuck") || tagNames.has("is:stuck");
-
-    const emojifiedTagNames = new Set<string>();
-    if (isMetameta) {
-      emojifiedTagNames.add("is:metameta");
-    } else if (isMeta) {
-      emojifiedTagNames.add("is:meta");
-    }
-    if (isHighPriority) {
-      emojifiedTagNames.add("priority:high");
-    } else if (isLowPriority) {
-      emojifiedTagNames.add("priority:low");
-    }
-    if (isStuck) {
-      emojifiedTagNames.add("stuck");
-      emojifiedTagNames.add("is:stuck");
-    }
+    const status = puzzleStatusFromTags(tagNames);
 
     // Inside a group:X section the meta-for:X chip only repeats the heading.
     const suppressedTagIds = new Set(suppressTags);
@@ -513,7 +491,7 @@ const Puzzle = React.memo(
       .filter(
         (tag) =>
           !suppressedTagIds.has(tag._id) &&
-          !emojifiedTagNames.has(tag.name) &&
+          !status.shownAsStatus.has(tag.name) &&
           !suppressedMetaForNames.has(tag.name),
       );
 
@@ -572,10 +550,10 @@ const Puzzle = React.memo(
 
     let statusIcon;
     let statusText;
-    if (isHighPriority) {
+    if (status.priority === "high") {
       statusIcon = <PriorityHighIcon icon={faAngleDoubleUp} />;
       statusText = t("puzzleList.highPriority", "High priority");
-    } else if (isLowPriority) {
+    } else if (status.priority === "low") {
       statusIcon = <FontAwesomeIcon icon={faAngleDown} />;
       statusText = t("puzzleList.lowPriority", "Low priority");
     }
@@ -699,7 +677,7 @@ const Puzzle = React.memo(
               <span>{statusIcon}</span>
             </OverlayTrigger>
           )}
-          {isStuck && (
+          {status.stuck && (
             <OverlayTrigger
               placement="top"
               overlay={
@@ -713,10 +691,10 @@ const Puzzle = React.memo(
           )}
         </PuzzleStatusColumn>
         <PuzzleMetaColumn>
-          {(isMetameta || isMeta) && (
+          {status.meta && (
             <MetaBadge pill bg="warning" text="dark">
               <FontAwesomeIcon icon={faStar} />
-              {isMetameta
+              {status.meta === "metameta"
                 ? t("puzzleList.metameta", "Metameta")
                 : t("puzzleList.meta", "Meta")}
             </MetaBadge>

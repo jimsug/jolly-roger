@@ -242,6 +242,8 @@ interface FrameSpec {
   candidates: PuzzleType[];
   subframes: FrameSpec[];
   puzzles: PuzzleType[];
+  // How many of puzzles, at the start, are the round's metas.
+  metas: number;
 }
 
 function groupRank(group: PuzzleGroup): number {
@@ -277,9 +279,15 @@ function layoutFrame(
 ): { nodes: SeedNode[]; size: Size } {
   const children: SeedNode[] = [];
   let size: Size = { width: MIN_FRAME_WIDTH, height: MIN_FRAME_HEIGHT };
+  const metaRows = Math.ceil(frame.metas / CARDS_PER_ROW);
+  const feederRows = Math.ceil(
+    (frame.puzzles.length - frame.metas) / CARDS_PER_ROW,
+  );
 
   frame.puzzles.forEach((puzzle, i) => {
-    const slot = cardSlot(i);
+    const slot = cardSlot(
+      i < frame.metas ? i : metaRows * CARDS_PER_ROW + i - frame.metas,
+    );
     children.push({
       key: `puzzle:${puzzle._id}`,
       type: "puzzle",
@@ -296,11 +304,7 @@ function layoutFrame(
     });
   });
 
-  let y =
-    frame.puzzles.length > 0
-      ? FRAME_HEADER +
-        Math.ceil(frame.puzzles.length / CARDS_PER_ROW) * (CARD_HEIGHT + GAP)
-      : FRAME_HEADER;
+  let y = FRAME_HEADER + (metaRows + feederRows) * (CARD_HEIGHT + GAP);
   frame.subframes.forEach((sub) => {
     const subPosition = { x: FRAME_PADDING, y };
     const laidOut = layoutFrame(sub, frame.key, subPosition);
@@ -360,6 +364,7 @@ export function seedLayout(
         .map(convert)
         .filter((f): f is FrameSpec => !!f),
       puzzles: [],
+      metas: 0,
     };
   };
   const roots = puzzleGroupsByRelevance(puzzles, tags)
@@ -372,7 +377,8 @@ export function seedLayout(
     if (frame.tag) framesByTag.set(frame.tag._id, frame);
   }
 
-  // Metas first, at the head of their round's frame even without group:X.
+  // Metas first, on their own row (or rows) at the head of their round's
+  // frame even without group:X, so feeder arrows run up to them.
   const assigned = new Set<string>();
   puzzles.forEach((puzzle) => {
     const metaFrame = puzzle.tags
@@ -388,6 +394,7 @@ export function seedLayout(
       .find((f): f is FrameSpec => !!f);
     if (metaFrame) {
       metaFrame.puzzles.push(puzzle);
+      metaFrame.metas += 1;
       assigned.add(puzzle._id);
     }
   });
