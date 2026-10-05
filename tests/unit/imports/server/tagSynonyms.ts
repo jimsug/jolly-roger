@@ -17,6 +17,7 @@ import applyTagSynonyms from "../../../../imports/methods/applyTagSynonyms";
 import configureTagSynonyms from "../../../../imports/methods/configureTagSynonyms";
 import previewTagSynonyms from "../../../../imports/methods/previewTagSynonyms";
 import getOrCreateTagByName from "../../../../imports/server/getOrCreateTagByName";
+import renameOrMergeTag from "../../../../imports/server/renameOrMergeTag";
 import currentTagSynonyms from "../../../../imports/server/tagSynonyms";
 import asUser from "../../../lib/asUser";
 import createTestHunt from "../../../lib/createTestHunt";
@@ -300,6 +301,30 @@ describe("tag synonyms", function () {
         [],
         "nothing is left to change",
       );
+    });
+
+    it("leaves no puzzle on a tag destroyed by merges made at the same time", async function () {
+      const alpha = await insertTag(huntId, "alpha");
+      const beta = await insertTag(huntId, "beta");
+      await insertTag(huntId, "gamma");
+      const puzzles = [
+        await insertPuzzle(huntId, [alpha]),
+        await insertPuzzle(huntId, [beta]),
+      ];
+      // alpha into beta while beta goes into gamma
+      await Promise.all([
+        renameOrMergeTag((await Tags.findOneAsync(alpha))!, "beta", false),
+        renameOrMergeTag((await Tags.findOneAsync(beta))!, "gamma", false),
+      ]);
+
+      const live = new Set(
+        (await Tags.find({ hunt: huntId }).fetchAsync()).map((t) => t._id),
+      );
+      for (const id of puzzles) {
+        const tags = (await Puzzles.findOneAsync(id))?.tags ?? [];
+        assert.isNotEmpty(tags);
+        tags.forEach((tag) => assert.isTrue(live.has(tag), tag));
+      }
     });
 
     it("applies the saved table rather than the built-in one", async function () {

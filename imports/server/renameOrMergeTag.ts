@@ -5,12 +5,32 @@ import Tags from "../lib/models/Tags";
 import { tagNameMatcher, tagSynonymMatcher } from "../lib/tagNames";
 import currentTagSynonyms from "./tagSynonyms";
 import { deferSyncPuzzlesOnBoard } from "./whiteboard";
+import withLock from "./withLock";
 
 // Gives a tag a new name, already normalised and canonical. When another tag
 // in the hunt answers to that name, or to a synonym of it, the tag is folded
 // into that one instead: its puzzles move across, its aliases carry over and
-// it is destroyed. Either way the old name can be kept as an alias.
-export default async function renameOrMergeTag(
+// it is destroyed. Either way the old name can be kept as an alias. Runs
+// under the hunt's hunt:<id>:tags lock, reading the tag again there, so two
+// at once can't move puzzles onto a tag the other is destroying. With
+// onlyIfNamed, a tag that has been renamed since is left alone.
+export default function renameOrMergeTag(
+  tag: TagType,
+  newName: string,
+  keepOldNameAsAlias: boolean,
+  { onlyIfNamed }: { onlyIfNamed?: string } = {},
+): Promise<"renamed" | "merged" | "unchanged"> {
+  return withLock(`hunt:${tag.hunt}:tags`, async () => {
+    const current = await Tags.findOneAsync(tag._id);
+    if (!current) return "unchanged";
+    if (onlyIfNamed !== undefined && current.name !== onlyIfNamed) {
+      return "unchanged";
+    }
+    return renameOrMergeLocked(current, newName, keepOldNameAsAlias);
+  });
+}
+
+async function renameOrMergeLocked(
   tag: TagType,
   newName: string,
   keepOldNameAsAlias: boolean,

@@ -7,6 +7,7 @@ files:
   - imports/client/components/LinkAccountsNudge.tsx
   - imports/client/components/NotificationCenter.tsx
   - imports/client/GoogleScriptInfo.ts
+  - imports/lib/imageUploads.ts
   - imports/lib/models/DocumentActivities.ts
   - imports/lib/models/FolderPermissions.ts
   - imports/lib/unlinkedServices.ts
@@ -23,6 +24,7 @@ files:
   - imports/server/documentCache.ts
   - imports/server/gdrive.ts
   - imports/server/gdriveActivityFetcher.ts
+  - imports/server/getS3UploadParams.ts
   - imports/server/googleClientRefresher.ts
   - imports/server/googleScriptContent.ts
   - imports/server/hooks/DocumentCacheHooks.ts
@@ -50,7 +52,7 @@ files:
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-06T10:00:00Z
+updated: 2026-10-06T14:00:00Z
 ---
 
 # Google Drive Integration
@@ -97,7 +99,9 @@ has ever signed in to and which has no password and no Google account. If that
 account already has a different Google account linked, the sign-in is refused
 with a message saying to sign in with that Google account, or to sign in
 another way and link this one from the profile page, rather than replacing the
-link. An account that has the address unverified and has been signed in to is
+link. Claiming a placeholder this way also clears its enrolment and password
+reset tokens, so the original invite link can't then set a password on it. An
+account that has the address unverified and has been signed in to is
 left alone, since anyone can add any address to their own account from the
 profile page, and so is any account when Google hasn't verified the address.
 In those cases the Google sign-in gets a new account instead, without the
@@ -388,21 +392,36 @@ configured. (For admins, it also includes info about whether or not the script
 is currently up to date, driving a reminder to update). Assuming it is
 configured, the `InsertImage` React component drives inserting images on the
 client side using the `listDocumentSheets` and `insertDocumentImage` Meteor
-methods to front the API methods of our Google Apps Script project.
+methods to front the API methods of our Google Apps Script project. Both
+methods refuse anyone who isn't a member of the document's hunt. For an image
+inserted by URL, `insertDocumentImage` checks its type with a `HEAD` request
+only when the URL is an object in our own image bucket (as an upload's is);
+any other address someone types in is passed to the script as it is, and the
+server never requests it, so the method can't be used to reach addresses only
+the server can.
 
 Finally, even though the [insertImage method][] supports uploading image data
 directly, it has extremely stringent size limits (2 MB and one million pixels)
 which proved prohibitive. So we ultimately introduced the option of hosting
-uploaded image files in S3. AWS credentials must be provided via the environment
-(or some other ambient configuration, such as the EC2 instance metadata
-service), and the bucket to use is configured by `configureS3ImageBucket`.
-Assuming that's configured, the `createDocumentImageUpload` Meteor method
-generates a pre-signed AWS URL that can be used to upload images, which are then
-inserted by URL. The `InsertImage` client-side flow still has fallback logic to
-upload directly in the event that S3 is not configured. Additionally, Google Apps
-Script only supports PNG, JPEG, and GIF images; the `InsertImage` flow automatically
-converts other browser-renderable image formats (such as WebP, AVIF, or SVG)
-to PNG via `<canvas>` prior to upload. The bucket only takes those three types:
+uploaded image files in S3. AWS credentials must be provided via the
+environment (or some other ambient configuration, such as the EC2 instance
+metadata service), and the bucket to use is configured by
+`configureS3ImageBucket`. Assuming that's configured, the
+`createDocumentImageUpload` Meteor method generates a pre-signed AWS URL that
+can be used to upload images, which are then inserted by URL. Every upload
+policy (`getS3UploadParams`, chat's included) takes a file of at most 10 MB
+(`MAX_UPLOAD_BYTES`) and expires five minutes after it's handed out. The
+upload is a `no-cors` POST, which can't see the bucket refuse a file, so
+`InsertImage` (like chat's uploads) refuses one over 10 MB, as it would be
+uploaded after any conversion, before posting it: the file field says "Images
+can be at most 10 MB." The object's key keeps only letters, digits, `.`, `_`
+and `-` from the uploaded file's name (anything else becomes `_`), so a name
+can't change the policy or break the image's address. The `InsertImage`
+client-side flow still has fallback logic to upload directly in the event that
+S3 is not configured. Additionally, Google Apps Script only supports PNG,
+JPEG, and GIF images; the `InsertImage` flow automatically converts other
+browser-renderable image formats (such as WebP, AVIF, or SVG) to PNG via
+`<canvas>` prior to upload. The bucket only takes those three types:
 `createDocumentImageUpload` (and `createChatImageUpload`, for chat images)
 refuses any other `mimeType` through `assertUploadableImageType`, so an SVG,
 which would run any script in it if its bucket address were opened, never gets

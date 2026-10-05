@@ -6,6 +6,7 @@ import Whiteboards from "../../lib/models/Whiteboards";
 import whiteboardPresence from "../../lib/publications/whiteboardPresence";
 import WhiteboardPresence from "../models/WhiteboardPresence";
 import { removePresence } from "../whiteboardLive";
+import { IdPattern } from "../whiteboardShared";
 import definePublication from "./definePublication";
 
 // Everyone else's cursors, drags, strokes, selections, what they're typing
@@ -15,7 +16,7 @@ import definePublication from "./definePublication";
 // user statuses.
 definePublication(whiteboardPresence, {
   validate(arg) {
-    check(arg, { boardId: String });
+    check(arg, { boardId: IdPattern });
     return arg;
   },
 

@@ -5,6 +5,7 @@ import type { ChatImageUploadFailure } from "../../../../imports/client/uploadCh
 import uploadChatImage, {
   chatImageFailureReason,
 } from "../../../../imports/client/uploadChatImage";
+import { MAX_UPLOAD_BYTES } from "../../../../imports/lib/imageUploads";
 import createChatImageUpload from "../../../../imports/methods/createChatImageUpload";
 import {
   brokenFile,
@@ -106,5 +107,29 @@ describe("uploadChatImage", function () {
     assert.match(chatImageFailureReason(failed, i18n.t)!, /can't convert/);
     assert.isTrue(request.notCalled);
     assert.isTrue(fetch.notCalled);
+  });
+
+  it("refuses an image over the upload limit, before asking the server", async function () {
+    const big = new File([new Uint8Array(MAX_UPLOAD_BYTES + 1)], "big.png", {
+      type: "image/png",
+    });
+
+    const outcome = await upload(big);
+
+    assert.deepEqual(outcome, { failed: { stage: "tooBig" } });
+    assert.equal(
+      chatImageFailureReason({ stage: "tooBig" }, i18n.t),
+      "Images can be at most 10 MB.",
+    );
+    assert.isTrue(request.notCalled);
+    assert.isTrue(fetch.notCalled);
+
+    // One at the limit goes up
+    const atLimit = new File([new Uint8Array(MAX_UPLOAD_BYTES)], "ok.png", {
+      type: "image/png",
+    });
+    assert.deepEqual(await upload(atLimit), {
+      uploaded: "https://bucket.example.com/image",
+    });
   });
 });

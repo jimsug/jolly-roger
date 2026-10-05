@@ -6,6 +6,7 @@ import nodeIsText from "../../lib/nodeIsText";
 import editChatMessage from "../../methods/editChatMessage";
 import {
   assertPuzzleLinksInHunt,
+  assertStoredChatImages,
   parseChatMessageContent,
 } from "../chatMessageContent";
 import { assertHuntMember } from "../sendChatMessageInternal";
@@ -64,6 +65,7 @@ defineMethod(editChatMessage, {
       throw new Meteor.Error(400, "A reply can't be edited into a reaction");
     }
     await assertPuzzleLinksInHunt(contentObj, message.hunt);
+    await assertStoredChatImages(contentObj, message.hunt, message.content);
 
     // Edits don't run the chat message hooks: Discord isn't sent the new
     // text (a second post would read as a new message), and dingwords,

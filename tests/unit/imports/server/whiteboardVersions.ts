@@ -24,8 +24,10 @@ import type { WhiteboardVersionType } from "../../../../imports/lib/models/White
 import WhiteboardVersions from "../../../../imports/lib/models/WhiteboardVersions";
 import whiteboardVersions from "../../../../imports/lib/publications/whiteboardVersions";
 import {
+  BIG_READS_PER_MINUTE,
   MAX_BATCH,
   MAX_INK_POINTS_PER_BOARD,
+  MAX_KEPT_EXPORTS,
   MAX_NODES_PER_BOARD,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_INTERVAL_MS,
@@ -54,12 +56,14 @@ import {
   decodeVersion,
   EXPORT_KEPT_MS,
   exportBoard,
+  fetchVersion,
   pruneWhiteboardVersions,
   restoreItems,
   restoreVersion,
   serializeBoard,
 } from "../../../../imports/server/whiteboardVersions";
 import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 import StubSubscription, {
   publishHandler,
@@ -534,6 +538,34 @@ describe("whiteboard versions", function () {
         }
       });
 
+      it("keeps at most eight exports on a server, dropping the one fetched from longest ago", async function () {
+        const reads = boardReads();
+        const conns = Array.from({ length: MAX_KEPT_EXPORTS + 1 }, () =>
+          connection(),
+        );
+        try {
+          const first = await exportBoard(
+            member,
+            boardId,
+            0,
+            undefined,
+            conns[0]!,
+          );
+          for (const conn of conns.slice(1)) {
+            await exportBoard(member, boardId, 0, undefined, conn);
+          }
+          assert.equal(reads(), conns.length);
+          // The newest still has its export
+          await exportBoard(member, boardId, 1, first.hash, conns.at(-1)!);
+          assert.equal(reads(), conns.length);
+          // The first's has gone, so its next chunk reads the board again
+          await exportBoard(member, boardId, 1, first.hash, conns[0]!);
+          assert.equal(reads(), conns.length + 1);
+        } finally {
+          conns.forEach((conn) => conn.close());
+        }
+      });
+
       it("keeps an export for its next chunk until five minutes are up", async function () {
         const reads = boardReads();
         const conn = connection();
@@ -579,6 +611,50 @@ describe("whiteboard versions", function () {
           conn.close();
         }
       });
+    });
+
+    it("lets each person fetch 60 chunks a minute, versions and exports together, across connections", async function () {
+      const { nodes, edges } = await board();
+      const { versionId } = await storeVersion(nodes, edges);
+      const clock = sinon.useFakeTimers({
+        now: Date.now(),
+        toFake: ["Date"],
+      });
+      try {
+        for (let i = 0; i < BIG_READS_PER_MINUTE; i++) {
+          if (i % 2 === 0) {
+            await fetchVersion(member, boardId, versionId, 0);
+          } else {
+            await exportBoard(member, boardId, 0, undefined, null);
+          }
+        }
+        await assert.isRejected(
+          fetchVersion(member, boardId, versionId, 0),
+          /try again in a minute/,
+        );
+        await assert.isRejected(exportChunk(member), /try again in a minute/);
+        await assert.isRejected(
+          asUser(member, () =>
+            fetchWhiteboardVersion.callPromise({
+              boardId,
+              versionId,
+              index: 0,
+            }),
+          ),
+          /try again in a minute/,
+        );
+        // Someone else isn't held back
+        await fetchVersion(other, boardId, versionId, 0);
+        // A second later there's one more
+        clock.tick(1000);
+        await fetchVersion(member, boardId, versionId, 0);
+        await assert.isRejected(
+          fetchVersion(member, boardId, versionId, 0),
+          /try again in a minute/,
+        );
+      } finally {
+        clock.restore();
+      }
     });
 
     it("works on an archived hunt, and with history off", async function () {
@@ -937,6 +1013,148 @@ describe("whiteboard versions", function () {
         y: 1020,
         detachedFrom: added,
       });
+    });
+
+    it("puts back nodes and lines whose ids have since been taken on another board, under new ones", async function () {
+      const a = await sticky(member, { x: 0, y: 0 });
+      const b = await sticky(member, { x: 400, y: 0 });
+      const line = Random.id();
+      await upsertEdges(member, boardId, [{ _id: line, source: a, target: b }]);
+      await upsertNodes(member, boardId, [{ _id: a, text: "taken" }]);
+      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+      await asUser(member, () =>
+        sendChatMessage.callPromise({
+          puzzleId,
+          content: JSON.stringify(contentFromMessage("on the taken sticky")),
+          comment: { node: a, x: 10, y: 20 },
+        }),
+      );
+      await nextWindow();
+      await sticky(member, { x: 800, y: 0 });
+      const version = await newest();
+      await deleteNodes(member, boardId, [a]);
+      assert.notOk(await WhiteboardEdges.findOneAsync(line));
+
+      // A member of another hunt reuses both ids there
+      const otherHunt = await createTestHunt(operator);
+      await MeteorUsers.updateAsync(operator, {
+        $addToSet: { hunts: otherHunt },
+        $set: { [`roles.${otherHunt}`]: ["operator"] },
+      });
+      const otherBoard = await ensureWhiteboard(operator, otherHunt);
+      const end = Random.id();
+      await upsertNodes(operator, otherBoard, [
+        { _id: a, type: "sticky", position: { x: 0, y: 0 } },
+        { _id: end, type: "sticky", position: { x: 400, y: 0 } },
+      ]);
+      await upsertEdges(operator, otherBoard, [
+        { _id: line, source: a, target: end },
+      ]);
+
+      await restoreVersion(member, boardId, version._id);
+
+      const restored = (await WhiteboardNodes.findOneAsync({
+        board: boardId,
+        text: "taken",
+      }))!;
+      assert.ok(restored);
+      assert.notEqual(restored._id, a);
+      const lines = await WhiteboardEdges.find({
+        board: boardId,
+        target: b,
+      }).fetchAsync();
+      assert.lengthOf(lines, 1);
+      assert.equal(lines[0]!.source, restored._id);
+      assert.notEqual(lines[0]!._id, line);
+      assert.equal(
+        (
+          await ChatMessages.findOneAsync({
+            "content.children.text": "on the taken sticky",
+          })
+        )?.comment?.node,
+        restored._id,
+      );
+      // The other board's are left alone
+      assert.equal((await WhiteboardNodes.findOneAsync(a))?.board, otherBoard);
+      assert.equal(
+        (await WhiteboardEdges.findOneAsync(line))?.board,
+        otherBoard,
+      );
+      // and so it can be restored again, when the node keeps its new id
+      // and its comment
+      await restoreVersion(other, boardId, version._id);
+      const again = await WhiteboardNodes.find({
+        board: boardId,
+        text: "taken",
+      }).fetchAsync();
+      assert.deepEqual(
+        again.map((n) => n._id),
+        [restored._id],
+      );
+      assert.equal(
+        (
+          await ChatMessages.findOneAsync({
+            "content.children.text": "on the taken sticky",
+          })
+        )?.comment?.node,
+        restored._id,
+      );
+    });
+
+    it("finishes a restore that fails part-way through writing", async function () {
+      const a = await sticky(member, { x: 0, y: 0 });
+      const b = await sticky(member, { x: 400, y: 0 });
+      await upsertEdges(member, boardId, [
+        { _id: Random.id(), source: a, target: b },
+      ]);
+      await nextWindow();
+      await sticky(member, { x: 800, y: 0 });
+      const version = await newest();
+      const target = await payloadOf(version);
+      await deleteNodes(member, boardId, [a, b]);
+
+      const insertEdges = sinon.stub(WhiteboardEdges, "insertManyAsync");
+      insertEdges.callThrough();
+      insertEdges.onFirstCall().rejects(new Error("connection reset"));
+      try {
+        await restoreVersion(member, boardId, version._id);
+      } finally {
+        insertEdges.restore();
+      }
+
+      const live = await board();
+      assert.sameMembers(
+        live.nodes.map((n) => n._id),
+        target.nodes.map((n) => n._id),
+      );
+      assert.sameMembers(
+        live.edges.map((e) => e._id),
+        target.edges.map((e) => e._id),
+      );
+    });
+
+    it("records one version for a burst of resets and restores by one person", async function () {
+      await sticky(member, { x: 0, y: 0 });
+      await nextWindow();
+      await sticky(member, { x: 400, y: 0 });
+      const version = await newest();
+      await restoreVersion(member, boardId, version._id);
+      const recorded = (await versions()).length;
+      const size = (await versions()).reduce((sum, v) => sum + v.size, 0);
+
+      for (let i = 0; i < 3; i++) {
+        await restoreVersion(member, boardId, version._id);
+      }
+      await resetLayout(member, boardId, false);
+      assert.lengthOf(await versions(), recorded);
+      assert.equal(
+        (await versions()).reduce((sum, v) => sum + v.size, 0),
+        size,
+      );
+
+      // Someone else's records the board as they found it
+      await restoreVersion(other, boardId, version._id);
+      assert.lengthOf(await versions(), recorded + 1);
     });
 
     it("gives what it puts back a fresh updatedAt", async function () {

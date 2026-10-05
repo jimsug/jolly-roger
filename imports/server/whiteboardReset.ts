@@ -187,7 +187,7 @@ export async function resetLayout(
     }
     await renew();
 
-    await syncAutoEdges(board, puzzles, tags);
+    await syncAutoEdges(board, puzzles, tags, renew);
     // Arrows to or from a deleted puzzle stay hidden, whether the delete
     // or a person hid them, until it comes back.
     if (putBack) {

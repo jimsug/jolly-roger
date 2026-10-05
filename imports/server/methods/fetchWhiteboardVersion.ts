@@ -13,11 +13,10 @@ defineMethod(fetchWhiteboardVersion, {
     return arg;
   },
 
+  // Not unblocked: a connection's chunk fetches run one after another, so
+  // it can't have many multi-megabyte chunks in memory at once.
   run({ boardId, versionId, index }) {
     check(this.userId, String);
-    // A chunk can be several megabytes, which shouldn't hold up the caller's
-    // other calls.
-    this.unblock();
     return fetchVersion(this.userId, boardId, versionId, index);
   },
 });

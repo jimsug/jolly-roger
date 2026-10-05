@@ -64,6 +64,7 @@ files:
   - imports/client/hooks/useWhiteboardUndo.ts
   - imports/client/uploadChatImage.ts
   - imports/lib/chatMessagePath.ts
+  - imports/lib/imageUploads.ts
   - imports/lib/models/Puzzles.ts
   - imports/lib/models/WhiteboardEdges.ts
   - imports/lib/models/WhiteboardNodes.ts
@@ -107,9 +108,12 @@ files:
   - imports/methods/upsertWhiteboardEdges.ts
   - imports/methods/upsertWhiteboardNodes.ts
   - imports/server/boardCommentAudience.ts
+  - imports/server/chatMessageContent.ts
   - imports/server/daemons/whiteboardVersions.ts
+  - imports/server/getOrCreateTagByName.ts
   - imports/server/getS3UploadParams.ts
   - imports/server/hooks/ChatNotificationHooks.ts
+  - imports/server/jobs/applyTagSynonyms.ts
   - imports/server/methods/addPuzzleAnswer.ts
   - imports/server/methods/deleteChatMessage.ts
   - imports/server/methods/destroyPuzzle.ts
@@ -120,8 +124,10 @@ files:
   - imports/server/methods/resetWhiteboardLayout.ts
   - imports/server/methods/restoreWhiteboardItems.ts
   - imports/server/methods/restoreWhiteboardVersion.ts
+  - imports/server/methods/sendChatMessage.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
   - imports/server/methods/setWhiteboardLayoutLocked.ts
+  - imports/server/methods/setWhiteboardLive.ts
   - imports/server/methods/undestroyPuzzle.ts
   - imports/server/methods/updatePuzzle.ts
   - imports/server/models/WhiteboardPresence.ts
@@ -130,6 +136,9 @@ files:
   - imports/server/publications/whiteboardInk.ts
   - imports/server/publications/whiteboardPresence.ts
   - imports/server/publications/whiteboardVersions.ts
+  - imports/server/rateLimits.ts
+  - imports/server/renameOrMergeTag.ts
+  - imports/server/sendChatMessageInternal.ts
   - imports/server/tagSynonyms.ts
   - imports/server/transitionGuess.ts
   - imports/server/whiteboard.ts
@@ -160,6 +169,18 @@ puzzle, and move a card when its tags change, unless someone has moved that
 card by hand (Place by tags and Reset layout hand it back to placement).
 Placement takes the `whiteboard:<boardId>` lock, so a burst of new puzzles
 can't land in the same slot.
+
+Placement keeps to the board's caps (see Data model). It doesn't add a
+round's frame to a board that already has `MAX_NODES_PER_BOARD` nodes: the
+puzzle's card goes at the top level instead, and the server logs a warning.
+A meta gets feeder arrows from at most `MAX_FEEDERS_PER_META` (200) feeders,
+those whose puzzles were created first, and a sync draws no more arrows once
+the board has `MAX_EDGES_PER_BOARD` lines; it logs a warning for either.
+Seeding a new board keeps to both as well. A sync drawing a lot of arrows
+renews the board's lock every 100, so another server can't take the lock
+while it's still drawing. A deferred sync that fails (another server taking
+the lock, say) is logged and goes round once more; if that fails too, it's
+logged again and dropped.
 
 ### Deleted, replaced and restored puzzles
 
@@ -361,13 +382,30 @@ Anyone who can no longer comment (the hunt archived, or the hunt left) has
 their view and who they follow cleared in the same pass.
 
 The method unblocks, so updates from one connection can run side by side.
-Each connection numbers its updates per board, and one that's overtaken
-while it looks things up isn't written over the newer one.
+Each connection numbers its updates, and remembers per board the latest one
+written, so one that's overtaken while it looks things up isn't written over
+the newer one. An update whose access was dropped while it looked things up
+(a demotion, say) writes only its cursor, with its drags, strokes,
+selection, editing, view and who it follows stored as null, rather than what
+was allowed when it started.
+
+The board id must be a document id (the method's `check` and `setLive`
+both refuse anything else), and a connection keeps nothing for a board until
+the caller has been let onto it: what it remembers about a board (access,
+the latest update written, how often its presence subscription stopped) is
+only stored after the access check, for at most 16 boards, forgetting the
+one it used longest ago. A board that's removed (a purged hunt's) takes its
+presence rows and what every connection remembers about it with it, and
+purging a hunt removes presence after the boards, so an update let on just
+before can't put a row back.
 
 Each connection has a token bucket for its live updates, across all boards:
 `LIVE_UPDATES_PER_SECOND` (20) a second, in bursts of up to
-`LIVE_UPDATE_BURST` (40). The client sends far fewer than that. An update
-over the limit is dropped before anything else is done with it, with no
+`LIVE_UPDATE_BURST` (40). Each person has one too, across all their
+connections: `LIVE_USER_UPDATES_PER_SECOND` (60) a second, in bursts of up
+to `LIVE_USER_UPDATE_BURST` (120), room for a few busy tabs. An update takes
+a token from both. The client sends far fewer than that. An update over
+either limit is dropped before anything else is done with it, with no
 error back, since the next one comes a moment later; the server logs that
 it's dropping updates at debug level, once a minute at most per
 connection.
@@ -715,6 +753,24 @@ uploaded and the composer says "Images can't be added here: this server has
 nowhere to store them." in plain words, rather than the setup message chat
 shows admins.
 
+An image can be at most 10 MB (`MAX_UPLOAD_BYTES` in
+`imports/lib/imageUploads.ts`) as it would be uploaded, after any change to
+a PNG. `uploadChatImage` refuses a bigger one before asking the server for
+an upload, and chat, the composer and the board each show "Images can be at
+most 10 MB." their own way. The upload the server hands out refuses anything
+bigger as well, but the POST is `no-cors`, so the browser can't see that
+refusal: without the check, the message would be sent with an image that
+isn't there.
+
+The server takes an image in a message or comment only from this hunt's
+uploads in the image bucket, named as chat's own are (`assertStoredChatImages`
+in `imports/server/chatMessageContent.ts`, through the board's
+`assertStoredImages`; see Images), so a message can't have its readers'
+browsers fetch from anywhere else, or show another hunt's image that goes
+blank when that hunt is purged; anything else is refused with "That image
+isn't one we stored". An edit can keep the images the message already has,
+wherever they are, so an older message's image doesn't stop it being edited.
+
 ### Highlights
 
 On the board, the chat's Highlights panel has a Comments tab listing the
@@ -999,8 +1055,11 @@ app shows the JSON. A paste that starts `jolly-roger-whiteboard/` but isn't
 a version 1 copy that holds together (every parent a frame in the copy, no
 loops, every line between two nodes in it, an image node with its image and
 size and nothing else with an image, a shape node with a known shape and a
-size and nothing else with a shape, values within the server's limits) is
-refused. `copySelection`, `readClip`, `clipFromText` and
+size and nothing else with a shape, values within the server's limits, ids
+of at most 64 characters and image addresses of at most 2,048) is refused,
+as is one longer than `MAX_CLIP_LENGTH` (32 MB of text, about what a whole
+board at its caps copies to), which isn't even parsed, so a planted one
+can't hang the tab. `copySelection`, `readClip`, `clipFromText` and
 `pasteClip` in `imports/lib/whiteboard/clipboard.ts` do the work.
 
 ### Images
@@ -1022,21 +1081,22 @@ can edit:
   such as History or Not on the board, adds nothing.
 
 Several images at once go 24 units right and down from each other. Each is
-read for its size in pixels first; a file the browser can't show as an
-image says "That file isn't an image the board can show" in the usual
-"Couldn't save" alert. While it uploads a dashed grey placeholder with a
-spinner sits where it will land, at its own size in pixels but no wider than
-480 units, keeping its shape. The placeholder is only on this screen and
-isn't saved. The upload goes through `createChatImageUpload` for the board's
-backing puzzle and a POST to the bucket (`uploadChatImage` in
+read for its size in pixels first; a file the browser can't show as an image
+says "That file isn't an image the board can show" in the usual "Couldn't
+save" alert. While it uploads a dashed grey placeholder with a spinner sits
+where it will land, at its own size in pixels but no wider than 480 units,
+keeping its shape. The placeholder is only on this screen and isn't saved. The
+upload goes through `createChatImageUpload` for the board's backing puzzle and
+a POST to the bucket (`uploadChatImage` in
 `imports/client/uploadChatImage.ts`, which turns anything but a PNG, JPEG or
 GIF into a PNG first, as for comments); once it's done, the node is saved
-through `upsertNodes` in the frame under its middle, as one step for Undo.
-A failed upload takes the placeholder away and shows why in the "Couldn't
-save" alert, and nothing is saved. Images already on the board (as this
-client has them) and those still uploading count towards the board's cap
-on images, and files past it aren't uploaded at all: the alert says "This
-board can't take any more images", as the server would.
+through `upsertNodes` in the frame under its middle, as one step for Undo. A
+failed upload takes the placeholder away and shows why in the "Couldn't save"
+alert, and nothing is saved; that includes a file over 10 MB, which is refused
+before anything is uploaded (see Reactions and images). Images already on the
+board (as this client has them) and those still uploading count towards the
+board's cap on images, and files past it aren't uploaded at all: the alert
+says "This board can't take any more images", as the server would.
 
 When the server has no image bucket the Image tool is disabled, titled
 "Images can't be added here: this server has nowhere to store them.", and a
@@ -1051,23 +1111,24 @@ colour to pick. Zoomed right out it's a grey box with a picture icon. Copy,
 paste and duplicate carry images (see Copy, paste and duplicate), and Undo
 puts a deleted one back with the same upload.
 
-On the server, `upsertNodes` takes a new image node only with an `image`
-of `{ url, width, height }` (its size in pixels) and a width and height for
-the node. The address must be an object in the configured bucket named the
-way `createChatImageUpload` names chat images, by a hunt's id, a puzzle's id
-and an upload's id (`https://s3.<region>.amazonaws.com/<bucket>/<hunt>/<puzzle>/<upload>`).
-The hunt must be the board's own: purging a hunt removes everything under
-its id, so an image from another hunt could go blank on this board when
-that hunt is purged. An image from another hunt, anything else (a `data:`
-address included), or any image at all when there's no bucket, is refused
-with "That image isn't one we stored". Once the node
-is made its `image` never changes: an update that sends a different one is
-refused with "An image can't be changed", and one sent on any other kind of
-node with "Only image nodes have an image". A board takes at most
-`MAX_IMAGES_PER_BOARD` (100) images, which count towards its node cap too.
-Deleting an image node leaves the file in the bucket, as deleting a chat
-message does, and purging the hunt removes it with the rest of the hunt's
-images.
+On the server, `upsertNodes` takes a new image node only with an `image` of
+`{ url, width, height }` (its size in pixels) and a width and height for the
+node. The address must be an object in the configured bucket named the way
+`createChatImageUpload` names chat images, by a hunt's id, a puzzle's id and
+an upload's id
+(`https://s3.<region>.amazonaws.com/<bucket>/<hunt>/<puzzle>/<upload>`;
+`assertStoredImages` in `imports/server/getS3UploadParams.ts`, which chat and
+comments use too). The hunt must be the board's own: purging a hunt removes
+everything under its id, so an image from another hunt could go blank on this
+board when that hunt is purged. An image from another hunt, anything else (a
+`data:` address included), or any image at all when there's no bucket, is
+refused with "That image isn't one we stored". Once the node is made its
+`image` never changes: an update that sends a different one is refused with
+"An image can't be changed", and one sent on any other kind of node with "Only
+image nodes have an image". A board takes at most `MAX_IMAGES_PER_BOARD` (100)
+images, which count towards its node cap too. Deleting an image node leaves
+the file in the bucket, as deleting a chat message does, and purging the hunt
+removes it with the rest of the hunt's images.
 
 ### Shapes
 
@@ -1386,8 +1447,16 @@ unless the same input unlocks it; folding a locked frame is still allowed,
 since it changes no geometry. One move is allowed: resizing a frame from its
 top or left edge moves its origin, and the client keeps the frame's contents
 still by moving each child the other way, so a `position` alone on a locked
-node passes when its frame's new `position` is in the same batch and the
-node stays where it was on the board (`staysPutInMovedFrame`).
+node passes when the same batch moves and resizes its frame and the node
+stays where it was on the board, measured against where the whole batch
+leaves the frame (`staysPutInMovedFrame`). The frame's change must be a
+real resize from the top or left: an origin that moves keeps the opposite
+edge where it was. Listing the frame again later in the batch, moving it
+without resizing it, or moving and resizing it at once doesn't let the node
+through. So a lock keeps a node's place on the board through a resize, not
+its place in the frame: shrinking a frame from the left, moving it back and
+widening it from the right, each an ordinary edit, leaves a locked node
+further left in it.
 `deleteNodes` refuses a locked node, or an ink stroke with any locked
 segment, and `upsertEdges` refuses moving a line's end off a locked node,
 though the line can be restyled or relabelled and new lines can be drawn to
@@ -1474,7 +1543,11 @@ offline, which is announced as usual.
 Delete on a thread's panel asks first, in a dialog that says the comment and
 every reply to it go and that it can't be undone. Cancel leaves the thread as
 it was. Who may delete is unchanged: the author until someone else replies,
-and operators at any time.
+and operators at any time. The check for replies and the delete run under
+the thread's `chat-message:<id>:thread` lock, which a reply also takes to be
+written, checking the comment is still there, so a reply sent while the
+author deletes is either seen by the check or refused, never deleted with
+the thread unseen.
 
 ### Editing and deleting from chat
 
@@ -1544,8 +1617,15 @@ version lists who edited after it and when each of them started:
 
 Only ordinary edits made since the last reset or restore count for 1 to 3, so
 the first edit after one always records the board it left. A reset or restore
-always records the board it's about to change. Someone editing steadily gets
-a version every 10 minutes, and a burst of edits is one version. The fast
+records the board it's about to change, unless the newest version is a reset
+or restore by the same person from under a minute ago, which it joins
+instead: someone resetting or restoring over and over, with nothing else in
+between, stores at most one version a minute. An edit in between records a
+version of its own (the first after a reset or restore always does), and the
+reset or restore after it records another, so nothing limits a loop of
+restore, edit, restore beyond the history's size cap. Someone editing
+steadily gets a version every 10 minutes, and a burst of edits is one
+version. The fast
 path (rule 1) is one indexed read with no lock, for a batch that only
 changes what's there; the rest takes the board's
 `whiteboard:<boardId>` lock, which placement also takes, so a version never
@@ -1567,7 +1647,8 @@ ends with "Older history was cleared to save space". With history turned off
 it says so instead.
 
 Picking a row previews it. The client fetches the version's chunks with
-`Whiteboards.methods.fetchVersion`, one call per chunk, joins them, unpacks them
+`Whiteboards.methods.fetchVersion`, one call per chunk (not unblocked, so a
+connection's fetches run one after another), joins them, unpacks them
 with `DecompressionStream("gzip")` and hands the nodes and lines to
 `useWhiteboardSync` in place of the live board. While previewing, the board
 can't be edited or commented on, comment pins, cursors and other people's drags
@@ -1618,8 +1699,23 @@ restore that would take the board past its node or line limit is refused
 is past the ink budget and more than the board has now ("This version has
 more drawing on it than a board can hold"; see Ink).
 
+Node and line ids are chosen by clients, and a deleted node's id is free
+again, so an id the restore would insert may have been taken by a document
+on another board since. Each one that has is inserted under another id
+instead, with the plan's references to it (parents, line ends, changes)
+renamed to match, and comments that came off the old id still go back on
+it. The new id is worked out from the board's id and the old one, trying
+again a few times if that's taken too before falling back to a random id,
+and one on this board that the restore removes counts as free. So
+restoring the same version again, or finishing a restore that failed
+part-way, gives the node the same id, and its comments come back to it.
+The same goes for restoring one item, though there nothing is removed, so a
+node already back under its new id gets another.
+
 Only after that does it record the board as it is (a version of kind
-`restore`), so a refused restore records nothing. Then:
+`restore`), or join the same person's reset or restore from under a minute
+ago instead (see What a version is), so a refused restore records nothing.
+Then:
 
 - Cards for puzzles the version doesn't have stay, moved to the top level at
   the same place on screen and no longer marked as moved by hand. After the
@@ -1637,13 +1733,20 @@ Only after that does it record the board as it is (a version of kind
   on it.
 - The board's `lastRewrittenAt` is set.
 
-Documents a restore changes or puts back draw on top of anything else at
-their level, since their `updatedAt` is new: documents it inserts again get
-the time of the restore rather than the one stored in the version. Edits that
-land while a restore runs may survive on top or be overwritten. A restore
-that loses the board's lock part-way stops and says so (see "When the board
-is busy" below). Pins that came off a node before this feature have no
-`detachedFrom` and stay free.
+Documents a restore changes or puts back draw on top of anything else at their
+level, since their `updatedAt` is new: documents it inserts again get the time
+of the restore rather than the one stored in the version. Edits that land
+while a restore runs may survive on top or be overwritten. A restore that
+loses the board's lock part-way stops and says so (see "When the board is
+busy" below). Every step of the write can be run again, so a restore that
+fails part-way for any other reason (a database error, say) reads the board as
+it was left, plans again from there to the same version, and writes that,
+putting back comments the first attempt would have, so the board isn't left
+half restored. Only if that fails too is the error returned. The version this
+restore recorded still holds the board as it was just before it; when it
+joined the same person's reset or restore from under a minute ago instead, the
+history holds only the board from before the first of those. Pins that came
+off a node before this feature have no `detachedFrom` and stay free.
 
 ### Restoring one item
 
@@ -1707,7 +1810,8 @@ board's history under its lock (`pruneWhiteboardVersions` in
 everything from the last two hours stays; before that, the first version in
 each UTC hour stays, as does every reset and restore; and the newest versions
 are kept up to 256 MiB of compressed payload per board
-(`MAX_VERSION_BYTES_PER_BOARD`), never dropping the newest. Once the hunt is
+(`MAX_VERSION_BYTES_PER_BOARD`), never dropping the newest. Resets and
+restores count towards that cap like any other version. Once the hunt is
 archived, or the board has gone 14 days without a new version, its history
 thins to the newest 10 versions plus every reset and restore. Anything pruned
 sets the board's `versionsPrunedBefore`. A recording that takes the board
@@ -1750,34 +1854,39 @@ can't fetch is left blank. The file is called
 of characters a file name can't hold in the hunt's name replaced by a hyphen
 (`exportFileName`), and "hunt" for a name with nothing else left.
 
-**Data (JSON)** is the board in a version's payload format, `{ format: 1,
-nodes, edges }` as EJSON, with every node and line as stored: ink with its
-points (even while this viewer hides ink), hidden cards and frames, and
-fields like `createdBy` and `contributors`. It's always the live board, even
-while a version is previewed. It comes from `Whiteboards.methods.exportBoard`
-(`{ boardId, index, hash? }`, in `imports/server/whiteboardVersions.ts`),
-which needs only membership of the hunt (archived hunts included) and the
-whiteboard to be on; history being off doesn't matter. Like `fetchVersion`
-it returns the gzipped payload in chunks of at most 4 MiB, one per call, so
-a big board doesn't go through one message, with the chunk count and the
-payload's hash. Chunk 0 reads and compresses the board; a board of more than
-one chunk is then kept on that server for the connection, which asks for
-the rest with chunk 0's hash and gets them from the same compression. It's
-dropped once its last chunk is sent, when the connection starts another
-export, when the connection closes, or five minutes after a chunk of it was
-last fetched (`EXPORT_KEPT_MS`), so a download abandoned part-way doesn't
-hold the compressed board in memory for as long as the tab stays open. That
-last is checked whenever anyone on that server asks for a chunk, which
-drops every stale export, rather than on a timer. If the server no longer
-has it (the connection dropped and came back, or it expired), the board is
-read again, and a hash that differs from chunk 0's means the board changed
-in between: the client then
-says "Couldn't download the board: it changed while it was downloading. Try
-again." The method isn't unblocked, so one connection's export calls run
-one after another. The client joins the chunks, unpacks them with
-`DecompressionStream` and saves `<hunt name>-whiteboard-<yyyy-mm-dd>.json`.
-A browser without `DecompressionStream` says so instead. A typical board's
-file is a megabyte or two; the largest a board can hold is about 50 MB.
+**Data (JSON)** is the board in a version's payload format,
+`{ format: 1, nodes, edges }` as EJSON, with every node and line as stored:
+ink with its points (even while this viewer hides ink), hidden cards and
+frames, and fields like `createdBy` and `contributors`. It's always the live
+board, even while a version is previewed. It comes from
+`Whiteboards.methods.exportBoard` (`{ boardId, index, hash? }`, in
+`imports/server/whiteboardVersions.ts`), which needs only membership of the
+hunt (archived hunts included) and the whiteboard to be on; history being off
+doesn't matter. Like `fetchVersion` it returns the gzipped payload in chunks
+of at most 4 MiB, one per call, so a big board doesn't go through one message,
+with the chunk count and the payload's hash. Chunk 0 reads and compresses the
+board; a board of more than one chunk is then kept on that server for the
+connection, which asks for the rest with chunk 0's hash and gets them from the
+same compression. It's dropped once its last chunk is sent, when the
+connection starts another export, when the connection closes, five minutes
+after a chunk of it was last fetched (`EXPORT_KEPT_MS`), or when the server is
+keeping `MAX_KEPT_EXPORTS` (8) others fetched from more recently, so a
+download abandoned part-way doesn't hold the compressed board in memory for as
+long as the tab stays open. The five minutes are checked whenever anyone on
+that server asks for a chunk, which drops every stale export, rather than on a
+timer. If the server no longer has it (the connection dropped and came back,
+or it expired), the board is read again, and a hash that differs from chunk
+0's means the board changed in between: the client then says "Couldn't
+download the board: it changed while it was downloading. Try again." The
+method isn't unblocked, so one connection's export calls run one after
+another. Each person can fetch `BIG_READS_PER_MINUTE` (60) chunks a minute, of
+exports and versions together and across all their connections, refilled
+evenly over the minute; past that a call is refused with a 429, "That's a lot
+of downloading; try again in a minute". The client joins the chunks, unpacks
+them with `DecompressionStream` and saves
+`<hunt name>-whiteboard-<yyyy-mm-dd>.json`. A browser without
+`DecompressionStream` says so instead. A typical board's file is a megabyte or
+two; the largest a board can hold is about 50 MB.
 
 ## Reset layout and Place by tags
 
@@ -1988,8 +2097,9 @@ tag vocabulary in `imports/lib/tagNames.ts` (`tagKind`), through the server-wide
 synonym table admins edit on the Setup page (by default `loc:` and `location:`
 are synonyms for `where:` and `stuck` for `is:stuck`); the whiteboard's layout
 finds metas with its `isMetaForTag` too. The table can't rewrite into or out of
-`group:`, `meta-for:` or `is:` (`tagSynonymRuleProblems` calls that
-`structural`), apart from the built-in `stuck` rule, so the tags that organise a
+`group:`, `meta-for:` or `is:`, whatever the case, since lookups ignore it
+(`tagSynonymRuleProblems` calls that `structural`), apart from the built-in
+`stuck` rule, so the tags that organise a
 hunt keep the names they're stored under: a round's state, for one, reads
 `group:` and `meta-for:` tags as written. Without that, a tag stored before a
 rule existed would mean one thing there and another through the table. "Use the
@@ -2000,7 +2110,12 @@ until the server answers, and a refusal shows in it. Saving an empty table turns
 synonyms off. The helpers take the table as an argument: components get it from
 `useTagSynonyms`, and server code (placing cards, a reset's seed layout) from
 `currentTagSynonyms` in `imports/server/tagSynonyms.ts`, which follows the
-setting.
+setting. Renaming or merging a tag, from the tag manager or the job that
+applies the table, runs under the hunt's `hunt:<id>:tags` lock
+(`renameOrMergeTag`), reading the tag again there, so two merges at once
+can't leave a puzzle on a tag the other destroyed. A `group:` tag is only
+made if its `meta-for:` twin, a few characters longer, fits under
+`MAX_TAG_NAME_LENGTH` too.
 
 ### Feeders
 
@@ -2355,11 +2470,15 @@ was busy; try again", with nothing written.
 | `MAX_LIVE_DRAG_NODES` | 50 | nodes in one live drag |
 | `MAX_LIVE_SELECTION` | 50 | nodes in a live selection |
 | `LIVE_UPDATES_PER_SECOND`, `LIVE_UPDATE_BURST` | 20, 40 | live updates per connection (see The live channel) |
+| `LIVE_USER_UPDATES_PER_SECOND`, `LIVE_USER_UPDATE_BURST` | 60, 120 | live updates per person, across their connections |
+| `MAX_FEEDERS_PER_META` | 200 | feeders a meta gets arrows from (see Hunt Whiteboard) |
 | `MAX_FRAME_DEPTH` | 64 | frames inside frames |
 | `MAX_WHITEBOARD_EDITORS` | 500 | people the edit policy can name |
 
 History's intervals and caps are in the same file (see Retention and
-storage).
+storage), as are `BIG_READS_PER_MINUTE` (60 chunks of versions and exports a
+minute per person) and `MAX_KEPT_EXPORTS` (8 part-fetched exports per
+server; see Export).
 
 A hunt-sized board is tested by `tests/acceptance/whiteboardScale.tsx`: a
 test-only method (`test.methods.whiteboard.seedHuntSizedBoard`, refused
@@ -2373,9 +2492,8 @@ ink there. It logs all three, and fails over 8, 8 and 2 seconds
 respectively, ceilings well above what it takes so only a real slowdown
 fails it.
 
-Purging a hunt removes all six collections, and merging users carries
-`createdBy`, `contributors`, `lockedBy`, the `editors` list and versions'
-`users` over to the merged account and drops the source account's
+Purging a hunt removes all six collections (presence last), and merging users
+carries `createdBy`, `contributors`, `lockedBy`, the `editors` list and
+versions' `users` over to the merged account and drops the source account's
 presence, and clears `followedUser` wherever someone was following it. User
-ids inside a version's payload aren't rewritten; a restore maps them
-instead.
+ids inside a version's payload aren't rewritten; a restore maps them instead.

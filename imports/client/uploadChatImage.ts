@@ -1,5 +1,6 @@
 import type { Meteor } from "meteor/meteor";
 import type { TFunction } from "i18next";
+import { MAX_UPLOAD_BYTES } from "../lib/imageUploads";
 import createChatImageUpload from "../methods/createChatImageUpload";
 import {
   convertImageToPng,
@@ -7,10 +8,12 @@ import {
 } from "./components/InsertImage";
 
 // Why an image didn't make it: the browser couldn't turn it into a PNG, the
-// server wouldn't hand out an upload (with no error at all when it has
-// nowhere to put images), or the upload itself failed.
+// file (as it would be uploaded) is over MAX_UPLOAD_BYTES, the server
+// wouldn't hand out an upload (with no error at all when it has nowhere to
+// put images), or the upload itself failed.
 export type ChatImageUploadFailure =
   | { stage: "convert"; error: unknown }
+  | { stage: "tooBig" }
   | { stage: "request"; error: Meteor.Error | undefined }
   | { stage: "upload"; error: unknown };
 
@@ -25,6 +28,11 @@ export function chatImageFailureReason(
       "chat.imageUpload.unconvertible",
       "This browser can't convert that image to PNG. Use a PNG, JPEG or GIF instead.",
     );
+  }
+  if (failure.stage === "tooBig") {
+    return t("chat.imageUpload.tooBig", "Images can be at most {{size}} MB.", {
+      size: MAX_UPLOAD_BYTES / (1024 * 1024),
+    });
   }
   if (failure.stage === "request") {
     return failure.error
@@ -65,6 +73,12 @@ function requestAndUpload(
   onUploaded: (url: string) => void,
   onFailed: (failure: ChatImageUploadFailure) => void,
 ) {
+  // The bucket would refuse it, and the no-cors POST below can't see a
+  // refusal, so the image would be saved pointing at nothing.
+  if (file.size > MAX_UPLOAD_BYTES) {
+    onFailed({ stage: "tooBig" });
+    return;
+  }
   createChatImageUpload.call(
     { puzzleId, mimeType: file.type },
     (error, upload) => {

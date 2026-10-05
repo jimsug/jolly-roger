@@ -98,6 +98,28 @@ describe("deleted puzzles in the puzzle publications", function () {
     });
   });
 
+  describe("chatMessagesForFirehose", function () {
+    const forFirehose = async (userId: string) => {
+      const sub = new StubSubscription(userId);
+      try {
+        const [, puzzles] = (await publishHandler(
+          "ChatMessages.publications.forFirehose",
+        ).call(sub, { huntId })) as PuzzleCursor[];
+        return (await puzzles!.fetchAsync()).map((p) => p._id);
+      } finally {
+        sub.stop();
+      }
+    };
+
+    it("sends deleted puzzles to a global admin", async function () {
+      assert.sameMembers(await forFirehose(adminId), [liveId, deletedId]);
+    });
+
+    it("leaves deleted puzzles out for everyone else", async function () {
+      assert.sameMembers(await forFirehose(operatorId), [liveId]);
+    });
+  });
+
   describe("puzzlesForHunt", function () {
     it("sends deleted puzzles to a global admin who asks for them", async function () {
       assert.sameMembers(await forHunt(adminId), [liveId, deletedId]);

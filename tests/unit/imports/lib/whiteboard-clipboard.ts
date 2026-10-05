@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import sinon from "sinon";
 import type { WhiteboardEdgeType } from "../../../../imports/lib/models/WhiteboardEdges";
 import type { WhiteboardNodeType } from "../../../../imports/lib/models/WhiteboardNodes";
 import type { BoardClip } from "../../../../imports/lib/whiteboard/clipboard";
@@ -10,6 +11,7 @@ import {
   copySelection,
   imageHunt,
   looksLikeClip,
+  MAX_CLIP_LENGTH,
   offsetToCentre,
   pasteClip,
   readClip,
@@ -684,6 +686,40 @@ describe("whiteboard clipboard", function () {
       assert.deepEqual(JSON.parse(text.slice(CLIP_PREFIX.length)), clip);
       assert.isTrue(looksLikeClip(text));
       assert.deepEqual(readClip(text), clip);
+    });
+
+    it("turns down a copy too long to be one, before reading it", function () {
+      const parse = sinon.spy(JSON, "parse");
+      try {
+        const long = `${CLIP_PREFIX}${" ".repeat(MAX_CLIP_LENGTH)}`;
+        assert.isUndefined(readClip(long));
+        assert.isFalse(parse.called);
+      } finally {
+        parse.restore();
+      }
+      const read = (node: Record<string, unknown>) =>
+        readClip(
+          `${CLIP_PREFIX}${JSON.stringify({
+            nodes: [{ ...clip.nodes[0], ...node }],
+            edges: [],
+          })}`,
+        );
+      // An image whose address is `length` characters long
+      const image = (length: number) => {
+        const host = "https://x.example/";
+        return {
+          type: "image",
+          image: {
+            url: `${host}${"x".repeat(length - host.length)}`,
+            width: 1,
+            height: 1,
+          },
+        };
+      };
+      assert.ok(read({ id: "x".repeat(64) }));
+      assert.isUndefined(read({ id: "x".repeat(65) }));
+      assert.ok(read(image(2048)));
+      assert.isUndefined(read(image(2049)));
     });
 
     it("turns down text from anywhere else", function () {

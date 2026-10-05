@@ -1,4 +1,5 @@
 import { check } from "meteor/check";
+import isAdmin from "../../lib/isAdmin";
 import ChatMessages from "../../lib/models/ChatMessages";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
@@ -23,9 +24,10 @@ definePublication(chatMessagesForFirehose, {
       return [];
     }
 
+    // Deleted puzzles go to global admins only, as for puzzlesForHunt
     return [
       ChatMessages.find({ hunt: huntId }),
-      Puzzles.findAllowingDeleted({ hunt: huntId }),
+      Puzzles[isAdmin(user) ? "findAllowingDeleted" : "find"]({ hunt: huntId }),
     ];
   },
 });

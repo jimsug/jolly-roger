@@ -55,7 +55,15 @@ export default async function getOrCreateTagByName(
     return existingTag._id;
   }
 
-  if (canonicalName.length > MAX_TAG_NAME_LENGTH) {
+  // A group: tag brings a meta-for: tag, a few characters longer, with it,
+  // so that has to fit too before either is made.
+  const metaForName = isGroupTag(canonicalName, synonyms)
+    ? `${META_FOR_TAG_PREFIX}${tagPrefixValue(canonicalName, synonyms) ?? ""}`
+    : undefined;
+  if (
+    canonicalName.length > MAX_TAG_NAME_LENGTH ||
+    (metaForName?.length ?? 0) > MAX_TAG_NAME_LENGTH
+  ) {
     throw new Meteor.Error(
       400,
       `Tag name must be at most ${MAX_TAG_NAME_LENGTH} characters`,
@@ -69,9 +77,8 @@ export default async function getOrCreateTagByName(
   });
 
   // When creating a `group:*` tag, also ensure a matching `meta-for:` tag exists.
-  if (isGroupTag(canonicalName, synonyms)) {
-    const groupName = tagPrefixValue(canonicalName, synonyms) ?? "";
-    await getOrCreateTagByName(huntId, `${META_FOR_TAG_PREFIX}${groupName}`);
+  if (metaForName) {
+    await getOrCreateTagByName(huntId, metaForName);
   }
 
   return newTagId;

@@ -33,7 +33,10 @@ defineMethod(createDocumentImageUpload, {
       throw new Meteor.Error(403, "User is not a member of this hunt");
     }
 
-    const key = `${document.hunt}/${documentId}/${Random.id()}-${filename}`;
+    // Only plain characters from the filename go in the key: anything else
+    // could read as part of the upload policy or break the image's address.
+    const safeName = filename.replaceAll(/[^A-Za-z0-9._-]/g, "_");
+    const key = `${document.hunt}/${documentId}/${Random.id()}-${safeName}`;
 
     return getS3UploadParams(key, mimeType);
   },

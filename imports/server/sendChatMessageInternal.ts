@@ -121,6 +121,19 @@ export default async function sendChatMessageInternal({
       throw new Meteor.Error(400, "That message has been deleted");
     }
     msgId = reaction.id;
+  } else if (thread) {
+    // Under the thread's lock, which deleteComment holds while it checks
+    // for replies and deletes, so a reply either counts or is refused.
+    const rootId = thread;
+    msgId = await withLock(`chat-message:${rootId}:thread`, async () => {
+      const root = await ChatMessages.findOneAsync(rootId, {
+        projection: { _id: 1 },
+      });
+      if (!root) {
+        throw new Meteor.Error(404, "That comment has been deleted");
+      }
+      return insert();
+    });
   } else {
     msgId = await insert();
   }

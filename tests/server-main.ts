@@ -79,6 +79,7 @@ import "./unit/imports/server/destroyAPIKey";
 import "./unit/imports/server/dingwordSuppression";
 import "./unit/imports/server/DiscordHooks";
 import "./unit/imports/server/documentCache";
+import "./unit/imports/server/documentImages";
 import "./unit/imports/server/dropChatMessageAttachments";
 import "./unit/imports/server/dropPuzzleMarkedComplete";
 import "./unit/imports/server/Flags";

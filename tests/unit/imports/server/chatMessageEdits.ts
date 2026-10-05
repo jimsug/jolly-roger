@@ -1,4 +1,5 @@
 import { Accounts } from "meteor/accounts-base";
+import { Random } from "meteor/random";
 import { assert } from "chai";
 import sinon from "sinon";
 import FixtureHunt from "../../../../imports/FixtureHunt";
@@ -9,6 +10,7 @@ import ChatMessages, {
 import ChatNotifications from "../../../../imports/lib/models/ChatNotifications";
 import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
+import Settings from "../../../../imports/lib/models/Settings";
 import Whiteboards from "../../../../imports/lib/models/Whiteboards";
 import deleteChatMessage from "../../../../imports/methods/deleteChatMessage";
 import deleteWhiteboardComment from "../../../../imports/methods/deleteWhiteboardComment";
@@ -224,6 +226,69 @@ describe("editing and deleting chat messages", function () {
         /is not in hunt/,
       );
       assert.deepEqual((await reload(message._id)).content, message.content);
+    });
+
+    it("takes images only from the image bucket, but keeps the ones a message has", async function () {
+      const bucket = "https://s3.us-east-1.amazonaws.com/jr-test-images/";
+      await Settings.insertAsync({
+        name: "s3.image_bucket",
+        value: { bucketName: "jr-test-images", bucketRegion: "us-east-1" },
+        createdBy: operator,
+      });
+      try {
+        const ours = `${bucket}${huntId}/${puzzleId}/${Random.id()}`;
+        const theirs = "https://tracker.example.com/pixel.png";
+        const anotherHunts = `${bucket}${Random.id()}/${Random.id()}/${Random.id()}`;
+        const withImage = (url: string, words: string) => ({
+          type: "message" as const,
+          children: [{ type: "image" as const, url }, { text: words }],
+        });
+        const sendContent = (content: ChatMessageContentType) =>
+          asUser(sender, () =>
+            sendChatMessage.callPromise({
+              puzzleId,
+              content: JSON.stringify(content),
+            }),
+          );
+        await sendContent(withImage(ours, "an upload"));
+        await assert.isRejected(
+          sendContent(withImage(theirs, "a tracker")),
+          /isn't one we stored/,
+        );
+        await assert.isRejected(
+          sendContent(withImage(anotherHunts, "another hunt's upload")),
+          /isn't one we stored/,
+        );
+
+        // One from before, wherever it is, can stay through an edit
+        const old = await asUser(sender, () =>
+          ChatMessages.insertAsync({
+            puzzle: puzzleId,
+            hunt: huntId,
+            sender,
+            content: withImage(theirs, "from before"),
+            timestamp: new Date(),
+          }),
+        );
+        await edit(sender, old, withImage(theirs, "from before, edited"));
+        await assert.isRejected(
+          edit(sender, old, {
+            type: "message",
+            children: [
+              { type: "image", url: theirs },
+              { type: "image", url: `${theirs}?again` },
+            ],
+          }),
+          /isn't one we stored/,
+        );
+        await assert.isRejected(
+          edit(sender, old, withImage(anotherHunts, "from another hunt")),
+          /isn't one we stored/,
+        );
+        await edit(sender, old, withImage(ours, "swapped for an upload"));
+      } finally {
+        await Settings.removeAsync({ name: "s3.image_bucket" });
+      }
     });
 
     it("refuses a sender who has left the hunt", async function () {
@@ -471,6 +536,40 @@ describe("editing and deleting chat messages", function () {
           /Someone has replied/,
         );
         assert.isFalse((await reload(root._id)).deleted);
+      });
+
+      it("refuses a reply that lands while the author is deleting the thread", async function () {
+        const root = await comment(sender, "about to go");
+        const find = ChatMessages.find.bind(ChatMessages);
+        let reply: Promise<unknown> | undefined;
+        const stub = sinon
+          .stub(ChatMessages, "find")
+          .callsFake((...args: Parameters<typeof find>) => {
+            const selector = args[0] as Record<string, unknown> | undefined;
+            if (!reply && selector?.thread === root._id) {
+              reply = send(other, "wait, I have thoughts", {
+                puzzle: backingId,
+                parentId: root._id,
+              });
+              // Kept from being reported unhandled before it's awaited below
+              reply.catch(() => undefined);
+            }
+            return find(...args);
+          });
+        try {
+          await asUser(sender, () =>
+            deleteWhiteboardComment.callPromise({ messageId: root._id }),
+          );
+        } finally {
+          stub.restore();
+        }
+        assert.ok(reply);
+        await assert.isRejected(reply);
+        assert.isTrue((await reload(root._id)).deleted);
+        assert.equal(
+          await ChatMessages.find({ thread: root._id }).countAsync(),
+          0,
+        );
       });
 
       it("lets the author remove a thread with no replies", async function () {

@@ -1,3 +1,4 @@
+import { Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import Flags from "../Flags";
 import Hunts from "../lib/models/Hunts";
@@ -5,6 +6,7 @@ import MeteorUsers from "../lib/models/MeteorUsers";
 import WhiteboardNodes from "../lib/models/WhiteboardNodes";
 import Whiteboards from "../lib/models/Whiteboards";
 import { whiteboardAccess } from "../lib/permission_stubs";
+import { Id } from "../lib/typedModel/regexes";
 import { MAX_COORDINATE } from "../lib/whiteboard/limits";
 import { assertWhiteboardEnabled } from "./whiteboard";
 
@@ -12,6 +14,12 @@ import { assertWhiteboardEnabled } from "./whiteboard";
 // those modules it imports only whiteboard.ts, which imports only
 // whiteboardComments.ts, a leaf that imports no other whiteboard server
 // module, so there's no cycle.
+
+// A document id for check(), so a caller can't send anything else where a
+// board or node id goes.
+export const IdPattern = Match.Where(
+  (id: unknown): id is string => typeof id === "string" && Id.test(id),
+);
 
 export const inRange = (n: number) =>
   Number.isFinite(n) && Math.abs(n) <= MAX_COORDINATE;

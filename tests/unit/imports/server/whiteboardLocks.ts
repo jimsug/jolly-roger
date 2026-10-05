@@ -366,6 +366,43 @@ describe("whiteboard locks", function () {
       /That's locked/,
     );
     assert.deepEqual((await node(frame)).position, { x: 7950, y: 8000 });
+
+    // Listing the frame twice to net a move of the note in it is too
+    await assert.isRejected(
+      upsertNodes(other, boardId, [
+        { _id: frame, position: { x: 8000, y: 8000 }, width: 400 },
+        { _id: note, position: { x: 100, y: 100 } },
+        { _id: frame, position: { x: 7950, y: 8000 } },
+      ]),
+      /That's locked/,
+    );
+    // as is moving the frame, without resizing it, to cover a move of the
+    // note
+    await assert.isRejected(
+      upsertNodes(other, boardId, [
+        { _id: frame, position: { x: 8000, y: 8000 } },
+        { _id: note, position: { x: 100, y: 100 } },
+      ]),
+      /That's locked/,
+    );
+    // and so is moving it while resizing it, which a resize from one edge
+    // never does: otherwise moving the frame back afterwards would leave
+    // the note shifted in it
+    await assert.isRejected(
+      upsertNodes(other, boardId, [
+        { _id: frame, position: { x: 8000, y: 8000 }, width: 500 },
+        { _id: note, position: { x: 100, y: 100 } },
+      ]),
+      /That's locked/,
+    );
+    await assert.isRejected(
+      upsertNodes(other, boardId, [
+        { _id: frame, position: { x: 7950, y: 8050 }, height: 400 },
+        { _id: note, position: { x: 150, y: 50 } },
+      ]),
+      /That's locked/,
+    );
+    assert.deepEqual((await node(note)).position, { x: 150, y: 100 });
   });
 
   it("won't let someone who can't edit the board lock", async function () {

@@ -26,7 +26,9 @@ defineJob(applyTagSynonyms, {
         signal.throwIfAborted();
         const tag = await Tags.findOneAsync(step.tagId);
         if (tag?.name !== step.from) continue;
-        const outcome = await renameOrMergeTag(tag, step.to, true);
+        const outcome = await renameOrMergeTag(tag, step.to, true, {
+          onlyIfNamed: step.from,
+        });
         if (outcome === "renamed") renamed += 1;
         if (outcome === "merged") merged += 1;
       }

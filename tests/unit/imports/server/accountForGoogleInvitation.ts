@@ -78,6 +78,12 @@ describe("Google sign-in from a hunt invitation", function () {
     assert.equal(user?.googleAccount, "invited@example.com");
     assert.equal(user?.displayName, "Googler");
     assert.equal(await MeteorUsers.find().countAsync(), 1);
+    // The invite link can't set a password on it any more
+    const services = (
+      user as { services?: { password?: Record<string, unknown> } }
+    )?.services;
+    assert.notProperty(services?.password ?? {}, "enroll");
+    assert.notProperty(services?.password ?? {}, "reset");
   });
 
   it("links an account where the address is verified, keeping its name", async function () {

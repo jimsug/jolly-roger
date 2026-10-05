@@ -5,7 +5,10 @@ import ChatMessages from "../../lib/models/ChatMessages";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import sendChatMessage from "../../methods/sendChatMessage";
-import { parseChatMessageContent } from "../chatMessageContent";
+import {
+  assertStoredChatImages,
+  parseChatMessageContent,
+} from "../chatMessageContent";
 import sendChatMessageInternal from "../sendChatMessageInternal";
 import {
   assertMayReplyInThread,
@@ -54,6 +57,7 @@ defineMethod(sendChatMessage, {
     }
 
     const contentObj = parseChatMessageContent(content);
+    await assertStoredChatImages(contentObj, puzzle.hunt);
 
     if (comment) {
       if (parentId !== undefined) {

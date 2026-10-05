@@ -10,6 +10,7 @@ import {
   type TagSynonymRule,
 } from "../tagNames";
 import isWhiteboardPuzzle from "./isWhiteboardPuzzle";
+import { MAX_EDGES_PER_BOARD, MAX_FEEDERS_PER_META } from "./limits";
 
 // All layout is in flow (canvas) units and never depends on anyone's screen,
 // so every client and the server agree on where things go.
@@ -216,6 +217,43 @@ export function computeFeederPairs(
     });
   });
   return pairs;
+}
+
+// The pairs with at most MAX_FEEDERS_PER_META feeders for each meta, those
+// whose puzzles were created first, and the metas that had more.
+export function limitFeedersPerMeta(
+  pairs: FeederPair[],
+  puzzles: Pick<PuzzleType, "_id" | "createdAt">[],
+): { pairs: FeederPair[]; overLimit: string[] } {
+  const byMeta = new Map<string, FeederPair[]>();
+  pairs.forEach((pair) => {
+    const feeding = byMeta.get(pair.meta);
+    if (feeding) feeding.push(pair);
+    else byMeta.set(pair.meta, [pair]);
+  });
+  const overFull = [...byMeta].filter(
+    ([, feeding]) => feeding.length > MAX_FEEDERS_PER_META,
+  );
+  const overLimit = overFull.map(([meta]) => meta);
+  if (overLimit.length === 0) return { pairs, overLimit };
+
+  const puzzlesById = indexedById(puzzles);
+  const kept = new Set<FeederPair>();
+  overFull.forEach(([, feeding]) => {
+    feeding
+      .flatMap((pair) => {
+        const feeder = puzzlesById.get(pair.feeder);
+        return feeder ? [{ pair, feeder }] : [];
+      })
+      .toSorted((a, b) => byCreatedAt(a.feeder, b.feeder))
+      .slice(0, MAX_FEEDERS_PER_META)
+      .forEach(({ pair }) => kept.add(pair));
+  });
+  const over = new Set(overLimit);
+  return {
+    pairs: pairs.filter((pair) => !over.has(pair.meta) || kept.has(pair)),
+    overLimit,
+  };
 }
 
 // The meta-for:X tags for a frame tagged group:X. A frame for any other tag,
@@ -499,5 +537,11 @@ export function seedLayout(
     rowHeight = Math.max(rowHeight, laidOut.size.height);
   });
 
-  return { nodes, edges: computeFeederPairs(puzzles, tags) };
+  return {
+    nodes,
+    edges: limitFeedersPerMeta(
+      computeFeederPairs(puzzles, tags),
+      puzzles,
+    ).pairs.slice(0, MAX_EDGES_PER_BOARD),
+  };
 }

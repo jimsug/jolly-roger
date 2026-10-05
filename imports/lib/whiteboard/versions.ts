@@ -38,7 +38,9 @@ export interface VersionSummary {
 
 // What an edit does to the board's history:
 // - extend: a version the user's window is still open on takes the edit
-// - join: the newest version is under a minute old and takes the user on
+// - join: the newest version is under a minute old and takes the user on (or
+//   for a reset or restore, the newest is the same user's reset or restore
+//   from under a minute ago)
 // - serialize: the board has to be hashed before anything can be decided
 // - unchanged: the board is as the newest version has it, which takes the
 //   user on rather than storing the same board again
@@ -70,8 +72,21 @@ export function versionDecision({
   versions: VersionSummary[];
   hash?: string;
 }): VersionDecision {
-  // A reset or restore always records the board it's about to change.
-  if (kind !== "edits") return { action: "new" };
+  // A reset or restore records the board it's about to change, unless the
+  // same person reset or restored it under a minute ago, which already
+  // recorded it.
+  if (kind !== "edits") {
+    const newest = versions[0];
+    if (
+      newest &&
+      isRewrite(newest) &&
+      newest.createdAt.getTime() > now.getTime() - VERSION_JOIN_MS &&
+      newest.users.some((u) => u.user === user)
+    ) {
+      return { action: "join", version: newest._id, listed: true };
+    }
+    return { action: "new" };
+  }
 
   // Only ordinary edits since the last reset or restore count, so the first
   // edit after one always records the board it left.
@@ -121,10 +136,9 @@ export interface PrunableVersion {
 // Which of a board's versions to drop. Everything from the last two hours is
 // kept; before that, the first version in each UTC hour. Once the hunt is
 // archived, or the board has had no new version for VERSION_IDLE_MS, only the
-// newest VERSION_KEEP_AFTER_HUNT are kept. Resets and restores are always
-// kept. Then, newest first, everything past MAX_VERSION_BYTES_PER_BOARD goes,
-// apart from the newest version and resets and restores from the last two
-// hours.
+// newest VERSION_KEEP_AFTER_HUNT are kept. Resets and restores survive the
+// thinning. Then, newest first, everything past MAX_VERSION_BYTES_PER_BOARD
+// goes, resets and restores included, apart from the newest version.
 export function versionsToPrune(
   versions: PrunableVersion[],
   now: Date,
@@ -164,9 +178,8 @@ export function versionsToPrune(
   let full = false;
   sorted.forEach((v) => {
     if (!keep.has(v._id)) return;
-    const protectedVersion = v === newest || (isRewrite(v) && recent(v));
     if (
-      !protectedVersion &&
+      v !== newest &&
       (full || total + v.size > MAX_VERSION_BYTES_PER_BOARD)
     ) {
       full = true;
@@ -624,6 +637,59 @@ export function planRestore(
   });
 
   return { ok: true, plan };
+}
+
+// A plan with the nodes and lines it inserts renamed from one id to another
+// (for ids taken by documents on other boards, as a version's ids may be
+// once the board has deleted them), and every reference to them in the plan
+// renamed to match. Comments put back on a renamed node come off its old id
+// or its new one, which an earlier restore may have given it.
+export function withFreshInsertIds(
+  plan: RestorePlan,
+  ids: {
+    nodes: ReadonlyMap<string, string>;
+    edges: ReadonlyMap<string, string>;
+  },
+): RestorePlan {
+  const nodeIds = ids.nodes;
+  const edgeIds = ids.edges;
+  if (nodeIds.size === 0 && edgeIds.size === 0) return plan;
+
+  const node = (id: string) => nodeIds.get(id) ?? id;
+  const renamed = (change: RestoreChange, fields: string[]): RestoreChange => {
+    const $set = { ...change.$set };
+    fields.forEach((field) => {
+      const value = $set[field];
+      if (typeof value === "string") $set[field] = node(value);
+    });
+    return { ...change, $set };
+  };
+  return {
+    nodes: {
+      remove: plan.nodes.remove,
+      change: plan.nodes.change.map((c) => renamed(c, ["parent"])),
+      insert: plan.nodes.insert.map((n) => ({
+        ...n,
+        _id: node(n._id),
+        parent: n.parent && node(n.parent),
+      })),
+    },
+    edges: {
+      remove: plan.edges.remove,
+      change: plan.edges.change.map((c) => renamed(c, ["source", "target"])),
+      insert: plan.edges.insert.map((e) => ({
+        ...e,
+        _id: edgeIds.get(e._id) ?? e._id,
+        source: node(e.source),
+        target: node(e.target),
+      })),
+    },
+    detach: plan.detach,
+    reattach: plan.reattach.map(({ node: id, from }) => ({
+      node: node(id),
+      from: nodeIds.has(id) ? [...new Set([...from, node(id)])] : from,
+    })),
+  };
 }
 
 // What a selection in a preview restores, if it's one thing: a single node,

@@ -2,7 +2,9 @@ import { check, Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import type { ChatMessageContentType } from "../lib/models/ChatMessages";
 import Puzzles from "../lib/models/Puzzles";
+import nodeIsImage from "../lib/nodeIsImage";
 import nodeIsPuzzle from "../lib/nodeIsPuzzle";
+import { assertStoredImages } from "./getS3UploadParams";
 
 // Message content as a client sends it (a JSON string), checked the same way
 // whether it's a new message or an edit.
@@ -60,4 +62,22 @@ export async function assertPuzzleLinksInHunt(
   if (unknown !== undefined) {
     throw new Meteor.Error(400, `Puzzle ${unknown} is not in hunt ${huntId}`);
   }
+}
+
+// Images in a message are ones uploaded for its hunt, as chat's own uploads
+// are (see assertStoredImages). An edit can keep the images the message
+// already has (before), wherever they are.
+export async function assertStoredChatImages(
+  content: ChatMessageContentType,
+  huntId: string,
+  before?: ChatMessageContentType,
+) {
+  const kept = new Set(before?.children.filter(nodeIsImage).map((c) => c.url));
+  await assertStoredImages(
+    huntId,
+    content.children
+      .filter(nodeIsImage)
+      .map((child) => child.url)
+      .filter((url) => !kept.has(url)),
+  );
 }

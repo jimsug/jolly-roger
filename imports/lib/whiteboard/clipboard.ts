@@ -40,13 +40,21 @@ const CLIP_MARKER = "jolly-roger-whiteboard/";
 const CLIP_VERSION = 1;
 export const CLIP_PREFIX = `${CLIP_MARKER}${CLIP_VERSION}\n`;
 
+// The longest copy read off the clipboard, about what a whole board at its
+// caps copies to, so a planted one can't hang the tab that pastes it.
+export const MAX_CLIP_LENGTH = 32 * 1024 * 1024;
+// Ids are 17 characters and image addresses about a hundred.
+const MAX_ID_LENGTH = 64;
+const MAX_URL_LENGTH = 2048;
+const clipId = z.string().min(1).max(MAX_ID_LENGTH);
+
 const coordinate = z.number().min(-MAX_COORDINATE).max(MAX_COORDINATE);
 const dimension = z.number().positive().max(MAX_DIMENSION);
 
 const ClipNode = z.object({
-  id: z.string().min(1),
+  id: clipId,
   type: z.enum(WhiteboardNodeKinds).exclude(["puzzle"]),
-  parent: z.string().min(1).optional(),
+  parent: clipId.optional(),
   x: coordinate,
   y: coordinate,
   width: dimension.optional(),
@@ -56,11 +64,11 @@ const ClipNode = z.object({
   color: z.enum(WhiteboardColors).optional(),
   points: WhiteboardInkPoint.array().min(1).max(MAX_INK_POINTS).optional(),
   strokeWidth: z.enum(WhiteboardStrokeWidths).optional(),
-  stroke: z.string().min(1).optional(),
+  stroke: clipId.optional(),
   collapsed: z.boolean().optional(),
   image: z
     .object({
-      url: z.string().min(1),
+      url: z.string().min(1).max(MAX_URL_LENGTH),
       width: dimension,
       height: dimension,
     })
@@ -70,8 +78,8 @@ const ClipNode = z.object({
 type ClipNode = z.infer<typeof ClipNode>;
 
 const ClipEdge = z.object({
-  source: z.string().min(1),
-  target: z.string().min(1),
+  source: clipId,
+  target: clipId,
   label: z.string().max(MAX_LABEL_LENGTH).optional(),
   pathStyle: z.enum(WhiteboardPathStyles).optional(),
   arrowHead: z.enum(WhiteboardArrowHeads).optional(),
@@ -327,7 +335,9 @@ function holdsTogether(clip: BoardClip): boolean {
 // The copy in text taken off the clipboard, or undefined if it isn't one
 // this version can read.
 export function readClip(text: string): BoardClip | undefined {
-  if (!text.startsWith(CLIP_PREFIX)) return undefined;
+  if (!text.startsWith(CLIP_PREFIX) || text.length > MAX_CLIP_LENGTH) {
+    return undefined;
+  }
   let json: unknown;
   try {
     json = JSON.parse(text.slice(CLIP_PREFIX.length));

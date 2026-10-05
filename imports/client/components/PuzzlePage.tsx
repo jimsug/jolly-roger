@@ -1392,7 +1392,7 @@ const ChatInput = React.memo(
 
     const onUploadFailed = useCallback(
       (failure: ChatImageUploadFailure) => {
-        if (failure.stage === "convert") {
+        if (failure.stage === "convert" || failure.stage === "tooBig") {
           setUploadImageError(chatImageFailureReason(failure, t));
         } else if (failure.stage === "request") {
           setUploadImageError(

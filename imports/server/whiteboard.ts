@@ -26,6 +26,7 @@ import {
   frameLabelForTag,
   growToContain,
   isMetaForTag,
+  limitFeedersPerMeta,
   MIN_FRAME_HEIGHT,
   MIN_FRAME_WIDTH,
   placeIntoFrame,
@@ -34,6 +35,11 @@ import {
   seedLayout,
   topLevelSlot,
 } from "../lib/whiteboard/layout";
+import {
+  MAX_EDGES_PER_BOARD,
+  MAX_FEEDERS_PER_META,
+  MAX_NODES_PER_BOARD,
+} from "../lib/whiteboard/limits";
 import ignoringDuplicateKeyErrors, {
   isDuplicateKeyError,
 } from "./ignoringDuplicateKeyErrors";
@@ -107,12 +113,22 @@ async function growAncestors(
   }
 }
 
+// Adds a frame below everything on the board, unless the board is full, when
+// the puzzle it was for goes at the top level instead.
 async function insertTopLevelFrame(
   board: WhiteboardType,
   nodes: WhiteboardNodeType[],
   frame: Pick<WhiteboardNodeType, "frameKind" | "tag" | "label">,
   createdBy: string,
 ) {
+  const count = await WhiteboardNodes.find({ board: board._id }).countAsync();
+  if (count + 1 > MAX_NODES_PER_BOARD) {
+    Logger.warn("Not adding a frame to a full whiteboard", {
+      board: board._id,
+      tag: frame.tag,
+    });
+    return undefined;
+  }
   const topLevel = nodes.filter((n) => !n.parent && !n.hidden).map(nodeRect);
   const _id = await WhiteboardNodes.insertAsync({
     hunt: board.hunt,
@@ -265,14 +281,20 @@ async function placePuzzle(
   if (placedCard) nodesById.set(placedCard._id, placedCard);
 }
 
+// How many arrows syncAutoEdges draws between renewals of the board's lock.
+const ARROWS_PER_RENEWAL = 100;
+
 // Redraws the feeder arrows to and from a batch of puzzles. Arrows to or
 // from deleted puzzles in the batch (deleted), or any other deleted puzzle,
 // are hidden rather than removed, and come back once both ends are live
-// again. Only for callers holding the board's lock.
+// again. A meta gets arrows from at most MAX_FEEDERS_PER_META feeders, and
+// new arrows stop once the board has MAX_EDGES_PER_BOARD lines. Only for
+// callers holding the board's lock, whose renew this calls as it draws.
 export async function syncAutoEdges(
   board: WhiteboardType,
   batch: PuzzleType[],
   tags: TagType[],
+  renew: () => Promise<void>,
   deleted: string[] = [],
 ) {
   if (batch.length === 0 && deleted.length === 0) return;
@@ -284,13 +306,25 @@ export async function syncAutoEdges(
   const cardsByPuzzle = new Map(
     cards.flatMap((c) => (c.puzzle ? [[c.puzzle, c] as const] : [])),
   );
-  // Only their tags, which is all feeder pairs need
+  // Only their tags, which is all feeder pairs need, and when they were
+  // created, which says which feeders a meta with too many keeps
   const puzzles = await Puzzles.find(
     { hunt: board.hunt, _id: { $in: [...cardsByPuzzle.keys()] } },
-    { projection: { tags: 1 } },
+    { projection: { tags: 1, createdAt: 1 } },
   ).fetchAsync();
 
-  const wanted = computeFeederPairs(puzzles, tags).filter(
+  const { pairs, overLimit } = limitFeedersPerMeta(
+    computeFeederPairs(puzzles, tags),
+    puzzles,
+  );
+  if (overLimit.length > 0) {
+    Logger.warn("Some metas have too many feeders to draw arrows from all", {
+      board: board._id,
+      metas: overLimit.join(","),
+      limit: MAX_FEEDERS_PER_META,
+    });
+  }
+  const wanted = pairs.filter(
     (p) => batchById.has(p.feeder) || batchById.has(p.meta),
   );
   const wantedKeys = new Set(wanted.map((p) => `${p.feeder}:${p.meta}`));
@@ -357,12 +391,24 @@ export async function syncAutoEdges(
     });
   }
 
+  let room =
+    MAX_EDGES_PER_BOARD -
+    (await WhiteboardEdges.find({ board: board._id }).countAsync());
+  let drawn = 0;
+  let skipped = 0;
   for (const pair of wanted) {
     if (existingKeys.has(`${pair.feeder}:${pair.meta}`)) continue;
     const source = cardsByPuzzle.get(pair.feeder);
     const target = cardsByPuzzle.get(pair.meta);
     const drawnFor = batchById.get(pair.feeder) ?? batchById.get(pair.meta);
     if (!source || !target || !drawnFor) continue;
+    if (room <= 0) {
+      skipped += 1;
+      continue;
+    }
+    room -= 1;
+    drawn += 1;
+    if (drawn % ARROWS_PER_RENEWAL === 0) await renew();
     // Only a sync that outlasted the board's lock can have drawn it since.
     await ignoringDuplicateKeyErrors(() =>
       WhiteboardEdges.insertAsync({
@@ -376,6 +422,13 @@ export async function syncAutoEdges(
         createdBy: drawnFor.createdBy,
       }),
     );
+  }
+  if (skipped > 0) {
+    Logger.warn("Not drawing feeder arrows on a whiteboard with no room", {
+      board: board._id,
+      skipped,
+      limit: MAX_EDGES_PER_BOARD,
+    });
   }
 }
 
@@ -605,6 +658,7 @@ export async function syncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
       board,
       batch,
       tags,
+      renew,
       deleted.map((p) => p._id),
     );
   });
@@ -629,6 +683,10 @@ export function deferSyncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
 
   const pending = new Set(puzzleIds);
   pendingSyncs.set(huntId, pending);
+  // A puzzle whose sync fails goes round once more, so a passing failure
+  // (another server taking the board's lock, say) doesn't leave its card and
+  // arrows out of step until something else touches it.
+  const retried = new Set<string>();
   Meteor.defer(async () => {
     while (pending.size > 0) {
       const batch = [...pending];
@@ -636,10 +694,16 @@ export function deferSyncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
       try {
         await syncPuzzlesOnBoard(huntId, batch);
       } catch (error) {
+        const again = batch.filter((id) => !retried.has(id));
         Logger.error("Failed to sync puzzles onto whiteboard", {
           hunt: huntId,
           puzzles: batch.join(","),
+          retrying: again.length > 0,
           error,
+        });
+        again.forEach((id) => {
+          retried.add(id);
+          pending.add(id);
         });
       }
     }

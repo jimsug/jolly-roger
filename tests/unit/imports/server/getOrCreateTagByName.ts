@@ -139,6 +139,25 @@ describe("getOrCreateTagByName", function () {
     );
   });
 
+  it("refuses a group tag whose meta-for twin would be too long, making neither", async function () {
+    // group: is six characters and meta-for: nine
+    const value = "r".repeat(MAX_TAG_NAME_LENGTH - "group:".length);
+    await assert.isRejected(
+      asUser(userId, () => getOrCreateTagByName(huntId, `group:${value}`)),
+      /at most/,
+    );
+    assert.equal(
+      await Tags.find({ hunt: huntId, name: { $regex: value } }).countAsync(),
+      0,
+    );
+    // One whose twin fits is fine
+    const fits = "f".repeat(MAX_TAG_NAME_LENGTH - "meta-for:".length);
+    await asUser(userId, () => getOrCreateTagByName(huntId, `group:${fits}`));
+    assert.ok(
+      await Tags.findOneAsync({ hunt: huntId, name: `meta-for:${fits}` }),
+    );
+  });
+
   it("creates the meta-for twin of a group tag", async function () {
     await asUser(userId, () => getOrCreateTagByName(huntId, "group:Events"));
     const twin = await Tags.findOneAsync({

@@ -22,7 +22,9 @@ import type {
 import WhiteboardVersions from "../lib/models/WhiteboardVersions";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import {
+  BIG_READS_PER_MINUTE,
   MAX_BATCH,
+  MAX_KEPT_EXPORTS,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_CHUNK_BYTES,
   VERSION_INTERVAL_MS,
@@ -40,8 +42,11 @@ import {
   VERSION_FORMAT,
   versionDecision,
   versionsToPrune,
+  withFreshInsertIds,
 } from "../lib/whiteboard/versions";
 import WhiteboardVersionChunks from "./models/WhiteboardVersionChunks";
+import type { Bucket } from "./rateLimits";
+import { remember, take } from "./rateLimits";
 import { deferSyncPuzzlesOnBoard } from "./whiteboard";
 import { detachComments, reattachComments } from "./whiteboardComments";
 import {
@@ -603,13 +608,40 @@ interface PendingExport {
 }
 // How long an export is kept for its later chunks after its last fetch.
 export const EXPORT_KEPT_MS = 5 * 60 * 1000;
-// By connection, which fetches one export at a time. Each is dropped once
-// its last chunk is sent, when the connection starts another, when the
-// connection closes, or once nothing has fetched from it for EXPORT_KEPT_MS
-// (checked on the next export anyone asks for), so an abandoned export
-// doesn't sit in memory as long as its connection stays open.
+// By connection, which fetches one export at a time, least recently fetched
+// first. Each is dropped once its last chunk is sent, when the connection
+// starts another, when the connection closes, once nothing has fetched from
+// it for EXPORT_KEPT_MS (checked on the next export anyone asks for), or when
+// the server is keeping MAX_KEPT_EXPORTS others fetched from since, so
+// abandoned exports don't sit in memory.
 const pendingExports = new Map<string, PendingExport>();
 const watchedConnections = new Set<string>();
+
+// Each person's chunk fetches, versions and exports together, across all
+// their connections: a bucket of BIG_READS_PER_MINUTE tokens refilled
+// evenly over a minute. A bucket left alone for a minute is full again, the
+// same as none, so it's dropped.
+const bigReads = new Map<string, Bucket>();
+const BIG_READ_REFILL_MS = 60 * 1000;
+const BIG_READS_PER_SECOND = BIG_READS_PER_MINUTE / 60;
+
+function takeBigRead(userId: string) {
+  const now = Date.now();
+  bigReads.forEach(({ refilledAt }, user) => {
+    if (now - refilledAt >= BIG_READ_REFILL_MS) bigReads.delete(user);
+  });
+  const bucket = bigReads.get(userId) ?? {
+    tokens: BIG_READS_PER_MINUTE,
+    refilledAt: now,
+  };
+  bigReads.set(userId, bucket);
+  if (!take(bucket, now, BIG_READS_PER_MINUTE, BIG_READS_PER_SECOND)) {
+    throw new Meteor.Error(
+      429,
+      "That's a lot of downloading; try again in a minute",
+    );
+  }
+}
 
 function dropStaleExports(now: number) {
   pendingExports.forEach((pending, connectionId) => {
@@ -623,7 +655,7 @@ function keepExport(
   connection: Pick<Meteor.Connection, "id" | "onClose">,
   pending: PendingExport,
 ) {
-  pendingExports.set(connection.id, pending);
+  remember(pendingExports, connection.id, pending, MAX_KEPT_EXPORTS);
   if (watchedConnections.has(connection.id)) return;
   watchedConnections.add(connection.id);
   connection.onClose(() => {
@@ -645,6 +677,7 @@ export async function exportBoard(
   hash: string | undefined,
   connection: Pick<Meteor.Connection, "id" | "onClose"> | null,
 ) {
+  takeBigRead(userId);
   await loadBoardAccess(userId, boardId);
   if (!Number.isInteger(index) || index < 0) {
     throw new Meteor.Error(400, "No such part of the board");
@@ -683,6 +716,7 @@ export async function fetchVersion(
   versionId: string,
   index: number,
 ) {
+  takeBigRead(userId);
   await loadBoardAccess(userId, boardId);
   await assertHistoryEnabled();
   const version = await WhiteboardVersions.findOneAsync({
@@ -787,6 +821,113 @@ async function livePuzzleIds(huntId: string) {
   );
 }
 
+// Random.id()'s alphabet, which ids on the board are checked against.
+const ID_CHARS = "23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz";
+// How many derived ids are tried for one taken id before a random one.
+const DERIVED_ID_ATTEMPTS = 8;
+
+// An id worked out from the board, the id it stands in for and the attempt,
+// so restoring the same version again gives a renamed node the same id (and
+// its comments find it).
+function derivedId(boardId: string, id: string, attempt: number) {
+  const digest = createHash("sha256")
+    .update(`${boardId}:${id}:${attempt}`)
+    .digest();
+  return Array.from(
+    digest.subarray(0, 17),
+    (byte) => ID_CHARS[byte % ID_CHARS.length],
+  ).join("");
+}
+
+type IdLookup = (ids: string[]) => Promise<{ _id: string; board: string }[]>;
+const nodesById: IdLookup = (ids) =>
+  WhiteboardNodes.find(
+    { _id: { $in: ids } },
+    { projection: { _id: 1, board: 1 } },
+  ).fetchAsync();
+const edgesById: IdLookup = (ids) =>
+  WhiteboardEdges.find(
+    { _id: { $in: ids } },
+    { projection: { _id: 1, board: 1 } },
+  ).fetchAsync();
+
+// New ids for those of `ids` that are in use (as lookup finds them), where
+// ids on this board that the plan removes count as free. Each is the first
+// derived id that's free and not otherwise in the plan, or a random one if
+// none of DERIVED_ID_ATTEMPTS is.
+async function freeIdsFor(
+  lookup: IdLookup,
+  boardId: string,
+  ids: string[],
+  removed: ReadonlySet<string>,
+): Promise<Map<string, string>> {
+  const inUse = async (candidates: string[]) =>
+    new Set(
+      candidates.length === 0
+        ? []
+        : (await lookup(candidates))
+            .filter((doc) => doc.board !== boardId || !removed.has(doc._id))
+            .map((doc) => doc._id),
+    );
+  const taken = await inUse(ids);
+  const used = new Set(ids);
+  const renamed = new Map<string, string>();
+  let pending = ids.filter((id) => taken.has(id));
+  for (
+    let attempt = 0;
+    pending.length > 0 && attempt < DERIVED_ID_ATTEMPTS;
+    attempt++
+  ) {
+    const candidates = pending.map(
+      (id) => [id, derivedId(boardId, id, attempt)] as const,
+    );
+    const busy = await inUse(candidates.map(([, candidate]) => candidate));
+    pending = candidates.flatMap(([id, candidate]) => {
+      if (busy.has(candidate) || used.has(candidate)) return [id];
+      used.add(candidate);
+      renamed.set(id, candidate);
+      return [];
+    });
+  }
+  pending.forEach((id) => renamed.set(id, Random.id()));
+  return renamed;
+}
+
+// The plan with other ids for what it would insert under an id another
+// board's document has. Ids are chosen by clients and a deleted node's id is
+// free again, so one a version holds may since have been taken elsewhere.
+// Only for callers holding the board's lock, so nothing on this board can
+// take one in the meantime.
+async function withFreeIds(
+  boardId: string,
+  versionId: string,
+  plan: RestorePlan,
+): Promise<RestorePlan> {
+  const renamed = {
+    nodes: await freeIdsFor(
+      nodesById,
+      boardId,
+      plan.nodes.insert.map((n) => n._id),
+      new Set(plan.nodes.remove),
+    ),
+    edges: await freeIdsFor(
+      edgesById,
+      boardId,
+      plan.edges.insert.map((e) => e._id),
+      new Set(plan.edges.remove),
+    ),
+  };
+  if (renamed.nodes.size > 0 || renamed.edges.size > 0) {
+    Logger.info("Restoring whiteboard documents under new ids", {
+      board: boardId,
+      version: versionId,
+      nodes: [...renamed.nodes.keys()].join(","),
+      edges: [...renamed.edges.keys()].join(","),
+    });
+  }
+  return withFreshInsertIds(plan, renamed);
+}
+
 async function readBoard(boardId: string) {
   return {
     nodes: await WhiteboardNodes.find({ board: boardId }).fetchAsync(),
@@ -796,8 +937,9 @@ async function readBoard(boardId: string) {
 
 // Writes a restore plan to the board: comments come off the nodes leaving or
 // being hidden, then documents are removed, changed and inserted, and then
-// comments go back on nodes that are back. Only for callers holding the
-// board's lock.
+// comments go back on nodes that are back. Every step can be run again, and
+// planning again from wherever a failure left the board picks up what's
+// left. Only for callers holding the board's lock.
 async function writeRestorePlan(
   board: WhiteboardType,
   liveNodes: WhiteboardNodeType[],
@@ -908,7 +1050,7 @@ export async function restoreVersion(
           : "This version has more on it than a board can hold",
       );
     }
-    const { plan } = result;
+    const plan = await withFreeIds(boardId, version._id, result.plan);
     await renew();
 
     // Nothing has been written yet, so a failure here leaves the board as
@@ -917,7 +1059,30 @@ export async function restoreVersion(
       restoredFromAt: version.createdAt,
     });
 
-    await writeRestorePlan(current, live.nodes, plan, renew);
+    try {
+      await writeRestorePlan(current, live.nodes, plan, renew);
+    } catch (error) {
+      if (error instanceof LockPreemptedError) throw error;
+      // Part of the plan is written. Planning again from the board as it was
+      // left finishes the restore rather than leaving it half done; the
+      // first plan's comments are put back too, as nodes it brought back are
+      // no longer new to the second.
+      Logger.warn("A whiteboard restore failed part-way; finishing it", {
+        board: boardId,
+        version: version._id,
+        error,
+      });
+      const left = await readBoard(boardId);
+      await renew();
+      const again = planRestore(left, target, {
+        keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
+        livePuzzles: await livePuzzleIds(hunt._id),
+      });
+      if (!again.ok) throw error;
+      const rest = await withFreeIds(boardId, version._id, again.plan);
+      rest.reattach.push(...plan.reattach);
+      await writeRestorePlan(current, left.nodes, rest, renew);
+    }
 
     await Whiteboards.updateAsync(boardId, {
       $set: { lastRewrittenAt: new Date() },
@@ -981,7 +1146,7 @@ export async function restoreItems(
         ? tooMuchInkError()
         : new Meteor.Error(400, "This board is full");
     }
-    const { plan } = result;
+    const plan = await withFreeIds(boardId, version._id, result.plan);
     // Restoring an item is a person's edit, so like Place by tags it doesn't
     // move, change or unlock anything locked, whoever asks.
     const liveById = new Map(live.nodes.map((n) => [n._id, n]));

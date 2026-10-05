@@ -2,8 +2,10 @@ import { check, Match } from "meteor/check";
 import { fetch } from "meteor/fetch";
 import { Meteor } from "meteor/meteor";
 import Documents from "../../lib/models/Documents";
+import MeteorUsers from "../../lib/models/MeteorUsers";
 import Settings from "../../lib/models/Settings";
 import insertDocumentImage from "../../methods/insertDocumentImage";
+import { imageBucket, isImageObjectUrl } from "../getS3UploadParams";
 import defineMethod from "./defineMethod";
 
 async function validateImageLink(link: string) {
@@ -11,7 +13,13 @@ async function validateImageLink(link: string) {
   // If the request fails, we continue with the upload - invalid images will still fail, just with
   // a more confusing error message. We do this here and not client-side to bypass any CORS
   // restrictions. We do this here and not in the App Script to make a HEAD request and avoid
-  // fetching the image contents.
+  // fetching the image contents. Only an image in our own bucket is checked: the server
+  // never requests an address someone typed in, which could be one only it can reach, and
+  // the App Script fetches those itself.
+  const bucket = await imageBucket();
+  if (!bucket || !isImageObjectUrl(bucket, link)) {
+    return;
+  }
   const resp = await fetch(link, {
     method: "HEAD",
   });
@@ -64,6 +72,11 @@ defineMethod(insertDocumentImage, {
     const document = await Documents.findOneAsync(documentId);
     if (!document) {
       throw new Meteor.Error(404, "Document not found");
+    }
+
+    const user = await MeteorUsers.findOneAsync(this.userId);
+    if (!user?.hunts?.includes(document.hunt)) {
+      throw new Meteor.Error(403, "User is not a member of this hunt");
     }
 
     if (

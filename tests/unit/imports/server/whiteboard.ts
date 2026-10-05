@@ -4,6 +4,7 @@ import { Random } from "meteor/random";
 import { assert } from "chai";
 import sinon from "sinon";
 import FixtureHunt from "../../../../imports/FixtureHunt";
+import Logger from "../../../../imports/Logger";
 import chatMessagePath from "../../../../imports/lib/chatMessagePath";
 import { SUPPRESS_ALL_DINGWORDS } from "../../../../imports/lib/dingwordLogic";
 import { GLOBAL_SCOPE } from "../../../../imports/lib/isAdmin";
@@ -41,9 +42,11 @@ import {
 import {
   LIVE_UPDATE_BURST,
   LIVE_UPDATES_PER_SECOND,
+  LIVE_USER_UPDATE_BURST,
   MAX_BATCH,
   MAX_COORDINATE,
   MAX_EDGES_PER_BOARD,
+  MAX_FEEDERS_PER_META,
   MAX_FRAME_DEPTH,
   MAX_IMAGES_PER_BOARD,
   MAX_INK_POINTS_PER_BOARD,
@@ -93,8 +96,10 @@ import {
   upsertNodes,
 } from "../../../../imports/server/whiteboardEdits";
 import {
+  forgetBoardAccess,
   removePresence,
   setLive,
+  trackedBoardCounts,
 } from "../../../../imports/server/whiteboardLive";
 import {
   decodeVersion,
@@ -457,6 +462,139 @@ describe("whiteboard", function () {
       }, 5000);
     });
 
+    describe("past the board's caps", function () {
+      afterEach(function () {
+        sinon.restore();
+      });
+
+      // Feeders tagged with a new round, and a meta whose tag becomes that
+      // round's meta-for: tag only once they're all on the board
+      const round = async (name: string, feederCount: number) => {
+        const roundTag = await Tags.insertAsync({
+          hunt: huntId,
+          name: `group:${name}`,
+          createdBy: operator,
+        });
+        const metaTag = await Tags.insertAsync({
+          hunt: huntId,
+          name: `meta-someday:${name}`,
+          createdBy: operator,
+        });
+        const feeders: string[] = [];
+        for (let i = 0; i < feederCount; i++) {
+          feeders.push(await newPuzzle(`${name} ${i}`, [roundTag]));
+        }
+        const meta = await newPuzzle(`${name} meta`, [metaTag]);
+        await syncPuzzlesOnBoard(huntId, [...feeders, meta]);
+        const rename = async () => {
+          await Tags.updateAsync(metaTag, {
+            $set: { name: `meta-for:${name}` },
+          });
+          return (await Puzzles.findOneAsync(meta))!;
+        };
+        return { feeders, meta, rename };
+      };
+      const arrowsTo = (meta: string) =>
+        WhiteboardEdges.find({ board: boardId, auto: true, meta }).fetchAsync();
+
+      it("draws a meta's arrows from its first 200 feeders, renewing the lock as it goes", async function () {
+        const { feeders, meta, rename } = await round(
+          "huge",
+          MAX_FEEDERS_PER_META + 5,
+        );
+        const metaPuzzle = await rename();
+        const warn = sinon.spy(Logger, "warn");
+        const renew = sinon.spy(() => Promise.resolve());
+        await syncAutoEdges(
+          (await Whiteboards.findOneAsync(boardId))!,
+          [metaPuzzle],
+          await Tags.find({ hunt: huntId }).fetchAsync(),
+          renew,
+        );
+
+        const first = (
+          await Puzzles.find({ _id: { $in: feeders } }).fetchAsync()
+        )
+          .toSorted(
+            (a, b) => +a.createdAt - +b.createdAt || a._id.localeCompare(b._id),
+          )
+          .slice(0, MAX_FEEDERS_PER_META)
+          .map((p) => p._id);
+        assert.sameMembers(
+          (await arrowsTo(meta)).map((a) => a.feeder),
+          first,
+        );
+        assert.equal(renew.callCount, MAX_FEEDERS_PER_META / 100);
+        assert.isTrue(warn.calledWithMatch(sinon.match(/too many feeders/)));
+
+        // A later sync of a feeder past the first 200 leaves it out too
+        await syncPuzzlesOnBoard(huntId, feeders);
+        assert.lengthOf(await arrowsTo(meta), MAX_FEEDERS_PER_META);
+      });
+
+      it("stops drawing feeder arrows once the board has as many lines as it can hold", async function () {
+        const { meta, rename } = await round("crowded", 10);
+        const [a, b] = await WhiteboardNodes.find(
+          { board: boardId, type: "puzzle" },
+          { limit: 2 },
+        ).fetchAsync();
+        const room = 3;
+        const have = await WhiteboardEdges.find({
+          board: boardId,
+        }).countAsync();
+        await WhiteboardEdges.insertManyAsync(
+          Array.from({ length: MAX_EDGES_PER_BOARD - have - room }, () => ({
+            hunt: huntId,
+            board: boardId,
+            source: a!._id,
+            target: b!._id,
+            createdBy: member,
+          })),
+        );
+        await rename();
+        const warn = sinon.spy(Logger, "warn");
+        await syncPuzzlesOnBoard(huntId, [meta]);
+
+        assert.lengthOf(await arrowsTo(meta), room);
+        assert.equal(
+          await WhiteboardEdges.find({ board: boardId }).countAsync(),
+          MAX_EDGES_PER_BOARD,
+        );
+        assert.isTrue(warn.calledWithMatch(sinon.match(/no room/)));
+      });
+
+      it("puts a card at the top level rather than add a frame to a full board", async function () {
+        const have = await WhiteboardNodes.find({
+          board: boardId,
+        }).countAsync();
+        await WhiteboardNodes.insertManyAsync(
+          Array.from({ length: MAX_NODES_PER_BOARD - have }, (_, i) => ({
+            hunt: huntId,
+            board: boardId,
+            type: "sticky" as const,
+            position: { x: i, y: 50_000 },
+            createdBy: member,
+          })),
+        );
+        const tag = await Tags.insertAsync({
+          hunt: huntId,
+          name: "group:no-room",
+          createdBy: operator,
+        });
+        const puzzleId = await newPuzzle("No room", [tag]);
+        const warn = sinon.spy(Logger, "warn");
+        await syncPuzzlesOnBoard(huntId, [puzzleId]);
+
+        assert.notOk(
+          await WhiteboardNodes.findOneAsync({ board: boardId, tag }),
+        );
+        const card = await cardFor(puzzleId);
+        assert.ok(card);
+        assert.isUndefined(card.parent);
+        assert.isTrue(warn.calledWithMatch(sinon.match(/full whiteboard/)));
+      });
+    });
+
     it("follows a tag renamed into a round", async function () {
       const tagId = await Tags.insertAsync({
         hunt: huntId,
@@ -505,6 +643,32 @@ describe("whiteboard", function () {
       const after = await Tags.findOneAsync(tag._id);
       assert.deepEqual(after?.updatedAt, tag.updatedAt);
       assert.deepEqual(after?.aliases, tag.aliases);
+    });
+
+    it("tries a deferred sync that fails once more", async function () {
+      const puzzleId = await newPuzzle("Retried", [groupTag._id]);
+      const frame = await frameFor(groupTag._id);
+      // The sync's first read of the hunt's tags fails
+      const find = Tags.find.bind(Tags);
+      let failed = false;
+      const sync = sinon
+        .stub(Tags, "find")
+        .callsFake((...args: Parameters<typeof find>) => {
+          const selector = args[0] as Record<string, unknown> | undefined;
+          if (!failed && selector?.hunt === huntId) {
+            failed = true;
+            throw new Error("connection reset");
+          }
+          return find(...args);
+        });
+      try {
+        deferSyncPuzzlesOnBoard(huntId, [puzzleId]);
+        await waitForAssertion(async () => {
+          assert.equal((await cardFor(puzzleId))?.parent, frame._id);
+        }, 5000);
+      } finally {
+        sync.restore();
+      }
     });
 
     it("folds a burst of deferred syncs for a hunt into one", async function () {
@@ -1082,7 +1246,9 @@ describe("whiteboard", function () {
       const board = (await Whiteboards.findOneAsync(boardId))!;
       const tags = await Tags.find({ hunt: huntId }).fetchAsync();
       // As a sync that read the puzzle as deleted just before it came back
-      await syncAutoEdges(board, [], tags, [puzzle._id]);
+      await syncAutoEdges(board, [], tags, () => Promise.resolve(), [
+        puzzle._id,
+      ]);
       const after = await WhiteboardEdges.findOneAsync(arrow._id);
       assert.isTrue(after?.hidden);
       assert.isUndefined(after?.hiddenWithPuzzle);
@@ -3227,6 +3393,202 @@ describe("whiteboard", function () {
         });
       } finally {
         clock.restore();
+      }
+    });
+
+    it("holds back a person's updates across all their connections", async function () {
+      const clock = sinon.useFakeTimers({
+        now: Date.now(),
+        toFake: ["Date"],
+      });
+      try {
+        const connections = Array.from(
+          { length: LIVE_USER_UPDATE_BURST / LIVE_UPDATE_BURST + 1 },
+          () => fakeConnection(),
+        );
+        const count = (c: ReturnType<typeof fakeConnection>) =>
+          WhiteboardPresence.find({
+            connection: c.connection.id,
+          }).countAsync();
+        const [last, ...rest] = connections.toReversed();
+        for (const c of rest) {
+          for (let i = 0; i < LIVE_UPDATE_BURST; i++) {
+            await setLive(member, c.connection, boardId, state);
+          }
+          assert.equal(await count(c), 1);
+        }
+        // The person's bucket is empty, though this connection's isn't
+        await setLive(member, last!.connection, boardId, state);
+        assert.equal(await count(last!), 0);
+        // Someone else's isn't
+        await setLive(operator, last!.connection, boardId, state);
+        assert.equal(await count(last!), 1);
+        connections.forEach((c) => c.close());
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("keeps nothing for a board id that's malformed or that the caller can't see", async function () {
+      const { connection, close } = fakeConnection();
+      try {
+        await assert.isRejected(
+          setLive(member, connection, "x".repeat(100_000), state),
+          /Invalid live update/,
+        );
+        assert.isUndefined(trackedBoardCounts(connection.id));
+        await assert.isRejected(
+          asUser(
+            member,
+            () =>
+              setWhiteboardLive.callPromise({
+                boardId: "x".repeat(100_000),
+                ...state,
+              }),
+            connection,
+          ),
+          /Match error/,
+        );
+        await assert.isRejected(
+          publishHandler(whiteboardPresence.name).call(
+            new StubSubscription(member),
+            { boardId: "not an id!" },
+          ),
+          /Match error/,
+        );
+
+        for (let i = 0; i < 5; i++) {
+          await assert.isRejected(
+            setLive(member, connection, Random.id(), state),
+            /member/,
+          );
+        }
+        await assert.isRejected(
+          setLive(outsider, connection, boardId, state),
+          /member/,
+        );
+        assert.deepEqual(trackedBoardCounts(connection.id), {
+          boards: 0,
+          written: 0,
+          stops: 0,
+        });
+
+        await setLive(member, connection, boardId, state);
+        assert.deepEqual(trackedBoardCounts(connection.id), {
+          boards: 1,
+          written: 1,
+          stops: 0,
+        });
+      } finally {
+        close();
+      }
+    });
+
+    it("remembers at most 16 boards a connection has been on", async function () {
+      const { connection, close } = fakeConnection();
+      const hunts: string[] = [];
+      for (let i = 0; i < 17; i++) hunts.push(await createTestHunt(operator));
+      await MeteorUsers.updateAsync(operator, {
+        $addToSet: { hunts: { $each: hunts } },
+        $set: Object.fromEntries(
+          hunts.map((hunt) => [`roles.${hunt}`, ["operator"]]),
+        ),
+      });
+      try {
+        for (const hunt of hunts) {
+          const board = await ensureWhiteboard(operator, hunt);
+          await setLive(operator, connection, board, state);
+          await removePresence(board, connection.id);
+        }
+        assert.deepEqual(trackedBoardCounts(connection.id), {
+          boards: 16,
+          written: 0,
+          stops: 16,
+        });
+      } finally {
+        close();
+      }
+    });
+
+    it("only shows the cursor of an update whose access changed while it was under way", async function () {
+      const { connection, close } = fakeConnection();
+      const ids = (
+        await WhiteboardNodes.find(
+          { board: boardId },
+          { limit: 2, projection: { _id: 1 } },
+        ).fetchAsync()
+      ).map((n) => n._id);
+      await setLive(member, connection, boardId, state);
+      // As the observer would on a change to the edit policy, just as the
+      // update looks up its selection
+      const find = sinon.stub(WhiteboardNodes, "find").callsFake((...args) => {
+        forgetBoardAccess(boardId);
+        return find.wrappedMethod.apply(WhiteboardNodes, args);
+      });
+      try {
+        await setLive(member, connection, boardId, {
+          ...state,
+          cursor: { x: 7, y: 8 },
+          selection: ids,
+          editing: ids[0],
+        });
+        find.restore();
+        const presence = await WhiteboardPresence.findOneAsync({
+          connection: connection.id,
+        });
+        assert.deepEqual(presence?.cursor, { x: 7, y: 8 });
+        assert.isNull(presence?.selection);
+        assert.isNull(presence?.editing);
+      } finally {
+        find.restore();
+        close();
+      }
+    });
+
+    it("keeps an update's selection when only another board's access changed while it was under way", async function () {
+      const { connection, close } = fakeConnection();
+      const ids = (
+        await WhiteboardNodes.find(
+          { board: boardId },
+          { limit: 2, projection: { _id: 1 } },
+        ).fetchAsync()
+      ).map((n) => n._id);
+      await setLive(member, connection, boardId, state);
+      const find = sinon.stub(WhiteboardNodes, "find").callsFake((...args) => {
+        forgetBoardAccess(Random.id());
+        return find.wrappedMethod.apply(WhiteboardNodes, args);
+      });
+      try {
+        await setLive(member, connection, boardId, {
+          ...state,
+          cursor: { x: 7, y: 8 },
+          selection: ids,
+        });
+        find.restore();
+        const presence = await WhiteboardPresence.findOneAsync({
+          connection: connection.id,
+        });
+        assert.deepEqual(presence?.cursor, { x: 7, y: 8 });
+        assert.deepEqual(presence?.selection, ids);
+      } finally {
+        find.restore();
+        close();
+      }
+    });
+
+    it("takes a removed board's presence with it", async function () {
+      const { connection, close } = fakeConnection();
+      try {
+        await setLive(member, connection, boardId, state);
+        await Whiteboards.removeAsync(boardId);
+        await waitForAssertion(async () => {
+          assert.equal(
+            await WhiteboardPresence.find({ board: boardId }).countAsync(),
+            0,
+          );
+        }, 5000);
+      } finally {
+        close();
       }
     });
 

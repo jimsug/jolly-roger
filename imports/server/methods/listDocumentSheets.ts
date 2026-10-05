@@ -2,6 +2,7 @@ import { check } from "meteor/check";
 import { fetch } from "meteor/fetch";
 import { Meteor } from "meteor/meteor";
 import Documents from "../../lib/models/Documents";
+import MeteorUsers from "../../lib/models/MeteorUsers";
 import Settings from "../../lib/models/Settings";
 import listDocumentSheets from "../../methods/listDocumentSheets";
 import defineMethod from "./defineMethod";
@@ -20,6 +21,11 @@ defineMethod(listDocumentSheets, {
     const document = await Documents.findOneAsync(documentId);
     if (!document) {
       throw new Meteor.Error(404, "Document not found");
+    }
+
+    const user = await MeteorUsers.findOneAsync(this.userId);
+    if (!user?.hunts?.includes(document.hunt)) {
+      throw new Meteor.Error(403, "User is not a member of this hunt");
     }
 
     if (

@@ -25,6 +25,7 @@ import {
   versionDecision,
   versionDifferences,
   versionsToPrune,
+  withFreshInsertIds,
 } from "../../../../imports/lib/whiteboard/versions";
 
 const MINUTE = 60 * 1000;
@@ -72,6 +73,8 @@ const edge = (
   target: string,
   fields: Partial<WhiteboardEdgeType> = {},
 ): WhiteboardEdgeType => ({ ...base, _id, source, target, ...fields });
+
+const insertedIdsOf = (p: RestorePlan) => p.nodes.insert.map((n) => n._id);
 
 describe("whiteboard versions", function () {
   describe("versionDecision", function () {
@@ -179,14 +182,42 @@ describe("whiteboard versions", function () {
       });
     });
 
-    it("always writes for reset and restore", function () {
-      const v = version("v", ago(MINUTE), [["alice", ago(MINUTE)]]);
+    it("writes for a reset or restore after an ordinary version", function () {
+      const v = version("v", ago(MINUTE / 2), [["alice", ago(MINUTE / 2)]]);
       for (const kind of ["reset", "restore"] as const) {
         assert.deepEqual(decide([v], { kind }), { action: "new" });
         assert.deepEqual(decide([v], { kind, hash: "a".repeat(64) }), {
           action: "new",
         });
       }
+    });
+
+    it("joins a reset or restore to the same person's one under a minute old", function () {
+      const r = version(
+        "r",
+        ago(VERSION_JOIN_MS - 1000),
+        [["alice", ago(VERSION_JOIN_MS - 1000)]],
+        "restore",
+      );
+      for (const kind of ["reset", "restore"] as const) {
+        assert.deepEqual(decide([r], { kind }), {
+          action: "join",
+          version: "r",
+          listed: true,
+        });
+        // Not someone else's
+        assert.deepEqual(decide([r], { kind, user: "bob" }), {
+          action: "new",
+        });
+      }
+      // Nor once it's a minute old
+      const old = version(
+        "o",
+        ago(VERSION_JOIN_MS),
+        [["alice", ago(VERSION_JOIN_MS)]],
+        "reset",
+      );
+      assert.deepEqual(decide([old], { kind: "restore" }), { action: "new" });
     });
 
     it("never extends or joins a reset or restore version, so the first edit after one snapshots", function () {
@@ -272,9 +303,12 @@ describe("whiteboard versions", function () {
         oldest._id,
         older._id,
       ]);
-      // Resets and restores from the last two hours stay over the cap
+      // Resets and restores count towards it like anything else
       const reset = version(ago(5 * MINUTE), "reset", third);
-      assert.sameMembers(prune([reset, oldest, middle, newest]), [oldest._id]);
+      assert.sameMembers(prune([reset, oldest, middle, newest]), [
+        oldest._id,
+        reset._id,
+      ]);
     });
 
     it("never drops the newest", function () {
@@ -820,6 +854,65 @@ describe("whiteboard versions", function () {
         planRestore({ nodes: [over], edges: [] }, { nodes: [more], edges: [] }),
         { ok: false, reason: "tooMuchInk" },
       );
+    });
+  });
+
+  describe("withFreshInsertIds", function () {
+    const restorePlan = (): RestorePlan => ({
+      nodes: {
+        remove: ["gone"],
+        change: [
+          { _id: "kept", $set: { parent: "taken" }, $unset: {} },
+          { _id: "other", $set: { text: "taken" }, $unset: {} },
+        ],
+        insert: [frame("taken"), node("child", { parent: "taken" })],
+      },
+      edges: {
+        remove: [],
+        change: [{ _id: "e1", $set: { target: "taken" }, $unset: {} }],
+        insert: [edge("line", "child", "taken"), edge("free", "a", "b")],
+      },
+      detach: ["gone"],
+      reattach: [
+        { node: "taken", from: ["taken", "older"] },
+        { node: "child", from: ["child"] },
+      ],
+    });
+
+    it("leaves a plan with nothing renamed as it is", function () {
+      const p = restorePlan();
+      assert.strictEqual(
+        withFreshInsertIds(p, { nodes: new Map(), edges: new Map() }),
+        p,
+      );
+    });
+
+    it("renames a taken node and every reference to it, and a taken line", function () {
+      const p = withFreshInsertIds(restorePlan(), {
+        nodes: new Map([["taken", "fresh1"]]),
+        edges: new Map([["line", "fresh2"]]),
+      });
+      assert.deepEqual(insertedIdsOf(p), ["fresh1", "child"]);
+      assert.equal(p.nodes.insert[1]!.parent, "fresh1");
+      assert.deepEqual(p.nodes.change[0]!.$set, { parent: "fresh1" });
+      // Only references are renamed, not text that happens to match
+      assert.deepEqual(p.nodes.change[1]!.$set, { text: "taken" });
+      assert.deepEqual(p.edges.change[0]!.$set, { target: "fresh1" });
+      assert.deepEqual(
+        p.edges.insert.map((e) => [e._id, e.source, e.target]),
+        [
+          ["fresh2", "child", "fresh1"],
+          ["free", "a", "b"],
+        ],
+      );
+      // Comments come off the old id, or the new one, which a restore of
+      // the same version may have given it before
+      assert.deepEqual(p.reattach, [
+        { node: "fresh1", from: ["taken", "older", "fresh1"] },
+        { node: "child", from: ["child"] },
+      ]);
+      assert.deepEqual(p.nodes.remove, ["gone"]);
+      assert.deepEqual(p.detach, ["gone"]);
     });
   });
 

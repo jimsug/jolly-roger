@@ -98,9 +98,13 @@ function ruleApplies(rule: TagSynonymRule, name: string): boolean {
 // would mean one thing to those checks and another through the table.
 const STRUCTURAL_PREFIXES = ["group:", "meta-for:", "is:"];
 
+// Compared ignoring case, as tags are looked up, so "IS:STUCK" is as
+// structural as "is:stuck".
 const isStructural = (rule: TagSynonymRule) =>
   STRUCTURAL_PREFIXES.some(
-    (prefix) => rule.match.startsWith(prefix) || rule.to.startsWith(prefix),
+    (prefix) =>
+      rule.match.toLowerCase().startsWith(prefix) ||
+      rule.to.toLowerCase().startsWith(prefix),
   ) &&
   // The built-in rules (stuck is is:stuck) are allowed as they are.
   !TAG_SYNONYMS.some(

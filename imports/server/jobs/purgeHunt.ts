@@ -96,12 +96,14 @@ const COLLECTIONS_TO_PURGE = [
   Bookmarks,
   Tags,
   UserStatuses,
-  WhiteboardPresence,
   WhiteboardVersions,
   WhiteboardVersionChunks,
   WhiteboardEdges,
   WhiteboardNodes,
   Whiteboards,
+  // After the boards, so a live update that was let on just before can't
+  // put a row back once they've gone
+  WhiteboardPresence,
 ];
 
 // In the fullness of time, it would be nice if we only had to list models

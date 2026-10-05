@@ -331,6 +331,9 @@ describe("tagSynonymRuleProblems", function () {
         { kind: "tag", match: "wedged", to: "is:stuck" },
         // The built-in rule is allowed as it is
         { kind: "tag", match: "stuck", to: "is:stuck" },
+        // Whatever the case, since tags are looked up ignoring it
+        { kind: "tag", match: "help", to: "IS:STUCK" },
+        { kind: "prefix", match: "Group:", to: "team:" },
       ]),
       [
         [0, "structural"],
@@ -339,6 +342,8 @@ describe("tagSynonymRuleProblems", function () {
         [3, "structural"],
         [4, "structural"],
         [5, "structural"],
+        [7, "structural"],
+        [8, "structural"],
       ],
     );
   });

@@ -12,6 +12,8 @@ import { Id } from "../lib/typedModel/regexes";
 import {
   LIVE_UPDATE_BURST,
   LIVE_UPDATES_PER_SECOND,
+  LIVE_USER_UPDATE_BURST,
+  LIVE_USER_UPDATES_PER_SECOND,
   MAX_INK_POINTS,
   MAX_LIVE_DRAG_NODES,
   MAX_LIVE_SELECTION,
@@ -22,6 +24,8 @@ import { registerPeriodicCleanupHook } from "./garbage-collection";
 import type { WhiteboardPresenceType } from "./models/WhiteboardPresence";
 import WhiteboardPresence from "./models/WhiteboardPresence";
 import onExit from "./onExit";
+import type { Bucket } from "./rateLimits";
+import { refill, remember } from "./rateLimits";
 import serverId from "./serverId";
 import { inRange, isInkPoint } from "./whiteboardShared";
 
@@ -40,10 +44,15 @@ interface CachedAccess {
   // following; someone who can only view (on an archived hunt) doesn't.
   mayComment: boolean;
   until: number;
+  // Set when a change drops this answer, or when one landed while it was
+  // being worked out, so an update that read it knows it may be stale.
+  dropped?: boolean;
 }
 type Watch = Promise<{ stop: () => void }>;
 interface ConnectionState {
   connection: string;
+  // Only ever holds boards the connection has been let onto, as do written
+  // and stops, and at most MAX_TRACKED_BOARDS of them.
   boards: Map<string, CachedAccess>;
   // Bumped whenever this connection's answers are dropped, so a check that
   // was reading at the time doesn't remember what it read.
@@ -63,20 +72,29 @@ interface ConnectionState {
   // when either cleanup ran takes its document back out.
   stops: Map<string, number>;
   closed: boolean;
-  // Updates run side by side (the method unblocks), so each board counts
-  // the updates it's been sent and the latest one written. An update that's
-  // overtaken while it looks things up isn't written over the newer one.
-  sent: Map<string, number>;
+  // Updates run side by side (the method unblocks), so the connection
+  // numbers the updates it's sent, and each board remembers the latest one
+  // written there. An update that's overtaken while it looks things up isn't
+  // written over the newer one.
+  sent: number;
   written: Map<string, number>;
-  // A token bucket for the connection's live updates, across every board:
-  // up to LIVE_UPDATE_BURST tokens, refilled at LIVE_UPDATES_PER_SECOND,
-  // one taken per update. droppedLoggedAt is when dropping updates was last
-  // logged, so a flood logs once a minute at most.
-  tokens: number;
-  refilledAt: number;
+  // The connection's live updates, across every board: LIVE_UPDATE_BURST
+  // tokens refilled at LIVE_UPDATES_PER_SECOND. droppedLoggedAt is when
+  // dropping updates was last logged, so a flood logs once a minute at most.
+  bucket: Bucket;
   droppedLoggedAt: number;
 }
 const connections = new Map<string, ConnectionState>();
+// Each person's live updates across all their connections:
+// LIVE_USER_UPDATE_BURST tokens refilled at LIVE_USER_UPDATES_PER_SECOND.
+// A full bucket is the same as none, so those are dropped as connections
+// close.
+const userBuckets = new Map<string, Bucket>();
+
+// How many boards a connection's bookkeeping remembers. A tab is on one
+// board at a time, so this only matters to a connection that moves between
+// boards, which forgets the one it used longest ago.
+const MAX_TRACKED_BOARDS = 16;
 // As ConnectionState.epoch, for changes to boards and hunts.
 let boardsEpoch = 0;
 
@@ -103,16 +121,16 @@ function connectionState(connection: Meteor.Connection): ConnectionState {
     validatedFollowed: "",
     stops: new Map(),
     closed: false,
-    sent: new Map(),
+    sent: 0,
     written: new Map(),
-    tokens: LIVE_UPDATE_BURST,
-    refilledAt: Date.now(),
+    bucket: { tokens: LIVE_UPDATE_BURST, refilledAt: Date.now() },
     droppedLoggedAt: Number.NEGATIVE_INFINITY,
   };
   connections.set(connection.id, state);
   connection.onClose(() => {
     state.closed = true;
     connections.delete(connection.id);
+    dropFullUserBuckets();
     stopWatch(state.userWatch);
     WhiteboardPresence.removeAsync({ connection: connection.id }).catch(
       (error: unknown) => {
@@ -128,18 +146,30 @@ function connectionState(connection: Meteor.Connection): ConnectionState {
 
 const DROPPED_LOG_INTERVAL = 60 * 1000;
 
-// Takes a token for one live update, or says there isn't one. Live updates
-// come again a moment later, so one that's dropped is only ever a little
-// late, and nothing is sent back.
+function dropFullUserBuckets() {
+  const now = Date.now();
+  userBuckets.forEach((bucket, userId) => {
+    refill(bucket, now, LIVE_USER_UPDATE_BURST, LIVE_USER_UPDATES_PER_SECOND);
+    if (bucket.tokens >= LIVE_USER_UPDATE_BURST) userBuckets.delete(userId);
+  });
+}
+
+// Takes a token for one live update from the connection's bucket and the
+// person's, or says there isn't one in both. Live updates come again a
+// moment later, so one that's dropped is only ever a little late, and
+// nothing is sent back.
 function takeLiveToken(state: ConnectionState, userId: string) {
   const now = Date.now();
-  state.tokens = Math.min(
-    LIVE_UPDATE_BURST,
-    state.tokens + ((now - state.refilledAt) / 1000) * LIVE_UPDATES_PER_SECOND,
-  );
-  state.refilledAt = now;
-  if (state.tokens >= 1) {
-    state.tokens -= 1;
+  refill(state.bucket, now, LIVE_UPDATE_BURST, LIVE_UPDATES_PER_SECOND);
+  const userBucket = userBuckets.get(userId) ?? {
+    tokens: LIVE_USER_UPDATE_BURST,
+    refilledAt: now,
+  };
+  userBuckets.set(userId, userBucket);
+  refill(userBucket, now, LIVE_USER_UPDATE_BURST, LIVE_USER_UPDATES_PER_SECOND);
+  if (state.bucket.tokens >= 1 && userBucket.tokens >= 1) {
+    state.bucket.tokens -= 1;
+    userBucket.tokens -= 1;
     return true;
   }
   if (now - state.droppedLoggedAt >= DROPPED_LOG_INTERVAL) {
@@ -156,7 +186,10 @@ function forgetAccess(matches: (entry: CachedAccess) => boolean) {
   boardsEpoch += 1;
   for (const state of connections.values()) {
     for (const [key, entry] of state.boards) {
-      if (matches(entry)) state.boards.delete(key);
+      if (matches(entry)) {
+        entry.dropped = true;
+        state.boards.delete(key);
+      }
     }
   }
 }
@@ -274,23 +307,26 @@ async function watchUser(state: ConnectionState, userId: string) {
   await state.userWatch;
 }
 
+// What userId may do on the board, and the connection's epoch it was worked
+// out under. The answer's dropped flag and that epoch say whether it may
+// have changed since.
 async function boardAccess(
   userId: string,
   boardId: string,
   state: ConnectionState,
-): Promise<CachedAccess> {
+): Promise<{ access: CachedAccess; epoch: number }> {
   // Keyed by user too, so logging in as someone else on the same connection
   // doesn't inherit the previous user's access.
   const key = `${userId}:${boardId}`;
   const cached = state.boards.get(key);
   if (cached && cached.until > Date.now() && state.watchedUser === userId) {
-    return cached;
+    return { access: cached, epoch: state.epoch };
   }
 
   // The watch starts before anything is read, so no change slips between
   // the read and the watch.
   await watchUser(state, userId);
-  const epochs = [boardsEpoch, state.epoch];
+  const epochs: [number, number] = [boardsEpoch, state.epoch];
   const board = await Whiteboards.findOneAsync(boardId);
   const hunt = board ? await Hunts.findOneAsync(board.hunt) : undefined;
   const user = await MeteorUsers.findOneAsync(userId, {
@@ -300,7 +336,7 @@ async function boardAccess(
   if (!board || access === "none") {
     throw new Meteor.Error(403, "Not a member of this hunt");
   }
-  const entry = {
+  const entry: CachedAccess = {
     board: boardId,
     hunt: board.hunt,
     mayEdit: access === "edit",
@@ -308,9 +344,11 @@ async function boardAccess(
     until: Date.now() + MEMBERSHIP_TTL,
   };
   if (epochs[0] === boardsEpoch && epochs[1] === state.epoch) {
-    state.boards.set(key, entry);
+    remember(state.boards, key, entry, MAX_TRACKED_BOARDS);
+  } else {
+    entry.dropped = true;
   }
-  return entry;
+  return { access: entry, epoch: epochs[1] };
 }
 
 const invalidLiveUpdate = () => new Meteor.Error(400, "Invalid live update");
@@ -395,6 +433,9 @@ export async function setLive(
   boardId: string,
   live: WhiteboardLiveState,
 ) {
+  // Nothing is kept for a board until the caller is shown to be allowed on
+  // it, so the method's check of the id is repeated here.
+  if (!Id.test(boardId)) throw invalidLiveUpdate();
   // Read before anything is awaited, so a close or unsubscribe that lands
   // while this call is under way shows up as a change.
   const state = connectionState(connection);
@@ -402,8 +443,8 @@ export async function setLive(
   const stops = state.stops.get(boardId) ?? 0;
   const cleanedUp = () =>
     state.closed || (state.stops.get(boardId) ?? 0) !== stops;
-  const seq = (state.sent.get(boardId) ?? 0) + 1;
-  state.sent.set(boardId, seq);
+  state.sent += 1;
+  const seq = state.sent;
 
   if (
     (await Flags.activeAsync("disable.whiteboard")) ||
@@ -413,11 +454,8 @@ export async function setLive(
   }
   validateLive(live);
 
-  const { hunt, mayEdit, mayComment } = await boardAccess(
-    userId,
-    boardId,
-    state,
-  );
+  const { access, epoch } = await boardAccess(userId, boardId, state);
+  const { hunt, mayEdit, mayComment } = access;
   // Someone who can't edit still shows their cursor, but nothing they drag,
   // draw, select or type in, and someone who can only view doesn't show what
   // they're looking at or who they follow either. Dropped rather than
@@ -473,7 +511,10 @@ export async function setLive(
   }
 
   if (cleanedUp() || (state.written.get(boardId) ?? 0) > seq) return;
-  state.written.set(boardId, seq);
+  remember(state.written, boardId, seq, MAX_TRACKED_BOARDS);
+  // Who may do what changed while this looked things up (a demotion, say),
+  // so only the cursor goes through rather than what was allowed before.
+  const accessChanged = access.dropped === true || epoch !== state.epoch;
   // Only the caller's own connection's document is ever written.
   const selector = { board: boardId, connection: connection.id };
   await WhiteboardPresence.upsertAsync(selector, {
@@ -482,22 +523,48 @@ export async function setLive(
       user: userId,
       server: serverId,
       cursor: live.cursor,
-      drag,
-      stroke,
-      selection,
-      editing,
-      editingAt,
-      view,
-      followedUser,
+      ...(accessChanged
+        ? { ...NO_LIVE_EDITS, ...NO_FOLLOWING }
+        : {
+            drag,
+            stroke,
+            selection,
+            editing,
+            editingAt,
+            view,
+            followedUser,
+          }),
     },
   });
   if (cleanedUp()) await WhiteboardPresence.removeAsync(selector);
 }
 
-// For the presence publication's onStop.
+// How many boards a connection's bookkeeping holds, for tests.
+export function trackedBoardCounts(connectionId: string) {
+  const state = connections.get(connectionId);
+  return (
+    state && {
+      boards: state.boards.size,
+      written: state.written.size,
+      stops: state.stops.size,
+    }
+  );
+}
+
+// For the presence publication's onStop, which only runs for a board the
+// subscriber is a member of. Updates after this are numbered after any that
+// were under way, so the board's last written number isn't needed.
 export async function removePresence(boardId: string, connectionId: string) {
   const state = connections.get(connectionId);
-  state?.stops.set(boardId, (state.stops.get(boardId) ?? 0) + 1);
+  if (state) {
+    remember(
+      state.stops,
+      boardId,
+      (state.stops.get(boardId) ?? 0) + 1,
+      MAX_TRACKED_BOARDS,
+    );
+    state.written.delete(boardId);
+  }
   await WhiteboardPresence.removeAsync({
     board: boardId,
     connection: connectionId,
@@ -518,6 +585,19 @@ Meteor.startup(async () => {
     { projection: { editPolicy: 1, editors: 1 } },
   ).observeChangesAsync({
     changed: (boardId) => forgetBoardAccess(boardId),
+    // A purged board takes its presence with it, so an update that was
+    // still allowed a moment ago can't put a row back.
+    removed: (boardId) => {
+      forgetBoardAccess(boardId);
+      WhiteboardPresence.removeAsync({ board: boardId }).catch(
+        (error: unknown) => {
+          Logger.warn("Failed to remove a removed whiteboard's presence", {
+            board: boardId,
+            error,
+          });
+        },
+      );
+    },
   });
   const hunts = await Hunts.find(
     {},

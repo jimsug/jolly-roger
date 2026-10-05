@@ -2,6 +2,7 @@ import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { TFunction } from "i18next";
 import type React from "react";
 import type { ChangeEvent, MouseEvent, SubmitEvent } from "react";
 import {
@@ -24,6 +25,7 @@ import Tab from "react-bootstrap/Tab";
 import Tabs from "react-bootstrap/Tabs";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import { MAX_UPLOAD_BYTES } from "../../lib/imageUploads";
 import createDocumentImageUpload from "../../methods/createDocumentImageUpload";
 import type { ImageSource } from "../../methods/insertDocumentImage";
 import insertDocumentImage from "../../methods/insertDocumentImage";
@@ -143,11 +145,13 @@ const makeImageSource = async ({
   imageSource,
   file,
   imageUrl,
+  t,
 }: {
   documentId: string;
   imageSource: string;
   file?: File;
   imageUrl: string;
+  t: TFunction;
 }): Promise<ImageSource> => {
   if (imageSource === "link") {
     return {
@@ -180,6 +184,16 @@ const makeImageSource = async ({
     };
   }
 
+  // The bucket would refuse it, and the no-cors POST below can't see a
+  // refusal, so the sheet would be sent an image that isn't there.
+  if (uploadFile.size > MAX_UPLOAD_BYTES) {
+    throw new InvalidImage(
+      t("chat.imageUpload.tooBig", "Images can be at most {{size}} MB.", {
+        size: MAX_UPLOAD_BYTES / (1024 * 1024),
+      }),
+    );
+  }
+
   const { publicUrl, uploadUrl, fields } = upload;
   const formData = new FormData();
   for (const [key, value] of Object.entries(fields)) {
@@ -207,6 +221,7 @@ const InsertImageModal = ({
   sheets: Sheet[];
   ref: React.Ref<ImageInsertModalHandle>;
 }) => {
+  const { t } = useTranslation();
   // Pop up by default when first rendered.
   const [visible, setVisible] = useState(true);
   const show = useCallback(() => setVisible(true), []);
@@ -271,6 +286,7 @@ const InsertImageModal = ({
             imageSource,
             file,
             imageUrl: url,
+            t,
           });
 
           await insertDocumentImage.callPromise({
@@ -295,14 +311,12 @@ const InsertImageModal = ({
         }
       })();
     },
-    [documentId, imageSource, file, url, sheet, hide],
+    [documentId, imageSource, file, url, sheet, hide, t],
   );
 
   const submitDisabled = submitState === InsertImageSubmitState.SUBMITTING;
 
   const idPrefix = useId();
-
-  const { t } = useTranslation();
 
   const modal = (
     <Modal show={visible} onHide={hide}>

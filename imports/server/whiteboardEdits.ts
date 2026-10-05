@@ -37,7 +37,7 @@ import {
 import type { CommentAnchorInput } from "../methods/sendChatMessage";
 import type { WhiteboardEdgeInput } from "../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../methods/upsertWhiteboardNodes";
-import { imageBucket, imageObjectUrl } from "./getS3UploadParams";
+import { assertStoredImages } from "./getS3UploadParams";
 import { deferSyncRoundsOnBoard } from "./whiteboard";
 import { detachComments } from "./whiteboardComments";
 import {
@@ -55,6 +55,7 @@ import {
   recordVersionBeforeLockedEdit,
   withBoardLock,
 } from "./whiteboardVersions";
+import withLock from "./withLock";
 
 // Types whose content belongs to whoever wrote it.
 const NATIVE_TYPES = new Set([
@@ -262,29 +263,6 @@ const sameImage = (
   a: NonNullable<WhiteboardNodeInput["image"]>,
   b: WhiteboardNodeType["image"],
 ) => !!b && a.url === b.url && a.width === b.width && a.height === b.height;
-
-// An image node shows an object uploaded as chat images are (see
-// createChatImageUpload): one in the image bucket keyed by this hunt's id, a
-// puzzle's id and the upload's own. Purging a hunt removes everything under
-// its id, so an image from another hunt could vanish from this board.
-// Anything else, including when there's no bucket, is refused.
-async function assertStoredImages(huntId: string, urls: string[]) {
-  if (urls.length === 0) return;
-  const bucket = await imageBucket();
-  const prefix = bucket ? imageObjectUrl(bucket, "") : undefined;
-  urls.forEach((url) => {
-    const key =
-      prefix && url.startsWith(prefix) ? url.slice(prefix.length) : "";
-    const parts = key.split("/");
-    if (
-      parts.length !== 3 ||
-      parts[0] !== huntId ||
-      !parts.every((part) => Id.test(part))
-    ) {
-      throw badRequest("That image isn't one we stored");
-    }
-  });
-}
 
 // Image nodes come with an image, nothing else has one, and an image never
 // changes once it's on the board. Returns how many images the batch adds,
@@ -641,7 +619,10 @@ const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
 // Resizing a frame from its top or left edge moves its origin, and the
 // client keeps the frame's contents still by moving each child the other
 // way. A locked child's new position is allowed when it's only that: its
-// frame moves in the same batch and it stays where it was on the board.
+// frame is resized in the same batch, an origin that moves keeps the
+// opposite edge where it was (as a resize from that side does), and the
+// child stays where it was on the board, measured against where the batch
+// leaves the frame.
 function staysPutInMovedFrame(
   input: WhiteboardNodeInput,
   existing: WhiteboardNodeType,
@@ -656,19 +637,37 @@ function staysPutInMovedFrame(
     return false;
   }
   const parent = existingById.get(existing.parent);
-  const parentInput = inputs.find((i) => i._id === existing.parent);
-  if (!parent || !parentInput?.position || parentInput.parent !== undefined) {
+  const parentInputs = inputs.filter((i) => i._id === existing.parent);
+  const position = parentInputs.findLast((i) => i.position)?.position;
+  const width = parentInputs.findLast((i) => i.width !== undefined)?.width;
+  const height = parentInputs.findLast((i) => i.height !== undefined)?.height;
+  if (
+    !parent ||
+    !position ||
+    parentInputs.some((i) => i.parent !== undefined) ||
+    ((width === undefined || width === parent.width) &&
+      (height === undefined || height === parent.height))
+  ) {
+    return false;
+  }
+  const keepsEdge = (
+    from: number,
+    to: number,
+    size: number | undefined,
+    newSize: number | undefined,
+  ) => near(from, to) || near(from + (size ?? 0), to + (newSize ?? size ?? 0));
+  if (
+    !keepsEdge(parent.position.x, position.x, parent.width, width) ||
+    !keepsEdge(parent.position.y, position.y, parent.height, height)
+  ) {
     return false;
   }
   return (
     near(
       parent.position.x + existing.position.x,
-      parentInput.position.x + input.position.x,
+      position.x + input.position.x,
     ) &&
-    near(
-      parent.position.y + existing.position.y,
-      parentInput.position.y + input.position.y,
-    )
+    near(parent.position.y + existing.position.y, position.y + input.position.y)
   );
 }
 
@@ -1324,27 +1323,31 @@ export async function setCommentResolved(
 }
 
 // Authors can take back a comment until someone else replies to it. Operators
-// can always delete one. The whole thread goes with it.
+// can always delete one. The whole thread goes with it. Replies are written
+// under the thread's lock (see sendChatMessageInternal), so one can't land
+// between the check for replies and the delete.
 export async function deleteComment(userId: string, messageId: string) {
   const { message, hunt, user } = await rootCommentForWrite(userId, messageId);
-  if (!userMayWritePuzzlesForHunt(user, hunt)) {
-    if (message.sender !== userId) {
-      throw new Meteor.Error(403, "Only its author can delete a comment");
+  await withLock(`chat-message:${messageId}:thread`, async () => {
+    if (!userMayWritePuzzlesForHunt(user, hunt)) {
+      if (message.sender !== userId) {
+        throw new Meteor.Error(403, "Only its author can delete a comment");
+      }
+      const othersReplies = await ChatMessages.find({
+        thread: messageId,
+        sender: { $ne: userId },
+      }).fetchAsync();
+      if (othersReplies.some((reply) => !isReaction(reply))) {
+        throw new Meteor.Error(
+          403,
+          "Someone has replied, so only an operator can delete this comment",
+        );
+      }
     }
-    const othersReplies = await ChatMessages.find({
-      thread: messageId,
-      sender: { $ne: userId },
-    }).fetchAsync();
-    if (othersReplies.some((reply) => !isReaction(reply))) {
-      throw new Meteor.Error(
-        403,
-        "Someone has replied, so only an operator can delete this comment",
-      );
-    }
-  }
 
-  await ChatMessages.destroyAsync({
-    $or: [{ _id: messageId }, { thread: messageId }],
+    await ChatMessages.destroyAsync({
+      $or: [{ _id: messageId }, { thread: messageId }],
+    });
+    await ChatNotifications.destroyAsync({ thread: messageId });
   });
-  await ChatNotifications.destroyAsync({ thread: messageId });
 }

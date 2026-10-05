@@ -12,6 +12,7 @@ import {
   frameLabel,
   GAP,
   isMetaForTag,
+  limitFeedersPerMeta,
   placeIntoFrame,
   roundMetas,
   roundTags,
@@ -19,6 +20,10 @@ import {
   seedLayout,
   topLevelSlot,
 } from "../../../../imports/lib/whiteboard/layout";
+import {
+  MAX_EDGES_PER_BOARD,
+  MAX_FEEDERS_PER_META,
+} from "../../../../imports/lib/whiteboard/limits";
 
 const hunt = "hunt_id";
 const user = "user";
@@ -268,6 +273,63 @@ describe("whiteboard computeFeederPairs", function () {
     const { tags, puzzles, puzzle } = fixtures();
     puzzle("selfish", ["group:A", "meta-for:A"]);
     assert.deepEqual(computeFeederPairs(puzzles, tags), []);
+  });
+});
+
+describe("whiteboard limitFeedersPerMeta", function () {
+  it("keeps every pair for a meta at the limit, and nothing for none", function () {
+    const { tags, puzzles, puzzle } = fixtures();
+    puzzle("meta", ["meta-for:A"]);
+    for (let i = 0; i < MAX_FEEDERS_PER_META; i++) puzzle(`f${i}`, ["group:A"]);
+    const pairs = computeFeederPairs(puzzles, tags);
+    assert.deepEqual(limitFeedersPerMeta(pairs, puzzles), {
+      pairs,
+      overLimit: [],
+    });
+    assert.deepEqual(limitFeedersPerMeta([], []), {
+      pairs: [],
+      overLimit: [],
+    });
+  });
+
+  it("keeps the feeders created first for a meta past the limit, and every other meta's", function () {
+    const { tags, puzzles, puzzle } = fixtures();
+    puzzle("big", ["meta-for:A"]);
+    puzzle("small", ["meta-for:B"]);
+    puzzle("b1", ["group:B"]);
+    const feeders = Array.from({ length: MAX_FEEDERS_PER_META + 2 }, (_, i) =>
+      puzzle(`f${i}`, ["group:A"]),
+    );
+    // The first two were created last
+    feeders[0]!.createdAt = new Date(9_000_000);
+    feeders[1]!.createdAt = new Date(9_000_001);
+    const { pairs, overLimit } = limitFeedersPerMeta(
+      computeFeederPairs(puzzles, tags),
+      puzzles,
+    );
+    assert.deepEqual(overLimit, ["puz_big"]);
+    assert.sameMembers(
+      pairs.filter((p) => p.meta === "puz_big").map((p) => p.feeder),
+      feeders.slice(2).map((p) => p._id),
+    );
+    assert.deepEqual(
+      pairs.filter((p) => p.meta === "puz_small"),
+      [{ feeder: "puz_b1", meta: "puz_small" }],
+    );
+  });
+
+  it("caps a new board's arrows", function () {
+    const { tags, puzzles, puzzle } = fixtures();
+    // Every puzzle feeds every other: 60 x 59 pairs
+    for (let i = 0; i < 60; i++) puzzle(`p${i}`, ["group:A", "meta-for:A"]);
+    assert.isAbove(
+      computeFeederPairs(puzzles, tags).length,
+      MAX_EDGES_PER_BOARD,
+    );
+    assert.lengthOf(
+      seedLayout(puzzles, tags, UNGROUPED).edges,
+      MAX_EDGES_PER_BOARD,
+    );
   });
 });
 

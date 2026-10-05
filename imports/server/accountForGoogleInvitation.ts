@@ -87,11 +87,21 @@ export default async function accountForGoogleInvitation({
         user: existing._id,
         placeholder,
       });
+      // A placeholder's invite links stop working once it's claimed, as
+      // they would had it been claimed through one of them.
       await MeteorUsers.updateAsync(existing._id, {
         $set: {
           ...google,
           ...(existing.displayName ? {} : { displayName: name }),
         },
+        ...(placeholder
+          ? {
+              $unset: {
+                "services.password.enroll": 1,
+                "services.password.reset": 1,
+              },
+            }
+          : {}),
       });
       return existing._id;
     }

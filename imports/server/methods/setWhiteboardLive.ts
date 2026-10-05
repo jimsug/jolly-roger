@@ -7,12 +7,13 @@ import {
 import setWhiteboardLive from "../../methods/setWhiteboardLive";
 import { InkPointPattern } from "../whiteboardEdits";
 import { setLive } from "../whiteboardLive";
+import { IdPattern } from "../whiteboardShared";
 import defineMethod from "./defineMethod";
 
 defineMethod(setWhiteboardLive, {
   validate(arg) {
     check(arg, {
-      boardId: String,
+      boardId: IdPattern,
       cursor: Match.OneOf(null, { x: Number, y: Number }),
       drag: Match.OneOf(null, [
         {
