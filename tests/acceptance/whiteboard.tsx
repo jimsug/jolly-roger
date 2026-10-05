@@ -4014,6 +4014,19 @@ if (Meteor.isClient) {
         localStorage.removeItem(`whiteboard:viewport:${boardId}`);
       const removeNodes = (nodeIds: string[]) =>
         deleteWhiteboardNodes.callPromise({ boardId, nodeIds });
+      // Errors the page reports from now until stopped, such as React
+      // Flow's ResizeObserver reporting a loop.
+      const collectPageErrors = () => {
+        const errors: string[] = [];
+        const onError = (event: ErrorEvent) => {
+          errors.push(event.message);
+        };
+        window.addEventListener("error", onError);
+        return {
+          errors,
+          stop: () => window.removeEventListener("error", onError),
+        };
+      };
       const nodeShown = (id: string) =>
         waitFor(
           () => {
@@ -4342,6 +4355,111 @@ if (Meteor.isClient) {
             { timeout: 10000 },
           );
         } finally {
+          forgetView();
+          await removeNodes([sticky, frame]);
+        }
+      });
+
+      it("resizes a frame and a note without React Flow reporting a resize loop", async function () {
+        this.timeout(30000);
+        const frame = Random.id();
+        const sticky = Random.id();
+        const base = { x: 22000, y: 23000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: frame,
+              type: "frame",
+              position: base,
+              width: 600,
+              height: 400,
+              label: "Resize me",
+            },
+            {
+              _id: sticky,
+              type: "sticky",
+              parent: frame,
+              position: { x: 100, y: 100 },
+              width: 200,
+              height: 160,
+              text: "Resize me too",
+            },
+          ],
+        });
+        // Zoomed so that the sizes a drag sets aren't whole pixels
+        const zoom = 0.73;
+        lookAt({ x: base.x - 200, y: base.y - 100 }, zoom);
+        const page = collectPageErrors();
+        try {
+          await openBoard();
+          // Drags a corner handle in steps, with a frame drawn between them
+          const drag = async (id: string, dx: number, dy: number) => {
+            await select(id);
+            const corner = await waitFor(() => {
+              const found = nodeElement(id)?.querySelector(
+                ".react-flow__resize-control.handle.bottom.right",
+              );
+              assert.exists(found);
+              return found;
+            });
+            const box = corner.getBoundingClientRect();
+            const start = {
+              clientX: box.left + box.width / 2,
+              clientY: box.top + box.height / 2,
+            };
+            const mouse = { button: 0, view: window };
+            await act(async () => {
+              fireEvent.mouseDown(corner, { ...mouse, ...start });
+              await stabilize();
+            });
+            for (let step = 1; step <= 5; step++) {
+              await act(async () => {
+                fireEvent.mouseMove(window, {
+                  ...mouse,
+                  clientX: start.clientX + (dx * step) / 5,
+                  clientY: start.clientY + (dy * step) / 5,
+                });
+                await new Promise((resolve) => {
+                  requestAnimationFrame(() => setTimeout(resolve, 20));
+                });
+              });
+            }
+            await act(async () => {
+              fireEvent.mouseUp(window, {
+                ...mouse,
+                clientX: start.clientX + dx,
+                clientY: start.clientY + dy,
+              });
+              await stabilize();
+            });
+          };
+          await drag(frame, 100, 50);
+          await drag(sticky, 40, 20);
+          await waitFor(
+            async () => {
+              assert.closeTo(
+                (await savedNode(frame))?.width ?? 0,
+                600 + 100 / zoom,
+                1,
+              );
+              assert.closeTo(
+                (await savedNode(sticky))?.height ?? 0,
+                160 + 20 / zoom,
+                1,
+              );
+            },
+            { timeout: 10000 },
+          );
+          await new Promise((resolve) => {
+            setTimeout(resolve, 500);
+          });
+          assert.deepEqual(
+            page.errors.filter((e) => e.includes("ResizeObserver")),
+            [],
+          );
+        } finally {
+          page.stop();
           forgetView();
           await removeNodes([sticky, frame]);
         }
@@ -5232,19 +5350,6 @@ if (Meteor.isClient) {
           }
         });
 
-        // Errors the page reports from now until stopped, such as React
-        // Flow's ResizeObserver reporting a loop.
-        const collectPageErrors = () => {
-          const errors: string[] = [];
-          const onError = (event: ErrorEvent) => {
-            errors.push(event.message);
-          };
-          window.addEventListener("error", onError);
-          return {
-            errors,
-            stop: () => window.removeEventListener("error", onError),
-          };
-        };
         // Every value an element's style property takes from now until
         // stopped, starting with the one it has.
         const watchStyle = (
@@ -10505,6 +10610,200 @@ if (Meteor.isClient) {
           // With no preview, Escape closes History
           await press(document.body, { key: "Escape" });
           assert.isNull(screen.queryByRole("button", { name: "Now" }));
+        });
+
+        it("previews a version of a busy board without React Flow reporting a resize loop", async function () {
+          this.timeout(60000);
+          const base = { x: 30000, y: 31000 };
+          const round = Random.id();
+          const inner = Random.id();
+          const folded = Random.id();
+          const notes = Array.from({ length: 6 }, () => Random.id());
+          const text = Random.id();
+          const shape = Random.id();
+          const ink = [Random.id(), Random.id()];
+          const end = Random.id();
+          const added = Random.id();
+          const stroke = Random.id();
+          const wrapped =
+            "A note that wraps over several lines, with **bold** words in it.\n\nAnd a second paragraph below the first.";
+          // A board with a bit of everything: nested and collapsed frames,
+          // notes that wrap, a text box, a shape, an ink stroke and lines
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: round,
+                type: "frame",
+                position: base,
+                width: 1200.4,
+                height: 800.6,
+                label: "Round of notes",
+              },
+              {
+                _id: inner,
+                type: "frame",
+                parent: round,
+                position: { x: 600, y: 100 },
+                width: 500,
+                height: 400,
+                label: "Inner round",
+              },
+              {
+                _id: folded,
+                type: "frame",
+                position: { x: base.x + 1300, y: base.y },
+                width: 500,
+                height: 400,
+                label: "Folded round",
+                collapsed: true,
+              },
+              ...notes.map((_id, i) => ({
+                _id,
+                type: "sticky" as const,
+                parent: i < 3 ? round : i < 5 ? inner : folded,
+                position: { x: 40 + (i % 3) * 200, y: 80 + (i < 3 ? 0 : 160) },
+                width: 160,
+                height: 120,
+                text: wrapped,
+              })),
+              {
+                _id: text,
+                type: "text",
+                position: { x: base.x, y: base.y + 900 },
+                width: 300,
+                height: 48,
+                text: "Words under the round",
+              },
+              {
+                _id: shape,
+                type: "shape",
+                shape: "ellipse",
+                parent: round,
+                position: { x: 20, y: 60 },
+                width: 420,
+                height: 300,
+                color: "blue",
+              },
+              ...ink.map((_id, i) => ({
+                _id,
+                type: "ink" as const,
+                position: { x: base.x + i * 200, y: base.y + 850 },
+                width: 200,
+                height: 40,
+                points: Array.from(
+                  { length: 41 },
+                  (_, j): [number, number, number] => [
+                    j * 5,
+                    20 + Math.sin(j / 4) * 15,
+                    0.5,
+                  ],
+                ),
+                strokeWidth: "medium" as const,
+                color: "black" as const,
+                stroke,
+              })),
+              {
+                _id: end,
+                type: "point",
+                position: { x: base.x + 1400, y: base.y + 900 },
+              },
+            ],
+          });
+          await upsertWhiteboardEdges.callPromise({
+            boardId,
+            edges: [
+              { _id: Random.id(), source: notes[0]!, target: notes[3]! },
+              { _id: Random.id(), source: notes[1]!, target: end },
+            ],
+          });
+          await clearWhiteboardVersions.callPromise({ boardId });
+          // The version keeps the board as it was; since then things have
+          // moved, grown, been added and taken away, and frames have folded
+          // the other way
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              { _id: round, width: 1400.3, height: 900.7 },
+              { _id: inner, position: { x: 700, y: 150 }, collapsed: true },
+              { _id: folded, collapsed: false },
+              {
+                _id: notes[0]!,
+                position: { x: 300, y: 400 },
+                width: 240,
+                height: 200,
+              },
+              { _id: notes[1]!, parent: inner, position: { x: 40, y: 80 } },
+              { _id: notes[2]!, text: "Short" },
+              { _id: text, width: 400, text: "Other words under the round" },
+              {
+                _id: added,
+                type: "sticky",
+                parent: round,
+                position: { x: 900, y: 600 },
+                width: 160,
+                height: 120,
+                text: "Added since",
+              },
+            ],
+          });
+          await removeNodes([notes[4]!, shape, ink[1]!]);
+          lookAt({ x: base.x - 100, y: base.y - 100 }, 0.73);
+          const page = collectPageErrors();
+          try {
+            await openBoard();
+            await nodeShown(added);
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: "History" }));
+              await stabilize();
+            });
+            const row = await waitFor(
+              () => {
+                const found = [
+                  ...document.querySelectorAll<HTMLElement>(
+                    ".react-flow__panel.top.right button",
+                  ),
+                ].find((b) => b.textContent?.startsWith("Before edits"));
+                assert.exists(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            await act(async () => {
+              fireEvent.click(row);
+              await stabilize();
+            });
+            await screen.findByText(
+              /^Viewing the board as it was at /,
+              {},
+              { timeout: 10000 },
+            );
+            // The board as it was: the note since taken away is back, and
+            // the one since added is gone
+            await nodeShown(notes[4]!);
+            await waitFor(() => assert.isNull(nodeElement(added)));
+            // Long enough for React Flow to measure what's changed
+            await new Promise((resolve) => {
+              setTimeout(resolve, 500);
+            });
+            assert.deepEqual(
+              page.errors.filter((e) => e.includes("ResizeObserver")),
+              [],
+            );
+          } finally {
+            page.stop();
+            forgetView();
+            await removeNodes([
+              round,
+              inner,
+              folded,
+              ...notes.filter((id) => id !== notes[4]),
+              text,
+              ink[0]!,
+              end,
+              added,
+            ]);
+          }
         });
 
         describe("who's here and following", function () {

@@ -2345,7 +2345,12 @@ it as the header it is. A collapse or expand snaps rather than gliding as
 other changes do, as does any size change from elsewhere (someone else's
 resize, Fit to contents, a frame growing, or undoing one of those), along with
 the frame's contents: a size that changes on every animation frame has React
-Flow's ResizeObserver report a loop. Moves from elsewhere still glide.
+Flow's ResizeObserver report a loop. Moves from elsewhere still glide. A
+step of this viewer's own resize is drawn before its pointer event ends
+(`flushSync` in `onNodesChange`): left queued, React 19 would flush it with
+the re-render React Flow's ResizeObserver callback makes on measuring the
+step before, changing the node's box inside that delivery, which the browser
+reports as the same loop on every move.
 
 The folding is worked out on the client: `foldedInto` in
 `imports/lib/whiteboard/collapse.ts` maps each hidden node to the outermost

@@ -77,6 +77,7 @@ import ButtonGroup from "react-bootstrap/ButtonGroup";
 import FormSelect from "react-bootstrap/FormSelect";
 import Modal from "react-bootstrap/Modal";
 import Spinner from "react-bootstrap/Spinner";
+import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import styled, { css, useTheme } from "styled-components";
@@ -2103,7 +2104,17 @@ const CanvasInner = ({
           );
         }
       }
-      setNodes((nds) => applyNodeChanges([...changes, ...extra], nds));
+      const apply = () =>
+        setNodes((nds) => applyNodeChanges([...changes, ...extra], nds));
+      // A resize step is drawn before the pointer event ends. Left queued, it
+      // would be flushed by the re-render React Flow's ResizeObserver callback
+      // makes on measuring the step before, changing the node's box inside
+      // that delivery, which the browser reports as a ResizeObserver loop.
+      if (resizing) {
+        flushSync(apply);
+      } else {
+        apply();
+      }
     },
     [flow, setNodes, markPending, markBusy],
   );
