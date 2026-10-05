@@ -45,6 +45,7 @@ files:
   - imports/client/components/whiteboard/WhosHere.tsx
   - imports/client/components/whiteboard/boardFiles.ts
   - imports/client/components/whiteboard/boardWrites.ts
+  - imports/client/components/whiteboard/frameToolBox.ts
   - imports/client/components/whiteboard/marker.ts
   - imports/client/components/whiteboard/touch.ts
   - imports/client/hooks/useChatImageUpload.ts
@@ -494,6 +495,12 @@ choice, not a security boundary, and the server never sees it. While Meteor
 is disconnected the page also lowers any access to `view`, with the reason
 `offline` (see Offline).
 
+On a wide screen the board sits in the puzzle page's pane beside the chat,
+as a puzzle's document does, with the minimise chat toggle (or, once chat is
+minimised, its strip of buttons) at the pane's top left. The pane sets
+`--jr-pane-left-inset`, and the canvas starts its top-left panel, the
+toolbar, at least that far in, so the toggle never covers it.
+
 A read-only board's toolbar says "Viewing only", gives the reason on the line
 below, and keeps the Comment tool for anyone who can comment, and the
 Comments button (see Comments) and Hide ink (see Ink) for everyone. When the
@@ -687,7 +694,15 @@ chat does (`createChatImageUpload`, then a POST to the bucket) and puts it in
 the comment, which can't be sent until the upload finishes. Both use
 `useChatImageUpload` in `imports/client/hooks/`, which uploads through
 `uploadChatImage` in `imports/client/uploadChatImage.ts` (as the board's own
-images do, see Images), and each shows a failure its own way: chat in a dialog, the composer in a line under it. A failed image
+images do, see Images), and each shows a failure its own way: chat in a dialog, the composer in a line under it.
+`uploadChatImage` sends a PNG, JPEG or GIF as it is (so a GIF stays
+animated) and draws anything else (WebP, AVIF, BMP, SVG) to a canvas and
+sends that as a PNG, through Insert Image's `convertImageToPng`, before
+asking the server for an upload. An SVG opened straight from the bucket
+would run any script in it, so `createChatImageUpload` refuses any type but
+those three (`assertUploadableImageType`), whoever calls it. A file the
+browser can't decode is refused before anything is uploaded, with "This
+browser can't convert that image to PNG. Use a PNG, JPEG or GIF instead." A failed image
 doesn't count as something to send, so a comment that is only a failed image
 can't be sent. When the server has no S3 image bucket, the image isn't
 uploaded and the composer says "Images can't be added here: this server has
@@ -1008,7 +1023,8 @@ spinner sits where it will land, at its own size in pixels but no wider than
 480 units, keeping its shape. The placeholder is only on this screen and
 isn't saved. The upload goes through `createChatImageUpload` for the board's
 backing puzzle and a POST to the bucket (`uploadChatImage` in
-`imports/client/uploadChatImage.ts`); once it's done, the node is saved
+`imports/client/uploadChatImage.ts`, which turns anything but a PNG, JPEG or
+GIF into a PNG first, as for comments); once it's done, the node is saved
 through `upsertNodes` in the frame under its middle, as one step for Undo.
 A failed upload takes the placeholder away and shows why in the "Couldn't
 save" alert, and nothing is saved. Images already on the board (as this
@@ -2049,12 +2065,14 @@ above it, beside "Collapse for everyone", for anyone who can edit:
   (`meta-for:X` for a frame tagged `group:X`, from `roundMetas`) on their own
   row or rows at the top, then the other cards, each in the order their
   puzzles were created, four to a row, through `placeIntoFrame`. Notes, text,
-  images, shapes, ink, line ends and frames inside it stay where they are,
-  and the cards go round them (so a shape ringing some cards pushes them out
-  from under it); so do locked cards, which stay put. The frame and the frames
-  around it grow to take the cards, but nothing shrinks. Moved cards are
-  marked as moved by hand, as any move does, so placement leaves them be
-  until Place by tags or Reset layout.
+  images, ink, line ends and frames inside it stay where they are, and the
+  cards go round them; so do locked cards, which stay put. Shapes stay where
+  they are too but count as background (`frameToolBox` in
+  `imports/client/components/whiteboard/frameToolBox.ts` marks them): cards
+  are laid out as if they weren't there and may land on top of them. The
+  frame and the frames around it grow to take the cards, but nothing
+  shrinks. Moved cards are marked as moved by hand, as any move does, so
+  placement leaves them be until Place by tags or Reset layout.
 
 Separately, dropping something into a frame (or moving it within one), or
 nudging or aligning it there, grows the frame when the thing would overhang

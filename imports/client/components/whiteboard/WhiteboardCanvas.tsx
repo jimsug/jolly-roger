@@ -276,6 +276,7 @@ import FeederFocusContext from "./FeederFocusContext";
 import FrameLabelLayer from "./FrameLabelLayer";
 import FrameNode from "./FrameNode";
 import { boxOf } from "./floatingEdgeParams";
+import frameToolBox from "./frameToolBox";
 import type { VersionPreview } from "./HistoryPanel";
 import HistoryPanel, { loadVersion, versionMoment } from "./HistoryPanel";
 import ImageNode from "./ImageNode";
@@ -382,22 +383,6 @@ interface Landed {
   id: string;
   parent: string | undefined;
   position: XYPosition;
-}
-
-// A node's box in its frame, for the frame tools. A collapsed frame counts
-// at its stored size, not the header it's drawn as.
-function frameToolBox(n: WhiteboardFlowNode): Box {
-  const { doc } = n.data;
-  return {
-    id: n.id,
-    x: n.position.x,
-    y: n.position.y,
-    width: n.measured?.width ?? n.width ?? doc.width ?? 0,
-    height: n.data.collapsed
-      ? (doc.height ?? 0)
-      : (n.measured?.height ?? n.height ?? doc.height ?? 0),
-    locked: !!doc.locked,
-  };
 }
 
 // One input per node, later fields winning.
@@ -569,6 +554,12 @@ const CanvasWrapper = styled.div<{
     filter: drop-shadow(
       0 0 3px ${({ theme }) => theme.colors.whiteboardPreviewChanged}
     );
+  }
+
+  /* On a puzzle page the chat toggle sits at the pane's top left, so the
+     toolbar starts clear of it (see PuzzlePane). */
+  .react-flow__panel.top.left {
+    margin-left: max(15px, var(--jr-pane-left-inset, 0px));
   }
 
   /* The panels at the top right open below who's here (see WhosHere). */
@@ -5168,7 +5159,7 @@ const CanvasInner = ({
               },
               (failure) => {
                 finished();
-                const reason = chatImageFailureReason(failure);
+                const reason = chatImageFailureReason(failure, t);
                 if (reason === undefined) {
                   showNotice(imagesOff);
                 } else {

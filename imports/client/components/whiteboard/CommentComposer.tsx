@@ -124,7 +124,7 @@ const CommentComposer = ({
   );
   const onUploadFailed = useCallback(
     (failure: ChatImageUploadFailure) => {
-      const reason = chatImageFailureReason(failure);
+      const reason = chatImageFailureReason(failure, t);
       if (reason === undefined) {
         setImageNote(imagesOff);
         return;

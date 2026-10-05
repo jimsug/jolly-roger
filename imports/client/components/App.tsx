@@ -36,6 +36,11 @@ import { type AppThemeState, useAppThemeState } from "../hooks/persisted-state";
 import lookupUrl from "../lookupUrl";
 import ConnectionStatus from "./ConnectionStatus";
 import HuntNav from "./HuntNav";
+import {
+  UnlinkedServicesBadge,
+  UnlinkedServicesDot,
+  useUnlinkedServices,
+} from "./LinkAccountsNudge";
 import Loading from "./Loading";
 import NotificationCenter from "./NotificationCenter";
 import OperatorModeMenuItem from "./OperatorModeMenuItem";
@@ -286,6 +291,8 @@ const AppNavbar = ({
     void i18n.changeLanguage(lng);
   };
 
+  const unlinked = useUnlinkedServices();
+
   const theme = useTheme();
   return (
     <NavbarInset
@@ -315,11 +322,13 @@ const AppNavbar = ({
         <Dropdown as={NavItem}>
           <DropdownToggle as={NavLink}>
             <FontAwesomeIcon icon={faUser} />{" "}
-            <NavUsername>{displayName}</NavUsername>
+            <NavUsername>{displayName}</NavUsername>{" "}
+            <UnlinkedServicesBadge missing={unlinked} />
           </DropdownToggle>
           <DropdownMenu align="end">
             <DropdownItem as={Link} to={`/users/${userId}`} eventKey="1">
               {t("navigation.myProfile", "My profile")}
+              {unlinked.length > 0 ? <UnlinkedServicesDot /> : null}
             </DropdownItem>
             <DropdownItem as={Link} to="/history" eventKey="5">
               {t("navigation.myPuzzleHistory", "My puzzle history")}

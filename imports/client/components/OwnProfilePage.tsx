@@ -36,6 +36,7 @@ import AudioConfig from "./AudioConfig";
 import Avatar from "./Avatar";
 import GoogleLinkBlock from "./GoogleLinkBlock";
 import LabelledRadioGroup from "./LabelledRadioGroup";
+import { useUnlinkedServices } from "./LinkAccountsNudge";
 
 enum DiscordLinkBlockLinkState {
   IDLE = "idle",
@@ -492,9 +493,26 @@ const OwnProfilePage = ({
   const idPrefix = useId();
 
   const { t } = useTranslation();
+  const unlinked = useUnlinkedServices();
 
   return (
     <Container>
+      {unlinked.includes("google") ? (
+        <Alert variant="danger">
+          {t(
+            "profile.linkGoogleNudge",
+            "Please link your Google account below for full functionality.",
+          )}
+        </Alert>
+      ) : null}
+      {unlinked.includes("discord") ? (
+        <Alert variant="danger">
+          {t(
+            "profile.linkDiscordNudge",
+            "Please link your Discord account below for full functionality.",
+          )}
+        </Alert>
+      ) : null}
       <h1>{t("profile.ownProfileTitle", "Account information")}</h1>
       <Avatar {...initialUser} size={64} />
       <EmailSection user={initialUser} />

@@ -12,6 +12,8 @@ import { computeSolvedness } from "../../imports/lib/solvedness";
 import addHuntUser from "../../imports/methods/addHuntUser";
 import createHunt from "../../imports/methods/createHunt";
 import createPuzzle from "../../imports/methods/createPuzzle";
+import destroyPuzzle from "../../imports/methods/destroyPuzzle";
+import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
 import registerPuzzleInterest from "../../imports/methods/registerPuzzleInterest";
 import unlockPuzzle from "../../imports/methods/unlockPuzzle";
@@ -335,6 +337,70 @@ if (Meteor.isClient) {
         assert.equal(labelFor("solved-hide-button"), "Hide");
         assert.equal(labelFor("viewers-show-button"), "Show");
         assert.equal(labelFor("viewers-hide-button"), "Hide");
+      });
+
+      it("shows deleted puzzles to global admins and not to operators", async function () {
+        this.timeout(15000);
+        const huntId = await setUpHunt("puzzle list deleted puzzles");
+        await createPuzzle.callPromise({
+          huntId,
+          title: "Still here",
+          tags: [],
+          expectedAnswerCount: 1,
+          docType: "spreadsheet",
+        });
+        const deletedId = await createPuzzle.callPromise({
+          huntId,
+          title: "Gone now",
+          tags: [],
+          expectedAnswerCount: 1,
+          docType: "spreadsheet",
+        });
+        await destroyPuzzle.callPromise({
+          puzzleId: deletedId,
+          copySheetsToReplacement: false,
+        });
+        const operatorId = await createUser.callPromise({
+          email: HUNTER_EMAIL,
+          password: HUNTER_PASSWORD,
+          displayName: "Operator",
+        });
+        await addHuntUser.callPromise({ huntId, email: HUNTER_EMAIL });
+        await promoteOperator.callPromise({ targetUserId: operatorId, huntId });
+
+        const renderList = async () => {
+          render(
+            <MemoryRouter initialEntries={[`/hunts/${huntId}/puzzles`]}>
+              <Routes />
+            </MemoryRouter>,
+          );
+          await act(async () => {
+            await stabilize();
+          });
+          // The list itself, not the new puzzle notification
+          await screen.findByText("Solved puzzles", {}, { timeout: 5000 });
+        };
+
+        await renderList();
+        assert.exists(screen.queryByText("Deleted puzzles (admin only)"));
+        assert.isDefined(await Puzzles.findOneAllowingDeletedAsync(deletedId));
+        cleanup();
+
+        await promisify(Meteor.logout)();
+        await login(HUNTER_EMAIL, HUNTER_PASSWORD);
+        await renderList();
+        assert.isNull(screen.queryByText("Deleted puzzles (admin only)"));
+        // The page doesn't ask for deleted puzzles as an operator, so ask the
+        // publication directly to check the server holds them back
+        const directSub = await typedSubscribe.async(puzzlesForPuzzleList, {
+          huntId,
+          includeDeleted: true,
+        });
+        subscriptionStops.push(() => directSub.stop());
+        assert.isUndefined(
+          await Puzzles.findOneAllowingDeletedAsync(deletedId),
+          "The operator isn't sent the deleted puzzle, even when asking",
+        );
       });
     });
   });

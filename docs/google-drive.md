@@ -4,17 +4,21 @@ files:
   - imports/client/components/GoogleLinkBlock.tsx
   - imports/client/components/HuntListPage.tsx
   - imports/client/components/InsertImage.tsx
+  - imports/client/components/LinkAccountsNudge.tsx
   - imports/client/components/NotificationCenter.tsx
   - imports/client/GoogleScriptInfo.ts
   - imports/lib/models/DocumentActivities.ts
   - imports/lib/models/FolderPermissions.ts
+  - imports/lib/unlinkedServices.ts
   - imports/server/models/HuntFolders.ts
   - imports/methods/configureGoogleOAuthClient.ts
   - imports/methods/linkUserGoogleAccount.ts
   - imports/methods/unlinkUserGoogleAccount.ts
+  - imports/server/accountForGoogleInvitation.ts
   - imports/server/accounts.ts
   - imports/server/addPuzzle.ts
   - imports/server/addUserToHunt.ts
+  - imports/server/assertUploadableImageType.ts
   - imports/server/daemons/documentCache.ts
   - imports/server/documentCache.ts
   - imports/server/gdrive.ts
@@ -46,7 +50,7 @@ files:
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-06T09:00:00Z
+updated: 2026-10-06T10:00:00Z
 ---
 
 # Google Drive Integration
@@ -80,6 +84,30 @@ invite link using our Jolly Roger-specific Google-based user authentication flow
 (`useGoogleSignInCredentialsField` and the call to
 `Accounts.registerLoginHandler` in `imports/server/accounts.ts`). Either way,
 once an account is linked, that account can be used for subsequent logins.
+
+When someone signs in with Google from an invite link and no account is linked
+to that Google account yet, `accountForGoogleInvitation`
+(`imports/server/accountForGoogleInvitation.ts`) looks for an account with the
+Google profile's address. If Google has verified that address
+(`verified_email` in the OAuth service data), it takes that account over,
+linking the Google account and logging in to it, when the address is verified
+there too, or when the account is an unclaimed placeholder: the one
+`addUserToHunt` creates when an operator adds someone by email, which nobody
+has ever signed in to and which has no password and no Google account. If that
+account already has a different Google account linked, the sign-in is refused
+with a message saying to sign in with that Google account, or to sign in
+another way and link this one from the profile page, rather than replacing the
+link. An account that has the address unverified and has been signed in to is
+left alone, since anyone can add any address to their own account from the
+profile page, and so is any account when Google hasn't verified the address.
+In those cases the Google sign-in gets a new account instead, without the
+address, which Meteor won't let two accounts share.
+
+Until a hunter links Google, and Discord when the server has it set up, the
+navbar shows a red count by their name and a dot by "My profile", and the
+profile page asks them to link each one (`LinkAccountsNudge.tsx`). Drive
+activity feeds presence and the document cache, so an unlinked Google account
+leaves both incomplete.
 
 Because we use Meteor's built-in OAuth support, OAuth application credentials
 are stored in `ServiceConfiguration` (see the `configureGoogleOAuthClient`
@@ -371,7 +399,14 @@ service), and the bucket to use is configured by `configureS3ImageBucket`.
 Assuming that's configured, the `createDocumentImageUpload` Meteor method
 generates a pre-signed AWS URL that can be used to upload images, which are then
 inserted by URL. The `InsertImage` client-side flow still has fallback logic to
-upload directly in the event that S3 is not configured.
+upload directly in the event that S3 is not configured. Additionally, Google Apps
+Script only supports PNG, JPEG, and GIF images; the `InsertImage` flow automatically
+converts other browser-renderable image formats (such as WebP, AVIF, or SVG)
+to PNG via `<canvas>` prior to upload. The bucket only takes those three types:
+`createDocumentImageUpload` (and `createChatImageUpload`, for chat images)
+refuses any other `mimeType` through `assertUploadableImageType`, so an SVG,
+which would run any script in it if its bucket address were opened, never gets
+an upload.
 
 ## Third-party cookie detection
 

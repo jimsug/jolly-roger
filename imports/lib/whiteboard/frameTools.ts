@@ -8,10 +8,12 @@ import {
 } from "./layout";
 
 // A node's box in its frame's coordinates (or the board's, at the top
-// level), and whether it's locked.
+// level), whether it's locked, and whether it's background (a shape), which
+// Tidy lays cards over rather than going round.
 export interface Box extends Rect {
   id: string;
   locked?: boolean;
+  background?: boolean;
 }
 
 // A frame around the one being changed, innermost first, with everything
@@ -243,7 +245,8 @@ const occupying = (rect: Rect, meta: boolean): Occupied => ({
 // order of their puzzles' creation, four to a row, through placeIntoFrame.
 // Whatever else is in the frame (`others`: notes, text, ink, line ends,
 // frames and anything someone else is dragging) stays where it is and the
-// cards go round it, as do locked cards. The frame grows to take the cards,
+// cards go round it, as do locked cards, except for background (shapes),
+// which stays put with cards laid over it. The frame grows to take the cards,
 // and so do the frames around it, but nothing shrinks. A locked frame only
 // stands in the way when it would have to grow.
 export function tidyFrame(
@@ -255,7 +258,7 @@ export function tidyFrame(
 ): FrameToolResult {
   const plan = makePlan();
   const staying: Occupied[] = [
-    ...others.map((o) => occupying(o, false)),
+    ...others.filter((o) => !o.background).map((o) => occupying(o, false)),
     ...cards.filter((c) => c.locked).map((c) => occupying(c, metas.has(c.id))),
   ];
   const placed: Occupied[] = [];

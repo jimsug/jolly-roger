@@ -30,6 +30,7 @@ import "./unit/imports/lib/solvedness";
 import "./unit/imports/lib/sortUsersByDisplayName";
 import "./unit/imports/lib/summarizeUserStatuses";
 import "./unit/imports/lib/tagNames";
+import "./unit/imports/lib/unlinkedServices";
 import "./unit/imports/lib/ValidateShape";
 import "./unit/imports/lib/whiteboard-arrange";
 import "./unit/imports/lib/whiteboard-clipboard";
@@ -64,12 +65,15 @@ if (!Meteor.isAppTest) {
 
 Accounts.removeDefaultRateLimit();
 
+import "./unit/imports/server/accountForGoogleInvitation";
 import "./unit/imports/server/answersUpdatedAt";
 import "./unit/imports/server/backfillHuntAdminFields";
 import "./unit/imports/server/backfillPuzzleNotifications";
 import "./unit/imports/server/bulkAddHuntUsers";
 import "./unit/imports/server/chatMessagePins";
 import "./unit/imports/server/chatReactions";
+import "./unit/imports/server/configureListS3Buckets";
+import "./unit/imports/server/destroyAPIKey";
 import "./unit/imports/server/dingwordSuppression";
 import "./unit/imports/server/DiscordHooks";
 import "./unit/imports/server/documentCache";
@@ -80,12 +84,14 @@ import "./unit/imports/server/generateTurnConfig";
 import "./unit/imports/server/getOrCreateTagByName";
 import "./unit/imports/server/health";
 import "./unit/imports/server/huntFolderWarnings";
+import "./unit/imports/server/imageUploadTypes";
 import "./unit/imports/server/lockedPuzzles";
 import "./unit/imports/server/MigrationRegistry";
 import "./unit/imports/server/Model";
 import "./unit/imports/server/NewPuzzleNotificationHooks";
 import "./unit/imports/server/publishJoinedQuery";
 import "./unit/imports/server/puzzleHistory";
+import "./unit/imports/server/puzzlesForPuzzleList";
 import "./unit/imports/server/removeTagAlias";
 import "./unit/imports/server/repairLegacyUrls";
 import "./unit/imports/server/sendChatMessage";

@@ -4,6 +4,7 @@ import { Random } from "meteor/random";
 import Documents from "../../lib/models/Documents";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import createDocumentImageUpload from "../../methods/createDocumentImageUpload";
+import assertUploadableImageType from "../assertUploadableImageType";
 import getS3UploadParams from "../getS3UploadParams";
 import defineMethod from "./defineMethod";
 
@@ -20,6 +21,7 @@ defineMethod(createDocumentImageUpload, {
 
   async run({ documentId, filename, mimeType }) {
     check(this.userId, String);
+    assertUploadableImageType(mimeType);
     const user = (await MeteorUsers.findOneAsync(this.userId))!;
 
     const document = await Documents.findOneAsync(documentId);

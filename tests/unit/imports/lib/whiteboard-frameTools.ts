@@ -298,6 +298,24 @@ describe("whiteboard frame tools", function () {
       assert.deepEqual(changes.get("c"), { position: cardSlot(4) });
     });
 
+    it("lays cards over a shape, which stays put", function () {
+      const result = tidyFrame(
+        box("f", 0, 0, 2000, 2000),
+        [card("a", 1), card("b", 2)],
+        new Set(),
+        [
+          {
+            ...box("shape", cardSlot(0).x - 10, cardSlot(0).y - 10, 600, 300),
+            background: true,
+          },
+        ],
+      );
+      const changes = changesById(result);
+      assert.deepEqual(changes.get("a"), { position: cardSlot(0) });
+      assert.deepEqual(changes.get("b"), { position: cardSlot(1) });
+      assert.isFalse(changes.has("shape"));
+    });
+
     it("keeps feeders off a row of metas, a locked meta's included", function () {
       const result = tidyFrame(
         box("f", 0, 0, 2000, 2000),

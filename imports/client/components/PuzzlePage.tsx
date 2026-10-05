@@ -122,6 +122,7 @@ import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import { trace } from "../tracing";
 import type { ChatImageUploadFailure } from "../uploadChatImage";
+import { chatImageFailureReason } from "../uploadChatImage";
 import BookmarkButton from "./BookmarkButton";
 import ChatMessage from "./ChatMessage";
 import ChatMessageReactions from "./ChatMessageReactions";
@@ -480,6 +481,20 @@ const ChatSectionDiv = styled.div`
 `;
 
 const PuzzleContent = styled.div`
+  display: flex;
+  flex-direction: column;
+`;
+
+// The puzzle's document, or the content shown in its place, with the chat
+// toggle at its top left. --jr-pane-left-inset is how much room the toggle
+// and the minimised chat's strip take, for content (such as the board's
+// toolbar) that would otherwise sit under them.
+const PuzzlePane = styled.div`
+  --jr-pane-left-inset: 40px;
+
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 `;
@@ -1166,6 +1181,7 @@ const ChatInput = React.memo(
     scrollToMessage: (messageId: string) => void;
     ref: React.Ref<ChatInputHandle>;
   }) => {
+    const { t } = useTranslation();
     const users = useMentionableUsers(huntId);
     const [uploadImageError, setUploadImageError] = useState<string>();
     const clearUploadImageError = useCallback(
@@ -1263,18 +1279,23 @@ const ChatInput = React.memo(
       fileInputRef.current?.click();
     }, []);
 
-    const onUploadFailed = useCallback((failure: ChatImageUploadFailure) => {
-      if (failure.stage === "request") {
-        setUploadImageError(
-          failure.error?.message ??
-            "S3 presignedPost creation failed, check server settings to ensure S3 image bucket is configured correctly.",
-        );
-      } else {
-        setUploadImageError(
-          `S3 upload failed: ${(failure.error as Error).message}`,
-        );
-      }
-    }, []);
+    const onUploadFailed = useCallback(
+      (failure: ChatImageUploadFailure) => {
+        if (failure.stage === "convert") {
+          setUploadImageError(chatImageFailureReason(failure, t));
+        } else if (failure.stage === "request") {
+          setUploadImageError(
+            failure.error?.message ??
+              "S3 presignedPost creation failed, check server settings to ensure S3 image bucket is configured correctly.",
+          );
+        } else {
+          setUploadImageError(
+            `S3 upload failed: ${(failure.error as Error).message}`,
+          );
+        }
+      },
+      [t],
+    );
     const uploadImageFile = useChatImageUpload(
       puzzleId,
       fancyEditorRef,
@@ -1305,8 +1326,6 @@ const ChatInput = React.memo(
         </Modal.Body>
       </Modal>
     );
-
-    const { t } = useTranslation();
 
     const scrollToReplyTarget = useCallback(() => {
       if (replyingTo) {
@@ -2177,18 +2196,57 @@ const StyledCopyToClipboardButton = styled(CopyToClipboardButton)`
 
 const MinimizeChatButton = styled.button`
   position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  top: 0;
+  left: 0;
   z-index: 10;
   background-color: ${({ theme }) => theme.colors.secondary};
   border: 1px solid ${({ theme }) => theme.colors.text};
   color: ${({ theme }) => theme.colors.text};
   border-left: none;
-  border-top-right-radius: 8px;
-  border-bottom-right-radius: 8px;
-  padding: 8px 4px;
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+  padding: 0;
   cursor: pointer;
-  height: 40px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  font-size: 10px;
+  opacity: 0.6;
+  transition:
+    width 0.15s ease-in-out,
+    opacity 0.15s ease-in-out;
+
+  &:hover,
+  &:focus-visible {
+    width: 24px;
+    opacity: 1;
+  }
+
+  &:focus-visible {
+    outline: 2px solid ${({ theme }) => theme.colors.primary};
+    outline-offset: 1px;
+  }
+`;
+
+// Provides a fixed 24px bounding box for OverlayTrigger so the tooltip
+// positions relative to the fully expanded button rather than overlapping
+// with it when the button animates from its 14px collapsed width.
+const MinimizeChatButtonWrapper = styled.div`
+  position: absolute;
+  top: 6px;
+  left: 0;
+  z-index: 10;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+
+  &:hover button,
+  &:focus-within button {
+    width: 24px;
+    opacity: 1;
+  }
 `;
 
 enum PuzzleGuessSubmitState {
@@ -3480,38 +3538,40 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
     ) : null;
 
   if (isDesktop) {
+    const chatToggle = isChatMinimized ? (
+      <MinimizedChatInfo
+        huntId={huntId}
+        puzzleId={puzzleId}
+        callState={callState}
+        callDispatch={dispatch}
+        joinCall={joinCall}
+        onRestore={restoreChat}
+        missedMessages={missedMessages.length}
+      />
+    ) : (
+      <OverlayTrigger
+        placement="right"
+        overlay={
+          <Tooltip id={`${idPrefix}-hide-chat`}>
+            {t("chat.minimizeChat", "Minimize chat")}
+          </Tooltip>
+        }
+      >
+        <MinimizeChatButtonWrapper onClick={minimizeChat}>
+          <MinimizeChatButton
+            type="button"
+            aria-label={t("chat.minimizeChat", "Minimize chat")}
+          >
+            <FontAwesomeIcon icon={faChevronLeft} />
+          </MinimizeChatButton>
+        </MinimizeChatButtonWrapper>
+      </OverlayTrigger>
+    );
     return (
       <>
         {deletedModal}
         {ticker}
         <FixedLayout ref={puzzlePageDivRef}>
-          {isChatMinimized ? (
-            <MinimizedChatInfo
-              huntId={huntId}
-              puzzleId={puzzleId}
-              callState={callState}
-              callDispatch={dispatch}
-              joinCall={joinCall}
-              onRestore={restoreChat}
-              missedMessages={missedMessages.length}
-            />
-          ) : (
-            <OverlayTrigger
-              placement="right"
-              overlay={
-                <Tooltip id={`${idPrefix}-hide-chat`}>
-                  {t("chat.minimizeChat", "Minimize chat")}
-                </Tooltip>
-              }
-            >
-              <MinimizeChatButton
-                style={{ left: `${isChatMinimized ? 1 : sidebarWidth + 15}px` }}
-                onClick={minimizeChat}
-              >
-                <FontAwesomeIcon icon={faChevronLeft} />
-              </MinimizeChatButton>
-            </OverlayTrigger>
-          )}
           <SplitPaneMinus
             split="vertical"
             minSize={isChatMinimized ? 0 : MinimumSidebarWidth}
@@ -3526,12 +3586,15 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
             <PuzzleContent>
               {metadata}
               {showMetadataButton}
-              {shownContent ?? (
-                <PuzzlePageMultiplayerDocument
-                  document={document}
-                  selfUser={selfUser}
-                />
-              )}
+              <PuzzlePane>
+                {shownContent ?? (
+                  <PuzzlePageMultiplayerDocument
+                    document={document}
+                    selfUser={selfUser}
+                  />
+                )}
+                {chatToggle}
+              </PuzzlePane>
               {debugPane}
             </PuzzleContent>
           </SplitPaneMinus>

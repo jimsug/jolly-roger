@@ -4,6 +4,7 @@ import { Random } from "meteor/random";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import createChatImageUpload from "../../methods/createChatImageUpload";
+import assertUploadableImageType from "../assertUploadableImageType";
 import getS3UploadParams from "../getS3UploadParams";
 import defineMethod from "./defineMethod";
 
@@ -20,9 +21,7 @@ defineMethod(createChatImageUpload, {
   async run({ puzzleId, mimeType }) {
     check(this.userId, String);
 
-    if (!mimeType.startsWith("image/")) {
-      throw new Meteor.Error(403, "Only image files can be uploaded in chat.");
-    }
+    assertUploadableImageType(mimeType);
 
     const user = (await MeteorUsers.findOneAsync(this.userId))!;
 

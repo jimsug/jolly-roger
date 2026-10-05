@@ -1,10 +1,16 @@
 import type { Meteor } from "meteor/meteor";
+import type { TFunction } from "i18next";
 import createChatImageUpload from "../methods/createChatImageUpload";
+import {
+  convertImageToPng,
+  isDirectlySupported,
+} from "./components/InsertImage";
 
-// Why an image didn't make it: the server wouldn't hand out an upload (with
-// no error at all when it has nowhere to put images), or the upload itself
-// failed.
+// Why an image didn't make it: the browser couldn't turn it into a PNG, the
+// server wouldn't hand out an upload (with no error at all when it has
+// nowhere to put images), or the upload itself failed.
 export type ChatImageUploadFailure =
+  | { stage: "convert"; error: unknown }
   | { stage: "request"; error: Meteor.Error | undefined }
   | { stage: "upload"; error: unknown };
 
@@ -12,7 +18,14 @@ export type ChatImageUploadFailure =
 // nowhere to store images (which callers word their own way).
 export function chatImageFailureReason(
   failure: ChatImageUploadFailure,
+  t: TFunction,
 ): string | undefined {
+  if (failure.stage === "convert") {
+    return t(
+      "chat.imageUpload.unconvertible",
+      "This browser can't convert that image to PNG. Use a PNG, JPEG or GIF instead.",
+    );
+  }
   if (failure.stage === "request") {
     return failure.error
       ? (failure.error.reason ?? failure.error.message)
@@ -23,10 +36,30 @@ export function chatImageFailureReason(
     : String(failure.error);
 }
 
-// Uploads an image as chat does: the server is asked where to upload it,
-// then the file goes there. onUploaded hears the address it can be shown
-// from, or onFailed why it didn't make it.
+// Uploads an image as chat does: anything but a PNG, JPEG or GIF is drawn
+// to a canvas and uploaded as a PNG (so an SVG, which would run its scripts
+// if its address were opened, never reaches the bucket, and a GIF keeps its
+// animation), the server is asked where to upload it, then the file goes
+// there. onUploaded hears the address it can be shown from, or onFailed why
+// it didn't make it.
 export default function uploadChatImage(
+  puzzleId: string,
+  original: File,
+  onUploaded: (url: string) => void,
+  onFailed: (failure: ChatImageUploadFailure) => void,
+) {
+  if (isDirectlySupported(original)) {
+    requestAndUpload(puzzleId, original, onUploaded, onFailed);
+    return;
+  }
+  convertImageToPng(original)
+    .then((file) => requestAndUpload(puzzleId, file, onUploaded, onFailed))
+    .catch((error: unknown) => {
+      onFailed({ stage: "convert", error });
+    });
+}
+
+function requestAndUpload(
   puzzleId: string,
   file: File,
   onUploaded: (url: string) => void,

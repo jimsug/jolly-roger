@@ -34,6 +34,7 @@ import Tooltip from "react-bootstrap/Tooltip";
 import { Trans, useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import styled, { css } from "styled-components";
+import isAdmin from "../../lib/isAdmin";
 import { sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import Hunts from "../../lib/models/Hunts";
@@ -196,11 +197,14 @@ const PuzzleListView = ({
   huntId,
   canAdd,
   canUpdate,
+  showDeleted,
   loading,
 }: {
   huntId: string;
   canAdd: boolean;
   canUpdate: boolean;
+  // Global admins get a group of the hunt's deleted puzzles
+  showDeleted: boolean;
   loading: boolean;
 }) => {
   const allPuzzles = useTracker(
@@ -233,10 +237,10 @@ const PuzzleListView = ({
 
   const deletedPuzzles = useTracker(
     () =>
-      !canUpdate || loading || operatorActionsHidden
+      !showDeleted || loading || operatorActionsHidden
         ? undefined
         : Puzzles.findDeleted({ hunt: huntId }).fetch(),
-    [canUpdate, huntId, loading, operatorActionsHidden],
+    [showDeleted, huntId, loading, operatorActionsHidden],
   );
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -652,7 +656,7 @@ const PuzzleListView = ({
               group={{ puzzles: retainedDeletedPuzzles, subgroups: [] }}
               noSharedTagLabel={t(
                 "puzzleList.deletedPuzzlesGroup",
-                "Deleted puzzles (operator only)",
+                "Deleted puzzles (admin only)",
               )}
               bookmarked={bookmarked}
               allTags={allTags}
@@ -934,16 +938,17 @@ const PuzzleListPage = () => {
 
   // Assertion is safe because hunt is already subscribed and checked by HuntApp
   const hunt = useTracker(() => Hunts.findOne(huntId)!, [huntId]);
-  const { canAdd, canUpdate } = useTracker(() => {
+  const { canAdd, canUpdate, admin } = useTracker(() => {
     return {
       canAdd: userMayWritePuzzlesForHunt(Meteor.user(), hunt),
       canUpdate: userMayWritePuzzlesForHunt(Meteor.user(), hunt),
+      admin: isAdmin(Meteor.user()),
     };
   }, [hunt]);
 
   const puzzlesLoading = useTypedSubscribe(puzzlesForPuzzleList, {
     huntId,
-    includeDeleted: canUpdate,
+    includeDeleted: admin,
   });
   const loading = puzzlesLoading();
 
@@ -965,6 +970,7 @@ const PuzzleListPage = () => {
           huntId={huntId}
           canAdd={canAdd}
           canUpdate={canUpdate}
+          showDeleted={admin}
           loading={loading}
         />
       </HuntHasWhiteboardContext>

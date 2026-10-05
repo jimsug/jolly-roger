@@ -1,4 +1,5 @@
 import { check, Match } from "meteor/check";
+import isAdmin from "../../lib/isAdmin";
 import Bookmarks from "../../lib/models/Bookmarks";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
@@ -25,8 +26,10 @@ definePublication(puzzlesForPuzzleList, {
       return [];
     }
 
+    // Deleted puzzles go to global admins only, whatever the client asks for
+    const withDeleted = includeDeleted && isAdmin(user);
     return [
-      Puzzles[includeDeleted ? "findAllowingDeleted" : "find"]({
+      Puzzles[withDeleted ? "findAllowingDeleted" : "find"]({
         hunt: huntId,
       }),
       Tags.find({ hunt: huntId }),

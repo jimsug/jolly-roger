@@ -11,6 +11,7 @@ import MeteorUsers from "../lib/models/MeteorUsers";
 import type { SettingType } from "../lib/models/Settings";
 import Settings from "../lib/models/Settings";
 import { primaryEmail } from "../lib/models/User";
+import accountForGoogleInvitation from "./accountForGoogleInvitation";
 
 type LoginInfo = {
   type: string;
@@ -67,7 +68,7 @@ Accounts.registerLoginHandler(async (options: LoginOptions) => {
     }),
   });
 
-  // If an invitation code is provided, create a new user if needed.
+  // If an invitation code is provided, find or create the user's account.
   // We don't actually add the user to the hunt here - that should be handled once the user is
   // signed in and redirected to the /join URL they originally tried to access.
   if (options.allowAutoProvision) {
@@ -92,31 +93,28 @@ Accounts.registerLoginHandler(async (options: LoginOptions) => {
       throw new Meteor.Error(404, "Hunt does not exist for invitation");
     }
 
-    // Google credentials were provided - obtain the email from the associated account,
-    // create a passwordless account with that email, and link it to the Google account.
-    // Also set the initial displayName for the user to their Google account's name.
+    // Google credentials were provided. If no account is linked to the Google
+    // account yet, accountForGoogleInvitation picks one by the Google
+    // account's address (an existing account it can link, or a new
+    // passwordless one) and links it. The Google account's name becomes the
+    // displayName when the account has none.
     const credential = await Google.retrieveCredential(
       options.googleCredentials.key,
       options.googleCredentials.secret,
     );
-    const { email, id, name, picture } = credential.serviceData;
+    const { email, verified_email, id, name, picture } = credential.serviceData;
     const users = await MeteorUsers.find(
       { googleAccountId: id },
       { limit: 2 },
     ).fetchAsync();
     switch (users.length) {
       case 0: {
-        // Autoprovision a new user
-        const userId = await Accounts.createUserAsync({
+        const userId = await accountForGoogleInvitation({
           email,
-        });
-        await MeteorUsers.updateAsync(userId, {
-          $set: {
-            googleAccount: email,
-            googleAccountId: id,
-            googleProfilePicture: picture,
-            displayName: name,
-          },
+          verifiedByGoogle: verified_email === true,
+          id,
+          name,
+          picture,
         });
         // Tell accounts-base to log the user in.
         return { userId };

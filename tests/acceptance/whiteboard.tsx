@@ -645,6 +645,55 @@ if (Meteor.isClient) {
       );
     });
 
+    it("has the minimise chat toggle at the top of the board, as on a puzzle's page", async function () {
+      this.timeout(30000);
+      await ensureBoard();
+      render(<TestApp />);
+      // The toggle sits in the pane beside chat, whatever that pane shows
+      const paneWithToggle = async () => {
+        const toggle = await screen.findByRole(
+          "button",
+          { name: "Minimize chat" },
+          { timeout: 20000 },
+        );
+        // The button, its hover target, then the pane
+        return toggle.parentElement!.parentElement!;
+      };
+
+      await goTo(`/hunts/${huntId}/puzzles/${FixtureHunt.puzzles[0]!._id}`);
+      assert.include(
+        (await paneWithToggle()).textContent,
+        "Attempting to load collaborative document",
+      );
+      await goTo(boardPath);
+      await waitFor(
+        () =>
+          assert.isNotNull(document.querySelector(".react-flow__node-frame")),
+        { timeout: 20000 },
+      );
+      const pane = await paneWithToggle();
+      assert.isNotNull(pane.querySelector(".react-flow"));
+
+      // Neither the toggle nor, once chat is minimised, its strip covers the
+      // board's toolbar
+      const toolbar = () =>
+        pane
+          .querySelector(".react-flow__panel.top.left")!
+          .getBoundingClientRect();
+      const clearOfToolbar = (chrome: Element, what: string) => {
+        const box = chrome.getBoundingClientRect();
+        assert.isAbove(box.width, 0, what);
+        assert.isAtMost(box.right, toolbar().left, what);
+      };
+      const toggle = screen.getByRole("button", { name: "Minimize chat" });
+      clearOfToolbar(toggle.parentElement!, "the toggle");
+      fireEvent.click(toggle);
+      await waitFor(() =>
+        assert.isNull(screen.queryByRole("button", { name: "Minimize chat" })),
+      );
+      clearOfToolbar(pane.lastElementChild!, "the minimised chat");
+    });
+
     it("sends the backing puzzle's page to the board", async function () {
       this.timeout(10000);
       const board = await ensureBoard();
