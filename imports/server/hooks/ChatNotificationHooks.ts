@@ -13,6 +13,7 @@ import nodeIsMention from "../../lib/nodeIsMention";
 import nodeIsPuzzle from "../../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../../lib/nodeIsRoleMention";
 import { queryOperatorsForHunt } from "../../lib/permission_stubs";
+import boardCommentAudience from "../boardCommentAudience";
 import Subscribers from "../models/Subscribers";
 import type Hookset from "./Hookset";
 
@@ -35,10 +36,12 @@ const ChatNotificationHooks: Hookset = {
     const { sender } = chatMessage;
 
     // Collect users to notify, recording why (a mention, the dingwords that
-    // matched, or both), and create notifications at the end.
+    // matched, or both; a whiteboard thread they're in; a comment on the
+    // whiteboard card of a puzzle they're on), and create notifications at
+    // the end.
     const usersToNotify = new Map<
       string,
-      { mentioned: boolean; dingwords: Set<string> }
+      { mentioned: boolean; dingwords: Set<string>; cardPuzzle?: string }
     >();
     const reasonFor = (userId: string) => {
       let reason = usersToNotify.get(userId);
@@ -179,6 +182,21 @@ const ChatNotificationHooks: Hookset = {
       }
     }
 
+    // A new comment on a puzzle's card on the whiteboard goes to the people
+    // on that puzzle too. Someone mentioned (or in the thread) keeps that row;
+    // someone whose dingwords matched gets a board comment row that still
+    // records the words. These aren't dingwords, so dingword mutes neither
+    // stop nor clear them; the profile setting stops them (see
+    // boardCommentAudience).
+    const audience = await boardCommentAudience(chatMessage);
+    audience?.users.forEach((userId) => {
+      const existing = usersToNotify.get(userId);
+      if (existing && (existing.mentioned || existing.dingwords.size === 0)) {
+        return;
+      }
+      reasonFor(userId).cardPuzzle = audience.cardPuzzle;
+    });
+
     // Create notifications for each user who should be dinged by this message.
     const thread = commentThreadOf(chatMessage);
     const mentionedPuzzles = [
@@ -189,25 +207,30 @@ const ChatNotificationHooks: Hookset = {
       ),
     ];
     await Promise.all(
-      [...usersToNotify].map(async ([userId, { mentioned, dingwords }]) => {
-        await ChatNotifications.insertAsync({
-          user: userId,
-          sender,
-          puzzle: chatMessage.puzzle,
-          hunt: chatMessage.hunt,
-          content: chatMessage.content,
-          timestamp: chatMessage.timestamp,
-          message: chatMessage._id,
-          // Recorded so the toast can offer to mute the words that dinged,
-          // and so a mute knows which rows it may clear
-          ...(dingwords.size > 0 ? { dingwords: [...dingwords] } : {}),
-          mentioned,
-          // The comment thread the message is in, or starts
-          ...(thread ? { thread } : {}),
-          // So the publication can send the linked puzzles' titles along
-          ...(mentionedPuzzles.length > 0 ? { mentionedPuzzles } : {}),
-        });
-      }),
+      [...usersToNotify].map(
+        async ([userId, { mentioned, dingwords, cardPuzzle }]) => {
+          await ChatNotifications.insertAsync({
+            user: userId,
+            sender,
+            puzzle: chatMessage.puzzle,
+            hunt: chatMessage.hunt,
+            content: chatMessage.content,
+            timestamp: chatMessage.timestamp,
+            message: chatMessage._id,
+            // Recorded so the toast can offer to mute the words that dinged,
+            // and so a mute knows which rows it may clear
+            ...(dingwords.size > 0 ? { dingwords: [...dingwords] } : {}),
+            mentioned,
+            // The comment thread the message is in, or starts
+            ...(thread ? { thread } : {}),
+            // So the publication can send the linked puzzles' titles along
+            ...(mentionedPuzzles.length > 0 ? { mentionedPuzzles } : {}),
+            ...(cardPuzzle
+              ? { reason: "boardComment" as const, cardPuzzle }
+              : {}),
+          });
+        },
+      ),
     );
   },
 };

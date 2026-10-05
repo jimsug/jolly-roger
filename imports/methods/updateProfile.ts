@@ -11,6 +11,10 @@ export default new TypedMethod<
     // Whether the user is hunting remotely. Only accepted from a logged-in
     // user editing their own profile.
     isOffsite?: boolean;
+    // Whether new whiteboard comments on the cards of puzzles the user is on
+    // notify them. Only accepted from a logged-in user editing their own
+    // profile.
+    boardCommentNotifications?: boolean;
     // If provided, identifies the user by enrollment token instead of
     // requiring a logged-in session. This allows updateProfile to be called
     // before Accounts.resetPassword consumes the token, making the

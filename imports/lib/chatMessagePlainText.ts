@@ -97,3 +97,14 @@ export function firehosePlainText(
     separator: " ",
   });
 }
+
+// The first line of some text that has anything on it, trimmed, or "" when
+// there is none. Comment lists and toasts show a message by its first line.
+export function firstLine(text: string): string {
+  return (
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? ""
+  );
+}

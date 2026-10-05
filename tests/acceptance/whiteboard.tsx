@@ -30,6 +30,7 @@ import sinon from "sinon";
 import FixtureHunt from "../../imports/FixtureHunt";
 import ChatMessages from "../../imports/lib/models/ChatMessages";
 import Hunts from "../../imports/lib/models/Hunts";
+import MeteorUsers from "../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../imports/lib/models/Puzzles";
 import Tags from "../../imports/lib/models/Tags";
 import WhiteboardEdges from "../../imports/lib/models/WhiteboardEdges";
@@ -62,6 +63,7 @@ import deleteWhiteboardComment from "../../imports/methods/deleteWhiteboardComme
 import deleteWhiteboardEdges from "../../imports/methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../imports/methods/deleteWhiteboardNodes";
 import destroyPuzzle from "../../imports/methods/destroyPuzzle";
+import dismissChatNotification from "../../imports/methods/dismissChatNotification";
 import exportWhiteboard from "../../imports/methods/exportWhiteboard";
 import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
@@ -114,6 +116,12 @@ const addPuzzleSubscriber = new TypedMethod<
 
 const clearPuzzleSubscribers = new TypedMethod<{ userIds: string[] }, void>(
   "test.methods.whiteboard.clearPuzzleSubscribers",
+);
+
+// Unsets the caller's board comment setting, and their display name too if
+// asked, putting a profile back as it was before a test filled them in.
+const unsetProfileSettings = new TypedMethod<{ displayName: boolean }, void>(
+  "test.methods.whiteboard.unsetProfileSettings",
 );
 
 // The image bucket uploads are checked against: configured as TEST_BUCKET,
@@ -293,6 +301,26 @@ if (Meteor.isServer) {
         throw new Meteor.Error(500, "This code must not run in production");
       }
       await Puzzles.updateAsync(puzzleId, { $set: { deleted: true } });
+    },
+  });
+
+  defineMethod(unsetProfileSettings, {
+    validate(arg: unknown) {
+      check(arg, { displayName: Boolean });
+      return arg;
+    },
+
+    async run({ displayName }) {
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+      check(this.userId, String);
+      await MeteorUsers.updateAsync(this.userId, {
+        $unset: {
+          boardCommentNotifications: 1,
+          ...(displayName ? { displayName: 1 } : {}),
+        },
+      });
     },
   });
 
@@ -11432,6 +11460,227 @@ if (Meteor.isClient) {
             await deleteWhiteboardComment.callPromise({ messageId: commentId });
           }
           await removeNodes(Object.values(ids));
+        }
+      });
+    });
+    describe("telling a puzzle's people about a comment on its card", function () {
+      const OTHER_EMAIL = "card-commenter@example.com";
+      const OTHER_PASSWORD = "password";
+      const OTHER_NAME = "Card Commenter";
+      const SETTING = "Tell me about board comments on puzzles I'm on";
+      let other: ReturnType<typeof DDP.connect>;
+      let board: { _id: string; puzzle: string };
+
+      before(async function () {
+        this.timeout(20000);
+        board = await ensureBoard();
+        await createTestUser.callPromise({
+          email: OTHER_EMAIL,
+          password: OTHER_PASSWORD,
+          displayName: OTHER_NAME,
+        });
+        await addHuntUser.callPromise({ huntId, email: OTHER_EMAIL });
+        other = DDP.connect(Meteor.absoluteUrl());
+        await other.callAsync("login", {
+          user: { email: OTHER_EMAIL },
+          password: (
+            Accounts as unknown as {
+              _hashPassword: (password: string) => unknown;
+            }
+          )._hashPassword(OTHER_PASSWORD),
+        });
+      });
+
+      after(function () {
+        other.disconnect();
+      });
+
+      const ChatNotifications: typeof import("../../imports/lib/models/ChatNotifications").default =
+        require("../../imports/lib/models/ChatNotifications").default;
+      const { Subscribers: ClientSubscribers } =
+        require("../../imports/client/subscribers") as typeof import("../../imports/client/subscribers");
+      const chatMessagesForPuzzle: typeof import("../../imports/lib/publications/chatMessagesForPuzzle").default =
+        require("../../imports/lib/publications/chatMessagesForPuzzle").default;
+
+      // Opens a puzzle's page, which puts this browser on the puzzle, and
+      // waits until the server has it there.
+      const openPuzzle = async (puzzleId: string) => {
+        await goTo(`/hunts/${huntId}/puzzles/${puzzleId}`);
+        await waitFor(
+          async () =>
+            assert.ok(
+              await ClientSubscribers.findOneAsync({
+                name: `puzzle:${puzzleId}`,
+                user: Meteor.userId()!,
+              }),
+            ),
+          { timeout: 20000 },
+        );
+      };
+      const theyComment = (node: string, text: string) =>
+        other.callAsync(sendChatMessage.name, {
+          puzzleId: board.puzzle,
+          content: JSON.stringify({
+            type: "message",
+            children: [{ text }],
+          }),
+          comment: { node, x: 10, y: 10 },
+        });
+      const commentToasts = () =>
+        [...document.querySelectorAll<HTMLElement>(".toast")].filter((toast) =>
+          toast
+            .querySelector(".toast-header")
+            ?.textContent?.includes("Comment on"),
+        );
+
+      it("tells someone with the puzzle open, until they turn it off", async function () {
+        this.timeout(60000);
+        subs.push(
+          await typedSubscribe.async(whiteboardContents, {
+            boardId: board._id,
+          }),
+          await typedSubscribe.async(chatMessagesForPuzzle, {
+            puzzleId: board.puzzle,
+            huntId,
+          }),
+        );
+        const card = (await WhiteboardNodes.findOneAsync({
+          board: board._id,
+          type: "puzzle",
+          hidden: { $ne: true },
+        }))!;
+        const cardPuzzle = card.puzzle!;
+        const first = "Have a look at this one";
+        const second = "And this one";
+        const hadDisplayName = !!(await Meteor.userAsync())?.displayName;
+        try {
+          render(<TestApp />);
+          await openPuzzle(cardPuzzle);
+          const title = await waitFor(
+            async () => {
+              const found = await Puzzles.findOneAsync(cardPuzzle);
+              assert.ok(found);
+              return found.title;
+            },
+            { timeout: 20000 },
+          );
+
+          await theyComment(card._id, first);
+          const toast = await waitFor(
+            () => {
+              const [found] = commentToasts();
+              assert.ok(found);
+              return found;
+            },
+            { timeout: 20000 },
+          );
+          assert.include(
+            toast.querySelector(".toast-header")?.textContent ?? "",
+            `Comment on ${title}`,
+          );
+          assert.include(
+            toast.querySelector(".toast-body")?.textContent ?? "",
+            `${OTHER_NAME}: ${first}`,
+          );
+
+          // Following it opens the thread on the board
+          const link =
+            toast.querySelector<HTMLAnchorElement>(".toast-header a")!;
+          await act(async () => {
+            fireEvent.click(link);
+            await stabilize();
+          });
+          await waitFor(
+            () => {
+              assert.equal(location.current?.pathname, boardPath);
+              assert.include(
+                document.querySelector(".react-flow__panel.top.right")
+                  ?.textContent ?? "",
+                first,
+              );
+              assert.equal(location.current?.search, "");
+            },
+            { timeout: 20000 },
+          );
+
+          // Turning it off on the profile page stops the next one
+          const me = (await Meteor.userAsync())!;
+          if (!hadDisplayName) {
+            await updateProfile.callPromise({
+              displayName: "Board Watcher",
+              dingwords: me.dingwords ?? [],
+            });
+          }
+          await goTo("/users/me");
+          const setting = await screen.findByLabelText<HTMLInputElement>(
+            SETTING,
+            {},
+            { timeout: 20000 },
+          );
+          assert.isTrue(setting.checked);
+          await act(async () => {
+            fireEvent.click(setting);
+            fireEvent.click(screen.getByRole("button", { name: "Save" }));
+            await stabilize();
+          });
+          await screen.findByText("Saved changes.", {}, { timeout: 10000 });
+          assert.isFalse((await Meteor.userAsync())?.boardCommentNotifications);
+
+          await openPuzzle(cardPuzzle);
+          await theyComment(card._id, second);
+          // A mention sent after the comment arrives after any row the
+          // comment made, so once it's here a board comment row would be too
+          await other.callAsync(sendChatMessage.name, {
+            puzzleId: board.puzzle,
+            content: JSON.stringify({
+              type: "message",
+              children: [
+                { type: "mention", userId: Meteor.userId()! },
+                { text: " after the second" },
+              ],
+            }),
+          });
+          await waitFor(
+            async () =>
+              assert.ok(
+                await ChatNotifications.findOneAsync({
+                  "content.children.text": " after the second",
+                }),
+              ),
+            { timeout: 20000 },
+          );
+          await act(async () => {
+            await stabilize();
+          });
+          assert.lengthOf(commentToasts(), 0);
+          assert.equal(
+            await ChatNotifications.find({
+              reason: "boardComment",
+            }).countAsync(),
+            0,
+          );
+        } finally {
+          await unsetProfileSettings.callPromise({
+            displayName: !hadDisplayName,
+          });
+          for (const cn of await ChatNotifications.find({
+            "content.children.text": " after the second",
+          }).fetchAsync()) {
+            await dismissChatNotification.callPromise({
+              chatNotificationId: cn._id,
+            });
+          }
+          for (const text of [first, second]) {
+            const thread = await ChatMessages.findOneAsync({
+              puzzle: board.puzzle,
+              "content.children.text": text,
+            });
+            if (thread) {
+              await other.callAsync(deleteWhiteboardComment.name, {
+                messageId: thread._id,
+              });
+            }
+          }
         }
       });
     });

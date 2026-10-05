@@ -399,6 +399,9 @@ const OwnProfilePage = ({
     initialUser.dingwordsOpenMatch ?? false,
   );
   const [isOffsite, setIsOffsite] = useState(initialUser.isOffsite ?? false);
+  const [boardCommentNotifications, setBoardCommentNotifications] = useState(
+    initialUser.boardCommentNotifications ?? true,
+  );
   const [submitState, setSubmitState] = useState(
     OwnProfilePageSubmitState.IDLE,
   );
@@ -424,6 +427,13 @@ const OwnProfilePage = ({
   const handleDingwordsModeChange = useCallback((mode: string) => {
     setDingwordsOpenMatch(mode === "prefix");
   }, []);
+
+  const handleBoardCommentNotificationsChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setBoardCommentNotifications(e.currentTarget.checked);
+    },
+    [],
+  );
 
   const handleIsOffsiteChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -453,6 +463,7 @@ const OwnProfilePage = ({
       dingwords,
       dingwordsOpenMatch,
       isOffsite,
+      boardCommentNotifications,
     };
     updateProfile.call(newProfile, (error) => {
       if (error) {
@@ -462,7 +473,14 @@ const OwnProfilePage = ({
         setSubmitState(OwnProfilePageSubmitState.SUCCESS);
       }
     });
-  }, [dingwordsFlat, dingwordsOpenMatch, displayName, phoneNumber, isOffsite]);
+  }, [
+    dingwordsFlat,
+    dingwordsOpenMatch,
+    displayName,
+    phoneNumber,
+    isOffsite,
+    boardCommentNotifications,
+  ]);
 
   const dismissAlert = useCallback(() => {
     setSubmitState(OwnProfilePageSubmitState.IDLE);
@@ -580,6 +598,29 @@ const OwnProfilePage = ({
           onChange={handleDingwordsModeChange}
         />
       </fieldset>
+
+      <FormGroup className="mb-3">
+        <div className="form-label">
+          {t("profile.boardComments.label", "Whiteboard comments")}
+        </div>
+        <FormCheck
+          id={`${idPrefix}-board-comments`}
+          type="checkbox"
+          checked={boardCommentNotifications}
+          disabled={shouldDisableForm}
+          onChange={handleBoardCommentNotificationsChange}
+          label={t(
+            "profile.boardComments.checkbox",
+            "Tell me about board comments on puzzles I'm on",
+          )}
+        />
+        <FormText>
+          {t(
+            "profile.boardComments.help",
+            "When someone pins a new comment to a puzzle's card on the whiteboard, you'll get a notification if you've had that puzzle open in the last few minutes, are in its call, or have bookmarked it.",
+          )}
+        </FormText>
+      </FormGroup>
 
       <FormGroup className="mb-3">
         <div className="form-label">

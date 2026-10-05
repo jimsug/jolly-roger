@@ -29,6 +29,9 @@ import { useMediaQuery } from "usehooks-ts";
 import Flags from "../../Flags";
 import { calendarTimeFormat } from "../../lib/calendarTimeFormat";
 import chatMessagePath from "../../lib/chatMessagePath";
+import chatMessagePlainText, {
+  firstLine,
+} from "../../lib/chatMessagePlainText";
 import correctedAnswer from "../../lib/correctedAnswer";
 import { SUPPRESS_ALL_DINGWORDS } from "../../lib/dingwordLogic";
 import isAdmin from "../../lib/isAdmin";
@@ -833,37 +836,14 @@ const MuteDingwordItem = ({
   );
 };
 
-const ChatNotificationMessage = ({
-  cn,
-  hunt,
-  puzzle,
-  displayNames,
-  selfUserId,
-  roles,
-}: {
-  cn: ChatNotificationType;
-  hunt: HuntType;
-  puzzle: PuzzleType;
-  displayNames: Map<string, string>;
-  selfUserId: string;
-  roles: string[];
-}) => {
+// Dismissing a chat notification, or every one from its puzzle, and the
+// pending state and error of the last dismiss-all or mute.
+const useChatNotificationActions = (cn: ChatNotificationType) => {
   const id = cn._id;
   const dismiss = useCallback(
     () => dismissChatNotification.call({ chatNotificationId: id }),
     [id],
   );
-
-  const { t, i18n } = useTranslation();
-
-  const suppressed = useTracker(
-    () => Meteor.user()?.suppressedDingwords?.[cn.hunt]?.[cn.puzzle] ?? [],
-    [cn.hunt, cn.puzzle],
-  );
-  const allMuted = suppressed.includes(SUPPRESS_ALL_DINGWORDS);
-  const muteableWords = (cn.dingwords ?? [])
-    .filter((word) => !suppressed.includes(word))
-    .slice(0, MAX_MUTE_ITEMS);
 
   // The newest notification shown for this puzzle, by the server's clock:
   // everything up to it has been seen, while a ding arriving mid-request
@@ -901,6 +881,161 @@ const ChatNotificationMessage = ({
     );
   }, [cn.hunt, cn.puzzle, newestSeen, startAction, finishAction]);
 
+  return {
+    dismiss,
+    dismissAllForPuzzle,
+    newestSeen,
+    startAction,
+    finishAction,
+    actionPending,
+    actionError,
+  };
+};
+
+const chatNotificationLink = (
+  cn: ChatNotificationType,
+  hunt: HuntType,
+  puzzle: PuzzleType,
+) =>
+  chatMessagePath({
+    hunt: hunt._id,
+    puzzle: puzzle._id,
+    whiteboard: isWhiteboardPuzzle(puzzle),
+    message: cn.message,
+    thread: cn.thread,
+  });
+
+// A new whiteboard comment on the card of a puzzle the user is on: it reads
+// as a comment on that puzzle (cardPuzzle), from its sender, with the
+// comment's first line. If the card's puzzle has gone it reads as a comment
+// on the whiteboard.
+export const BoardCommentNotificationMessage = ({
+  cn,
+  hunt,
+  puzzle,
+  cardPuzzle,
+  displayNames,
+}: {
+  cn: ChatNotificationType;
+  hunt: HuntType;
+  puzzle: PuzzleType;
+  cardPuzzle: PuzzleType | undefined;
+  displayNames: Map<string, string>;
+}) => {
+  const { t, i18n } = useTranslation();
+  const { dismiss, dismissAllForPuzzle, actionPending, actionError } =
+    useChatNotificationActions(cn);
+
+  const mentionedKey = (cn.mentionedPuzzles ?? []).join(",");
+  const titles = useTracker(
+    () =>
+      new Map(
+        Puzzles.find({
+          _id: { $in: mentionedKey.split(",").filter(Boolean) },
+        }).map((p) => [p._id, p.title]),
+      ),
+    [mentionedKey],
+  );
+  const text = firstLine(
+    chatMessagePlainText(cn.content, displayNames, titles),
+  );
+
+  const messageLink = chatNotificationLink(cn, hunt, puzzle);
+
+  return (
+    <Toast onClose={dismiss}>
+      <Toast.Header>
+        <FontAwesomeIcon icon={faComment} className="me-2" />
+        <strong className="me-auto">
+          {cardPuzzle ? (
+            <Trans
+              i18nKey="notification.boardComment.title"
+              t={t}
+              defaults="Comment on <puzzleLink />"
+              components={{
+                puzzleLink: (
+                  <Link to={messageLink} onClick={dismiss}>
+                    {cardPuzzle.title}
+                  </Link>
+                ),
+              }}
+            />
+          ) : (
+            <Link to={messageLink} onClick={dismiss}>
+              {t(
+                "notification.boardComment.titleUnknown",
+                "Comment on the whiteboard",
+              )}
+            </Link>
+          )}
+        </strong>
+        <StyledNotificationTimestamp>
+          {calendarTimeFormat(cn.createdAt, t, i18n.language)}
+        </StyledNotificationTimestamp>
+        <ToastSettings id={`chat-settings-${cn._id}`}>
+          <DropdownItem disabled={actionPending} onClick={dismissAllForPuzzle}>
+            {t(
+              "notification.boardComment.dismissAll",
+              "Dismiss all from the whiteboard",
+            )}
+          </DropdownItem>
+          <DropdownItem as={Link} to="/users/me">
+            {t("notification.boardComment.settings", "Board comment settings")}
+          </DropdownItem>
+        </ToastSettings>
+      </Toast.Header>
+      <CappedToastBody>
+        <ToastActionError error={actionError} />
+        <Trans
+          i18nKey="notification.boardComment.body"
+          t={t}
+          defaults="<sender />: <text />"
+          components={{
+            sender: <strong>{displayNames.get(cn.sender) ?? "???"}</strong>,
+            text: <span>{text}</span>,
+          }}
+        />
+      </CappedToastBody>
+    </Toast>
+  );
+};
+
+// A chat message that dinged the user
+export const ChatNotificationMessage = ({
+  cn,
+  hunt,
+  puzzle,
+  displayNames,
+  selfUserId,
+  roles,
+}: {
+  cn: ChatNotificationType;
+  hunt: HuntType;
+  puzzle: PuzzleType;
+  displayNames: Map<string, string>;
+  selfUserId: string;
+  roles: string[];
+}) => {
+  const { t, i18n } = useTranslation();
+  const {
+    dismiss,
+    dismissAllForPuzzle,
+    newestSeen,
+    startAction,
+    finishAction,
+    actionPending,
+    actionError,
+  } = useChatNotificationActions(cn);
+
+  const suppressed = useTracker(
+    () => Meteor.user()?.suppressedDingwords?.[cn.hunt]?.[cn.puzzle] ?? [],
+    [cn.hunt, cn.puzzle],
+  );
+  const allMuted = suppressed.includes(SUPPRESS_ALL_DINGWORDS);
+  const muteableWords = (cn.dingwords ?? [])
+    .filter((word) => !suppressed.includes(word))
+    .slice(0, MAX_MUTE_ITEMS);
+
   const muteForPuzzle = useCallback(
     (dingword?: string) => {
       startAction();
@@ -921,13 +1056,7 @@ const ChatNotificationMessage = ({
     muteForPuzzle();
   }, [muteForPuzzle]);
 
-  const messageLink = chatMessagePath({
-    hunt: hunt._id,
-    puzzle: puzzle._id,
-    whiteboard: isWhiteboardPuzzle(puzzle),
-    message: cn.message,
-    thread: cn.thread,
-  });
+  const messageLink = chatNotificationLink(cn, hunt, puzzle);
 
   return (
     <Toast onClose={dismiss}>
@@ -941,7 +1070,7 @@ const ChatNotificationMessage = ({
         <StyledNotificationTimestamp>
           {calendarTimeFormat(cn.createdAt, t, i18n.language)}
         </StyledNotificationTimestamp>
-        <ToastSettings id={`chat-settings-${id}`}>
+        <ToastSettings id={`chat-settings-${cn._id}`}>
           <DropdownItem disabled={actionPending} onClick={dismissAllForPuzzle}>
             {t(
               "notification.chat.dismissAllForPuzzle",
@@ -1587,15 +1716,26 @@ const NotificationCenter = () => {
     const puzzle = puzzles.get(cn.puzzle);
     if (!hunt || !puzzle) return;
     messages.push(
-      <ChatNotificationMessage
-        key={cn._id}
-        cn={cn}
-        hunt={hunt}
-        puzzle={puzzle}
-        displayNames={displayNames}
-        selfUserId={selfUserId}
-        roles={rolesForChat.get(cn.hunt) ?? []}
-      />,
+      cn.reason === "boardComment" ? (
+        <BoardCommentNotificationMessage
+          key={cn._id}
+          cn={cn}
+          hunt={hunt}
+          puzzle={puzzle}
+          cardPuzzle={cn.cardPuzzle ? puzzles.get(cn.cardPuzzle) : undefined}
+          displayNames={displayNames}
+        />
+      ) : (
+        <ChatNotificationMessage
+          key={cn._id}
+          cn={cn}
+          hunt={hunt}
+          puzzle={puzzle}
+          displayNames={displayNames}
+          selfUserId={selfUserId}
+          roles={rolesForChat.get(cn.hunt) ?? []}
+        />
+      ),
     );
   });
 

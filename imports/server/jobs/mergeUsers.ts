@@ -752,6 +752,16 @@ defineJob(mergeUsers, {
       );
     }
 
+    // Board comment notifications: set if not present on target.
+    if (source.boardCommentNotifications !== undefined) {
+      await MeteorUsers.updateAsync(
+        { _id: targetUser, boardCommentNotifications: { $exists: false } },
+        {
+          $set: { boardCommentNotifications: source.boardCommentNotifications },
+        },
+      );
+    }
+
     // Per-puzzle dingword mutes: union per hunt and puzzle.
     for (const [huntId, puzzles] of Object.entries(
       source.suppressedDingwords ?? {},

@@ -2,6 +2,7 @@ import { assert } from "chai";
 import i18next, { type TFunction } from "i18next";
 import chatMessagePlainText, {
   firehosePlainText,
+  firstLine,
 } from "../../../../imports/lib/chatMessagePlainText";
 import type { ChatMessageContentType } from "../../../../imports/lib/models/ChatMessages";
 
@@ -99,5 +100,23 @@ describe("firehosePlainText", function () {
 
   it("handles an empty message", function () {
     assert.equal(firehosePlainText(content([]), displayNames, puzzles, t), "");
+  });
+});
+
+describe("firstLine", function () {
+  it("is empty for blank text", function () {
+    assert.equal(firstLine(""), "");
+    assert.equal(firstLine("  \n\t\n "), "");
+  });
+
+  it("skips leading blank and whitespace-only lines", function () {
+    assert.equal(
+      firstLine("\n   \n  Is this the meta?  \nSecond"),
+      "Is this the meta?",
+    );
+  });
+
+  it("trims a single line", function () {
+    assert.equal(firstLine("  just this "), "just this");
   });
 });

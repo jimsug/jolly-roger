@@ -2,7 +2,9 @@ import { useTracker } from "meteor/react-meteor-data";
 import React, { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import styled from "styled-components";
-import chatMessagePlainText from "../../../lib/chatMessagePlainText";
+import chatMessagePlainText, {
+  firstLine,
+} from "../../../lib/chatMessagePlainText";
 import type { ChatMessageType } from "../../../lib/models/ChatMessages";
 import type {
   CommentThread,
@@ -133,11 +135,9 @@ const CommentList = ({
         thread.root._id,
         {
           target: describeCommentTarget(thread.root.comment?.node, t),
-          firstLine:
-            chatMessagePlainText(thread.root.content, displayNames)
-              .split("\n")
-              .map((line) => line.trim())
-              .find((line) => line.length > 0) ?? "",
+          firstLine: firstLine(
+            chatMessagePlainText(thread.root.content, displayNames),
+          ),
         },
       ]),
     );

@@ -13,6 +13,7 @@ defineMethod(updateProfile, {
       dingwords: [String],
       dingwordsOpenMatch: Match.Optional(Boolean),
       isOffsite: Match.Optional(Boolean),
+      boardCommentNotifications: Match.Optional(Boolean),
       enrollmentToken: Match.Optional(String),
     });
 
@@ -25,6 +26,7 @@ defineMethod(updateProfile, {
     dingwords,
     dingwordsOpenMatch,
     isOffsite,
+    boardCommentNotifications,
     enrollmentToken,
   }) {
     let userId: string;
@@ -50,6 +52,12 @@ defineMethod(updateProfile, {
         throw new Meteor.Error(
           400,
           "Cannot set dingword matching mode while enrolling",
+        );
+      }
+      if (boardCommentNotifications !== undefined) {
+        throw new Meteor.Error(
+          400,
+          "Cannot set board comment notifications while enrolling",
         );
       }
 
@@ -86,6 +94,9 @@ defineMethod(updateProfile, {
         dingwords,
         ...(dingwordsOpenMatch === undefined ? {} : { dingwordsOpenMatch }),
         ...(isOffsite === undefined ? {} : { isOffsite }),
+        ...(boardCommentNotifications === undefined
+          ? {}
+          : { boardCommentNotifications }),
       },
       $unset: unset,
     });

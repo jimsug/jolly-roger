@@ -44,6 +44,37 @@ describe("updateProfile isOffsite", function () {
     assert.isFalse((await MeteorUsers.findOneAsync(userId))?.isOffsite);
   });
 
+  it("saves the board comment setting, and leaves it alone when left out", async function () {
+    await asUser(userId, () =>
+      updateProfile.callPromise({
+        displayName: "Remote",
+        dingwords: [],
+        boardCommentNotifications: false,
+      }),
+    );
+    assert.isFalse(
+      (await MeteorUsers.findOneAsync(userId))?.boardCommentNotifications,
+    );
+
+    await asUser(userId, () =>
+      updateProfile.callPromise({ displayName: "Remote", dingwords: [] }),
+    );
+    assert.isFalse(
+      (await MeteorUsers.findOneAsync(userId))?.boardCommentNotifications,
+    );
+
+    await asUser(userId, () =>
+      updateProfile.callPromise({
+        displayName: "Remote",
+        dingwords: [],
+        boardCommentNotifications: true,
+      }),
+    );
+    assert.isTrue(
+      (await MeteorUsers.findOneAsync(userId))?.boardCommentNotifications,
+    );
+  });
+
   it("isn't accepted on the enrollment path", async function () {
     const enrolleeId = await Accounts.createUserAsync({
       email: "enrollee@example.com",
@@ -66,6 +97,15 @@ describe("updateProfile isOffsite", function () {
         dingwords: [],
         enrollmentToken: "enroll-token",
         isOffsite: true,
+      }),
+      /enrolling/,
+    );
+    await assert.isRejected(
+      updateProfile.callPromise({
+        displayName: "Enrollee",
+        dingwords: [],
+        enrollmentToken: "enroll-token",
+        boardCommentNotifications: false,
       }),
       /enrolling/,
     );

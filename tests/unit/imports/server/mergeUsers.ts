@@ -121,6 +121,31 @@ describe("user merge", function () {
     );
   });
 
+  it("takes the source's board comment setting only when the target has none", async function () {
+    await resetDatabase("merge boardCommentNotifications");
+
+    const sourceId = await createUser("source@example.com", "Source");
+    const targetId = await createUser("target@example.com", "Target");
+    await MeteorUsers.updateAsync(sourceId, {
+      $set: { boardCommentNotifications: false },
+    });
+    await runMergeJob(sourceId, targetId);
+    assert.isFalse(
+      (await MeteorUsers.findOneAsync(targetId))?.boardCommentNotifications,
+      "An unset target setting is filled from the source",
+    );
+
+    const sourceId2 = await createUser("source2@example.com", "Source 2");
+    await MeteorUsers.updateAsync(sourceId2, {
+      $set: { boardCommentNotifications: true },
+    });
+    await runMergeJob(sourceId2, targetId);
+    assert.isFalse(
+      (await MeteorUsers.findOneAsync(targetId))?.boardCommentNotifications,
+      "A target setting that is set wins",
+    );
+  });
+
   it("unions per-puzzle dingword mutes", async function () {
     await resetDatabase("merge suppressedDingwords");
 

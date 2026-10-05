@@ -40,6 +40,15 @@ const ChatNotification = withCommon(
     // notification so the toast can show their titles. Rows written before
     // this field existed lack it.
     mentionedPuzzles: foreignKey.array().optional(),
+    // Why the user was told when it wasn't a mention or a thread they're in:
+    // "boardComment" for a new comment pinned to the whiteboard card of a
+    // puzzle they're on or have bookmarked (any dingwords that also matched
+    // are still recorded).
+    reason: z.enum(["boardComment"]).optional(),
+    // The puzzle whose card a "boardComment" row's comment is pinned to.
+    // `puzzle` is still the whiteboard's hidden puzzle the comment was sent
+    // to.
+    cardPuzzle: foreignKey.optional(),
   }),
 );
 

@@ -234,7 +234,9 @@ message across the hunt, or when someone adds a matching tag to a puzzle.
 Dingwords match whole words or phrases (or the start of a word, if you choose
 that in your profile), and a dingword notification can mute that dingword, or
 all of them, for that puzzle. Bookmark puzzles to receive notifications when
-their state changes (e.g. when an answer is found).
+their state changes (e.g. when an answer is found). A new whiteboard comment
+on a puzzle's card notifies the people on that puzzle and those who have
+bookmarked it, unless they turn that off in their profile.
 
 <details>
 <summary>See a dingword notification</summary>

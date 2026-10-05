@@ -4,6 +4,8 @@ files:
   - imports/client/components/AvatarStack.tsx
   - imports/client/components/ChatMessageReactions.tsx
   - imports/client/components/HighlightsPanel.tsx
+  - imports/client/components/NotificationCenter.tsx
+  - imports/client/components/OwnProfilePage.tsx
   - imports/client/components/WhiteboardPage.tsx
   - imports/client/components/tagColors.ts
   - imports/client/components/whiteboard/BoardSearch.tsx
@@ -99,8 +101,10 @@ files:
   - imports/methods/setWhiteboardLive.ts
   - imports/methods/upsertWhiteboardEdges.ts
   - imports/methods/upsertWhiteboardNodes.ts
+  - imports/server/boardCommentAudience.ts
   - imports/server/daemons/whiteboardVersions.ts
   - imports/server/getS3UploadParams.ts
+  - imports/server/hooks/ChatNotificationHooks.ts
   - imports/server/methods/addPuzzleAnswer.ts
   - imports/server/methods/destroyPuzzle.ts
   - imports/server/methods/exportWhiteboard.ts
@@ -130,7 +134,7 @@ files:
   - imports/server/whiteboardShared.ts
   - imports/server/whiteboardVersions.ts
   - imports/server/withLock.ts
-updated: 2026-10-05
+updated: 2026-10-06
 ---
 
 # Hunt Whiteboard
@@ -692,6 +696,41 @@ threads the viewer started or replied to (reactions don't count), by their
 first comment. Picking a row scrolls chat to the comment, as in the other
 tabs, and each row's "Show on board" closes the panel and shows the thread
 on the board.
+
+### Who hears about a comment
+
+A reply goes to whoever left the comment and everyone who has replied since,
+as long as they're still in the hunt (reactions don't count). Mentions and
+dingwords in comments work as they do in chat.
+
+A new comment pinned to a puzzle's card also goes to the people on that
+puzzle: anyone with its page open in a visible tab, or in a hidden tab they
+looked at in the last five minutes (the puzzle list's window), anyone in its
+call, and anyone who has bookmarked it. Unlike the puzzle list, nobody is
+placed on just one puzzle, so someone looking at the board itself still
+counts for the puzzles they have open elsewhere. The comment's author is
+left out, as is anyone not in the hunt, and each person gets one
+notification for the message: someone mentioned keeps their mention, and
+someone whose dingwords matched gets the board comment notification with
+their words still recorded on it. Replies don't go to the puzzle's people,
+and a comment on a note, a frame, a text box, a deleted puzzle's card or a
+loose spot on the board goes to nobody beyond its mentions and dingwords.
+`boardCommentAudience` in `imports/server/boardCommentAudience.ts` works out
+who, from the `puzzle:<id>` subscribers, the call's peers (none while
+`disable.webrtc` is on) and the bookmarks, and the chat notification hook
+adds them; their rows carry `reason: "boardComment"`, the thread, and
+`cardPuzzle` naming the card's puzzle.
+
+The toast reads "Comment on <puzzle>" ("Comment on the whiteboard" if that
+puzzle has since been deleted), with the sender's name and the comment's
+first line, and links to the board with the thread open and chat at the
+comment (`?comment=` and `#msg=`). Closing it dismisses it as any other.
+These aren't dingwords, so muting dingwords for the board neither stops
+them nor clears them. Turning off "Tell me about board comments on puzzles
+I'm on" on the profile page stops new ones (ones already showing stay until
+dismissed): it's stored as `boardCommentNotifications: false` on the user,
+and unset means on. The toast's settings menu links there. Like every chat
+notification, they aren't shown while the `disable.dingwords` flag is on.
 
 ## Editing
 

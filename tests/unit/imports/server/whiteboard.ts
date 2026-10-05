@@ -4,9 +4,12 @@ import { Random } from "meteor/random";
 import { assert } from "chai";
 import sinon from "sinon";
 import FixtureHunt from "../../../../imports/FixtureHunt";
+import chatMessagePath from "../../../../imports/lib/chatMessagePath";
+import { SUPPRESS_ALL_DINGWORDS } from "../../../../imports/lib/dingwordLogic";
 import { GLOBAL_SCOPE } from "../../../../imports/lib/isAdmin";
 import mergeUsersJob from "../../../../imports/lib/jobs/mergeUsers";
 import purgeHuntJob from "../../../../imports/lib/jobs/purgeHunt";
+import Bookmarks from "../../../../imports/lib/models/Bookmarks";
 import ChatMessages, {
   contentFromMessage,
 } from "../../../../imports/lib/models/ChatMessages";
@@ -15,6 +18,7 @@ import Documents from "../../../../imports/lib/models/Documents";
 import FeatureFlags from "../../../../imports/lib/models/FeatureFlags";
 import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
+import Peers from "../../../../imports/lib/models/mediasoup/Peers";
 import PuzzleNotifications from "../../../../imports/lib/models/PuzzleNotifications";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
 import Servers from "../../../../imports/lib/models/Servers";
@@ -62,6 +66,7 @@ import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import setWhiteboardCommentResolved from "../../../../imports/methods/setWhiteboardCommentResolved";
 import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEditPolicy";
 import setWhiteboardLive from "../../../../imports/methods/setWhiteboardLive";
+import suppressDingwordsForPuzzle from "../../../../imports/methods/suppressDingwordsForPuzzle";
 import undestroyPuzzle from "../../../../imports/methods/undestroyPuzzle";
 import updatePuzzle from "../../../../imports/methods/updatePuzzle";
 import upsertWhiteboardEdges from "../../../../imports/methods/upsertWhiteboardEdges";
@@ -72,6 +77,7 @@ import GlobalHooks from "../../../../imports/server/GlobalHooks";
 import { cleanupDeadServer } from "../../../../imports/server/garbage-collection";
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
 import Locks from "../../../../imports/server/models/Locks";
+import Subscribers from "../../../../imports/server/models/Subscribers";
 import WhiteboardPresence from "../../../../imports/server/models/WhiteboardPresence";
 import WhiteboardVersionChunks from "../../../../imports/server/models/WhiteboardVersionChunks";
 import {
@@ -4083,6 +4089,270 @@ describe("whiteboard", function () {
       });
       assert.equal(notification?.user, member);
       assert.isUndefined(notification?.thread);
+    });
+
+    describe("on a puzzle's card", function () {
+      let card: string;
+      let cardPuzzle: string;
+      let viewer: string;
+      let caller: string;
+      let bookmarker: string;
+      let elsewhere: string;
+
+      // Puts someone on a puzzle: with its page open, in its call, or with it
+      // bookmarked.
+      const view = (user: string, puzzle: string) =>
+        Subscribers.insertAsync({
+          server: Random.id(),
+          connection: Random.id(),
+          user,
+          name: `puzzle:${puzzle}`,
+          context: { hunt: huntId, puzzle, visible: false },
+        });
+      const call = (user: string, puzzle: string) =>
+        asUser(user, () =>
+          Peers.insertAsync({
+            createdServer: Random.id(),
+            hunt: huntId,
+            call: puzzle,
+            tab: Random.id(),
+            initialPeerState: "active",
+            muted: false,
+            deafened: false,
+          }),
+        );
+      const bookmark = (user: string, puzzle: string) =>
+        asUser(user, () =>
+          Bookmarks.insertAsync({ hunt: huntId, puzzle, user }),
+        );
+      const notified = (message: string) =>
+        ChatNotifications.find({ message }).fetchAsync();
+
+      beforeEach(async function () {
+        const cards = await WhiteboardNodes.find({
+          board: boardId,
+          type: "puzzle",
+        }).fetchAsync();
+        card = cards[0]!._id;
+        cardPuzzle = cards[0]!.puzzle!;
+        const otherPuzzle = cards[1]!.puzzle!;
+        viewer = await makeUser("viewer@example.com", []);
+        caller = await makeUser("caller@example.com", []);
+        bookmarker = await makeUser("bookmarker@example.com", []);
+        elsewhere = await makeUser("elsewhere@example.com", []);
+        await view(viewer, cardPuzzle);
+        await call(caller, cardPuzzle);
+        await bookmark(bookmarker, cardPuzzle);
+        await view(member, cardPuzzle);
+        await view(elsewhere, otherPuzzle);
+        await call(elsewhere, otherPuzzle);
+        await bookmark(elsewhere, otherPuzzle);
+      });
+
+      it("tells the puzzle's viewers, callers and bookmarkers about a new comment", async function () {
+        const root = await send(member, "look at this", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        const rows = await notified(root._id);
+        assert.sameMembers(
+          rows.map((n) => n.user),
+          [viewer, caller, bookmarker],
+        );
+        rows.forEach((n) => {
+          assert.equal(n.reason, "boardComment");
+          assert.equal(n.cardPuzzle, cardPuzzle);
+          assert.equal(n.thread, root._id);
+          assert.equal(n.puzzle, backingId);
+          assert.equal(n.sender, member);
+          assert.isFalse(n.mentioned);
+          assert.isUndefined(n.dingwords);
+        });
+        assert.equal(
+          chatMessagePath({
+            hunt: rows[0]!.hunt,
+            puzzle: rows[0]!.puzzle,
+            whiteboard: true,
+            message: rows[0]!.message,
+            thread: rows[0]!.thread,
+          }),
+          `/hunts/${huntId}/whiteboard?comment=${root._id}#msg=${root._id}`,
+        );
+      });
+
+      it("tells someone who is also mentioned once, as a mention", async function () {
+        const root = await send(operator, " look at this", {
+          comment: { node: card, x: 5, y: 5 },
+          mention: viewer,
+        });
+        const rows = (await notified(root._id)).filter(
+          (n) => n.user === viewer,
+        );
+        assert.lengthOf(rows, 1);
+        assert.isTrue(rows[0]!.mentioned);
+        assert.isUndefined(rows[0]!.reason);
+        assert.equal(rows[0]!.thread, root._id);
+      });
+
+      it("leaves replies to the thread's participants", async function () {
+        const root = await send(member, "the root", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        const answer = await reply(operator, root._id, "a reply");
+        assert.sameMembers(
+          (await notified(answer._id)).map((n) => n.user),
+          [member],
+        );
+      });
+
+      it("tells nobody new about a comment on a note or loose on the board", async function () {
+        const node = await sticky({ x: 100, y: 100 });
+        const onNote = await send(member, "on the note", {
+          comment: { node, x: 5, y: 5 },
+        });
+        const loose = await send(member, "loose", { comment: { x: 0, y: 0 } });
+        assert.lengthOf(await notified(onNote._id), 0);
+        assert.lengthOf(await notified(loose._id), 0);
+      });
+
+      it("leaves out someone who has turned it off", async function () {
+        await MeteorUsers.updateAsync(viewer, {
+          $set: { boardCommentNotifications: false },
+        });
+        await MeteorUsers.updateAsync(caller, {
+          $set: { boardCommentNotifications: true },
+        });
+        const root = await send(member, "look at this", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        assert.sameMembers(
+          (await notified(root._id)).map((n) => n.user),
+          [caller, bookmarker],
+        );
+      });
+
+      it("isn't stopped or cleared by muting dingwords on the board", async function () {
+        await MeteorUsers.updateAsync(viewer, {
+          $set: {
+            [`suppressedDingwords.${huntId}.${backingId}`]: [
+              SUPPRESS_ALL_DINGWORDS,
+            ],
+          },
+        });
+        const root = await send(member, "look at this", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        await asUser(viewer, () =>
+          suppressDingwordsForPuzzle.callPromise({
+            hunt: huntId,
+            puzzle: backingId,
+            dismissUntil: new Date(),
+          }),
+        );
+        const rows = await ChatNotifications.find({
+          message: root._id,
+          user: viewer,
+        }).fetchAsync();
+        assert.lengthOf(rows, 1);
+        assert.equal(rows[0]!.reason, "boardComment");
+      });
+
+      it("gives someone whose dingword matched one board comment row that keeps the word", async function () {
+        await MeteorUsers.updateAsync(viewer, {
+          $set: { dingwords: ["meta"] },
+        });
+        const root = await send(member, "is this the meta", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        const rows = await ChatNotifications.find({
+          message: root._id,
+          user: viewer,
+        }).fetchAsync();
+        assert.lengthOf(rows, 1);
+        assert.equal(rows[0]!.reason, "boardComment");
+        assert.equal(rows[0]!.cardPuzzle, cardPuzzle);
+        assert.deepEqual(rows[0]!.dingwords, ["meta"]);
+        assert.isFalse(rows[0]!.mentioned);
+
+        await asUser(viewer, () =>
+          suppressDingwordsForPuzzle.callPromise({
+            hunt: huntId,
+            puzzle: backingId,
+            dingword: "meta",
+            dismissUntil: new Date(),
+          }),
+        );
+        assert.lengthOf(
+          await ChatNotifications.find({
+            message: root._id,
+            user: viewer,
+          }).fetchAsync(),
+          1,
+        );
+      });
+
+      it("counts a hidden tab only if it was seen in the last few minutes", async function () {
+        const stale = await makeUser("stale@example.com", []);
+        const looking = await makeUser("looking@example.com", []);
+        const staleTab = await view(stale, cardPuzzle);
+        const visibleTab = await Subscribers.insertAsync({
+          server: Random.id(),
+          connection: Random.id(),
+          user: looking,
+          name: `puzzle:${cardPuzzle}`,
+          context: { hunt: huntId, puzzle: cardPuzzle, visible: true },
+        });
+        const longAgo = new Date(Date.now() - 10 * 60 * 1000);
+        await Subscribers.collection
+          .rawCollection()
+          .updateMany(
+            { _id: { $in: [staleTab, visibleTab] } },
+            { $set: { updatedAt: longAgo } },
+          );
+        const root = await send(member, "look at this", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        assert.sameMembers(
+          (await notified(root._id)).map((n) => n.user),
+          [viewer, caller, bookmarker, looking],
+        );
+      });
+
+      it("leaves out people who have left the hunt", async function () {
+        await MeteorUsers.updateAsync(viewer, { $pull: { hunts: huntId } });
+        await MeteorUsers.updateAsync(bookmarker, {
+          $pull: { hunts: huntId },
+        });
+        const root = await send(member, "look at this", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        assert.sameMembers(
+          (await notified(root._id)).map((n) => n.user),
+          [caller],
+        );
+      });
+
+      it("tells nobody new about a comment on a deleted puzzle's card", async function () {
+        await Puzzles.updateAsync(cardPuzzle, { $set: { deleted: true } });
+        const root = await send(member, "look at this", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        assert.lengthOf(await notified(root._id), 0);
+      });
+
+      it("leaves out callers while calls are turned off", async function () {
+        await FeatureFlags.insertAsync({
+          name: "disable.webrtc",
+          type: "on",
+          createdBy: operator,
+        });
+        const root = await send(member, "look at this", {
+          comment: { node: card, x: 5, y: 5 },
+        });
+        assert.sameMembers(
+          (await notified(root._id)).map((n) => n.user),
+          [viewer, bookmarker],
+        );
+      });
     });
   });
 

@@ -43,8 +43,8 @@ defineMethod(suppressDingwordsForPuzzle, {
     });
 
     // Clear the notifications this mute would have prevented: those where
-    // every matched dingword is now muted and nothing else (an @-mention or
-    // role mention) dinged the user.
+    // every matched dingword is now muted and nothing else (an @-mention, a
+    // role mention or a comment on a puzzle card) dinged the user.
     const suppressed = new Set([
       ...(user.suppressedDingwords?.[hunt]?.[puzzle] ?? []),
       wordToSuppress,
@@ -56,6 +56,9 @@ defineMethod(suppressDingwordsForPuzzle, {
       createdAt: { $lte: dismissUntil },
     }).fetchAsync();
     const stale = notifications.filter((cn) => {
+      if (cn.reason === "boardComment") {
+        return false;
+      }
       // The hook records whether a mention was involved; rows from before it
       // did are judged from their content, which can only approximate the
       // role mention case (who counted as an active operator at the time).

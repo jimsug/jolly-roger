@@ -143,7 +143,7 @@ type ConnectionPresence = { visible: boolean; updatedAt: Date };
 // Whether the subscriber's tab was visible. The client sends a boolean;
 // "visible" is what clients from before the port sent, and that form can go
 // once no pre-port client can still be connected.
-function isVisible(context: SubscriberType["context"]): boolean {
+export function isVisible(context: SubscriberType["context"]): boolean {
   const { visible } = context;
   return visible === true || visible === "visible";
 }

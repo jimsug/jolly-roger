@@ -39,6 +39,9 @@ declare module "meteor/meteor" {
       // Hunting remotely: puzzles that need someone on site sort below the
       // rest of their group for this user
       isOffsite?: boolean;
+      // Whether new whiteboard comments on the cards of puzzles the user is
+      // on or has bookmarked notify them. Unset means they do.
+      boardCommentNotifications?: boolean;
       mergedInto?: string;
     }
   }
@@ -77,6 +80,7 @@ export const User = z.object({
     .record(z.string(), z.record(z.string(), nonEmptyString.array()))
     .optional(),
   isOffsite: z.boolean().optional(),
+  boardCommentNotifications: z.boolean().optional(),
   mergedInto: foreignKey.optional(),
 });
 validateSchema(User);

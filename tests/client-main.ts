@@ -63,6 +63,7 @@ import "./unit/imports/client/DocumentDisplay";
 import "./unit/imports/client/EditableText";
 import "./unit/imports/client/guessDetails";
 import "./unit/imports/client/HighlightsPanel";
+import "./unit/imports/client/NotificationCenter";
 import "./unit/imports/client/operatorModeMenuItem";
 import "./unit/imports/client/persistedState";
 import "./unit/imports/client/PuzzleHistoryPage";

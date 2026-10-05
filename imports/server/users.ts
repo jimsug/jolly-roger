@@ -30,9 +30,11 @@ Accounts.setDefaultPublishFields({
   hunts: 1,
   huntTermsAcceptedAt: 1,
   // Settings only the user's own client reads (dingword matching and mutes,
-  // hunting offsite), kept out of the profile fields every hunt-mate receives
+  // hunting offsite, board comment notifications), kept out of the profile
+  // fields every hunt-mate receives
   dingwordsOpenMatch: 1,
   isOffsite: 1,
+  boardCommentNotifications: 1,
   suppressedDingwords: 1,
   ...profileFields,
 });
