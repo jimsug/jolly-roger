@@ -8,10 +8,12 @@ import {
   clipFromText,
   clipText,
   copySelection,
+  imageHunt,
   looksLikeClip,
   offsetToCentre,
   pasteClip,
   readClip,
+  withoutOtherHuntsImages,
 } from "../../../../imports/lib/whiteboard/clipboard";
 import type { Point, Rect } from "../../../../imports/lib/whiteboard/layout";
 import { POINT_SIZE } from "../../../../imports/lib/whiteboard/layout";
@@ -752,6 +754,75 @@ describe("whiteboard clipboard", function () {
     it("makes nothing of blank text", function () {
       assert.isUndefined(clipFromText("", sizes));
       assert.isUndefined(clipFromText(" \n\t", sizes));
+    });
+  });
+
+  describe("images from other hunts", function () {
+    const at = (hunt: string) =>
+      `https://s3.us-east-1.amazonaws.com/jr-images/${hunt}/puzzle1/upload1`;
+
+    it("reads the hunt an image was uploaded for from its address", function () {
+      assert.equal(imageHunt(at("hunt1")), "hunt1");
+      assert.isUndefined(imageHunt("not an address"));
+      assert.isUndefined(imageHunt("https://example.com/cat.png"));
+      assert.isUndefined(imageHunt("data:image/png;base64,iVBORw0KGgo="));
+    });
+
+    it("leaves out other hunts' images and the lines to them, and counts them", function () {
+      const clip: BoardClip = {
+        nodes: [
+          {
+            id: "ours",
+            type: "image",
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+            image: { url: at("hunt1"), width: 200, height: 100 },
+          },
+          {
+            id: "theirs",
+            type: "image",
+            x: 200,
+            y: 0,
+            width: 100,
+            height: 50,
+            image: { url: at("hunt2"), width: 200, height: 100 },
+          },
+          {
+            id: "odd",
+            type: "image",
+            x: 400,
+            y: 0,
+            width: 100,
+            height: 50,
+            image: { url: "https://example.com/cat.png", width: 1, height: 1 },
+          },
+          { id: "note", type: "sticky", x: 0, y: 100, width: 50, height: 50 },
+        ],
+        edges: [
+          { source: "note", target: "ours" },
+          { source: "note", target: "theirs" },
+        ],
+      };
+      const { clip: kept, leftOut } = withoutOtherHuntsImages(clip, "hunt1");
+      assert.equal(leftOut, 2);
+      assert.sameMembers(
+        kept.nodes.map((n) => n.id),
+        ["ours", "note"],
+      );
+      assert.deepEqual(kept.edges, [{ source: "note", target: "ours" }]);
+    });
+
+    it("hands back a clip with nothing foreign in it as it was", function () {
+      const clip: BoardClip = {
+        nodes: [{ id: "note", type: "sticky", x: 0, y: 0 }],
+        edges: [],
+      };
+      assert.deepEqual(withoutOtherHuntsImages(clip, "hunt1"), {
+        clip,
+        leftOut: 0,
+      });
     });
   });
 });

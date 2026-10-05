@@ -17,6 +17,17 @@ export const STROKE_SIZES: Record<WhiteboardStrokeWidth, number> = {
 
 // Samples closer than this to the last kept point add nothing visible.
 const MIN_POINT_DISTANCE = 0.5;
+// How far from the stroke as stored a point can be and still be dropped when
+// the stroke is saved (see simplifyInk).
+export const INK_SIMPLIFY_TOLERANCE = 0.5;
+// The most a stroke is drawn between samples. Longer gaps, as simplifying
+// leaves along straight runs, are filled in before the outline is worked
+// out, so smoothing treats a simplified stroke as it did the drawn one.
+const RENDER_SPACING = 4;
+// The most points filling in adds to one stroke. Past that the spacing
+// widens, so a stroke whose samples are very far apart (anything up to the
+// coordinate limit is allowed) still draws in bounded time.
+export const MAX_FILLED_POINTS = 2000;
 // Each new segment repeats this many points from the end of the previous one
 // so the joins overlap.
 export const SEGMENT_OVERLAP = 2;
@@ -114,6 +125,105 @@ function average(a: number, b: number) {
   return (a + b) / 2;
 }
 
+// Distance from (x, y) to the segment from a to b.
+function distanceToSegment(
+  x: number,
+  y: number,
+  a: InkPoint,
+  b: InkPoint,
+): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lengthSquared = dx * dx + dy * dy;
+  const t =
+    lengthSquared === 0
+      ? 0
+      : Math.min(
+          1,
+          Math.max(0, ((x - a[0]) * dx + (y - a[1]) * dy) / lengthSquared),
+        );
+  return Math.hypot(x - (a[0] + t * dx), y - (a[1] + t * dy));
+}
+
+// Ramer-Douglas-Peucker: keeps the first and last points, and between any
+// two kept points keeps the one furthest from the segment joining them if
+// it's more than tolerance away, until none is. Every dropped point is then
+// within tolerance of the simplified stroke. Kept points are unchanged,
+// pressure included, and two or more points never become fewer than two.
+// Measured to the segment rather than the whole line, so a stroke that
+// doubles back keeps its turn.
+export function simplifyInk(
+  points: InkPoint[],
+  tolerance = INK_SIMPLIFY_TOLERANCE,
+): InkPoint[] {
+  if (points.length <= 2) return points;
+  const keep = points.map((_, i) => i === 0 || i === points.length - 1);
+  const spans: [number, number][] = [[0, points.length - 1]];
+  for (let span = spans.pop(); span; span = spans.pop()) {
+    const [first, last] = span;
+    const a = points[first]!;
+    const b = points[last]!;
+    let furthest = -1;
+    let distance = tolerance;
+    for (let i = first + 1; i < last; i++) {
+      const p = points[i]!;
+      const d = distanceToSegment(p[0], p[1], a, b);
+      if (d > distance) {
+        furthest = i;
+        distance = d;
+      }
+    }
+    if (furthest !== -1) {
+      keep[furthest] = true;
+      spans.push([first, furthest], [furthest, last]);
+    }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
+// How many points the ink among nodes holds, as the per-board budget counts
+// them.
+export const inkPointCount = (
+  nodes: readonly { type?: string; points?: readonly unknown[] }[],
+) =>
+  nodes.reduce(
+    (total, n) => total + (n.type === "ink" ? (n.points?.length ?? 0) : 0),
+    0,
+  );
+
+// A stroke with points added along any gap longer than RENDER_SPACING, or
+// wider spacing if that would add more than MAX_FILLED_POINTS, with pressure
+// shading evenly between the samples either side.
+export function filledIn(points: InkPoint[]): InkPoint[] {
+  let length = 0;
+  for (let i = 1; i < points.length; i++) {
+    length += Math.hypot(
+      points[i]![0] - points[i - 1]![0],
+      points[i]![1] - points[i - 1]![1],
+    );
+  }
+  const spacing = Math.max(RENDER_SPACING, length / MAX_FILLED_POINTS);
+  const filled: InkPoint[] = [];
+  points.forEach((p, i) => {
+    const previous = points[i - 1];
+    if (previous) {
+      const steps = Math.ceil(
+        Math.hypot(p[0] - previous[0], p[1] - previous[1]) / spacing,
+      );
+      for (let step = 1; step < steps; step++) {
+        const t = step / steps;
+        filled.push([
+          previous[0] + (p[0] - previous[0]) * t,
+          previous[1] + (p[1] - previous[1]) * t,
+          previous[2] + (p[2] - previous[2]) * t,
+        ]);
+      }
+    }
+    filled.push(p);
+  });
+  return filled;
+}
+
 // SVG path for a stroke's filled outline.
 export function inkPath(
   points: InkPoint[],
@@ -121,7 +231,7 @@ export function inkPath(
   complete: boolean,
 ): string {
   if (points.length === 0) return "";
-  const outline = getStroke(points, {
+  const outline = getStroke(filledIn(points), {
     size: STROKE_SIZES[strokeWidth],
     thinning: 0.5,
     smoothing: 0.5,
@@ -145,16 +255,20 @@ export function inkPath(
   return `${path}Z`;
 }
 
-// Distance from a point to the nearest sample in a stroke. Good enough for
-// hit-testing the eraser, since samples are at most a few units apart.
+// Distance from a point to the nearest part of a stroke, between samples as
+// well as at them, since a saved stroke can have long straight runs with
+// no samples along them.
 export function distanceToInk(
   points: InkPoint[],
   x: number,
   y: number,
 ): number {
+  if (points.length === 1) {
+    return Math.hypot(points[0]![0] - x, points[0]![1] - y);
+  }
   let best = Number.POSITIVE_INFINITY;
-  points.forEach(([px, py]) => {
-    best = Math.min(best, Math.hypot(px - x, py - y));
-  });
+  for (let i = 1; i < points.length; i++) {
+    best = Math.min(best, distanceToSegment(x, y, points[i - 1]!, points[i]!));
+  }
   return best;
 }

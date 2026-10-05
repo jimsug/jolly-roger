@@ -48,6 +48,7 @@ import {
   LOCKED_FIELDS,
   loadBoardAccess,
   lockedError,
+  tooMuchInkError,
 } from "./whiteboardShared";
 import withLock, { LockPreemptedError } from "./withLock";
 
@@ -786,7 +787,9 @@ export async function restoreVersion(
     if (!result.ok) {
       throw new Meteor.Error(
         409,
-        "This version has more on it than a board can hold",
+        result.reason === "tooMuchInk"
+          ? "This version has more drawing on it than a board can hold"
+          : "This version has more on it than a board can hold",
       );
     }
     const { plan } = result;
@@ -857,7 +860,11 @@ export async function restoreItems(
       keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
       livePuzzles: await livePuzzleIds(hunt._id),
     });
-    if (!result.ok) throw new Meteor.Error(400, "This board is full");
+    if (!result.ok) {
+      throw result.reason === "tooMuchInk"
+        ? tooMuchInkError()
+        : new Meteor.Error(400, "This board is full");
+    }
     const { plan } = result;
     // Restoring an item is a person's edit, so like Place by tags it doesn't
     // move, change or unlock anything locked, whoever asks.

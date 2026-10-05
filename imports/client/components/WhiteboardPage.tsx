@@ -20,6 +20,7 @@ import {
 } from "../../lib/permission_stubs";
 import whiteboardContents from "../../lib/publications/whiteboardContents";
 import whiteboardForHunt from "../../lib/publications/whiteboardForHunt";
+import whiteboardInk from "../../lib/publications/whiteboardInk";
 import {
   BOARD_TARGET_PARAMS,
   boardTargetFromParams,
@@ -27,6 +28,7 @@ import {
 } from "../../lib/whiteboard/links";
 import createWhiteboard from "../../methods/createWhiteboard";
 import { useBreadcrumb } from "../hooks/breadcrumb";
+import { useWhiteboardHideInk } from "../hooks/persisted-state";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import PuzzlePage, { MinimumDesktopWidth } from "./PuzzlePage";
 import type { BoardFocus } from "./whiteboard/BoardFocusContext";
@@ -154,6 +156,13 @@ const WhiteboardPage = () => {
     board ? whiteboardContents : undefined,
     { boardId: board?._id ?? "" },
   );
+  // Ink comes on its own, so a viewer who hides it is sent only where each
+  // stroke is, not its points.
+  const [hideInk, setHideInk] = useWhiteboardHideInk();
+  const inkLoading = useTypedSubscribe(board ? whiteboardInk : undefined, {
+    boardId: board?._id ?? "",
+    outlines: hideInk,
+  });
   const [searchParams, setSearchParams] = useSearchParams();
   const initialComment = searchParams.get("comment") ?? undefined;
   const clearInitialComment = useCallback(
@@ -249,7 +258,9 @@ const WhiteboardPage = () => {
             isOperator={policyAccess.isOperator}
             showMiniMap={!compact}
             compact={compact}
-            boardLoaded={!contentsLoading()}
+            boardLoaded={!contentsLoading() && !inkLoading()}
+            hideInk={hideInk}
+            onHideInkChange={setHideInk}
             focusRef={focusRef}
             initialComment={initialComment}
             onInitialCommentShown={clearInitialComment}

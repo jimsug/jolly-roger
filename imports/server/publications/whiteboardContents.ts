@@ -1,10 +1,8 @@
 import { check } from "meteor/check";
-import Flags from "../../Flags";
-import MeteorUsers from "../../lib/models/MeteorUsers";
 import WhiteboardEdges from "../../lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../lib/models/WhiteboardNodes";
-import Whiteboards from "../../lib/models/Whiteboards";
 import whiteboardContents from "../../lib/publications/whiteboardContents";
+import { boardForMember } from "../whiteboardShared";
 import definePublication from "./definePublication";
 
 definePublication(whiteboardContents, {
@@ -14,26 +12,13 @@ definePublication(whiteboardContents, {
   },
 
   async run({ boardId }) {
-    if (!this.userId) {
+    if (!(await boardForMember(this.userId, boardId))) {
       return [];
     }
 
-    const board = await Whiteboards.findOneAsync(boardId);
-    if (!board) {
-      return [];
-    }
-
-    const user = await MeteorUsers.findOneAsync(this.userId);
-    if (!user?.hunts?.includes(board.hunt)) {
-      return [];
-    }
-
-    if (await Flags.activeAsync("disable.whiteboard")) {
-      return [];
-    }
-
+    // Ink comes separately, from whiteboardInk.
     return [
-      WhiteboardNodes.find({ board: boardId }),
+      WhiteboardNodes.find({ board: boardId, type: { $ne: "ink" } }),
       WhiteboardEdges.find({ board: boardId }),
     ];
   },

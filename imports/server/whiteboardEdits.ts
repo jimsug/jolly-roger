@@ -16,6 +16,7 @@ import WhiteboardNodes from "../lib/models/WhiteboardNodes";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import { Id } from "../lib/typedModel/regexes";
 import type { InkPoint } from "../lib/whiteboard/ink";
+import { inkPointCount, simplifyInk } from "../lib/whiteboard/ink";
 import isWhiteboardPuzzle from "../lib/whiteboard/isWhiteboardPuzzle";
 import { POINT_SIZE } from "../lib/whiteboard/layout";
 import {
@@ -26,6 +27,7 @@ import {
   MAX_FRAME_DEPTH,
   MAX_IMAGES_PER_BOARD,
   MAX_INK_POINTS,
+  MAX_INK_POINTS_PER_BOARD,
   MAX_LABEL_LENGTH,
   MAX_NODES_PER_BOARD,
   MAX_TEXT_LENGTH,
@@ -39,10 +41,12 @@ import { detachComments } from "./whiteboardComments";
 import {
   assertMayCommentOnBoard,
   assertMayEditBoard,
+  inkPointsOnBoard,
   inRange,
   isInkPoint,
   LOCKED_FIELDS,
   lockedError,
+  tooMuchInkError,
 } from "./whiteboardShared";
 import { recordVersionBeforeEdit, withBoardLock } from "./whiteboardVersions";
 
@@ -205,10 +209,11 @@ const sameImage = (
 ) => !!b && a.url === b.url && a.width === b.width && a.height === b.height;
 
 // An image node shows an object uploaded as chat images are (see
-// createChatImageUpload): one in the image bucket keyed by a hunt's id, a
-// puzzle's id and the upload's own. Anything else, including when there's no
-// bucket, is refused.
-async function assertStoredImages(urls: string[]) {
+// createChatImageUpload): one in the image bucket keyed by this hunt's id, a
+// puzzle's id and the upload's own. Purging a hunt removes everything under
+// its id, so an image from another hunt could vanish from this board.
+// Anything else, including when there's no bucket, is refused.
+async function assertStoredImages(huntId: string, urls: string[]) {
   if (urls.length === 0) return;
   const bucket = await imageBucket();
   const prefix = bucket ? imageObjectUrl(bucket, "") : undefined;
@@ -216,7 +221,11 @@ async function assertStoredImages(urls: string[]) {
     const key =
       prefix && url.startsWith(prefix) ? url.slice(prefix.length) : "";
     const parts = key.split("/");
-    if (parts.length !== 3 || !parts.every((part) => Id.test(part))) {
+    if (
+      parts.length !== 3 ||
+      parts[0] !== huntId ||
+      !parts.every((part) => Id.test(part))
+    ) {
       throw badRequest("That image isn't one we stored");
     }
   });
@@ -226,7 +235,7 @@ async function assertStoredImages(urls: string[]) {
 // changes once it's on the board. Taken together with the cap on images, so
 // a batch that breaks either is refused before anything is written.
 async function assertImagesAllowed(
-  board: { _id: string },
+  board: { _id: string; hunt: string },
   inputs: WhiteboardNodeInput[],
   existingById: Map<string, WhiteboardNodeType>,
 ) {
@@ -257,7 +266,7 @@ async function assertImagesAllowed(
     }
   });
   if (added.length === 0) return;
-  await assertStoredImages(added);
+  await assertStoredImages(board.hunt, added);
   const count = await WhiteboardNodes.find({
     board: board._id,
     type: "image",
@@ -546,19 +555,26 @@ function assertLocksAllow(
 export async function upsertNodes(
   userId: string,
   boardId: string,
-  inputs: WhiteboardNodeInput[],
+  sent: WhiteboardNodeInput[],
 ) {
   const { board, hunt, user } = await assertMayEditBoard(userId, boardId);
-  if (inputs.length > MAX_BATCH) throw badRequest("Too many nodes at once");
-  inputs.forEach(validateCommonFields);
+  if (sent.length > MAX_BATCH) throw badRequest("Too many nodes at once");
+  sent.forEach(validateCommonFields);
 
   const existingNodes = await WhiteboardNodes.find({
-    _id: { $in: inputs.map((n) => n._id) },
+    _id: { $in: sent.map((n) => n._id) },
   }).fetchAsync();
   const existingById = new Map(existingNodes.map((n) => [n._id, n]));
   if (existingNodes.some((n) => n.board !== boardId)) {
     throw new Meteor.Error(403, "Node belongs to another board");
   }
+  // New ink is stored simplified (a saved stroke's points never change), and
+  // counts towards the board's ink budget as stored.
+  const inputs = sent.map((input) =>
+    input.type === "ink" && input.points && !existingById.has(input._id)
+      ? { ...input, points: simplifyInk(input.points) }
+      : input,
+  );
 
   const inserts = inputs.filter((n) => !existingById.has(n._id));
   // Check every new node is complete before writing anything, so a batch that
@@ -595,6 +611,13 @@ export async function upsertNodes(
     if (count + inserts.length > MAX_NODES_PER_BOARD) {
       throw badRequest("This board is full");
     }
+  }
+  const newInk = inkPointCount(inserts);
+  if (
+    newInk > 0 &&
+    (await inkPointsOnBoard(boardId)) + newInk > MAX_INK_POINTS_PER_BOARD
+  ) {
+    throw tooMuchInkError();
   }
 
   // Folding, opening, locking or unlocking on its own doesn't start a

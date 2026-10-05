@@ -25,6 +25,8 @@ import WhiteboardNodes from "../../../../imports/lib/models/WhiteboardNodes";
 import type { WhiteboardEditPolicy } from "../../../../imports/lib/models/Whiteboards";
 import Whiteboards from "../../../../imports/lib/models/Whiteboards";
 import WhiteboardVersions from "../../../../imports/lib/models/WhiteboardVersions";
+import whiteboardContents from "../../../../imports/lib/publications/whiteboardContents";
+import whiteboardInk from "../../../../imports/lib/publications/whiteboardInk";
 import whiteboardPresence from "../../../../imports/lib/publications/whiteboardPresence";
 import {
   CARD_HEIGHT,
@@ -33,9 +35,12 @@ import {
   POINT_SIZE,
 } from "../../../../imports/lib/whiteboard/layout";
 import {
+  LIVE_UPDATE_BURST,
+  LIVE_UPDATES_PER_SECOND,
   MAX_BATCH,
   MAX_FRAME_DEPTH,
   MAX_IMAGES_PER_BOARD,
+  MAX_INK_POINTS_PER_BOARD,
   MAX_LIVE_SELECTION,
   MAX_NODES_PER_BOARD,
   MAX_WHITEBOARD_EDITORS,
@@ -1624,6 +1629,196 @@ describe("whiteboard", function () {
       );
     });
 
+    describe("ink budget", function () {
+      // A stroke of `count` points that zigzags, so simplifying keeps every
+      // one of them
+      const zigzag = (count: number) => ({
+        _id: Random.id(),
+        type: "ink" as const,
+        position: { x: 0, y: 0 },
+        strokeWidth: "thin" as const,
+        stroke: Random.id(),
+        points: Array.from(
+          { length: count },
+          (_, i): [number, number, number] => [i * 5, (i % 2) * 5, 0.5],
+        ),
+      });
+      // Ink straight into the board, bypassing the budget, leaving `room`
+      // points of it
+      const fillInk = async (room: number) => {
+        await WhiteboardNodes.insertAsync({
+          hunt: huntId,
+          board: boardId,
+          type: "ink",
+          position: { x: 0, y: 0 },
+          strokeWidth: "thin",
+          points: Array.from(
+            { length: MAX_INK_POINTS_PER_BOARD - room },
+            (_, i): [number, number, number] => [i % 1000, i % 7, 0.5],
+          ),
+          createdBy: member,
+        });
+      };
+
+      it("stores a new stroke simplified, keeping its ends and its pressure", async function () {
+        const straight = {
+          ...zigzag(0),
+          points: Array.from(
+            { length: 100 },
+            (_, i): [number, number, number] => [i * 2, 10, i === 99 ? 1 : 0.2],
+          ),
+        };
+        const bent = zigzag(10);
+        await upsertNodes(member, boardId, [straight, bent]);
+        assert.deepEqual(
+          (await WhiteboardNodes.findOneAsync(straight._id))?.points,
+          [
+            [0, 10, 0.2],
+            [198, 10, 1],
+          ],
+        );
+        assert.deepEqual(
+          (await WhiteboardNodes.findOneAsync(bent._id))?.points,
+          bent.points,
+        );
+      });
+
+      it("refuses a whole batch that would take the board past its ink budget", async function () {
+        await fillInk(15);
+        const note = {
+          _id: Random.id(),
+          type: "sticky" as const,
+          position: { x: 0, y: 0 },
+        };
+        const stroke = zigzag(20);
+        await assert.isRejected(
+          asUser(member, () =>
+            upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [note, stroke],
+            }),
+          ),
+          /as much drawing as it can hold/,
+        );
+        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
+        assert.notOk(await WhiteboardNodes.findOneAsync(stroke._id));
+
+        // What's left fits, counted once simplified
+        const long = {
+          ...zigzag(0),
+          points: Array.from(
+            { length: 300 },
+            (_, i): [number, number, number] => [i, 0, 0.5],
+          ),
+        };
+        await upsertNodes(member, boardId, [zigzag(10), long, note]);
+        assert.ok(await WhiteboardNodes.findOneAsync(long._id));
+        // Anything but ink still goes on a board with no ink to spare
+        await upsertNodes(member, boardId, [
+          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
+        ]);
+        await upsertNodes(member, boardId, [
+          { _id: note._id, position: { x: 50, y: 50 } },
+        ]);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [zigzag(4)]),
+          /as much drawing as it can hold/,
+        );
+      });
+    });
+
+    describe("ink publication", function () {
+      let note: string;
+      let ink: string;
+
+      beforeEach(async function () {
+        note = Random.id();
+        ink = Random.id();
+        await upsertNodes(member, boardId, [
+          { _id: note, type: "sticky", position: { x: 0, y: 0 } },
+          {
+            _id: ink,
+            type: "ink",
+            position: { x: 0, y: 0 },
+            strokeWidth: "thin",
+            points: [
+              [0, 0, 0.5],
+              [10, 10, 0.5],
+            ],
+          },
+        ]);
+      });
+
+      const publishedDocs = async (
+        publication: { name: string },
+        userId: string,
+        args: object = {},
+      ) => {
+        const result = await publishHandler(publication.name).call(
+          new StubSubscription(userId),
+          { boardId, ...args },
+        );
+        const cursors = Array.isArray(result) ? result : [result];
+        const docs = await Promise.all(
+          cursors.map(
+            (c: {
+              fetchAsync: () => Promise<
+                { _id: string; points?: unknown; position?: unknown }[]
+              >;
+            }) => c.fetchAsync(),
+          ),
+        );
+        return docs.flat();
+      };
+      const published = async (
+        publication: { name: string },
+        userId: string,
+        args: object = {},
+      ) => (await publishedDocs(publication, userId, args)).map((d) => d._id);
+
+      it("publishes a board's ink to members on its own", async function () {
+        const inkDocs = await publishedDocs(whiteboardInk, member, {
+          outlines: false,
+        });
+        assert.deepEqual(
+          inkDocs.map((d) => d._id),
+          [ink],
+        );
+        assert.lengthOf(inkDocs[0]!.points as unknown[], 2);
+        const contents = await published(whiteboardContents, member);
+        assert.include(contents, note);
+        assert.notInclude(contents, ink);
+      });
+
+      it("publishes ink without its points as outlines", async function () {
+        const inkDocs = await publishedDocs(whiteboardInk, member, {
+          outlines: true,
+        });
+        assert.deepEqual(
+          inkDocs.map((d) => d._id),
+          [ink],
+        );
+        assert.notProperty(inkDocs[0], "points");
+        assert.deepEqual(inkDocs[0]!.position, { x: 0, y: 0 });
+      });
+
+      it("publishes no ink to people outside the hunt, or with the board off", async function () {
+        assert.isEmpty(
+          await published(whiteboardInk, outsider, { outlines: false }),
+        );
+        assert.isEmpty(await published(whiteboardContents, outsider));
+        await FeatureFlags.insertAsync({
+          name: "disable.whiteboard",
+          type: "on",
+          createdBy: operator,
+        });
+        assert.isEmpty(
+          await published(whiteboardInk, member, { outlines: false }),
+        );
+        assert.isEmpty(await published(whiteboardContents, member));
+      });
+    });
+
     it("only joins nodes on the same board with arrows", async function () {
       const a = Random.id();
       await upsertNodes(member, boardId, [
@@ -1758,15 +1953,15 @@ describe("whiteboard", function () {
         );
       });
 
-      it("takes an image uploaded in another hunt, as a paste from there brings", async function () {
+      it("refuses an image uploaded in another hunt, which purging that hunt would take", async function () {
         const input = imageInput(
           inBucket(`${Random.id()}/${Random.id()}/${Random.id()}`),
         );
-        await upsertNodes(member, boardId, [input]);
-        assert.deepEqual(
-          (await WhiteboardNodes.findOneAsync(input._id))!.image,
-          input.image,
+        await assert.isRejected(
+          upsertNodes(member, boardId, [input]),
+          /That image isn't one we stored/,
         );
+        assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
       });
 
       it("refuses an image from anywhere else", async function () {
@@ -2257,6 +2452,63 @@ describe("whiteboard", function () {
         await WhiteboardPresence.find({ server: deadServer }).countAsync(),
         0,
       );
+    });
+
+    it("drops updates past a connection's rate limit, without an error, and takes them again a second later", async function () {
+      const clock = sinon.useFakeTimers({
+        now: Date.now(),
+        toFake: ["Date"],
+      });
+      try {
+        const { connection } = fakeConnection();
+        const cursorAt = async () =>
+          (await WhiteboardPresence.findOneAsync({ connection: connection.id }))
+            ?.cursor;
+        for (let i = 1; i <= LIVE_UPDATE_BURST; i++) {
+          await setLive(member, connection, boardId, {
+            ...state,
+            cursor: { x: i, y: 0 },
+          });
+        }
+        assert.deepEqual(await cursorAt(), { x: LIVE_UPDATE_BURST, y: 0 });
+        await setLive(member, connection, boardId, {
+          ...state,
+          cursor: { x: -1, y: 0 },
+        });
+        assert.deepEqual(await cursorAt(), { x: LIVE_UPDATE_BURST, y: 0 });
+
+        // Another connection has a bucket of its own
+        const other = fakeConnection();
+        await setLive(member, other.connection, boardId, state);
+        assert.equal(
+          await WhiteboardPresence.find({
+            connection: other.connection.id,
+          }).countAsync(),
+          1,
+        );
+
+        clock.tick(1000);
+        for (let i = 1; i <= LIVE_UPDATES_PER_SECOND; i++) {
+          await setLive(member, connection, boardId, {
+            ...state,
+            cursor: { x: 1000 + i, y: 0 },
+          });
+        }
+        assert.deepEqual(await cursorAt(), {
+          x: 1000 + LIVE_UPDATES_PER_SECOND,
+          y: 0,
+        });
+        await setLive(member, connection, boardId, {
+          ...state,
+          cursor: { x: -1, y: 0 },
+        });
+        assert.deepEqual(await cursorAt(), {
+          x: 1000 + LIVE_UPDATES_PER_SECOND,
+          y: 0,
+        });
+      } finally {
+        clock.restore();
+      }
     });
 
     it("publishes everyone else's presence, and forgets yours when you leave", async function () {

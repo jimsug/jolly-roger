@@ -9,12 +9,19 @@ export const MAX_EDGES_PER_BOARD = 3000;
 export const MAX_TEXT_LENGTH = 2000;
 export const MAX_LABEL_LENGTH = 200;
 export const MAX_INK_POINTS = 500;
+// All the ink on a board, counted in points once each stroke is simplified
+// (about 6 MB).
+export const MAX_INK_POINTS_PER_BOARD = 200_000;
 export const MAX_COORDINATE = 1_000_000;
 export const MAX_DIMENSION = 100_000;
 export const MAX_CONTRIBUTORS = 50;
 export const MAX_LIVE_DRAG_NODES = 50;
 // How many selected nodes a live update can show to others.
 export const MAX_LIVE_SELECTION = 50;
+// How many live updates a connection can send a second, and in a burst.
+// Updates past that are dropped.
+export const LIVE_UPDATES_PER_SECOND = 20;
+export const LIVE_UPDATE_BURST = 40;
 // How deep frames can nest. A longer chain of parents is taken to be a loop
 // (which frames moved into each other at the same time can briefly make), so
 // nothing that walks up one can hang.

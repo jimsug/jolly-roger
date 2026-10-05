@@ -30,7 +30,8 @@ import {
 // the board, not relative to its frame, and a node's parent, if it has one,
 // is another node in the copy. Puzzle cards are never copied (a puzzle has
 // one card), nor are comments. An image is copied by its address, so a paste
-// shows the same upload.
+// shows the same upload, and only pastes into a board of the hunt it was
+// uploaded for.
 
 // Anything starting with this is meant to be a copy from a board, of some
 // version.
@@ -324,6 +325,43 @@ export function readClip(text: string): BoardClip | undefined {
   const parsed = BoardClip.safeParse(json);
   if (!parsed.success || !holdsTogether(parsed.data)) return undefined;
   return parsed.data;
+}
+
+// The hunt an image was uploaded for, from its address, which ends
+// <hunt>/<puzzle>/<upload> as createChatImageUpload names it.
+export function imageHunt(url: string): string | undefined {
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return undefined;
+  }
+  const parts = path.split("/").filter((part) => part !== "");
+  return parts.length >= 3 ? parts.at(-3) : undefined;
+}
+
+// A clip without the images uploaded for any hunt but huntId, which a board
+// doesn't take (purging a hunt takes its images with it), and without the
+// lines to them. Also says how many images were left out.
+export function withoutOtherHuntsImages(
+  clip: BoardClip,
+  huntId: string,
+): { clip: BoardClip; leftOut: number } {
+  const foreign = new Set(
+    clip.nodes
+      .filter((n) => n.image && imageHunt(n.image.url) !== huntId)
+      .map((n) => n.id),
+  );
+  if (foreign.size === 0) return { clip, leftOut: 0 };
+  return {
+    clip: {
+      nodes: clip.nodes.filter((n) => !foreign.has(n.id)),
+      edges: clip.edges.filter(
+        (e) => !foreign.has(e.source) && !foreign.has(e.target),
+      ),
+    },
+    leftOut: foreign.size,
+  };
 }
 
 // Ordinary text pasted onto the board, as a copy of one node at 0, 0: a

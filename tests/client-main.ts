@@ -92,3 +92,4 @@ import "./acceptance/puzzles";
 import "./acceptance/smoke";
 import "./acceptance/tags";
 import "./acceptance/whiteboard";
+import "./acceptance/whiteboardScale";

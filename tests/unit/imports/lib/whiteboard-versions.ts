@@ -4,6 +4,7 @@ import type { WhiteboardNodeType } from "../../../../imports/lib/models/Whiteboa
 import type { WhiteboardVersionKind } from "../../../../imports/lib/models/WhiteboardVersions";
 import {
   MAX_IMAGES_PER_BOARD,
+  MAX_INK_POINTS_PER_BOARD,
   MAX_NODES_PER_BOARD,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_IDLE_MS,
@@ -53,6 +54,18 @@ const card = (_id: string, puzzle: string, parent?: string) =>
   node(_id, { type: "puzzle", puzzle, parent });
 const frame = (_id: string, fields: Partial<WhiteboardNodeType> = {}) =>
   node(_id, { type: "frame", width: 300, height: 200, ...fields });
+// An ink segment with `count` points.
+const ink = (_id: string, count: number) =>
+  node(_id, {
+    type: "ink",
+    stroke: _id,
+    strokeWidth: "thin",
+    points: Array.from({ length: count }, (_, i): [number, number, number] => [
+      i,
+      0,
+      0.5,
+    ]),
+  });
 const edge = (
   _id: string,
   source: string,
@@ -781,6 +794,33 @@ describe("whiteboard versions", function () {
         planRestore({ nodes: [], edges: [] }, { nodes: stored, edges: [] }).ok,
       );
     });
+
+    it("refuses ink past the budget, unless the board already has more", function () {
+      const over = ink("over", MAX_INK_POINTS_PER_BOARD + 1);
+      const more = ink("more", MAX_INK_POINTS_PER_BOARD + 50);
+      assert.deepEqual(
+        planRestore(
+          { nodes: [ink("small", 10)], edges: [] },
+          { nodes: [over], edges: [] },
+        ),
+        { ok: false, reason: "tooMuchInk" },
+      );
+      assert.isTrue(
+        planRestore(
+          { nodes: [ink("small", 10)], edges: [] },
+          { nodes: [ink("full", MAX_INK_POINTS_PER_BOARD)], edges: [] },
+        ).ok,
+      );
+      // A board already past the budget can still lose ink, but not gain it
+      assert.isTrue(
+        planRestore({ nodes: [more], edges: [] }, { nodes: [over], edges: [] })
+          .ok,
+      );
+      assert.deepEqual(
+        planRestore({ nodes: [over], edges: [] }, { nodes: [more], edges: [] }),
+        { ok: false, reason: "tooMuchInk" },
+      );
+    });
   });
 
   describe("pickToRestore", function () {
@@ -1061,6 +1101,28 @@ describe("whiteboard versions", function () {
       assert.isTrue(
         planItems({ nodes: live }, { nodes: [image("i0")] }, ["i0"]).ok,
       );
+    });
+
+    it("refuses ink past the budget, unless it leaves the board with less", function () {
+      const nearlyFull = ink("big", MAX_INK_POINTS_PER_BOARD - 5);
+      const version = { nodes: [ink("gone", 10), ink("big", 10)] };
+      assert.deepEqual(planItems({ nodes: [nearlyFull] }, version, ["gone"]), {
+        ok: false,
+        reason: "tooMuchInk",
+      });
+      assert.isTrue(
+        planItems({ nodes: [nearlyFull] }, { nodes: [ink("gone", 5)] }, [
+          "gone",
+        ]).ok,
+      );
+      // On a board already past the budget, putting back a stroke as it was
+      // with fewer points is allowed, and adding one isn't
+      const overfull = ink("big", MAX_INK_POINTS_PER_BOARD + 50);
+      assert.isTrue(planItems({ nodes: [overfull] }, version, ["big"]).ok);
+      assert.deepEqual(planItems({ nodes: [overfull] }, version, ["gone"]), {
+        ok: false,
+        reason: "tooMuchInk",
+      });
     });
   });
 

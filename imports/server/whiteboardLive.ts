@@ -10,6 +10,8 @@ import Whiteboards from "../lib/models/Whiteboards";
 import { whiteboardAccess } from "../lib/permission_stubs";
 import { Id } from "../lib/typedModel/regexes";
 import {
+  LIVE_UPDATE_BURST,
+  LIVE_UPDATES_PER_SECOND,
   MAX_INK_POINTS,
   MAX_LIVE_DRAG_NODES,
   MAX_LIVE_SELECTION,
@@ -60,6 +62,13 @@ interface ConnectionState {
   // overtaken while it looks things up isn't written over the newer one.
   sent: Map<string, number>;
   written: Map<string, number>;
+  // A token bucket for the connection's live updates, across every board:
+  // up to LIVE_UPDATE_BURST tokens, refilled at LIVE_UPDATES_PER_SECOND,
+  // one taken per update. droppedLoggedAt is when dropping updates was last
+  // logged, so a flood logs once a minute at most.
+  tokens: number;
+  refilledAt: number;
+  droppedLoggedAt: number;
 }
 const connections = new Map<string, ConnectionState>();
 // As ConnectionState.epoch, for changes to boards and hunts.
@@ -89,6 +98,9 @@ function connectionState(connection: Meteor.Connection): ConnectionState {
     closed: false,
     sent: new Map(),
     written: new Map(),
+    tokens: LIVE_UPDATE_BURST,
+    refilledAt: Date.now(),
+    droppedLoggedAt: Number.NEGATIVE_INFINITY,
   };
   connections.set(connection.id, state);
   connection.onClose(() => {
@@ -105,6 +117,32 @@ function connectionState(connection: Meteor.Connection): ConnectionState {
     );
   });
   return state;
+}
+
+const DROPPED_LOG_INTERVAL = 60 * 1000;
+
+// Takes a token for one live update, or says there isn't one. Live updates
+// come again a moment later, so one that's dropped is only ever a little
+// late, and nothing is sent back.
+function takeLiveToken(state: ConnectionState, userId: string) {
+  const now = Date.now();
+  state.tokens = Math.min(
+    LIVE_UPDATE_BURST,
+    state.tokens + ((now - state.refilledAt) / 1000) * LIVE_UPDATES_PER_SECOND,
+  );
+  state.refilledAt = now;
+  if (state.tokens >= 1) {
+    state.tokens -= 1;
+    return true;
+  }
+  if (now - state.droppedLoggedAt >= DROPPED_LOG_INTERVAL) {
+    state.droppedLoggedAt = now;
+    Logger.debug("Dropping whiteboard live updates over the rate limit", {
+      user: userId,
+      connection: state.connection,
+    });
+  }
+  return false;
 }
 
 function forgetAccess(matches: (entry: CachedAccess) => boolean) {
@@ -321,6 +359,7 @@ export async function setLive(
   // Read before anything is awaited, so a close or unsubscribe that lands
   // while this call is under way shows up as a change.
   const state = connectionState(connection);
+  if (!takeLiveToken(state, userId)) return;
   const stops = state.stops.get(boardId) ?? 0;
   const cleanedUp = () =>
     state.closed || (state.stops.get(boardId) ?? 0) !== stops;

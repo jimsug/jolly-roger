@@ -54,6 +54,7 @@ files:
   - imports/lib/models/WhiteboardVersions.ts
   - imports/lib/models/Whiteboards.ts
   - imports/lib/permission_stubs.ts
+  - imports/lib/publications/whiteboardInk.ts
   - imports/lib/puzzleTagStatus.ts
   - imports/lib/puzzleViewers.ts
   - imports/lib/tagNames.ts
@@ -63,6 +64,7 @@ files:
   - imports/lib/whiteboard/feederFocus.ts
   - imports/lib/whiteboard/feeders.ts
   - imports/lib/whiteboard/frameTools.ts
+  - imports/lib/whiteboard/ink.ts
   - imports/lib/whiteboard/layout.ts
   - imports/lib/whiteboard/limits.ts
   - imports/lib/whiteboard/links.ts
@@ -99,6 +101,8 @@ files:
   - imports/server/methods/updatePuzzle.ts
   - imports/server/models/WhiteboardPresence.ts
   - imports/server/models/WhiteboardVersionChunks.ts
+  - imports/server/publications/whiteboardContents.ts
+  - imports/server/publications/whiteboardInk.ts
   - imports/server/publications/whiteboardVersions.ts
   - imports/server/tagSynonyms.ts
   - imports/server/transitionGuess.ts
@@ -326,6 +330,14 @@ The method unblocks, so updates from one connection can run side by side.
 Each connection numbers its updates per board, and one that's overtaken
 while it looks things up isn't written over the newer one.
 
+Each connection has a token bucket for its live updates, across all boards:
+`LIVE_UPDATES_PER_SECOND` (20) a second, in bursts of up to
+`LIVE_UPDATE_BURST` (40). The client sends far fewer than that. An update
+over the limit is dropped before anything else is done with it, with no
+error back, since the next one comes a moment later; the server logs that
+it's dropping updates at debug level, once a minute at most per
+connection.
+
 #### Selections and "is editing"
 
 Each update also carries `selection`, the ids of the nodes selected (at most
@@ -378,7 +390,7 @@ is disconnected the page also lowers any access to `view`, with the reason
 
 A read-only board's toolbar says "Viewing only", gives the reason on the line
 below, and keeps the Comment tool for anyone who can comment, and the
-Comments button (see Comments) for everyone. When the
+Comments button (see Comments) and Hide ink (see Ink) for everyone. When the
 viewer's edit rights come or go while the board is open, a notice says so,
 and a note being edited closes, keeping what was typed as "Not saved" until
 it can be retried (see When a save is refused). A window becoming
@@ -442,7 +454,9 @@ to load, shows what it names, and is then dropped from the address:
 
 A board opened from a link doesn't fit itself to the screen first, so it
 doesn't jump twice; if the link names something that isn't there, it fits
-then.
+then. A board that does fit itself on opening (no link and no saved view)
+waits until all of it, ink included, has arrived, since ink comes on its
+own subscription (see Ink).
 
 The toolbar's link button, "Copy link to here", copies a link to the selected
 card (`?puzzle=`), to a selected frame, note, text box or image (`?node=`), or else
@@ -622,6 +636,10 @@ Feeder arrows, comments, locks and who made what aren't copied either. A
 round's frame is copied as a plain frame with the round's name as its label,
 and a folded frame stays folded. An image is copied by its address, with
 both its sizes, so its paste shows the same upload rather than a new one.
+An image uploaded in another hunt can't go on this hunt's board (see
+Images), so a paste from another hunt's board leaves its images out, with
+any line to them, pastes the rest, and says "Images from another hunt were
+left out" (`withoutOtherHuntsImages` in `clipboard.ts`).
 
 A paste puts everything back with fresh ids, so it can go onto the board it
 came from or any other, as often as wanted. It keeps its layout, centred on
@@ -660,7 +678,9 @@ new inserts, so the board's caps, access and locks apply as for anything
 drawn: what's pasted is unlocked, and lists the person who pasted it as its
 creator. It's one step for Undo, which deletes the lot. If the server
 refuses any of it, the usual "Couldn't save" alert shows and whatever got
-through is deleted again.
+through is deleted again. That includes a paste with more ink than the
+board has room for, refused with "This board has as much drawing as it can
+hold" (see Ink).
 
 On the clipboard a copy is plain text: `jolly-roger-whiteboard/1` on the
 first line, then the copy as JSON, with each node's position on the board
@@ -725,16 +745,89 @@ of `{ url, width, height }` (its size in pixels) and a width and height for
 the node. The address must be an object in the configured bucket named the
 way `createChatImageUpload` names chat images, by a hunt's id, a puzzle's id
 and an upload's id (`https://s3.<region>.amazonaws.com/<bucket>/<hunt>/<puzzle>/<upload>`).
-The hunt can be any hunt, so a copy from another hunt's board pastes with
-its images; anything else, a `data:` address included, or any image at all when there's
-no bucket, is refused with "That image isn't one we stored". Once the node
+The hunt must be the board's own: purging a hunt removes everything under
+its id, so an image from another hunt could go blank on this board when
+that hunt is purged. An image from another hunt, anything else (a `data:`
+address included), or any image at all when there's no bucket, is refused
+with "That image isn't one we stored". Once the node
 is made its `image` never changes: an update that sends a different one is
 refused with "An image can't be changed", and one sent on any other kind of
 node with "Only image nodes have an image". A board takes at most
 `MAX_IMAGES_PER_BOARD` (100) images, which count towards its node cap too.
 Deleting an image node leaves the file in the bucket, as deleting a chat
-message does; purging a hunt removes everything under its id, so an image
-pasted from it into another hunt's board shows nothing after that.
+message does, and purging the hunt removes it with the rest of the hunt's
+images.
+
+### Ink
+
+The pen draws a stroke as the pointer moves, dropping samples within half a
+unit of the last one kept, and saves it in segments of up to
+`MAX_INK_POINTS` (500) points that share a stroke id, each repeating the
+last two points of the one before so the joins overlap (`InkSegmenter` in
+`imports/lib/whiteboard/ink.ts`). While it's drawn the stroke goes to
+everyone else on the live channel.
+
+`upsertNodes` simplifies each new segment before storing it, with
+Ramer-Douglas-Peucker (`simplifyInk` in `ink.ts`): between any two points it
+keeps, it keeps the one furthest from the straight segment joining them if
+that's more than `INK_SIMPLIFY_TOLERANCE` (half a unit) away, until none is,
+so every point it drops is within half a unit of the stroke as stored. The
+first and last points always stay, so a segment of two or more points keeps
+at least two, and each point kept keeps its own pressure. Distance is
+measured to the segment rather than the whole line, so a stroke that
+doubles back keeps its turn. A straight run comes down to its two ends. A
+segment sent with more than 500 points is still refused, before
+simplifying. Only new segments are simplified; a saved stroke's points never
+change. To draw a simplified stroke as it was drawn, `inkPath` fills in
+points along any gap longer than 4 units before working out the outline
+(`filledIn`), and the eraser measures to the line between samples rather
+than to the samples alone. Filling in adds at most `MAX_FILLED_POINTS`
+(2,000) points to a stroke, spacing them further apart on a stroke longer
+than that allows, so a stroke whose samples are far apart (anything within
+the coordinate limit is allowed) still draws quickly, saved or live.
+
+A board holds at most `MAX_INK_POINTS_PER_BOARD` (200,000) points of ink,
+counted after simplifying, which is about 6 MB. `upsertNodes` counts the
+board's ink (`inkPointsOnBoard` in `whiteboardShared.ts`, summed by the
+database, which reads every ink document on the board to do it) plus the
+batch's, and refuses the whole batch, before anything is written, with
+"This board has as much drawing as it can hold". Only a batch that adds ink
+is checked, so a full board still takes notes, lines and moves. Like the
+node cap, the count is taken outside the board lock, so people drawing at
+the same moment can each pass it and take a board a little past the
+budget; a later batch is then refused. A long stroke is saved a segment at
+a time, so one that reaches the budget part-way keeps the segments saved
+before it. A paste goes through the same check (see Copy, paste and
+duplicate), and so do restores: a version whose ink is past the budget, and
+more than the board has now, is refused with "This version has more drawing
+on it than a board can hold", and Restore this item with "This board has as
+much drawing as it can hold" (see History).
+
+Hide ink (a toggle on both toolbars, titled "Hide ink", pressed while ink
+is hidden) takes ink off the board for this viewer, for a board where it's
+in the way. It's remembered in this browser for every board
+(`whiteboard:hideInk`, beside the feeder arrows toggle), and starts off
+shown. Ink comes on its own publication,
+`Whiteboards.publications.inkForBoard`
+(`imports/server/publications/whiteboardInk.ts`), and `contentsForBoard`
+sends everything else and no ink. Both publish to members of the hunt, and
+nothing to anyone else or while `disable.whiteboard` is on
+(`boardForMember` in `whiteboardShared.ts`). While ink is hidden
+`WhiteboardPage` subscribes with `outlines: true`, which sends each segment
+without its points: where it is, how big and what frame it's in, which is
+a small part of the bytes. The canvas keeps those as hidden nodes that
+can't be seen or selected, so resizing a frame from its top or left edge,
+Fit to contents and Tidy treat the ink in it as they would if it were
+shown, and undoing a stroke drawn before ink was hidden still works.
+Copying a frame while ink is hidden leaves its ink out.
+
+Hiding ink puts down the pen or the eraser, and picking either up (from
+the toolbar or by its key) shows ink again; hiding it in another window
+does the same. Someone else's stroke still shows while it's being drawn. A
+version being previewed is shown without its ink, and if the version or
+the board has any, the preview banner says "Ink is hidden, so it isn't
+shown here. Restoring this version still puts its drawing back as it
+was."
 
 ### Not on the board
 
@@ -1107,7 +1200,10 @@ wins and the version's references are remapped to it. Parents that are
 missing or would make a loop are dropped (the node goes to the top level), as
 are lines with a missing end and free ends no line uses. Cards for deleted
 puzzles aren't put back (see Deleted, replaced and restored puzzles). A
-restore that would take the board past its node or line limit is refused.
+restore that would take the board past its node or line limit is refused
+("This version has more on it than a board can hold"), as is one whose ink
+is past the ink budget and more than the board has now ("This version has
+more drawing on it than a board can hold"; see Ink).
 
 Only after that does it record the board as it is (a version of kind
 `restore`), so a refused restore records nothing. Then:
@@ -1171,7 +1267,8 @@ level where the version had it on screen. A line whose other end isn't on the
 board isn't restored, nor is its free end, and neither is a card for a
 deleted puzzle or a line to one. Putting things back that would
 take the board past its node, line or image limit is refused with "This board is
-full".
+full", and past its ink budget with "This board has as much drawing as it
+can hold".
 
 It's an edit, not a rewrite: it records a version of kind `edits` through
 `recordVersionLocked`, which coalesces with the same person's other edits
@@ -1308,17 +1405,19 @@ its context. The server doesn't know or care: someone who may edit can still
 do so from a desktop.
 
 On a phone the viewer can pan and pinch, open puzzles from cards, show and
-hide resolved pins, open a pin's thread, place a comment, reply, react,
-resolve and reopen, delete their own thread while nobody else has replied
-(operators can always), use search and the Comments list, copy a link to the
-view, follow "Show on board" from chat, and open a collapsed round for
-themselves ("Show (only for you)", see Collapsed rounds). Nothing else: no
-tools, no moving, no folding rounds for everyone, no who-can-edit button.
+hide resolved pins, hide ink (see Ink), open a pin's thread, place a
+comment, reply, react, resolve and reopen, delete their own thread while
+nobody else has replied (operators can always), use search and the Comments
+list, copy a link to the view, follow "Show on board" from chat, and open a
+collapsed round for themselves ("Show (only for you)", see Collapsed
+rounds). Nothing else: no tools, no moving, no folding rounds for everyone,
+no who-can-edit button.
 
 The toolbar says "Viewing only" with "Editing needs a wider screen. You can
-still comment." under it, and its Comment, Comments and resolved buttons are
-44px square. While the Comment tool is out, a banner under the toolbar says
-"Tap where your comment goes", with Cancel to put the tool away.
+still comment." under it, and its Comment, Comments, resolved and Hide ink
+buttons are 44px square. While the Comment tool is out, a banner under the
+toolbar says "Tap where your comment goes", with Cancel to put the tool
+away.
 
 A tap places the comment. With the tool out on a phone the board still pans
 under a finger: React Flow's `panOnDrag` stays on, and the canvas leaves a
@@ -1719,11 +1818,45 @@ There is no flag for the edit policy: `members` is already the off position.
   `detachedFrom` on a free pin that came off a node). Replies carry `thread`,
   the root's id.
 
-The server enforces the limits in `imports/lib/whiteboard/limits.ts` (batch
-sizes, nodes, images and lines per board, text lengths, ink points, coordinate range,
-frame depth, the edit list, history's intervals and caps), and the client
-keeps to the ones it can. Purging a hunt removes all six collections, and
-merging users carries `createdBy`, `contributors`, `lockedBy`, the `editors`
-list and versions' `users` over to the merged account and drops the source
-account's presence. User ids inside a version's payload aren't rewritten; a
+The server enforces the limits in `imports/lib/whiteboard/limits.ts`, and
+the client keeps to the ones it can:
+
+| Limit | Value | What it caps |
+|---|---|---|
+| `MAX_BATCH` | 100 | nodes or lines in one write, or one restore of an item |
+| `MAX_NODES_PER_BOARD` | 5,000 | nodes on a board, images included |
+| `MAX_IMAGES_PER_BOARD` | 100 | images on a board |
+| `MAX_EDGES_PER_BOARD` | 3,000 | lines on a board, feeder arrows included |
+| `MAX_TEXT_LENGTH` | 2,000 | a note's or text box's text |
+| `MAX_LABEL_LENGTH` | 200 | a frame's or line's label |
+| `MAX_INK_POINTS` | 500 | points in one ink segment as sent |
+| `MAX_INK_POINTS_PER_BOARD` | 200,000 | ink points on a board, once simplified (see Ink) |
+| `MAX_COORDINATE` | 1,000,000 | how far from the origin anything can be |
+| `MAX_DIMENSION` | 100,000 | a node's width or height |
+| `MAX_CONTRIBUTORS` | 50 | the names kept in a node's or line's contributors |
+| `MAX_LIVE_DRAG_NODES` | 50 | nodes in one live drag |
+| `MAX_LIVE_SELECTION` | 50 | nodes in a live selection |
+| `LIVE_UPDATES_PER_SECOND`, `LIVE_UPDATE_BURST` | 20, 40 | live updates per connection (see The live channel) |
+| `MAX_FRAME_DEPTH` | 64 | frames inside frames |
+| `MAX_WHITEBOARD_EDITORS` | 500 | people the edit policy can name |
+
+History's intervals and caps are in the same file (see Retention and
+storage).
+
+A hunt-sized board is tested by `tests/acceptance/whiteboardScale.tsx`: a
+test-only method (`test.methods.whiteboard.seedHuntSizedBoard`, refused
+outside `meteor test`) seeds a hunt of 200 puzzles in 20 rounds, each round
+with a meta, creates its board, and adds 300 ink strokes of 100 points over
+the first rounds' frames, 50 sticky notes and 50 lines. The test opens the
+board on the first round, and times how long the first card takes to show,
+how long until all the ink has arrived and the strokes in view are drawn,
+and how long a dragged card takes to be saved once it's let go, with the
+ink there. It logs all three, and fails over 8, 8 and 2 seconds
+respectively, ceilings well above what it takes so only a real slowdown
+fails it.
+
+Purging a hunt removes all six collections, and merging users carries
+`createdBy`, `contributors`, `lockedBy`, the `editors` list and versions'
+`users` over to the merged account and drops the source account's
+presence. User ids inside a version's payload aren't rewritten; a
 restore maps them instead.

@@ -3,10 +3,12 @@ import type { WhiteboardEdgeType } from "../models/WhiteboardEdges";
 import type { WhiteboardNodeType } from "../models/WhiteboardNodes";
 import type { WhiteboardVersionKind } from "../models/WhiteboardVersions";
 import { ancestorsOf } from "./arrange";
+import { inkPointCount } from "./ink";
 import {
   MAX_EDGES_PER_BOARD,
   MAX_FRAME_DEPTH,
   MAX_IMAGES_PER_BOARD,
+  MAX_INK_POINTS_PER_BOARD,
   MAX_NODES_PER_BOARD,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_IDLE_MS,
@@ -199,9 +201,17 @@ export interface RestorePlan {
   reattach: { node: string; from: string[] }[];
 }
 
+// tooBig: past the board's caps on nodes, lines or images. tooMuchInk: past
+// its ink budget, and with more ink than the board has now.
 export type RestoreResult =
   | { ok: true; plan: RestorePlan }
-  | { ok: false; reason: "tooBig" };
+  | { ok: false; reason: "tooBig" | "tooMuchInk" };
+
+// Whether a board going from `before` ink points to `after` would pass the
+// budget. A board already past it (from before there was one) can still
+// lose ink.
+const overInkBudget = (before: number, after: number) =>
+  after > MAX_INK_POINTS_PER_BOARD && after > before;
 
 // What a document is, whatever its id: a card is its puzzle, a seeded frame
 // its tag, the Ungrouped frame its kind, a feeder arrow its feeder and meta.
@@ -554,6 +564,14 @@ export function planRestore(
   ) {
     return { ok: false, reason: "tooBig" };
   }
+  if (
+    overInkBudget(
+      inkPointCount(current.nodes),
+      inkPointCount([...wanted.values()]),
+    )
+  ) {
+    return { ok: false, reason: "tooMuchInk" };
+  }
 
   const plan = emptyPlan();
   planNodes(plan, liveNodes, wanted, targetIds);
@@ -671,7 +689,7 @@ const imageCount = (nodes: readonly { type: string }[]) =>
 
 export type ItemRestoreResult =
   | { ok: true; plan: RestorePlan; puzzles: string[] }
-  | { ok: false; reason: "tooBig" };
+  | { ok: false; reason: "tooBig" | "tooMuchInk" };
 
 // How to put the nodes and lines in items (from restoreItemSet) back as the
 // version (stored) has them, leaving everything else on the live board
@@ -680,10 +698,11 @@ export type ItemRestoreResult =
 // Nothing live is removed. A node whose frame isn't on the board, or would
 // make a loop, goes to the top level where the version had it on the board.
 // Lines need both ends on the board afterwards, free ends need a line, and
-// the board's caps on nodes, lines and images hold. With keepLocks, as for
-// planRestore, a node keeps the lock it has on the board and one the board
-// no longer has comes back unlocked. Given livePuzzles, a deleted puzzle's
-// card and its lines are put back only as forLivePuzzles says. Also returns the puzzles of the cards it touches.
+// the board's caps on nodes, lines and images hold, as does its ink budget.
+// With keepLocks, as for planRestore, a node keeps the lock it has on the
+// board and one the board no longer has comes back unlocked. Given
+// livePuzzles, a deleted puzzle's card and its lines are put back only as
+// forLivePuzzles says. Also returns the puzzles of the cards it touches.
 export function planItemRestore(
   current: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
   stored: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
@@ -777,6 +796,13 @@ export function planItemRestore(
       MAX_IMAGES_PER_BOARD
   ) {
     return { ok: false, reason: "tooBig" };
+  }
+  const inkNow = inkPointCount(current.nodes);
+  const inkAfter =
+    inkPointCount(current.nodes.filter((n) => !wanted.has(n._id))) +
+    inkPointCount([...wanted.values()]);
+  if (overInkBudget(inkNow, inkAfter)) {
+    return { ok: false, reason: "tooMuchInk" };
   }
 
   const plan = emptyPlan();

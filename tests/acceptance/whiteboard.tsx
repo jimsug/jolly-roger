@@ -47,7 +47,10 @@ import {
   FRAME_PADDING,
   GAP,
 } from "../../imports/lib/whiteboard/layout";
-import { MAX_LIVE_SELECTION } from "../../imports/lib/whiteboard/limits";
+import {
+  MAX_INK_POINTS_PER_BOARD,
+  MAX_LIVE_SELECTION,
+} from "../../imports/lib/whiteboard/limits";
 import addHuntUser from "../../imports/methods/addHuntUser";
 import addPuzzleTag from "../../imports/methods/addPuzzleTag";
 import createChatImageUpload from "../../imports/methods/createChatImageUpload";
@@ -117,9 +120,48 @@ const setImageBucket = new TypedMethod<{ on: boolean }, void>(
   "test.methods.whiteboard.setImageBucket",
 );
 
+// Adds one ink segment out of the way, with as many points as leave the
+// board `spare` points short of its ink budget, and returns its id.
+const fillInk = new TypedMethod<{ boardId: string; spare: number }, string>(
+  "test.methods.whiteboard.fillInk",
+);
+
 if (Meteor.isServer) {
   const defineMethod: typeof import("../../imports/server/methods/defineMethod").default =
     require("../../imports/server/methods/defineMethod").default;
+  const {
+    inkPointsOnBoard,
+  }: typeof import("../../imports/server/whiteboardShared") = require("../../imports/server/whiteboardShared");
+
+  defineMethod(fillInk, {
+    validate(arg: unknown) {
+      check(arg, { boardId: String, spare: Number });
+      return arg;
+    },
+
+    async run({ boardId, spare }) {
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+      check(this.userId, String);
+      const board = (await Whiteboards.findOneAsync(boardId))!;
+      const count =
+        MAX_INK_POINTS_PER_BOARD - (await inkPointsOnBoard(boardId)) - spare;
+      return WhiteboardNodes.insertAsync({
+        hunt: board.hunt,
+        board: boardId,
+        type: "ink",
+        position: { x: -90000, y: -90000 },
+        width: 10,
+        height: 10,
+        strokeWidth: "thin",
+        points: Array.from({ length: count }, (): [number, number, number] => [
+          0, 0, 0.5,
+        ]),
+        createdBy: this.userId,
+      });
+    },
+  });
 
   defineMethod(setPuzzleAnswers, {
     validate(arg: unknown) {
@@ -3299,6 +3341,98 @@ if (Meteor.isClient) {
         }
       });
 
+      it("hides ink, and stops receiving its points, until it's shown again or the pen is picked up", async function () {
+        this.timeout(30000);
+        const stroke = Random.id();
+        const segment = Random.id();
+        const note = Random.id();
+        const base = { x: 20500, y: 20000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: note,
+              type: "sticky",
+              position: { x: base.x, y: base.y + 100 },
+              width: 160,
+              height: 120,
+            },
+            {
+              _id: segment,
+              type: "ink",
+              position: base,
+              width: 200,
+              height: 40,
+              points: [
+                [0, 0, 0.5],
+                [100, 40, 0.5],
+                [200, 0, 0.5],
+              ],
+              strokeWidth: "medium",
+              color: "black",
+              stroke,
+            },
+          ],
+        });
+        // Hidden ink still comes, as outlines without points
+        const inkReceived = () =>
+          WhiteboardNodes.find({
+            board: boardId,
+            type: "ink",
+            points: { $exists: true },
+          }).countAsync();
+        const outlineReceived = async () =>
+          !!(await WhiteboardNodes.findOneAsync(segment));
+        const hideInk = () => screen.getByRole("button", { name: "Hide ink" });
+        lookAt(base);
+        try {
+          await openBoard();
+          await nodeShown(segment);
+          assert.equal(hideInk().getAttribute("aria-pressed"), "false");
+
+          await act(async () => {
+            fireEvent.click(hideInk());
+            await stabilize();
+          });
+          assert.equal(hideInk().getAttribute("aria-pressed"), "true");
+          await waitFor(
+            async () => {
+              assert.isNull(nodeElement(segment));
+              assert.equal(await inkReceived(), 0);
+              assert.isTrue(await outlineReceived());
+            },
+            { timeout: 10000 },
+          );
+          // Everything else is still there
+          assert.isNotNull(nodeElement(note));
+
+          await act(async () => {
+            fireEvent.click(hideInk());
+            await stabilize();
+          });
+          await nodeShown(segment);
+          assert.isAbove(await inkReceived(), 0);
+
+          await act(async () => {
+            fireEvent.click(hideInk());
+            await stabilize();
+          });
+          await waitFor(() => assert.isNull(nodeElement(segment)), {
+            timeout: 10000,
+          });
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: /^Draw/ }));
+            await stabilize();
+          });
+          await nodeShown(segment);
+          assert.equal(hideInk().getAttribute("aria-pressed"), "false");
+        } finally {
+          localStorage.removeItem("whiteboard:hideInk");
+          forgetView();
+          await removeNodes([segment, note]);
+        }
+      });
+
       it("makes a frame the size it's dragged out to", async function () {
         this.timeout(30000);
         const base = { x: 21000, y: 21000 };
@@ -3457,6 +3591,107 @@ if (Meteor.isClient) {
         } finally {
           forgetView();
           await removeNodes([sticky, frame]);
+        }
+      });
+
+      it("keeps hidden ink still when its frame is resized from the top left", async function () {
+        this.timeout(30000);
+        const frame = Random.id();
+        const segment = Random.id();
+        const base = { x: 22000, y: 23000 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: frame,
+              type: "frame",
+              position: base,
+              width: 600,
+              height: 400,
+              label: "Inky frame",
+            },
+            {
+              _id: segment,
+              type: "ink",
+              parent: frame,
+              position: { x: 100, y: 100 },
+              width: 200,
+              height: 40,
+              points: [
+                [0, 0, 0.5],
+                [100, 40, 0.5],
+                [200, 0, 0.5],
+              ],
+              strokeWidth: "medium",
+              color: "black",
+              stroke: Random.id(),
+            },
+          ],
+        });
+        localStorage.setItem("whiteboard:hideInk", "true");
+        lookAt({ x: base.x - 200, y: base.y - 100 });
+        try {
+          await openBoard();
+          await nodeShown(frame);
+          // Hidden, but there to be moved
+          await waitFor(
+            async () =>
+              assert.exists(await WhiteboardNodes.findOneAsync(segment)),
+            { timeout: 10000 },
+          );
+          assert.isNull(nodeElement(segment));
+          await select(frame);
+          const corner = await waitFor(() => {
+            const found = nodeElement(frame)?.querySelector(
+              ".react-flow__resize-control.handle.top.left",
+            );
+            assert.exists(found);
+            return found;
+          });
+          const box = corner.getBoundingClientRect();
+          const start = {
+            clientX: box.left + box.width / 2,
+            clientY: box.top + box.height / 2,
+          };
+          const to = {
+            clientX: start.clientX - 100,
+            clientY: start.clientY - 50,
+          };
+          const mouse = { button: 0, view: window };
+          await act(async () => {
+            fireEvent.mouseDown(corner, { ...mouse, ...start });
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.mouseMove(window, { ...mouse, ...to });
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.mouseUp(window, { ...mouse, ...to });
+            await stabilize();
+          });
+          await waitFor(
+            async () => {
+              const resized = await savedNode(frame);
+              const ink = await savedNode(segment);
+              assert.closeTo(resized?.position.x ?? 0, base.x - 100, 1);
+              assert.closeTo(
+                (resized?.position.x ?? 0) + (ink?.position.x ?? 0),
+                base.x + 100,
+                1,
+              );
+              assert.closeTo(
+                (resized?.position.y ?? 0) + (ink?.position.y ?? 0),
+                base.y + 100,
+                1,
+              );
+            },
+            { timeout: 10000 },
+          );
+        } finally {
+          localStorage.removeItem("whiteboard:hideInk");
+          forgetView();
+          await removeNodes([segment, frame]);
         }
       });
 
@@ -4662,14 +4897,8 @@ if (Meteor.isClient) {
           this.timeout(30000);
           const base = { x: 28500, y: 27000 };
           const screenAt = lookAt(base);
-          const before = new Set(
-            (
-              await WhiteboardNodes.find({
-                board: boardId,
-                type: "ink",
-              }).fetchAsync()
-            ).map((n) => n._id),
-          );
+          // Ink is only received while the board is open
+          let before = new Set<string>();
           const drawn = async () =>
             (
               await WhiteboardNodes.find({
@@ -4680,6 +4909,14 @@ if (Meteor.isClient) {
           let ids: string[] = [];
           try {
             await openBoard();
+            before = new Set(
+              (
+                await WhiteboardNodes.find({
+                  board: boardId,
+                  type: "ink",
+                }).fetchAsync()
+              ).map((n) => n._id),
+            );
             await act(async () => {
               fireEvent.click(screen.getByRole("button", { name: /^Draw/ }));
               await stabilize();
@@ -5548,6 +5785,122 @@ if (Meteor.isClient) {
           } finally {
             forgetView();
             await removeNodes([id]);
+          }
+        });
+
+        it("leaves out images from another hunt and pastes the rest", async function () {
+          this.timeout(30000);
+          const base = { x: 39000, y: 30000 };
+          const note = `Kept ${Random.id()}`;
+          const foreignUrl = `https://s3.${TEST_BUCKET.bucketRegion}.amazonaws.com/${TEST_BUCKET.bucketName}/${Random.id()}/${Random.id()}/${Random.id()}`;
+          const copied = `jolly-roger-whiteboard/1\n${JSON.stringify({
+            nodes: [
+              {
+                id: "note",
+                type: "sticky",
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 120,
+                text: note,
+              },
+              {
+                id: "picture",
+                type: "image",
+                x: 200,
+                y: 0,
+                width: 300,
+                height: 150,
+                image: { url: foreignUrl, width: 600, height: 300 },
+              },
+            ],
+            edges: [{ source: "note", target: "picture" }],
+          })}`;
+          lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            const pasted = await clipboard("paste", copied);
+            assert.isTrue(pasted.event.defaultPrevented);
+            await screen.findByText("Images from another hunt were left out");
+            await waitFor(
+              async () =>
+                assert.exists(
+                  await WhiteboardNodes.findOneAsync({
+                    board: boardId,
+                    text: note,
+                  }),
+                ),
+              { timeout: 10000 },
+            );
+            assert.notExists(
+              await WhiteboardNodes.findOneAsync({
+                board: boardId,
+                "image.url": foreignUrl,
+              }),
+            );
+          } finally {
+            forgetView();
+            const left = await WhiteboardNodes.find({
+              board: boardId,
+              text: note,
+            }).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
+          }
+        });
+
+        it("refuses a paste with more ink than the board has room for", async function () {
+          this.timeout(30000);
+          const base = { x: 41000, y: 30000 };
+          const note = `Inky ${Random.id()}`;
+          const copied = `jolly-roger-whiteboard/1\n${JSON.stringify({
+            nodes: [
+              {
+                id: "note",
+                type: "sticky",
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 120,
+                text: note,
+              },
+              {
+                id: "line",
+                type: "ink",
+                x: 200,
+                y: 0,
+                width: 200,
+                height: 20,
+                strokeWidth: "thin",
+                stroke: "stroke",
+                points: Array.from({ length: 20 }, (_, i) => [
+                  i * 10,
+                  (i % 2) * 10,
+                  0.5,
+                ]),
+              },
+            ],
+            edges: [],
+          })}`;
+          // With ink hidden, the filler's points aren't sent to the client
+          localStorage.setItem("whiteboard:hideInk", "true");
+          const filler = await fillInk.callPromise({ boardId, spare: 5 });
+          lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            await clipboard("paste", copied);
+            await screen.findByText(
+              "Couldn't save: This board has as much drawing as it can hold",
+            );
+            assert.isEmpty(await withText([note]).fetchAsync());
+            assert.isTrue(undoButton().disabled);
+          } finally {
+            localStorage.removeItem("whiteboard:hideInk");
+            forgetView();
+            await removeNodes([filler]);
+            const left = await withText([note]).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
           }
         });
 

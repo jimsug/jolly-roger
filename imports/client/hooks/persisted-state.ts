@@ -323,6 +323,12 @@ export const useWhiteboardFeederArrows = () => {
   return useBestEffortLocalStorage("whiteboard:feederArrows", true);
 };
 
+// Whether this viewer has hidden ink on the board, which also stops its
+// points being sent to them.
+export const useWhiteboardHideInk = () => {
+  return useBestEffortLocalStorage("whiteboard:hideInk", false);
+};
+
 // How a meta card's Feeders popover orders its list. Anything saved that
 // isn't an order reads as board order.
 export const useWhiteboardFeederOrder = () => {

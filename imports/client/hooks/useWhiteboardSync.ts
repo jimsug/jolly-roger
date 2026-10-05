@@ -286,10 +286,15 @@ export default function useWhiteboardSync({
   override,
   peeked,
   busy,
+  hideInk,
 }: {
   boardId: string;
   livePuzzleIds: Set<string>;
   showFeederArrows: boolean;
+  // Whether this viewer has hidden ink. Ink is then kept as hidden nodes
+  // (with no points, see whiteboardInk), so a frame resized, fitted or tidied
+  // still accounts for what's in it.
+  hideInk: boolean;
   remoteDrags: Map<string, RemoteDrag>;
   erasingStrokes: Set<string>;
   // Collapsed frames this viewer has opened for themselves.
@@ -537,6 +542,7 @@ export default function useWhiteboardSync({
         }
 
         const erasing = !!doc.stroke && erasingStrokes.has(doc.stroke);
+        const hidden = doc.type === "ink" && (hideInk || !doc.points);
         // A node that hasn't changed is handed back as it was, so React Flow
         // skips it. One that's gliding is built afresh even so, since a new
         // node is what starts its glide moving (see the effect on nodes).
@@ -550,7 +556,8 @@ export default function useWhiteboardSync({
           prev.position.x === position.x &&
           prev.position.y === position.y &&
           prev.width === width &&
-          prev.height === height
+          prev.height === height &&
+          !!prev.hidden === hidden
         ) {
           return prev;
         }
@@ -562,7 +569,9 @@ export default function useWhiteboardSync({
           data: { doc, erasing, collapsed, collapsedForAll },
           width,
           height,
-          selected: prev?.selected ?? false,
+          hidden,
+          // Something hidden can't stay selected, or Delete would take it.
+          selected: !hidden && (prev?.selected ?? false),
           dragging: prev?.dragging,
           resizing: prev?.resizing,
           measured: prev?.measured,
@@ -600,6 +609,7 @@ export default function useWhiteboardSync({
     erasingStrokes,
     peeked,
     busy,
+    hideInk,
     generation,
   ]);
 

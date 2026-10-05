@@ -1,6 +1,8 @@
 import { Meteor } from "meteor/meteor";
+import Flags from "../Flags";
 import Hunts from "../lib/models/Hunts";
 import MeteorUsers from "../lib/models/MeteorUsers";
+import WhiteboardNodes from "../lib/models/WhiteboardNodes";
 import Whiteboards from "../lib/models/Whiteboards";
 import { whiteboardAccess } from "../lib/permission_stubs";
 import { MAX_COORDINATE } from "../lib/whiteboard/limits";
@@ -27,6 +29,40 @@ export function isInkPoint(point: number[]) {
 }
 
 export const lockedError = () => new Meteor.Error(403, "That's locked");
+
+export const tooMuchInkError = () =>
+  new Meteor.Error(400, "This board has as much drawing as it can hold");
+
+// How many points the ink on a board holds, for MAX_INK_POINTS_PER_BOARD.
+// Summed by the database, so the points aren't sent here, though it still
+// reads every ink document on the board to count them.
+export async function inkPointsOnBoard(boardId: string) {
+  const [result] = await WhiteboardNodes.collection
+    .rawCollection()
+    .aggregate<{ total: number }>([
+      { $match: { board: boardId, type: "ink" } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $size: { $ifNull: ["$points", []] } } },
+        },
+      },
+    ])
+    .toArray();
+  return result?.total ?? 0;
+}
+
+// The board, for a publication of its contents: only for a member of its
+// hunt, and not while disable.whiteboard is on. Otherwise undefined.
+export async function boardForMember(userId: string | null, boardId: string) {
+  if (!userId) return undefined;
+  const board = await Whiteboards.findOneAsync(boardId);
+  if (!board) return undefined;
+  const user = await MeteorUsers.findOneAsync(userId);
+  if (!user?.hunts?.includes(board.hunt)) return undefined;
+  if (await Flags.activeAsync("disable.whiteboard")) return undefined;
+  return board;
+}
 
 // What a lock stops on a node. Folding a frame changes no geometry, so it's
 // still allowed.

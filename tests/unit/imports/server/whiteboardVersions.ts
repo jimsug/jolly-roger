@@ -22,6 +22,7 @@ import WhiteboardVersions from "../../../../imports/lib/models/WhiteboardVersion
 import whiteboardVersions from "../../../../imports/lib/publications/whiteboardVersions";
 import {
   MAX_BATCH,
+  MAX_INK_POINTS_PER_BOARD,
   MAX_NODES_PER_BOARD,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_INTERVAL_MS,
@@ -184,6 +185,21 @@ describe("whiteboard versions", function () {
     });
     return { versionId, chunks };
   };
+
+  // An ink stroke of `count` points that zigzags, so simplifying keeps
+  // every one of them
+  const zigzag = (count: number) => ({
+    _id: Random.id(),
+    type: "ink" as const,
+    position: { x: 600, y: 600 },
+    strokeWidth: "thin" as const,
+    stroke: Random.id(),
+    points: Array.from({ length: count }, (_, i): [number, number, number] => [
+      i * 5,
+      (i % 2) * 5,
+      0.5,
+    ]),
+  });
 
   describe("recording", function () {
     it("records a version on a user's first edit", async function () {
@@ -814,6 +830,49 @@ describe("whiteboard versions", function () {
       assert.sameDeepMembers((await board()).nodes, nodes);
     });
 
+    it("records nothing when a version has more drawing on it than a board can hold", async function () {
+      const stroke = zigzag(3);
+      await upsertNodes(member, boardId, [stroke]);
+      const template = (await WhiteboardNodes.findOneAsync(stroke._id))!;
+      const inky = await storeVersion(
+        [{ ...template, points: zigzag(MAX_INK_POINTS_PER_BOARD + 1).points }],
+        [],
+      );
+      const before = await versions();
+      const { nodes } = await board();
+      await assert.isRejected(
+        restoreVersion(member, boardId, inky.versionId),
+        /more drawing on it than a board can hold/,
+      );
+      assert.sameMembers(
+        (await versions()).map((v) => v._id),
+        before.map((v) => v._id),
+      );
+      assert.sameDeepMembers((await board()).nodes, nodes);
+    });
+
+    it("restores a version with less drawing on a board already past the budget", async function () {
+      const stroke = zigzag(10);
+      await upsertNodes(member, boardId, [stroke]);
+      await nextWindow();
+      await deleteNodes(member, boardId, [stroke._id]);
+      const version = await newest();
+      // Ink from before there was a budget
+      const heavy = await WhiteboardNodes.insertAsync({
+        hunt: huntId,
+        board: boardId,
+        type: "ink",
+        position: { x: 0, y: 0 },
+        strokeWidth: "thin",
+        points: zigzag(MAX_INK_POINTS_PER_BOARD + 10).points,
+        createdBy: member,
+      });
+
+      await restoreVersion(member, boardId, version._id);
+      assert.ok(await WhiteboardNodes.findOneAsync(stroke._id));
+      assert.notOk(await WhiteboardNodes.findOneAsync(heavy));
+    });
+
     it("refuses a version from another board", async function () {
       const otherHunt = await Hunts.insertAsync({
         name: "Another hunt",
@@ -1344,6 +1403,29 @@ describe("whiteboard versions", function () {
         (await versions()).map((v) => [v._id, v.changeCount]),
         before,
       );
+    });
+
+    it("refuses to put back ink the board has no room for", async function () {
+      const stroke = zigzag(20);
+      await upsertNodes(member, boardId, [stroke]);
+      await nextWindow();
+      await deleteNodes(member, boardId, [stroke._id]);
+      const version = await newest();
+      await WhiteboardNodes.insertAsync({
+        hunt: huntId,
+        board: boardId,
+        type: "ink",
+        position: { x: 0, y: 0 },
+        strokeWidth: "thin",
+        points: zigzag(MAX_INK_POINTS_PER_BOARD - 10).points,
+        createdBy: member,
+      });
+
+      await assert.isRejected(
+        restoreItems(member, boardId, version._id, [stroke._id]),
+        /as much drawing as it can hold/,
+      );
+      assert.notOk(await WhiteboardNodes.findOneAsync(stroke._id));
     });
 
     it("restores every segment of an ink stroke from one of them", async function () {

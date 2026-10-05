@@ -20,6 +20,7 @@ import { faObjectGroup } from "@fortawesome/free-solid-svg-icons/faObjectGroup";
 import { faPen } from "@fortawesome/free-solid-svg-icons/faPen";
 import { faRotateLeft } from "@fortawesome/free-solid-svg-icons/faRotateLeft";
 import { faRotateRight } from "@fortawesome/free-solid-svg-icons/faRotateRight";
+import { faSignature } from "@fortawesome/free-solid-svg-icons/faSignature";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type {
   AriaLabelConfig,
@@ -110,6 +111,7 @@ import {
   offsetToCentre,
   pasteClip,
   readClip,
+  withoutOtherHuntsImages,
 } from "../../../lib/whiteboard/clipboard";
 import {
   collapsedAncestors,
@@ -954,6 +956,7 @@ interface Drawing {
 const NO_REMOTE_DRAGS = new Map<string, RemoteDrag>();
 const NO_PINS: CommentPin[] = [];
 const NO_CHANGES: ReadonlySet<string> = new Set();
+const NO_FLOW_NODES: WhiteboardFlowNode[] = [];
 const NO_SOLVEDNESS = new Map<string, Solvedness>();
 
 // A set with ids added or taken away, or the same set if that changes
@@ -1003,6 +1006,10 @@ interface CanvasProps {
   compact: boolean;
   // Whether the board's nodes and lines have arrived.
   boardLoaded: boolean;
+  // Whether this viewer has hidden ink, which WhiteboardPage then has sent
+  // as outlines without points.
+  hideInk: boolean;
+  onHideInkChange: (hideInk: boolean) => void;
   // Set to the canvas's way of showing a comment, for the board's chat.
   focusRef: React.RefObject<((threadId: string) => void) | undefined>;
   // A comment to show once the board has loaded (from a ?comment= link).
@@ -1041,6 +1048,8 @@ const CanvasInner = ({
   showMiniMap,
   compact,
   boardLoaded,
+  hideInk,
+  onHideInkChange: setHideInk,
   focusRef,
   initialComment,
   onInitialCommentShown,
@@ -1055,6 +1064,15 @@ const CanvasInner = ({
   // An earlier version of the board being looked at, which can't be edited
   // or commented on.
   const [preview, setPreview] = useState<VersionPreview>();
+  // A version is previewed without its ink while this viewer hides ink, as
+  // the board is.
+  const shownPreview = useMemo(
+    () =>
+      preview && hideInk
+        ? { ...preview, nodes: preview.nodes.filter((n) => n.type !== "ink") }
+        : preview,
+    [preview, hideInk],
+  );
   // The version being fetched to preview. Picking another, or going back to
   // now, drops it.
   const [previewLoading, setPreviewLoading] = useState<string>();
@@ -1190,8 +1208,31 @@ const CanvasInner = ({
   // when there's none, unless a link says where to look.
   const [initialViewport] = useState(savedViewport);
   const [openedAt] = useState(boardTargetKey(initialTarget));
+  // With no saved view and no link to follow, React Flow fits the board to
+  // the first nodes it's given. Ink comes on its own subscription, often
+  // after the cards, so the board is given no nodes until everything,
+  // ink included, has arrived once.
+  const fitsOnOpen = !initialViewport && !openedAt;
+  const [loadedOnce, setLoadedOnce] = useState(boardLoaded);
+  if (boardLoaded && !loadedOnce) {
+    setLoadedOnce(true);
+  }
   const [showFeederArrows, setShowFeederArrows] = useWhiteboardFeederArrows();
   const [tool, setTool] = useState<Tool>("select");
+  const inkTool = tool === "pen" || tool === "eraser";
+  // Hiding ink, here or in another window, puts the pen or the eraser down.
+  if (hideInk && inkTool) {
+    setTool("select");
+  }
+  // Picking a tool from the toolbar or by its key. Picking up the pen or the
+  // eraser shows hidden ink again.
+  const pickTool = useCallback(
+    (next: Tool) => {
+      setTool(next);
+      if ((next === "pen" || next === "eraser") && hideInk) setHideInk(false);
+    },
+    [hideInk, setHideInk],
+  );
   // A board that becomes read-only (say, the hunt is archived) puts any
   // drawing tool down, and the Comment tool too once commenting goes.
   if (readOnly && tool !== "select" && !(tool === "comment" && canComment)) {
@@ -1455,9 +1496,10 @@ const CanvasInner = ({
     erasingStrokes,
     lineColors,
     lineLabels,
-    override: preview,
+    override: shownPreview,
     peeked,
     busy,
+    hideInk,
   });
 
   // A frame that's no longer collapsed takes its peek with it, so folding it
@@ -4291,7 +4333,10 @@ const CanvasInner = ({
       .filter((e) => e.selected)
       .map((e) => e.id);
     return copySelection(
-      WhiteboardNodes.find({ board: boardId }).fetch(),
+      // Ink this viewer has hidden has no points here, and isn't copied.
+      WhiteboardNodes.find({ board: boardId })
+        .fetch()
+        .filter((n) => n.type !== "ink" || n.points),
       WhiteboardEdges.find({ board: boardId }).fetch(),
       { nodes: selectedNodes, edges: selectedEdges },
       (frame) =>
@@ -4364,7 +4409,16 @@ const CanvasInner = ({
   // from or anything inside that. If any of it is refused, what got through
   // is taken off again.
   const pasteCopy = useCallback(
-    (clip: BoardClip, offset: XYPosition) => {
+    (copied: BoardClip, offset: XYPosition) => {
+      const { clip, leftOut } = withoutOtherHuntsImages(copied, huntId);
+      if (leftOut > 0) {
+        showNotice(
+          t(
+            "whiteboard.clipboard.otherHuntImages",
+            "Images from another hunt were left out",
+          ),
+        );
+      }
       const frames = frameRects();
       const copiedFrames = clip.nodes
         .filter((n) => n.type === "frame")
@@ -4431,8 +4485,11 @@ const CanvasInner = ({
       isWithin,
       absoluteRect,
       boardId,
+      huntId,
       recordEdit,
       reportRefusal,
+      showNotice,
+      t,
     ],
   );
 
@@ -4792,7 +4849,7 @@ const CanvasInner = ({
         const keyTool = TOOLS_BY_KEY.get(key);
         if (keyTool && (keyTool === "comment" ? canComment : !readOnly)) {
           event.preventDefault();
-          setTool(keyTool);
+          pickTool(keyTool);
           return;
         }
         const width = PEN_WIDTH_KEYS.get(key);
@@ -4933,6 +4990,7 @@ const CanvasInner = ({
     lockSelection,
     toggleLock,
     duplicateSelection,
+    pickTool,
   ]);
 
   // Double-clicking a card opens its puzzle, on any board, as long as nothing
@@ -4967,6 +5025,10 @@ const CanvasInner = ({
   const toggleFeederArrows = useCallback(
     () => setShowFeederArrows((current) => !current),
     [setShowFeederArrows],
+  );
+  const toggleHideInk = useCallback(
+    () => setHideInk(!hideInk),
+    [hideInk, setHideInk],
   );
   const toggleHidden = useCallback(() => {
     setSidePanel((current) => (current === "hidden" ? undefined : "hidden"));
@@ -5111,12 +5173,20 @@ const CanvasInner = ({
         : undefined,
     [preview, boardId],
   );
+  // Restoring a version replaces the board's ink with the version's, which a
+  // viewer hiding ink can't see in the preview, so the banner says so.
+  const inkHiddenInPreview =
+    hideInk &&
+    !!preview &&
+    [...preview.nodes, ...(liveBoard?.nodes ?? [])].some(
+      (n) => n.type === "ink",
+    );
   const changed = useMemo(
     () =>
-      preview && liveBoard
-        ? versionDifferences(liveBoard, preview, { locks: isOperator })
+      shownPreview && liveBoard
+        ? versionDifferences(liveBoard, shownPreview, { locks: isOperator })
         : NO_CHANGES,
-    [preview, liveBoard, isOperator],
+    [shownPreview, liveBoard, isOperator],
   );
   const shownNodes = useMemo(
     () =>
@@ -5394,6 +5464,18 @@ const CanvasInner = ({
     "whiteboard.toolbar.feederArrows",
     "Show feeder arrows",
   );
+  const hideInkTitle = t("whiteboard.toolbar.hideInk", "Hide ink");
+  const hideInkButton = (
+    <Button
+      variant={hideInk ? "secondary" : "outline-secondary"}
+      onClick={toggleHideInk}
+      title={hideInkTitle}
+      aria-label={hideInkTitle}
+      aria-pressed={hideInk}
+    >
+      <FontAwesomeIcon icon={faSignature} />
+    </Button>
+  );
   const notOnBoardTitle = t(
     "whiteboard.toolbar.notOnBoard",
     "Not on the board",
@@ -5580,7 +5662,9 @@ const CanvasInner = ({
                   onDrop={onDrop}
                 >
                   <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
-                    nodes={shownNodes}
+                    nodes={
+                      fitsOnOpen && !loadedOnce ? NO_FLOW_NODES : shownNodes
+                    }
                     edges={shownEdges}
                     nodeTypes={nodeTypes}
                     edgeTypes={edgeTypes}
@@ -5603,7 +5687,7 @@ const CanvasInner = ({
                     connectionRadius={0}
                     colorMode={theme.basicMode === "dark" ? "dark" : "light"}
                     defaultViewport={initialViewport}
-                    fitView={!initialViewport && !openedAt}
+                    fitView={fitsOnOpen}
                     minZoom={MIN_ZOOM}
                     maxZoom={MAX_ZOOM}
                     nodesDraggable={!readOnly && !drawingTool}
@@ -5780,7 +5864,7 @@ const CanvasInner = ({
                               <CommentToolButton
                                 active={tool === "comment"}
                                 unread={unreadCount}
-                                onSelect={setTool}
+                                onSelect={pickTool}
                               />
                             )}
                             {commentListButton}
@@ -5800,6 +5884,7 @@ const CanvasInner = ({
                                 {resolvedCount}
                               </Button>
                             )}
+                            {hideInkButton}
                             {historyButton}
                           </ReadOnlyButtons>
                           {mayChangeEditPolicy && !compact && (
@@ -5838,7 +5923,7 @@ const CanvasInner = ({
                             <ToolButton
                               tool="select"
                               active={tool === "select"}
-                              onSelect={setTool}
+                              onSelect={pickTool}
                               title={t(
                                 "whiteboard.toolbar.select",
                                 "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add; Ctrl/⌘+C, Ctrl/⌘+V and Ctrl/⌘+D copy, paste and duplicate)",
@@ -5849,7 +5934,7 @@ const CanvasInner = ({
                             <ToolButton
                               tool="pen"
                               active={tool === "pen"}
-                              onSelect={setTool}
+                              onSelect={pickTool}
                               title={t(
                                 "whiteboard.toolbar.pen",
                                 "Draw (hold Space to pan)",
@@ -5860,7 +5945,7 @@ const CanvasInner = ({
                             <ToolButton
                               tool="eraser"
                               active={tool === "eraser"}
-                              onSelect={setTool}
+                              onSelect={pickTool}
                               title={t(
                                 "whiteboard.toolbar.eraser",
                                 "Erase strokes",
@@ -5871,7 +5956,7 @@ const CanvasInner = ({
                             <ToolButton
                               tool="connector"
                               active={tool === "connector"}
-                              onSelect={setTool}
+                              onSelect={pickTool}
                               title={t(
                                 "whiteboard.toolbar.line",
                                 "Line: drag between two things to connect them, or anywhere for a free line (Shift snaps the angle)",
@@ -5920,7 +6005,7 @@ const CanvasInner = ({
                             <ToolButton
                               tool="sticky"
                               active={tool === "sticky"}
-                              onSelect={setTool}
+                              onSelect={pickTool}
                               title={t(
                                 "whiteboard.toolbar.sticky",
                                 "Sticky note: click to place, or drag to size",
@@ -5931,7 +6016,7 @@ const CanvasInner = ({
                             <ToolButton
                               tool="text"
                               active={tool === "text"}
-                              onSelect={setTool}
+                              onSelect={pickTool}
                               title={t(
                                 "whiteboard.toolbar.text",
                                 "Text: click to place, or drag to size",
@@ -5942,7 +6027,7 @@ const CanvasInner = ({
                             <ToolButton
                               tool="frame"
                               active={tool === "frame"}
-                              onSelect={setTool}
+                              onSelect={pickTool}
                               title={t(
                                 "whiteboard.toolbar.frame",
                                 "Frame: click to place, or drag to size",
@@ -6043,7 +6128,7 @@ const CanvasInner = ({
                             <CommentToolButton
                               active={tool === "comment"}
                               unread={unreadCount}
-                              onSelect={setTool}
+                              onSelect={pickTool}
                             />
                             {commentListButton}
                             <Button
@@ -6073,6 +6158,7 @@ const CanvasInner = ({
                             >
                               <FontAwesomeIcon icon={faDiagramProject} />
                             </Button>
+                            {hideInkButton}
                             <Button
                               variant={
                                 sidePanel === "hidden"
@@ -6308,6 +6394,14 @@ const CanvasInner = ({
                           </Button>
                           {restoreBlocked && (
                             <ReadOnlyReason>{restoreBlocked}</ReadOnlyReason>
+                          )}
+                          {inkHiddenInPreview && (
+                            <ReadOnlyReason>
+                              {t(
+                                "whiteboard.history.inkHidden",
+                                "Ink is hidden, so it isn't shown here. Restoring this version still puts its drawing back as it was.",
+                              )}
+                            </ReadOnlyReason>
                           )}
                         </PreviewBanner>
                       </Panel>
