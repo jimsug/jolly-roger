@@ -11,6 +11,7 @@ files:
   - imports/client/components/whiteboard/CommentLayer.tsx
   - imports/client/components/whiteboard/CommentList.tsx
   - imports/client/components/whiteboard/CommentPanel.tsx
+  - imports/client/components/whiteboard/DownloadButton.tsx
   - imports/client/components/whiteboard/EditPolicyModal.tsx
   - imports/client/components/whiteboard/EditableText.tsx
   - imports/client/components/whiteboard/FeederFocusContext.ts
@@ -33,6 +34,7 @@ files:
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
   - imports/client/components/whiteboard/WhiteboardCanvas.tsx
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
+  - imports/client/components/whiteboard/boardFiles.ts
   - imports/client/components/whiteboard/boardWrites.ts
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useChatImagesEnabled.ts
@@ -61,6 +63,7 @@ files:
   - imports/lib/whiteboard/clipboard.ts
   - imports/lib/whiteboard/collapse.ts
   - imports/lib/whiteboard/comments.ts
+  - imports/lib/whiteboard/exportFiles.ts
   - imports/lib/whiteboard/feederFocus.ts
   - imports/lib/whiteboard/feeders.ts
   - imports/lib/whiteboard/frameTools.ts
@@ -76,6 +79,7 @@ files:
   - imports/lib/whiteboard/search.ts
   - imports/lib/whiteboard/undo.ts
   - imports/lib/whiteboard/versions.ts
+  - imports/methods/exportWhiteboard.ts
   - imports/methods/fetchWhiteboardVersion.ts
   - imports/methods/placeWhiteboardCardsByTags.ts
   - imports/methods/resetWhiteboardLayout.ts
@@ -90,6 +94,7 @@ files:
   - imports/server/getS3UploadParams.ts
   - imports/server/methods/addPuzzleAnswer.ts
   - imports/server/methods/destroyPuzzle.ts
+  - imports/server/methods/exportWhiteboard.ts
   - imports/server/methods/fetchWhiteboardVersion.ts
   - imports/server/methods/placeWhiteboardCardsByTags.ts
   - imports/server/methods/resetWhiteboardLayout.ts
@@ -793,9 +798,9 @@ database, which reads every ink document on the board to do it) plus the
 batch's, and refuses the whole batch, before anything is written, with
 "This board has as much drawing as it can hold". Only a batch that adds ink
 is checked, so a full board still takes notes, lines and moves. Like the
-node cap, the count is taken outside the board lock, so people drawing at
-the same moment can each pass it and take a board a little past the
-budget; a later batch is then refused. A long stroke is saved a segment at
+other caps, the count and the new ink's write happen under the board's lock,
+so people drawing at the same moment can't together take a board past the
+budget. A long stroke is saved a segment at
 a time, so one that reaches the budget part-way keeps the segments saved
 before it. A paste goes through the same check (see Copy, paste and
 duplicate), and so do restores: a version whose ink is past the budget, and
@@ -1113,7 +1118,10 @@ its edit policy, so a restore never changes who may edit.
 Node and line edits (`upsertNodes`, `deleteNodes`, `upsertEdges`, `deleteEdges`
 and `placeByTags`) call `recordVersionBeforeEdit` in
 `imports/server/whiteboardVersions.ts` after their checks and before their first
-write. Restoring one item (`restoreItems`, below) records the same way from
+write. An `upsertNodes` or `upsertEdges` batch that adds anything records with
+`recordVersionBeforeLockedEdit` instead, from under the board's lock once the
+caps are counted (see Data model), so a batch the caps refuse records
+nothing. Restoring one item (`restoreItems`, below) records the same way from
 under the board's lock. Comments, live drags and strokes, placement from puzzle
 hooks, an `upsertNodes` batch that does nothing but collapse, expand, lock or
 unlock, and Lock layout never record one. Versions hold each frame's
@@ -1136,12 +1144,15 @@ Only ordinary edits made since the last reset or restore count for 1 to 3, so
 the first edit after one always records the board it left. A reset or restore
 always records the board it's about to change. Someone editing steadily gets
 a version every 10 minutes, and a burst of edits is one version. The fast
-path (rule 1) is one indexed read with no lock; the rest takes the board's
+path (rule 1) is one indexed read with no lock, for a batch that only
+changes what's there; the rest takes the board's
 `whiteboard:<boardId>` lock, which placement also takes, so a version never
 sees half a placement. A failure to record is logged and the edit goes ahead:
-a missing version beats a refused edit. User edits don't take the lock for
-their own writes, so a version can catch part of someone else's batch;
-restore cleans up what that can leave.
+a missing version beats a refused edit. Changes to nodes and lines already
+on the board are written without the lock, so a version can catch part of
+someone else's batch of changes; restore cleans up what that can leave. A
+batch that adds anything takes the lock for its count, its version and its
+inserts, so a version never holds part of its new nodes or lines.
 
 ### The History panel
 
@@ -1304,6 +1315,63 @@ that didn't finish), and logs each board's history size once a day, so an
 ink-heavy board shows up before it reaches the cap. A board that fails is
 logged and left for the next pass, and the rest carry on.
 
+### Export
+
+The Download menu, on both toolbars, saves the board as a picture or as
+data. It isn't shown on a phone. Anyone who can see the board can use it,
+including people who can only view or comment and everyone once the hunt is
+archived. While a download is being made the button shows a spinner, is
+titled "Preparing the download" and can't be used again; a failure says why
+under the toolbar ("Couldn't download the board: ..."). The date in each
+file name is the day it's downloaded.
+
+**Picture (PNG)** draws the board with `html-to-image` (pinned to 1.11.11,
+the version React Flow's download-image example uses; dependabot leaves it
+alone), as React Flow's own export example does (`boardPng` in
+`imports/client/components/whiteboard/boardFiles.ts`): it takes the bounds of
+every node on show (`getNodesBounds`), adds 40 units of background round
+them, and draws React Flow's viewport at that size (`getViewportForBounds`)
+on the board's background colour (`whiteboardBackground` in the theme, which
+the board on screen uses too). It's drawn at twice the board's size, and
+scaled down so the longer side is at most 8,192 pixels (`exportImageSize`
+in `imports/lib/whiteboard/exportFiles.ts`). While it's drawn the board
+renders every node rather than just those in view, and leaves out cursors,
+other people's selections and drags, comment pins, a preview's highlights,
+the viewer's own selection, and anything they're part-way through drawing,
+joining, uploading or placing; it waits for the nodes that were out of view
+to be measured (up to 120 frames) and then puts things back. It shows the
+board as this viewer sees it, so hidden ink and folded frames stay that way,
+and while a version is previewed it's a picture of that version. Images on
+the board are fetched again to go into the picture, and one the browser
+can't fetch is left blank. The file is called
+`<hunt name>-whiteboard-<yyyy-mm-dd>.png`, by the local date, with each run
+of characters a file name can't hold in the hunt's name replaced by a hyphen
+(`exportFileName`), and "hunt" for a name with nothing else left.
+
+**Data (JSON)** is the board in a version's payload format, `{ format: 1,
+nodes, edges }` as EJSON, with every node and line as stored: ink with its
+points (even while this viewer hides ink), hidden cards and frames, and
+fields like `createdBy` and `contributors`. It's always the live board, even
+while a version is previewed. It comes from `Whiteboards.methods.exportBoard`
+(`{ boardId, index, hash? }`, in `imports/server/whiteboardVersions.ts`),
+which needs only membership of the hunt (archived hunts included) and the
+whiteboard to be on; history being off doesn't matter. Like `fetchVersion`
+it returns the gzipped payload in chunks of at most 4 MiB, one per call, so
+a big board doesn't go through one message, with the chunk count and the
+payload's hash. Chunk 0 reads and compresses the board; a board of more than
+one chunk is then kept on that server for the connection, which asks for
+the rest with chunk 0's hash and gets them from the same compression. It's
+dropped once its last chunk is sent, when the connection starts another
+export, or when the connection closes. If the server no longer has it (the
+connection dropped and came back), the board is read again, and a hash that
+differs from chunk 0's means the board changed in between: the client then
+says "Couldn't download the board: it changed while it was downloading. Try
+again." The method isn't unblocked, so one connection's export calls run
+one after another. The client joins the chunks, unpacks them with
+`DecompressionStream` and saves `<hunt name>-whiteboard-<yyyy-mm-dd>.json`.
+A browser without `DecompressionStream` says so instead. A typical board's
+file is a megabyte or two; the largest a board can hold is about 50 MB.
+
 ## Reset layout and Place by tags
 
 Both are edits: they need edit access, so the edit policy decides who may use
@@ -1392,6 +1460,15 @@ as it was, and takes away the version it recorded for itself. One that loses
 it after it has started writing stops there and keeps what it wrote, and
 `lastRewrittenAt` isn't set; running it again finishes the job, and the
 version it recorded undoes it.
+
+A node or line batch that adds anything waits for the same lock to count the
+board's caps (see Data model), so it waits behind a reset or restore and
+then sees what it left: once it has the lock it checks again that its user
+may still edit, that the frames its new nodes go in and the nodes its new
+lines join are still on the board, and that its new cards' puzzles still
+have none, and is refused if not. If it loses the lock before its first
+write it's refused the same way, and a version it recorded is taken away
+again.
 
 ## Phones
 
@@ -1819,7 +1896,24 @@ There is no flag for the edit policy: `members` is already the off position.
   the root's id.
 
 The server enforces the limits in `imports/lib/whiteboard/limits.ts`, and
-the client keeps to the ones it can:
+the client keeps to the ones it can. The per-board caps on nodes, images,
+lines and ink points are hard. `upsertNodes` and `upsertEdges` check a whole
+batch before writing any of it: no new node or line twice in one batch
+(several changes to one already there are fine), every field,
+locks, and for nodes each parent (a frame on this board, no loops, no deeper
+than `MAX_FRAME_DEPTH`), each new card's puzzle (one of this hunt's, with no
+card on the board and only one new card in the batch) and each new stroke's
+points, taking the batch's own new nodes and parent changes into account in
+the order they're written (new nodes first, then changes). A batch that adds
+anything then counts the board and writes its new nodes or lines under the
+board's `whiteboard:<boardId>` lock, which placement, resets and restores
+hold too, so two batches at once can't together pass a cap: the second
+counts what the first wrote and is refused. Under the lock it first checks
+again what it may have waited behind a reset, restore or placement to see
+(see Reset layout and Place by tags). Changes to nodes and lines already
+there are written after the lock is let go. A batch that waits behind a
+long reset or restore and then loses the lock is refused with "The board
+was busy; try again", with nothing written.
 
 | Limit | Value | What it caps |
 |---|---|---|

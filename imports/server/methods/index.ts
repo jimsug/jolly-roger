@@ -48,6 +48,7 @@ import "./dismissChatNotificationsForPuzzle";
 import "./dismissPendingAnnouncement";
 import "./dismissPuzzleNotification";
 import "./ensurePuzzleDocument";
+import "./exportWhiteboard";
 import "./fetchWhiteboardVersion";
 import "./generateUploadToken";
 import "./generateHuntInvitationCode";

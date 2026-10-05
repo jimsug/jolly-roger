@@ -72,6 +72,7 @@ import { useNavigate } from "react-router";
 import styled, { css, useTheme } from "styled-components";
 import Flags from "../../../Flags";
 import type { ChatMessageCommentAnchorType } from "../../../lib/models/ChatMessages";
+import Hunts from "../../../lib/models/Hunts";
 import Puzzles from "../../../lib/models/Puzzles";
 import Tags from "../../../lib/models/Tags";
 import WhiteboardEdges from "../../../lib/models/WhiteboardEdges";
@@ -132,6 +133,7 @@ import {
   contains,
   snapAngle,
 } from "../../../lib/whiteboard/connectors";
+import { exportFileName } from "../../../lib/whiteboard/exportFiles";
 import { feederFocus } from "../../../lib/whiteboard/feederFocus";
 import type {
   Box,
@@ -234,6 +236,12 @@ import WhiteboardPresence from "../../WhiteboardPresence";
 import CopyToClipboardButton from "../CopyToClipboardButton";
 import ArrangeIcon from "./ArrangeIcon";
 import BoardSearch from "./BoardSearch";
+import {
+  BoardChangedError,
+  boardPng,
+  fetchBoardJson,
+  saveBlob,
+} from "./boardFiles";
 import type { Done } from "./boardWrites";
 import { callAll, chunks, sendWrite } from "./boardWrites";
 import ChatLoadedContext from "./ChatLoadedContext";
@@ -246,6 +254,8 @@ import CommentList from "./CommentList";
 import CommentPanel from "./CommentPanel";
 import CursorLayer from "./CursorLayer";
 import colors from "./colors";
+import type { DownloadKind } from "./DownloadButton";
+import DownloadButton from "./DownloadButton";
 import describeCommentTarget from "./describeCommentTarget";
 import EditPolicyModal, { EditPolicyButton } from "./EditPolicyModal";
 import FeederFocusContext from "./FeederFocusContext";
@@ -476,6 +486,9 @@ const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
   width: 100%;
   height: 100%;
   cursor: ${({ $tool }) => ($tool === "select" ? "auto" : "crosshair")};
+
+  /* The board's background, which a downloaded picture uses too. */
+  --xy-background-color: ${({ theme }) => theme.colors.whiteboardBackground};
 
   /* While drawing, nothing on the board can be picked up, so nothing should
      look like it can. */
@@ -982,6 +995,14 @@ const PULSE_MS = 2200;
 // How long a note about a link that couldn't be followed stays up.
 const NOTICE_MS = 8000;
 
+// The most frames a picture of the board waits for the nodes that were out
+// of view to be drawn and measured, before it's taken anyway.
+const EXPORT_WAIT_FRAMES = 120;
+const nextFrame = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+
 interface CanvasProps {
   boardId: string;
   huntId: string;
@@ -1393,6 +1414,13 @@ const CanvasInner = ({
     [tidyLater],
   );
   const dismissNotice = useCallback(() => setNotice(undefined), []);
+
+  // A download being made. While a picture is drawn the board renders every
+  // node, not just those in view, and leaves out cursors, others' selections
+  // and drags, comment pins, a preview's highlights, this viewer's own
+  // selection and anything they're part-way through drawing or placing.
+  const [exporting, setExporting] = useState<DownloadKind>();
+  const capturing = exporting === "png";
   const followNotice = useCallback(() => {
     setNotice(undefined);
     notice?.action?.onClick();
@@ -1491,8 +1519,10 @@ const CanvasInner = ({
     boardId,
     livePuzzleIds,
     showFeederArrows,
-    // Other people's drags are on the board as it is, not the version.
-    remoteDrags: preview ? NO_REMOTE_DRAGS : remoteDrags,
+    // Other people's drags are on the board as it is, not the version, and
+    // a picture of the board shows where things are, not where they're
+    // being dragged.
+    remoteDrags: preview || capturing ? NO_REMOTE_DRAGS : remoteDrags,
     erasingStrokes,
     lineColors,
     lineLabels,
@@ -5188,24 +5218,26 @@ const CanvasInner = ({
         : NO_CHANGES,
     [shownPreview, liveBoard, isOperator],
   );
-  const shownNodes = useMemo(
-    () =>
-      changed.size === 0
-        ? nodes
-        : nodes.map((n) =>
-            changed.has(n.id) ? { ...n, className: CHANGED_CLASS } : n,
-          ),
-    [nodes, changed],
-  );
-  const shownEdges = useMemo(
-    () =>
-      changed.size === 0
-        ? edges
-        : edges.map((e) =>
-            changed.has(e.id) ? { ...e, className: CHANGED_CLASS } : e,
-          ),
-    [edges, changed],
-  );
+  const shownNodes = useMemo(() => {
+    if (capturing) {
+      return nodes.map((n) => (n.selected ? { ...n, selected: false } : n));
+    }
+    return changed.size === 0
+      ? nodes
+      : nodes.map((n) =>
+          changed.has(n.id) ? { ...n, className: CHANGED_CLASS } : n,
+        );
+  }, [nodes, changed, capturing]);
+  const shownEdges = useMemo(() => {
+    if (capturing) {
+      return edges.map((e) => (e.selected ? { ...e, selected: false } : e));
+    }
+    return changed.size === 0
+      ? edges
+      : edges.map((e) =>
+          changed.has(e.id) ? { ...e, className: CHANGED_CLASS } : e,
+        );
+  }, [edges, changed, capturing]);
 
   // The one thing picked in a preview (a node, or a whole ink stroke), which
   // can be put back on its own, and whether it brings too much with it to
@@ -5523,6 +5555,100 @@ const CanvasInner = ({
       <UnreadBadge count={listUnread} />
     </Button>
   );
+  const huntName = useTracker(() => Hunts.findOne(huntId)?.name, [huntId]);
+  // Downloads the board: a picture of it as it's shown (without ink while
+  // ink is hidden, and the version while one is previewed), or its data as
+  // it's stored, ink and all.
+  const download = useCallback(
+    async (kind: DownloadKind) => {
+      if (kind === "json" && typeof DecompressionStream === "undefined") {
+        showNotice(
+          t(
+            "whiteboard.download.browserTooOld",
+            "Couldn't download the board: this browser can't unpack it.",
+          ),
+        );
+        return;
+      }
+      setExporting(kind);
+      try {
+        if (kind === "json") {
+          const json = await fetchBoardJson(boardId);
+          saveBlob(
+            new Blob([json], { type: "application/json" }),
+            exportFileName(huntName, new Date(), "json"),
+          );
+          return;
+        }
+        const drawn = flow.getNodes().filter((n) => !n.hidden);
+        // Nodes that were out of view are drawn now, and measured before
+        // their lines are drawn.
+        for (let frame = 0; frame < EXPORT_WAIT_FRAMES; frame++) {
+          await nextFrame();
+          if (
+            drawn.every((n) => flow.getInternalNode(n.id)?.measured.width) &&
+            frame > 1
+          ) {
+            break;
+          }
+        }
+        const viewport = wrapperRef.current?.querySelector<HTMLElement>(
+          ".react-flow__viewport",
+        );
+        if (!viewport) return;
+        const png = await boardPng(
+          viewport,
+          flow.getNodesBounds(drawn),
+          theme.colors.whiteboardBackground,
+        );
+        saveBlob(png, exportFileName(huntName, new Date(), "png"));
+      } catch (error) {
+        if (error instanceof BoardChangedError) {
+          showNotice(
+            t(
+              "whiteboard.download.changed",
+              "Couldn't download the board: it changed while it was downloading. Try again.",
+            ),
+          );
+        } else if (error instanceof Meteor.Error) {
+          showNotice(
+            t(
+              "whiteboard.download.failed",
+              "Couldn't download the board: {{reason}}",
+              {
+                reason: error.reason ?? error.message,
+                // React escapes text, so i18next's escaping would only show
+                // entities. Goes once both i18n inits stop escaping.
+                interpolation: { escapeValue: false },
+              },
+            ),
+          );
+        } else {
+          // oxlint-disable-next-line no-console
+          console.error("Couldn't download the whiteboard", error);
+          showNotice(
+            t(
+              "whiteboard.download.unknownError",
+              "Couldn't download the board. Try again.",
+            ),
+          );
+        }
+      } finally {
+        setExporting(undefined);
+      }
+    },
+    [boardId, flow, huntName, showNotice, t, theme],
+  );
+  const startDownload = useCallback(
+    (kind: DownloadKind) => {
+      void download(kind);
+    },
+    [download],
+  );
+  // Not on a phone, which shows the board read-only and small.
+  const downloadButton = compact ? null : (
+    <DownloadButton busy={!!exporting} onDownload={startDownload} />
+  );
   const historyTitle = t("whiteboard.history.title", "History");
   // Not on a phone, where the board can't be restored and a preview would
   // cover it.
@@ -5700,7 +5826,7 @@ const CanvasInner = ({
                     panOnDrag={!drawingTool || (compact && tool === "comment")}
                     selectionOnDrag={false}
                     deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
-                    onlyRenderVisibleElements
+                    onlyRenderVisibleElements={!capturing}
                     ariaLabelConfig={ariaLabelConfig}
                   >
                     <Background />
@@ -5713,48 +5839,50 @@ const CanvasInner = ({
                       />
                     )}
                     <FrameLabelLayer />
-                    {!preview && (
+                    {!preview && !capturing && (
                       <RemoteSelectionLayer
                         boardId={boardId}
                         liveEnabled={liveEnabled}
                       />
                     )}
-                    {!preview && (
+                    {!preview && !capturing && (
                       <CursorLayer
                         boardId={boardId}
                         liveEnabled={liveEnabled}
                       />
                     )}
                     <CommentLayer
-                      pins={preview ? NO_PINS : commentPins}
+                      pins={preview || capturing ? NO_PINS : commentPins}
                       openId={openThreadId ?? (draft ? "draft" : undefined)}
                       pulseId={pulse}
                       onOpen={openComment}
                     />
-                    {nodePulse && (
+                    {nodePulse && !capturing && (
                       <NodePulse
                         node={nodePulse.node}
                         point={nodePulse.point}
                       />
                     )}
-                    {localStroke && localStroke.points.length > 0 && (
-                      <ViewportPortal>
-                        <LocalStroke>
-                          <path
-                            d={inkPath(
-                              localStroke.points,
-                              localStroke.strokeWidth,
-                              false,
-                            )}
-                            fill={
-                              colors.stroke[localStroke.color] ??
-                              theme.colors.text
-                            }
-                          />
-                        </LocalStroke>
-                      </ViewportPortal>
-                    )}
-                    {lineFrom && lineTo && (
+                    {!capturing &&
+                      localStroke &&
+                      localStroke.points.length > 0 && (
+                        <ViewportPortal>
+                          <LocalStroke>
+                            <path
+                              d={inkPath(
+                                localStroke.points,
+                                localStroke.strokeWidth,
+                                false,
+                              )}
+                              fill={
+                                colors.stroke[localStroke.color] ??
+                                theme.colors.text
+                              }
+                            />
+                          </LocalStroke>
+                        </ViewportPortal>
+                      )}
+                    {!capturing && lineFrom && lineTo && (
                       <ViewportPortal>
                         <LocalStroke>
                           {lineOrigin && (
@@ -5784,7 +5912,7 @@ const CanvasInner = ({
                         </LocalStroke>
                       </ViewportPortal>
                     )}
-                    {clickConnectStart && clickConnectOrigin && (
+                    {!capturing && clickConnectStart && clickConnectOrigin && (
                       <ViewportPortal>
                         <LocalStroke className="jr-click-connect">
                           <AttachOutline id={clickConnectStart.nodeId} />
@@ -5802,14 +5930,14 @@ const CanvasInner = ({
                         </LocalStroke>
                       </ViewportPortal>
                     )}
-                    {!connecting && attachPreview && (
+                    {!capturing && !connecting && attachPreview && (
                       <ViewportPortal>
                         <LocalStroke>
                           <AttachOutline id={attachPreview} />
                         </LocalStroke>
                       </ViewportPortal>
                     )}
-                    {uploads.length > 0 && (
+                    {!capturing && uploads.length > 0 && (
                       <ViewportPortal>
                         {uploads.map((upload) => (
                           <UploadPlaceholder
@@ -5830,7 +5958,7 @@ const CanvasInner = ({
                         ))}
                       </ViewportPortal>
                     )}
-                    {isPlaceTool(tool) && placeGhost && (
+                    {!capturing && isPlaceTool(tool) && placeGhost && (
                       <ViewportPortal>
                         <PlaceGhost
                           $tool={tool}
@@ -5886,6 +6014,7 @@ const CanvasInner = ({
                             )}
                             {hideInkButton}
                             {historyButton}
+                            {downloadButton}
                           </ReadOnlyButtons>
                           {mayChangeEditPolicy && !compact && (
                             <EditPolicyButton
@@ -6174,6 +6303,7 @@ const CanvasInner = ({
                               {notOnBoardCount > 0 && ` ${notOnBoardCount}`}
                             </Button>
                             {historyButton}
+                            {downloadButton}
                             {historyOn && (
                               <ResetLayoutButton onClick={openResetLayout} />
                             )}

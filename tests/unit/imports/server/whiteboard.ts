@@ -38,6 +38,7 @@ import {
   LIVE_UPDATE_BURST,
   LIVE_UPDATES_PER_SECOND,
   MAX_BATCH,
+  MAX_EDGES_PER_BOARD,
   MAX_FRAME_DEPTH,
   MAX_IMAGES_PER_BOARD,
   MAX_INK_POINTS_PER_BOARD,
@@ -61,6 +62,7 @@ import setWhiteboardLive from "../../../../imports/methods/setWhiteboardLive";
 import undestroyPuzzle from "../../../../imports/methods/undestroyPuzzle";
 import updatePuzzle from "../../../../imports/methods/updatePuzzle";
 import upsertWhiteboardEdges from "../../../../imports/methods/upsertWhiteboardEdges";
+import type { WhiteboardNodeInput } from "../../../../imports/methods/upsertWhiteboardNodes";
 import upsertWhiteboardNodes from "../../../../imports/methods/upsertWhiteboardNodes";
 import addPuzzle from "../../../../imports/server/addPuzzle";
 import GlobalHooks from "../../../../imports/server/GlobalHooks";
@@ -2078,6 +2080,544 @@ describe("whiteboard", function () {
         await upsertNodes(member, boardId, [{ _id: input._id, locked: false }]);
         await deleteNodes(member, boardId, [input._id]);
         assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
+      });
+    });
+
+    describe("hard caps", function () {
+      // Runs the batches while the test holds the board's lock, and lets
+      // them have it only once each is queued for it, so every one has
+      // passed its checks before any counts the board. whileQueued, if
+      // given, runs once they're all waiting. Returns what each came to:
+      // "accepted", or the error it was refused with.
+      const raceForLock = async (
+        batches: (() => Promise<unknown>)[],
+        whileQueued?: () => Promise<unknown>,
+      ) => {
+        const lockName = `whiteboard:${boardId}`;
+        const held = await Locks.insertAsync({ name: lockName });
+        const insertLock = Locks.insertAsync.bind(Locks);
+        let queued = 0;
+        let allQueued!: () => void;
+        const waiting = new Promise<void>((resolve) => {
+          allQueued = resolve;
+        });
+        const stub = sinon
+          .stub(Locks, "insertAsync")
+          .callsFake((...args: Parameters<typeof insertLock>) => {
+            if (args[0].name === lockName) {
+              queued += 1;
+              if (queued === batches.length) allQueued();
+            }
+            return insertLock(...args);
+          });
+        try {
+          const results = batches.map((batch) =>
+            batch().then(
+              () => "accepted",
+              (error: unknown) => error,
+            ),
+          );
+          await waiting;
+          await whileQueued?.();
+          await Locks.removeAsync(held);
+          return await Promise.all(results);
+        } finally {
+          stub.restore();
+          await Locks.removeAsync(held);
+        }
+      };
+
+      const accepted = (results: unknown[]) =>
+        results.filter((r) => r === "accepted").length;
+      const sticky = () => ({
+        _id: Random.id(),
+        type: "sticky" as const,
+        position: { x: 0, y: 0 },
+      });
+
+      it("lets only one of two batches that together pass the node cap in", async function () {
+        const existing = await WhiteboardNodes.find({
+          board: boardId,
+        }).countAsync();
+        await WhiteboardNodes.insertManyAsync(
+          Array.from(
+            { length: MAX_NODES_PER_BOARD - existing - 1 },
+            (_, i) => ({
+              hunt: huntId,
+              board: boardId,
+              type: "text" as const,
+              position: { x: i, y: 0 },
+              createdBy: member,
+            }),
+          ),
+        );
+        const results = await raceForLock([
+          () => upsertNodes(member, boardId, [sticky()]),
+          () => upsertNodes(operator, boardId, [sticky()]),
+        ]);
+        assert.equal(accepted(results), 1);
+        const refused = results.find((r) => r !== "accepted");
+        assert.match((refused as Meteor.Error).reason!, /board is full/);
+        assert.equal(
+          await WhiteboardNodes.find({ board: boardId }).countAsync(),
+          MAX_NODES_PER_BOARD,
+        );
+      });
+
+      it("lets only one of two batches that together pass the ink budget in", async function () {
+        await WhiteboardNodes.insertAsync({
+          hunt: huntId,
+          board: boardId,
+          type: "ink",
+          position: { x: 0, y: 0 },
+          strokeWidth: "thin",
+          points: Array.from(
+            { length: MAX_INK_POINTS_PER_BOARD - 15 },
+            (_, i): [number, number, number] => [i % 1000, i % 7, 0.5],
+          ),
+          createdBy: member,
+        });
+        // Ten points that zigzag, so simplifying keeps them all
+        const stroke = () => ({
+          _id: Random.id(),
+          type: "ink" as const,
+          position: { x: 0, y: 0 },
+          strokeWidth: "thin" as const,
+          stroke: Random.id(),
+          points: Array.from(
+            { length: 10 },
+            (_, i): [number, number, number] => [i * 5, (i % 2) * 5, 0.5],
+          ),
+        });
+        const strokes = [stroke(), stroke()];
+        const results = await raceForLock(
+          strokes.map((s) => () => upsertNodes(member, boardId, [s])),
+        );
+        assert.equal(accepted(results), 1);
+        assert.match(
+          (results.find((r) => r !== "accepted") as Meteor.Error).reason!,
+          /as much drawing as it can hold/,
+        );
+        assert.equal(
+          await WhiteboardNodes.find({
+            _id: { $in: strokes.map((s) => s._id) },
+          }).countAsync(),
+          1,
+        );
+      });
+
+      it("lets only one of two batches that together pass the image cap in", async function () {
+        const bucket = {
+          bucketName: "jr-test-images",
+          bucketRegion: "ap-southeast-2",
+        };
+        await Settings.insertAsync({
+          name: "s3.image_bucket",
+          value: bucket,
+          createdBy: operator,
+        });
+        const backing = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+        const image = () => ({
+          _id: Random.id(),
+          type: "image" as const,
+          position: { x: 10, y: 20 },
+          width: 240,
+          height: 120,
+          image: {
+            url: `https://s3.${bucket.bucketRegion}.amazonaws.com/${bucket.bucketName}/${huntId}/${backing}/${Random.id()}`,
+            width: 800,
+            height: 400,
+          },
+        });
+        await WhiteboardNodes.insertManyAsync(
+          Array.from({ length: MAX_IMAGES_PER_BOARD - 1 }, () => {
+            const { _id: _ignored, ...doc } = image();
+            return { ...doc, hunt: huntId, board: boardId, createdBy: member };
+          }),
+        );
+        const results = await raceForLock([
+          () => upsertNodes(member, boardId, [image()]),
+          () => upsertNodes(operator, boardId, [image()]),
+        ]);
+        assert.equal(accepted(results), 1);
+        assert.match(
+          (results.find((r) => r !== "accepted") as Meteor.Error).reason!,
+          /can't take any more images/,
+        );
+        assert.equal(
+          await WhiteboardNodes.find({
+            board: boardId,
+            type: "image",
+          }).countAsync(),
+          MAX_IMAGES_PER_BOARD,
+        );
+      });
+
+      it("lets only one of two batches that together pass the line cap in", async function () {
+        const [a, b] = [sticky(), sticky()];
+        await upsertNodes(member, boardId, [a, b]);
+        const existing = await WhiteboardEdges.find({
+          board: boardId,
+        }).countAsync();
+        await WhiteboardEdges.insertManyAsync(
+          Array.from({ length: MAX_EDGES_PER_BOARD - existing - 1 }, () => ({
+            hunt: huntId,
+            board: boardId,
+            source: a._id,
+            target: b._id,
+            createdBy: member,
+          })),
+        );
+        const line = () => ({ _id: Random.id(), source: a._id, target: b._id });
+        const results = await raceForLock([
+          () => upsertEdges(member, boardId, [line()]),
+          () => upsertEdges(operator, boardId, [line()]),
+        ]);
+        assert.equal(accepted(results), 1);
+        assert.match(
+          (results.find((r) => r !== "accepted") as Meteor.Error).reason!,
+          /too many arrows/,
+        );
+        assert.equal(
+          await WhiteboardEdges.find({ board: boardId }).countAsync(),
+          MAX_EDGES_PER_BOARD,
+        );
+      });
+
+      it("refuses readably, with nothing written, when another server takes the lock while it counts", async function () {
+        // Another server takes the lock the moment this one counts the
+        // board's nodes.
+        const lockName = `whiteboard:${boardId}`;
+        let held: string | undefined;
+        const find = WhiteboardNodes.find.bind(WhiteboardNodes);
+        const stub = sinon
+          .stub(WhiteboardNodes, "find")
+          .callsFake((...args: Parameters<typeof find>) => {
+            const cursor = find(...args);
+            const selector = args[0] as Record<string, unknown> | undefined;
+            if (
+              selector?.board === boardId &&
+              Object.keys(selector).length === 1
+            ) {
+              const counted = cursor.countAsync.bind(cursor);
+              cursor.countAsync = async () => {
+                const theirs = await Locks.findOneAsync({ name: lockName });
+                if (theirs && !held) {
+                  await Locks.removeAsync(theirs._id);
+                  held = await Locks.insertAsync({ name: lockName });
+                }
+                return counted();
+              };
+            }
+            return cursor;
+          });
+        const note = sticky();
+        try {
+          await assert.isRejected(
+            upsertNodes(member, boardId, [note]),
+            /The board was busy; try again/,
+          );
+          assert.ok(held);
+        } finally {
+          stub.restore();
+          if (held) await Locks.removeAsync(held);
+        }
+        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
+      });
+
+      it("writes nothing from a batch whose last node has a bad parent, puzzle or loop", async function () {
+        const frame = {
+          _id: Random.id(),
+          type: "frame" as const,
+          position: { x: 0, y: 0 },
+          width: 400,
+          height: 400,
+        };
+        const moved = sticky();
+        await upsertNodes(member, boardId, [frame, moved]);
+        const before = await WhiteboardNodes.find({
+          board: boardId,
+        }).fetchAsync();
+
+        const fresh = sticky();
+        const tries: [WhiteboardNodeInput, RegExp][] = [
+          [
+            { ...sticky(), parent: moved._id },
+            /Parent must be a frame on this board/,
+          ],
+          [
+            {
+              _id: Random.id(),
+              type: "puzzle",
+              position: { x: 0, y: 0 },
+              puzzle: Random.id(),
+            },
+            /Unknown puzzle/,
+          ],
+        ];
+        for (const [last, error] of tries) {
+          await assert.isRejected(
+            upsertNodes(member, boardId, [
+              fresh,
+              { _id: moved._id, position: { x: 900, y: 900 } },
+              last,
+            ]),
+            error,
+          );
+        }
+        const inner = {
+          _id: Random.id(),
+          type: "frame" as const,
+          position: { x: 10, y: 10 },
+          width: 100,
+          height: 100,
+          parent: frame._id,
+        };
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            fresh,
+            inner,
+            { _id: frame._id, parent: inner._id },
+          ]),
+          /A frame can't contain itself/,
+        );
+        assert.sameDeepMembers(
+          await WhiteboardNodes.find({ board: boardId }).fetchAsync(),
+          before,
+        );
+      });
+
+      it("records no version for a batch the caps refuse", async function () {
+        const existing = await WhiteboardNodes.find({
+          board: boardId,
+        }).countAsync();
+        await WhiteboardNodes.insertManyAsync(
+          Array.from({ length: MAX_NODES_PER_BOARD - existing }, (_, i) => ({
+            hunt: huntId,
+            board: boardId,
+            type: "text" as const,
+            position: { x: i, y: 0 },
+            createdBy: member,
+          })),
+        );
+        const versions = await WhiteboardVersions.find({
+          board: boardId,
+        }).countAsync();
+        await assert.isRejected(
+          upsertNodes(member, boardId, [sticky()]),
+          /board is full/,
+        );
+        assert.equal(
+          await WhiteboardVersions.find({ board: boardId }).countAsync(),
+          versions,
+        );
+      });
+
+      it("takes back the version it recorded if it loses the lock before writing", async function () {
+        // Another server takes the lock just after this one stores the
+        // version.
+        const lockName = `whiteboard:${boardId}`;
+        let held: string | undefined;
+        const insertVersion =
+          WhiteboardVersions.insertAsync.bind(WhiteboardVersions);
+        const stub = sinon
+          .stub(WhiteboardVersions, "insertAsync")
+          .callsFake(async (...args: Parameters<typeof insertVersion>) => {
+            const id = await insertVersion(...args);
+            const theirs = await Locks.findOneAsync({ name: lockName });
+            if (theirs && !held) {
+              await Locks.removeAsync(theirs._id);
+              held = await Locks.insertAsync({ name: lockName });
+            }
+            return id;
+          });
+        const note = sticky();
+        try {
+          await assert.isRejected(
+            upsertNodes(member, boardId, [note]),
+            /The board was busy; try again/,
+          );
+          assert.ok(held);
+        } finally {
+          stub.restore();
+          if (held) await Locks.removeAsync(held);
+        }
+        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
+        assert.equal(
+          await WhiteboardVersions.find({ board: boardId }).countAsync(),
+          0,
+        );
+        assert.equal(
+          await WhiteboardVersionChunks.find({ board: boardId }).countAsync(),
+          0,
+        );
+      });
+
+      it("refuses, writing nothing, a batch that makes a node or a line twice", async function () {
+        const note = sticky();
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            note,
+            { ...note, position: { x: 50, y: 50 } },
+          ]),
+          /can only be in a batch once/,
+        );
+        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
+
+        const [a, b] = [sticky(), sticky()];
+        await upsertNodes(member, boardId, [a, b]);
+        const line = { _id: Random.id(), source: a._id, target: b._id };
+        await assert.isRejected(
+          upsertEdges(member, boardId, [line, line]),
+          /can only be in a batch once/,
+        );
+        assert.notOk(await WhiteboardEdges.findOneAsync(line._id));
+      });
+
+      it("refuses, writing nothing, a second card for a puzzle", async function () {
+        const card = (await WhiteboardNodes.findOneAsync({
+          board: boardId,
+          type: "puzzle",
+        }))!;
+        const newCard = () => ({
+          _id: Random.id(),
+          type: "puzzle" as const,
+          position: { x: 0, y: 0 },
+          puzzle: card.puzzle!,
+        });
+        const fresh = sticky();
+        await assert.isRejected(
+          upsertNodes(member, boardId, [fresh, newCard()]),
+          /That puzzle is already on the board/,
+        );
+        // Two in one batch, for a puzzle not on the board
+        await WhiteboardNodes.removeAsync(card._id);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [fresh, newCard(), newCard()]),
+          /That puzzle is already on the board/,
+        );
+        assert.notOk(await WhiteboardNodes.findOneAsync(fresh._id));
+        assert.notOk(
+          await WhiteboardNodes.findOneAsync({
+            board: boardId,
+            puzzle: card.puzzle,
+          }),
+        );
+      });
+
+      it("writes nothing from a line batch whose last line is bad", async function () {
+        const [a, b] = [sticky(), sticky()];
+        await upsertNodes(member, boardId, [a, b]);
+        const before = await WhiteboardEdges.find({
+          board: boardId,
+        }).countAsync();
+        const versions = await WhiteboardVersions.find({
+          board: boardId,
+        }).countAsync();
+        const good = { _id: Random.id(), source: a._id, target: b._id };
+        const otherBoard = await WhiteboardNodes.insertAsync({
+          hunt: huntId,
+          board: Random.id(),
+          type: "sticky",
+          position: { x: 0, y: 0 },
+          createdBy: member,
+        });
+        const tries: [{ source: string; target: string }, RegExp][] = [
+          [{ source: a._id, target: otherBoard }, /join nodes on this board/],
+          [{ source: a._id, target: a._id }, /two different ends/],
+        ];
+        for (const [ends, error] of tries) {
+          await assert.isRejected(
+            upsertEdges(member, boardId, [good, { _id: Random.id(), ...ends }]),
+            error,
+          );
+        }
+        assert.equal(
+          await WhiteboardEdges.find({ board: boardId }).countAsync(),
+          before,
+        );
+        assert.equal(
+          await WhiteboardVersions.find({ board: boardId }).countAsync(),
+          versions,
+        );
+      });
+
+      it("checks again, once it has the lock, what a reset or restore may have taken away", async function () {
+        const frame = {
+          _id: Random.id(),
+          type: "frame" as const,
+          position: { x: 0, y: 0 },
+          width: 400,
+          height: 400,
+        };
+        const [a, b] = [sticky(), sticky()];
+        await upsertNodes(member, boardId, [frame, a, b]);
+        const child = { ...sticky(), parent: frame._id };
+        const line = { _id: Random.id(), source: a._id, target: b._id };
+        const results = await raceForLock(
+          [
+            () => upsertNodes(member, boardId, [child]),
+            () => upsertEdges(member, boardId, [line]),
+          ],
+          () =>
+            WhiteboardNodes.removeAsync({
+              _id: { $in: [frame._id, b._id] },
+            }),
+        );
+        assert.match(
+          (results[0] as Meteor.Error).reason!,
+          /Parent must be a frame on this board/,
+        );
+        assert.match(
+          (results[1] as Meteor.Error).reason!,
+          /join nodes on this board/,
+        );
+        assert.notOk(await WhiteboardNodes.findOneAsync(child._id));
+        assert.notOk(await WhiteboardEdges.findOneAsync(line._id));
+      });
+
+      it("checks again, once it has the lock, that the editor may still edit", async function () {
+        const results = await raceForLock(
+          [() => upsertNodes(member, boardId, [sticky()])],
+          () =>
+            Whiteboards.updateAsync(boardId, {
+              $set: { editPolicy: "operators" },
+            }),
+        );
+        assert.instanceOf(results[0], Meteor.Error);
+        assert.equal(
+          await WhiteboardNodes.find({
+            board: boardId,
+            type: "sticky",
+          }).countAsync(),
+          0,
+        );
+      });
+
+      it("takes a node whose parent is a frame made earlier in the batch", async function () {
+        const frame = {
+          _id: Random.id(),
+          type: "frame" as const,
+          position: { x: 0, y: 0 },
+          width: 400,
+          height: 400,
+        };
+        const child = { ...sticky(), parent: frame._id };
+        const existing = sticky();
+        await upsertNodes(member, boardId, [existing]);
+        await upsertNodes(member, boardId, [
+          frame,
+          child,
+          { _id: existing._id, parent: frame._id },
+        ]);
+        assert.equal(
+          (await WhiteboardNodes.findOneAsync(child._id))?.parent,
+          frame._id,
+        );
+        assert.equal(
+          (await WhiteboardNodes.findOneAsync(existing._id))?.parent,
+          frame._id,
+        );
       });
     });
 

@@ -2,6 +2,7 @@ import { promisify } from "node:util";
 import { Accounts } from "meteor/accounts-base";
 import { check } from "meteor/check";
 import { DDP } from "meteor/ddp";
+import { EJSON } from "meteor/ejson";
 import { Meteor } from "meteor/meteor";
 import { Mongo } from "meteor/mongo";
 import { Random } from "meteor/random";
@@ -61,6 +62,7 @@ import deleteWhiteboardComment from "../../imports/methods/deleteWhiteboardComme
 import deleteWhiteboardEdges from "../../imports/methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../imports/methods/deleteWhiteboardNodes";
 import destroyPuzzle from "../../imports/methods/destroyPuzzle";
+import exportWhiteboard from "../../imports/methods/exportWhiteboard";
 import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
 import removePuzzleTag from "../../imports/methods/removePuzzleTag";
@@ -2278,6 +2280,39 @@ if (Meteor.isClient) {
           assert.isNull(screen.queryByLabelText("Who can edit"));
         });
 
+        it("lets a viewer download the board", async function () {
+          this.timeout(30000);
+          const saved: string[] = [];
+          const click = sinon
+            .stub(HTMLAnchorElement.prototype, "click")
+            .callsFake(function (this: HTMLAnchorElement) {
+              if (this.download) saved.push(this.href);
+            });
+          try {
+            render(<TestApp />);
+            await goTo(boardPath);
+            await screen.findByText("Viewing only", {}, { timeout: 20000 });
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: "Download" }));
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.click(await screen.findByText("Data (JSON)"));
+              await stabilize();
+            });
+            await waitFor(() => assert.lengthOf(saved, 1), { timeout: 20000 });
+            const payload = EJSON.parse(
+              await (await fetch(saved[0]!)).text(),
+            ) as { nodes: { _id: string }[] };
+            assert.include(
+              payload.nodes.map((n) => n._id),
+              image,
+            );
+          } finally {
+            click.restore();
+          }
+        });
+
         it("offers a non-editor no undo", async function () {
           this.timeout(30000);
           render(<TestApp />);
@@ -2727,6 +2762,246 @@ if (Meteor.isClient) {
         assert.isTrue(to.classList.contains("clickconnecting"));
         await press(document.body, { key: "Escape" });
         assert.equal(await linesBetween(boardId, a._id, b._id), before);
+      });
+
+      it("downloads the board as a picture and as data", async function () {
+        this.timeout(90000);
+        // Well left of everything else, so the picture is narrower without
+        // it
+        const { data } = await exportWhiteboard.callPromise({
+          boardId,
+          index: 0,
+        });
+        const before = EJSON.parse(
+          await new Response(
+            new Blob([new Uint8Array(data)])
+              .stream()
+              .pipeThrough(new DecompressionStream("gzip")),
+          ).text(),
+        ) as {
+          nodes: {
+            position: { x: number };
+            parent?: string;
+            hidden?: boolean;
+          }[];
+        };
+        const leftmost = Math.min(
+          ...before.nodes
+            .filter((n) => !n.parent && !n.hidden)
+            .map((n) => n.position.x),
+        );
+        const ink = Random.id();
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: ink,
+              type: "ink",
+              position: { x: leftmost - 2000, y: -200 },
+              width: 100,
+              height: 20,
+              strokeWidth: "thin",
+              stroke: Random.id(),
+              points: [
+                [0, 0, 0.5],
+                [50, 20, 0.5],
+                [100, 0, 0.5],
+              ],
+            },
+          ],
+        });
+        const saved: { href: string; name: string }[] = [];
+        const click = sinon
+          .stub(HTMLAnchorElement.prototype, "click")
+          .callsFake(function (this: HTMLAnchorElement) {
+            if (this.download) {
+              saved.push({ href: this.href, name: this.download });
+            }
+          });
+        const callExport = exportWhiteboard.callPromise.bind(exportWhiteboard);
+        let letExportGo!: () => void;
+        const exportHeld = new Promise<void>((resolve) => {
+          letExportGo = resolve;
+        });
+        const exportStub = sinon
+          .stub(exportWhiteboard, "callPromise")
+          .callsFake(async (...args: Parameters<typeof callExport>) => {
+            await exportHeld;
+            return callExport(...args);
+          });
+        const today = new Date();
+        const day = [
+          today.getFullYear(),
+          String(today.getMonth() + 1).padStart(2, "0"),
+          String(today.getDate()).padStart(2, "0"),
+        ].join("-");
+        const hideInk = () => screen.getByRole("button", { name: "Hide ink" });
+        // The pixel size of a saved PNG, from its header
+        const pngSize = async (href: string) => {
+          const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
+          assert.equal(String.fromCodePoint(...bytes.slice(1, 4)), "PNG");
+          const header = new DataView(bytes.buffer);
+          return { width: header.getUint32(16), height: header.getUint32(20) };
+        };
+        const pick = async (choice: string) => {
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Download" }));
+            await stabilize();
+          });
+          await act(async () => {
+            fireEvent.click(await screen.findByText(choice));
+            await stabilize();
+          });
+        };
+        try {
+          await openBoard();
+          await waitFor(
+            () =>
+              assert.isNotNull(
+                document.querySelector(".react-flow__node-puzzle"),
+              ),
+            { timeout: 20000 },
+          );
+
+          // Data: busy until the board has come down, then saved whole
+          await pick("Data (JSON)");
+          const busy = await screen.findByRole("button", {
+            name: "Preparing the download",
+          });
+          assert.isTrue((busy as HTMLButtonElement).disabled);
+          letExportGo();
+          await waitFor(() => assert.lengthOf(saved, 1), { timeout: 20000 });
+          assert.equal(
+            saved[0]!.name,
+            `Mystery Hunt 2018-whiteboard-${day}.json`,
+          );
+          const payload = EJSON.parse(
+            await (await fetch(saved[0]!.href)).text(),
+          ) as {
+            format: number;
+            nodes: { _id: string; points?: unknown[] }[];
+            edges: unknown[];
+          };
+          assert.equal(payload.format, 1);
+          const shown = await WhiteboardNodes.find({
+            board: boardId,
+          }).fetchAsync();
+          assert.includeMembers(
+            payload.nodes.map((n) => n._id),
+            shown.map((n) => n._id),
+          );
+          assert.lengthOf(
+            payload.nodes.find((n) => n._id === ink)?.points ?? [],
+            3,
+          );
+          await screen.findByRole("button", { name: "Download" });
+
+          // A picture of everything drawn, at twice its size up to the cap
+          await pick("Picture (PNG)");
+          await waitFor(() => assert.lengthOf(saved, 2), { timeout: 30000 });
+          const png = saved[1]!;
+          assert.equal(png.name, `Mystery Hunt 2018-whiteboard-${day}.png`);
+          assert.match(png.href, /^blob:/);
+          const size = await pngSize(png.href);
+          // What's drawn, from the nodes at the top level (the rest are
+          // inside frames)
+          const top = shown.filter(
+            (n) =>
+              !n.parent &&
+              !n.hidden &&
+              n.width !== undefined &&
+              n.height !== undefined,
+          );
+          const expectSize = (drawn: typeof top) => {
+            const left = Math.min(...drawn.map((n) => n.position.x));
+            const right = Math.max(
+              ...drawn.map((n) => n.position.x + n.width!),
+            );
+            const upper = Math.min(...drawn.map((n) => n.position.y));
+            const lower = Math.max(
+              ...drawn.map((n) => n.position.y + n.height!),
+            );
+            const width = right - left + 80;
+            const height = lower - upper + 80;
+            const scale = Math.min(2, 8192 / Math.max(width, height));
+            return { width: width * scale, height: height * scale };
+          };
+          const expected = expectSize(top);
+          assert.isAtMost(Math.max(size.width, size.height), 8192);
+          assert.approximately(
+            size.width,
+            expected.width,
+            expected.width * 0.15,
+          );
+          assert.approximately(
+            size.height,
+            expected.height,
+            expected.height * 0.15,
+          );
+          // with the board drawn on it, on the board's background
+          const picture = new Image();
+          picture.src = png.href;
+          await picture.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = 200;
+          canvas.height = Math.max(
+            1,
+            Math.round((200 * size.height) / size.width),
+          );
+          const context = canvas.getContext("2d")!;
+          context.drawImage(picture, 0, 0, canvas.width, canvas.height);
+          const pixels = context.getImageData(
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          ).data;
+          // The corner is background, white give or take the scaling down
+          pixels.subarray(0, 3).forEach((channel) => {
+            assert.isAtLeast(channel, 245);
+          });
+          const colours = new Set<number>();
+          for (let i = 0; i < pixels.length; i += 4) {
+            colours.add(
+              (pixels[i]! << 16) | (pixels[i + 1]! << 8) | pixels[i + 2]!,
+            );
+          }
+          assert.isAbove(colours.size, 10);
+
+          // With ink hidden, the picture leaves the ink out, as the board does
+          await act(async () => {
+            fireEvent.click(hideInk());
+            await stabilize();
+          });
+          assert.equal(hideInk().getAttribute("aria-pressed"), "true");
+          await pick("Picture (PNG)");
+          await waitFor(() => assert.lengthOf(saved, 3), { timeout: 30000 });
+          const withoutInk = await pngSize(saved[2]!.href);
+          const expectedWithoutInk = expectSize(
+            top.filter((n) => n._id !== ink),
+          );
+          assert.isBelow(withoutInk.width, size.width);
+          assert.approximately(
+            withoutInk.width,
+            expectedWithoutInk.width,
+            expectedWithoutInk.width * 0.15,
+          );
+        } finally {
+          click.restore();
+          exportStub.restore();
+          letExportGo();
+          if (
+            screen
+              .queryByRole("button", { name: "Hide ink" })
+              ?.getAttribute("aria-pressed") === "true"
+          ) {
+            await act(async () => {
+              fireEvent.click(hideInk());
+              await stabilize();
+            });
+          }
+          await deleteWhiteboardNodes.callPromise({ boardId, nodeIds: [ink] });
+        }
       });
 
       describe("comment threads", function () {
@@ -6968,6 +7243,22 @@ if (Meteor.isClient) {
             },
             { timeout: 10000 },
           );
+        });
+
+        it("offers no download on a phone", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          await screen.findByText(
+            "Editing needs a wider screen. You can still comment.",
+            {},
+            { timeout: 20000 },
+          );
+          await act(async () => {
+            await stabilize();
+          });
+          screen.getByRole("button", { name: /^Comments/ });
+          assert.isNull(screen.queryByRole("button", { name: "Download" }));
         });
 
         it("doesn't let anything be moved on a phone", async function () {

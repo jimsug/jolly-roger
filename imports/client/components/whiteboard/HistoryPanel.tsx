@@ -18,6 +18,7 @@ import WhiteboardVersions from "../../../lib/models/WhiteboardVersions";
 import whiteboardVersions from "../../../lib/publications/whiteboardVersions";
 import fetchWhiteboardVersion from "../../../methods/fetchWhiteboardVersion";
 import useTypedSubscribe from "../../hooks/useTypedSubscribe";
+import { gunzipChunks } from "./boardFiles";
 
 export interface VersionPreview {
   version: WhiteboardVersionType;
@@ -31,19 +32,17 @@ export async function loadVersion(
   boardId: string,
   version: WhiteboardVersionType,
 ): Promise<VersionPreview> {
-  const parts: Uint8Array<ArrayBuffer>[] = [];
+  const parts: Uint8Array[] = [];
   for (let index = 0; index < version.chunkCount; index++) {
-    const chunk = await fetchWhiteboardVersion.callPromise({
-      boardId,
-      versionId: version._id,
-      index,
-    });
-    parts.push(new Uint8Array(chunk));
+    parts.push(
+      await fetchWhiteboardVersion.callPromise({
+        boardId,
+        versionId: version._id,
+        index,
+      }),
+    );
   }
-  const stream = new Blob(parts)
-    .stream()
-    .pipeThrough(new DecompressionStream("gzip"));
-  const payload = EJSON.parse(await new Response(stream).text()) as {
+  const payload = EJSON.parse(await gunzipChunks(parts)) as {
     nodes: WhiteboardNodeType[];
     edges: WhiteboardEdgeType[];
   };

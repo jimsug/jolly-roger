@@ -20,6 +20,11 @@ import {
 
 const HOUR_MS = 60 * 60 * 1000;
 
+// A version's payload, and a downloaded board, is
+// gzip(EJSON.stringify({ format, nodes, edges })), with every node and line
+// on the board as stored, hidden ones included.
+export const VERSION_FORMAT = 1;
+
 // Resets and restores, which pruning keeps.
 const isRewrite = (v: { kind: WhiteboardVersionKind }) => v.kind !== "edits";
 

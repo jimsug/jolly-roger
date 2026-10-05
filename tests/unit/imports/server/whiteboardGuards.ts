@@ -63,6 +63,7 @@ import dismissChatNotificationsForPuzzle from "../../../../imports/methods/dismi
 import dismissPendingAnnouncement from "../../../../imports/methods/dismissPendingAnnouncement";
 import dismissPuzzleNotification from "../../../../imports/methods/dismissPuzzleNotification";
 import ensurePuzzleDocument from "../../../../imports/methods/ensurePuzzleDocument";
+import exportWhiteboard from "../../../../imports/methods/exportWhiteboard";
 import fetchWhiteboardVersion from "../../../../imports/methods/fetchWhiteboardVersion";
 import generateHuntInvitationCode from "../../../../imports/methods/generateHuntInvitationCode";
 import generateUploadToken from "../../../../imports/methods/generateUploadToken";
@@ -183,6 +184,7 @@ const METHODS = {
   dismissPendingAnnouncement,
   dismissPuzzleNotification,
   ensurePuzzleDocument,
+  exportWhiteboard,
   fetchWhiteboardVersion,
   generateHuntInvitationCode,
   generateUploadToken,

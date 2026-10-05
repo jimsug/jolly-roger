@@ -1,5 +1,8 @@
+import { randomBytes } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { Accounts } from "meteor/accounts-base";
 import { EJSON } from "meteor/ejson";
+import type { Meteor } from "meteor/meteor";
 import type { Mongo } from "meteor/mongo";
 import { Random } from "meteor/random";
 import { assert } from "chai";
@@ -27,6 +30,7 @@ import {
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_INTERVAL_MS,
 } from "../../../../imports/lib/whiteboard/limits";
+import exportWhiteboard from "../../../../imports/methods/exportWhiteboard";
 import fetchWhiteboardVersion from "../../../../imports/methods/fetchWhiteboardVersion";
 import restoreWhiteboardItems from "../../../../imports/methods/restoreWhiteboardItems";
 import restoreWhiteboardVersion from "../../../../imports/methods/restoreWhiteboardVersion";
@@ -48,6 +52,7 @@ import { resetLayout } from "../../../../imports/server/whiteboardReset";
 import {
   compressVersion,
   decodeVersion,
+  exportBoard,
   pruneWhiteboardVersions,
   restoreItems,
   restoreVersion,
@@ -352,6 +357,165 @@ describe("whiteboard versions", function () {
         createdBy: operator,
       });
       await assert.isRejected(fetch(member, 0), /history is turned off/);
+    });
+  });
+
+  describe("export", function () {
+    const exportChunk = (userId: string, index = 0) =>
+      asUser(userId, () => exportWhiteboard.callPromise({ boardId, index }));
+    const download = async (userId: string) => {
+      const { data, chunkCount } = await exportChunk(userId);
+      assert.equal(chunkCount, 1);
+      return EJSON.parse(gunzipSync(data).toString("utf8")) as {
+        format: number;
+        nodes: unknown[];
+        edges: unknown[];
+      };
+    };
+
+    it("gives a member every node and line on the board, ink included", async function () {
+      const ink = zigzag(20);
+      await upsertNodes(member, boardId, [ink]);
+      const [a, b] = [await sticky(member), await sticky(member)];
+      await upsertEdges(member, boardId, [
+        { _id: Random.id(), source: a, target: b },
+      ]);
+      const live = await board();
+
+      const payload = await download(member);
+      assert.equal(payload.format, 1);
+      assert.sameDeepMembers(payload.nodes, live.nodes);
+      assert.sameDeepMembers(payload.edges, live.edges);
+      assert.isNotEmpty(live.edges);
+      assert.deepEqual(
+        (payload.nodes as typeof live.nodes).find((n) => n._id === ink._id)
+          ?.points,
+        ink.points,
+      );
+      await assert.isRejected(exportChunk(member, 1), /No such part/);
+      await assert.isRejected(exportChunk(member, -1), /No such part/);
+    });
+
+    it("gives the same hash for the same board, and a new one once it changes", async function () {
+      const first = await exportChunk(member);
+      const again = await exportChunk(member);
+      assert.equal(again.hash, first.hash);
+      assert.deepEqual([...again.data], [...first.data]);
+      await sticky(member);
+      assert.notEqual((await exportChunk(member)).hash, first.hash);
+    });
+
+    describe("a board too big for one chunk", function () {
+      // A connection whose close can be triggered, as the method's is.
+      const connection = () => {
+        const closers: (() => void)[] = [];
+        return {
+          id: Random.id(),
+          onClose(cb: () => void) {
+            closers.push(cb);
+          },
+          close: () => closers.forEach((cb) => cb()),
+        } satisfies Pick<Meteor.Connection, "id" | "onClose"> & {
+          close: () => void;
+        };
+      };
+      // How many times the board's nodes are read
+      const boardReads = () => {
+        const find = WhiteboardNodes.find.bind(WhiteboardNodes);
+        let reads = 0;
+        sinon
+          .stub(WhiteboardNodes, "find")
+          .callsFake((...args: Parameters<typeof find>) => {
+            const selector = args[0] as Record<string, unknown> | undefined;
+            if (
+              selector?.board === boardId &&
+              Object.keys(selector).length === 1
+            ) {
+              reads += 1;
+            }
+            return find(...args);
+          });
+        return () => reads;
+      };
+
+      beforeEach(async function () {
+        // Text that doesn't compress, so the board comes to two chunks
+        await WhiteboardNodes.insertAsync({
+          hunt: huntId,
+          board: boardId,
+          type: "sticky",
+          position: { x: 0, y: 0 },
+          text: randomBytes(6 * 1024 * 1024).toString("base64"),
+          createdBy: member,
+        });
+      });
+
+      afterEach(function () {
+        sinon.restore();
+      });
+
+      it("reads and compresses it once for all its chunks", async function () {
+        const live = await board();
+        const reads = boardReads();
+        const conn = connection();
+        const first = await exportBoard(member, boardId, 0, undefined, conn);
+        assert.equal(first.chunkCount, 2);
+        const second = await exportBoard(member, boardId, 1, first.hash, conn);
+        assert.equal(second.hash, first.hash);
+        assert.equal(reads(), 1);
+        const payload = EJSON.parse(
+          gunzipSync(Buffer.concat([first.data, second.data])).toString("utf8"),
+        ) as { nodes: unknown[]; edges: unknown[] };
+        assert.sameDeepMembers(payload.nodes, live.nodes);
+        assert.sameDeepMembers(payload.edges, live.edges);
+
+        // The export is dropped once its last chunk is sent
+        await exportBoard(member, boardId, 1, first.hash, conn);
+        assert.equal(reads(), 2);
+      });
+
+      it("reads the board again for a later chunk of an export it no longer has", async function () {
+        const reads = boardReads();
+        const conn = connection();
+        const first = await exportBoard(member, boardId, 0, undefined, conn);
+        conn.close();
+        await WhiteboardNodes.insertAsync({
+          hunt: huntId,
+          board: boardId,
+          type: "text",
+          position: { x: 0, y: 0 },
+          createdBy: member,
+        });
+        const second = await exportBoard(member, boardId, 1, first.hash, conn);
+        assert.equal(reads(), 2);
+        assert.notEqual(second.hash, first.hash);
+
+        // and without a connection, every chunk reads it
+        const third = await exportBoard(member, boardId, 0, undefined, null);
+        await exportBoard(member, boardId, 1, third.hash, null);
+        assert.equal(reads(), 4);
+      });
+    });
+
+    it("works on an archived hunt, and with history off", async function () {
+      await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+      await FeatureFlags.insertAsync({
+        name: "disable.whiteboard_versions",
+        type: "on",
+        createdBy: operator,
+      });
+      const payload = await download(member);
+      assert.sameDeepMembers(payload.nodes, (await board()).nodes);
+    });
+
+    it("refuses someone outside the hunt, and while the whiteboard is off", async function () {
+      await assert.isRejected(exportChunk(outsider), /member/);
+      await FeatureFlags.insertAsync({
+        name: "disable.whiteboard",
+        type: "on",
+        createdBy: operator,
+      });
+      await assert.isRejected(exportChunk(member), /whiteboard is disabled/);
     });
   });
 

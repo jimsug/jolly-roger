@@ -48,7 +48,11 @@ import {
   lockedError,
   tooMuchInkError,
 } from "./whiteboardShared";
-import { recordVersionBeforeEdit, withBoardLock } from "./whiteboardVersions";
+import {
+  recordVersionBeforeEdit,
+  recordVersionBeforeLockedEdit,
+  withBoardLock,
+} from "./whiteboardVersions";
 
 // Types whose content belongs to whoever wrote it.
 const NATIVE_TYPES = new Set(["frame", "sticky", "text", "ink", "image"]);
@@ -97,41 +101,82 @@ function validatePoints(points: number[][]) {
   if (!points.every(isInkPoint)) throw badRequest("Invalid ink point");
 }
 
+// What a parent check needs to know about a node.
+type ParentLink = Pick<WhiteboardNodeType, "_id" | "board" | "type" | "parent">;
+
+const PARENT_LINK_PROJECTION = { board: 1, type: 1, parent: 1 } as const;
+
+// The board as a batch would leave it, as far as parents go: nodes are read
+// from the database, and those the batch has already been checked for are
+// taken as it will write them. Checking a batch against this before writing
+// any of it means a node late in the batch can't be refused after earlier
+// ones have been written.
+class PlannedParents {
+  private readonly planned = new Map<string, ParentLink>();
+
+  constructor(private readonly boardId: string) {}
+
+  async get(id: string): Promise<ParentLink | undefined> {
+    return (
+      this.planned.get(id) ??
+      (await WhiteboardNodes.findOneAsync(id, {
+        projection: PARENT_LINK_PROJECTION,
+      }))
+    );
+  }
+
+  set(node: ParentLink) {
+    this.planned.set(node._id, node);
+  }
+
+  // The nodes directly inside any of the frames in level.
+  async childrenOf(level: string[]) {
+    const inLevel = new Set(level);
+    const stored = await WhiteboardNodes.find(
+      { board: this.boardId, parent: { $in: level } },
+      { projection: PARENT_LINK_PROJECTION },
+    ).fetchAsync();
+    return [
+      ...stored.filter((node) => !this.planned.has(node._id)),
+      ...[...this.planned.values()].filter(
+        (node) => node.parent !== undefined && inLevel.has(node.parent),
+      ),
+    ];
+  }
+}
+
 // How many frames a node inside parent would be in: parent and each frame
 // above it. Infinity if the node would be inside itself, being parent or
 // somewhere above it. A chain deeper than any board should have counts as a
 // loop.
 async function depthInside(
   nodeId: string,
-  parent: WhiteboardNodeType | undefined,
+  parent: ParentLink | undefined,
+  nodes: PlannedParents,
 ) {
   let depth = 0;
   for (let current = parent; current; depth++) {
     if (current._id === nodeId || depth > MAX_FRAME_DEPTH) return Infinity;
-    current = current.parent
-      ? await WhiteboardNodes.findOneAsync(current.parent)
-      : undefined;
+    current = current.parent ? await nodes.get(current.parent) : undefined;
   }
   return depth;
 }
 
 async function wouldContainItself(
   nodeId: string,
-  parent: WhiteboardNodeType | undefined,
+  parent: ParentLink | undefined,
+  nodes: PlannedParents,
 ) {
-  return (await depthInside(nodeId, parent)) === Infinity;
+  return (await depthInside(nodeId, parent, nodes)) === Infinity;
 }
 
 // How many levels of nodes sit inside a frame (0 for an empty one), counted
 // no further than any board allows.
-async function depthBelow(boardId: string, frameId: string) {
+async function depthBelow(frameId: string, nodes: PlannedParents) {
   let depth = 0;
   let level = [frameId];
   while (level.length > 0 && depth <= MAX_FRAME_DEPTH) {
-    const children = await WhiteboardNodes.find(
-      { board: boardId, parent: { $in: level } },
-      { projection: { type: 1 } },
-    ).fetchAsync();
+    const children = await nodes.childrenOf(level);
     if (children.length === 0) break;
     depth += 1;
     level = children.filter((c) => c.type === "frame").map((c) => c._id);
@@ -143,16 +188,17 @@ async function depthBelow(boardId: string, frameId: string) {
 // itself, and nothing can end up inside more than MAX_FRAME_DEPTH frames,
 // counting the levels already inside the node (contentDepth).
 async function assertValidParent(
+  nodes: PlannedParents,
   boardId: string,
   nodeId: string,
   parentId: string,
   contentDepth = 0,
 ) {
-  const parent = await WhiteboardNodes.findOneAsync(parentId);
+  const parent = await nodes.get(parentId);
   if (!parent || parent.board !== boardId || parent.type !== "frame") {
     throw badRequest("Parent must be a frame on this board");
   }
-  const depth = await depthInside(nodeId, parent);
+  const depth = await depthInside(nodeId, parent, nodes);
   if (depth === Infinity) {
     throw badRequest("A frame can't contain itself");
   }
@@ -232,8 +278,8 @@ async function assertStoredImages(huntId: string, urls: string[]) {
 }
 
 // Image nodes come with an image, nothing else has one, and an image never
-// changes once it's on the board. Taken together with the cap on images, so
-// a batch that breaks either is refused before anything is written.
+// changes once it's on the board. Returns how many images the batch adds,
+// which the caller counts against the cap under the board's lock.
 async function assertImagesAllowed(
   board: { _id: string; hunt: string },
   inputs: WhiteboardNodeInput[],
@@ -265,26 +311,107 @@ async function assertImagesAllowed(
       throw badRequest("Only image nodes have an image");
     }
   });
-  if (added.length === 0) return;
   await assertStoredImages(board.hunt, added);
-  const count = await WhiteboardNodes.find({
-    board: board._id,
-    type: "image",
-  }).countAsync();
-  if (count + added.length > MAX_IMAGES_PER_BOARD) {
-    throw badRequest("This board can't take any more images");
+  return added.length;
+}
+
+// A change to a node already on the board, with that node as it was read.
+interface NodeUpdate {
+  existing: WhiteboardNodeType;
+  input: WhiteboardNodeInput;
+}
+
+const cardPuzzles = (inserts: NewNodeInput[]) =>
+  inserts.flatMap((input) =>
+    input.type === "puzzle" && input.puzzle ? [input.puzzle] : [],
+  );
+
+// A puzzle has one card on a board.
+async function assertNoCardsFor(boardId: string, puzzleIds: string[]) {
+  if (
+    puzzleIds.length > 0 &&
+    (await WhiteboardNodes.find({
+      board: boardId,
+      puzzle: { $in: puzzleIds },
+    }).countAsync()) > 0
+  ) {
+    throw badRequest("That puzzle is already on the board");
   }
 }
 
+// The checks on each node that need the board: a node keeps its type, a
+// parent is a frame on this board that doesn't put anything inside itself
+// or too deep, a new card's puzzle is one of this hunt's and not on the
+// board yet, and new ink has its points. Made for the whole batch, in the
+// order it's written (new nodes, then changes), before any of it is.
+async function assertNodesValid(
+  board: { _id: string; hunt: string },
+  inserts: NewNodeInput[],
+  updates: NodeUpdate[],
+) {
+  const puzzleIds = cardPuzzles(inserts);
+  if (new Set(puzzleIds).size !== puzzleIds.length) {
+    throw badRequest("That puzzle is already on the board");
+  }
+  await assertNoCardsFor(board._id, puzzleIds);
+  const puzzles = new Map(
+    (puzzleIds.length > 0
+      ? await Puzzles.find({ _id: { $in: puzzleIds } }).fetchAsync()
+      : []
+    ).map((p) => [p._id, p]),
+  );
+
+  const nodes = new PlannedParents(board._id);
+  for (const input of inserts) {
+    if (input.parent) {
+      await assertValidParent(nodes, board._id, input._id, input.parent);
+    }
+    if (input.type === "puzzle") {
+      if (!input.puzzle) throw badRequest("Puzzle cards need a puzzle");
+      const puzzle = puzzles.get(input.puzzle);
+      if (!puzzle || puzzle.hunt !== board.hunt || isWhiteboardPuzzle(puzzle)) {
+        throw badRequest("Unknown puzzle");
+      }
+    }
+    if (input.type === "ink" && (!input.points || !input.strokeWidth)) {
+      throw badRequest("Ink needs points and a stroke width");
+    }
+    nodes.set({
+      _id: input._id,
+      board: board._id,
+      type: input.type,
+      parent: input.parent ?? undefined,
+    });
+  }
+  for (const { existing, input } of updates) {
+    if (input.type && input.type !== existing.type) {
+      throw badRequest("Can't change a node's type");
+    }
+    if (input.parent === undefined) continue;
+    if (input.parent !== null) {
+      await assertValidParent(
+        nodes,
+        board._id,
+        existing._id,
+        input.parent,
+        existing.type === "frame" ? await depthBelow(existing._id, nodes) : 0,
+      );
+    }
+    nodes.set({
+      _id: existing._id,
+      board: existing.board,
+      type: existing.type,
+      parent: input.parent ?? undefined,
+    });
+  }
+}
+
+// Writes one change checked by assertNodesValid.
 async function updateNode(
   userId: string,
   existing: WhiteboardNodeType,
   input: WhiteboardNodeInput,
 ) {
-  if (input.type && input.type !== existing.type) {
-    throw badRequest("Can't change a node's type");
-  }
-
   const $set: Record<string, unknown> = {};
   const $unset: Record<string, ""> = {};
 
@@ -296,14 +423,6 @@ async function updateNode(
     if (input.parent === null) {
       $unset.parent = "";
     } else {
-      await assertValidParent(
-        existing.board,
-        existing._id,
-        input.parent,
-        existing.type === "frame"
-          ? await depthBelow(existing.board, existing._id)
-          : 0,
-      );
       $set.parent = input.parent;
     }
     $set.manual = true;
@@ -413,6 +532,7 @@ async function updateNode(
     (await wouldContainItself(
       existing._id,
       await WhiteboardNodes.findOneAsync(parent),
+      new PlannedParents(existing.board),
     ))
   ) {
     await WhiteboardNodes.updateAsync(
@@ -425,29 +545,18 @@ async function updateNode(
   }
 }
 
+type NewNodeInput = WhiteboardNodeInput &
+  Required<Pick<WhiteboardNodeInput, "type" | "position">>;
+
+const isNewNodeInput = (input: WhiteboardNodeInput): input is NewNodeInput =>
+  !!input.type && !!input.position;
+
+// Writes one new node checked by assertNodesValid.
 async function insertNode(
   userId: string,
   board: { _id: string; hunt: string },
-  input: WhiteboardNodeInput,
+  input: NewNodeInput,
 ) {
-  if (!input.type || !input.position) {
-    throw badRequest("New nodes need a type and a position");
-  }
-  if (input.parent) {
-    await assertValidParent(board._id, input._id, input.parent);
-  }
-
-  if (input.type === "puzzle") {
-    if (!input.puzzle) throw badRequest("Puzzle cards need a puzzle");
-    const puzzle = await Puzzles.findOneAsync(input.puzzle);
-    if (!puzzle || puzzle.hunt !== board.hunt || isWhiteboardPuzzle(puzzle)) {
-      throw badRequest("Unknown puzzle");
-    }
-  }
-  if (input.type === "ink" && (!input.points || !input.strokeWidth)) {
-    throw badRequest("Ink needs points and a stroke width");
-  }
-
   const text = nonBlank(input.text);
   const label = nonBlank(input.label);
 
@@ -576,10 +685,17 @@ export async function upsertNodes(
       : input,
   );
 
-  const inserts = inputs.filter((n) => !existingById.has(n._id));
-  // Check every new node is complete before writing anything, so a batch that
-  // refers to a node someone else has just deleted fails as a whole.
-  if (inserts.some((n) => !n.type || !n.position)) {
+  const fresh = inputs.filter((n) => !existingById.has(n._id));
+  // Several changes to one node are fine, but it can only be made once.
+  if (new Set(fresh.map((n) => n._id)).size !== fresh.length) {
+    throw badRequest("A new node can only be in a batch once");
+  }
+  const updates = inputs.flatMap((input): NodeUpdate[] => {
+    const existing = existingById.get(input._id);
+    return existing ? [{ existing, input }] : [];
+  });
+  const inserts = fresh.filter(isNewNodeInput);
+  if (inserts.length !== fresh.length) {
     throw badRequest("New nodes need a type and a position");
   }
   // Only frames fold: an existing node by its saved type, a new one by the
@@ -605,39 +721,79 @@ export async function upsertNodes(
       : [];
   });
   await assertPuzzlesLive(board.hunt, puttingBack);
-  await assertImagesAllowed(board, inputs, existingById);
-  if (inserts.length > 0) {
-    const count = await WhiteboardNodes.find({ board: boardId }).countAsync();
-    if (count + inserts.length > MAX_NODES_PER_BOARD) {
-      throw badRequest("This board is full");
-    }
-  }
-  const newInk = inkPointCount(inserts);
-  if (
-    newInk > 0 &&
-    (await inkPointsOnBoard(boardId)) + newInk > MAX_INK_POINTS_PER_BOARD
-  ) {
-    throw tooMuchInkError();
-  }
+  const newImages = await assertImagesAllowed(board, inputs, existingById);
+  await assertNodesValid(board, inserts, updates);
 
-  // Folding, opening, locking or unlocking on its own doesn't start a
-  // version: none of them changes the layout, they're undone the way they
-  // were done, and Collapse finished rounds sends a lot.
-  const viewOnly = inputs.every(
-    (input) =>
-      (input.collapsed !== undefined || input.locked !== undefined) &&
-      Object.keys(input).every(
-        (key) => key === "_id" || key === "collapsed" || key === "locked",
+  if (inserts.length > 0) {
+    // The caps are counted and the new nodes written under the board's
+    // lock, so two batches at once can't both fit in the room for one.
+    // Placement, resets and restores hold the same lock. A batch that waited
+    // for it behind one of those checks again that it may still edit, that
+    // the frames its new nodes go in are still there, and that placement
+    // hasn't since put its puzzles on the board.
+    const newInk = inkPointCount(inserts);
+    const insertIds = new Set(inserts.map((n) => n._id));
+    const outsideParents = [
+      ...new Set(
+        inserts.flatMap((n) =>
+          n.parent && !insertIds.has(n.parent) ? [n.parent] : [],
+        ),
       ),
-  );
-  if (!viewOnly) await recordVersionBeforeEdit(board, userId);
-  for (const input of inputs) {
-    const existing = existingById.get(input._id);
-    if (existing) {
-      await updateNode(userId, existing, input);
-    } else {
-      await insertNode(userId, board, input);
-    }
+    ];
+    await withBoardLock(boardId, async (renew) => {
+      await assertMayEditBoard(userId, boardId);
+      if (
+        outsideParents.length > 0 &&
+        (await WhiteboardNodes.find({
+          _id: { $in: outsideParents },
+          board: boardId,
+          type: "frame",
+        }).countAsync()) !== outsideParents.length
+      ) {
+        throw badRequest("Parent must be a frame on this board");
+      }
+      await assertNoCardsFor(boardId, cardPuzzles(inserts));
+      const count = await WhiteboardNodes.find({ board: boardId }).countAsync();
+      if (count + inserts.length > MAX_NODES_PER_BOARD) {
+        throw badRequest("This board is full");
+      }
+      if (newImages > 0) {
+        const images = await WhiteboardNodes.find({
+          board: boardId,
+          type: "image",
+        }).countAsync();
+        if (images + newImages > MAX_IMAGES_PER_BOARD) {
+          throw badRequest("This board can't take any more images");
+        }
+      }
+      if (
+        newInk > 0 &&
+        (await inkPointsOnBoard(boardId)) + newInk > MAX_INK_POINTS_PER_BOARD
+      ) {
+        throw tooMuchInkError();
+      }
+      // This also checks the lock is still held: another server may have
+      // taken it while this one counted.
+      await recordVersionBeforeLockedEdit(board, userId, renew);
+      for (const input of inserts) {
+        await insertNode(userId, board, input);
+      }
+    });
+  } else {
+    // Folding, opening, locking or unlocking on its own doesn't start a
+    // version: none of them changes the layout, they're undone the way they
+    // were done, and Collapse finished rounds sends a lot.
+    const viewOnly = inputs.every(
+      (input) =>
+        (input.collapsed !== undefined || input.locked !== undefined) &&
+        Object.keys(input).every(
+          (key) => key === "_id" || key === "collapsed" || key === "locked",
+        ),
+    );
+    if (!viewOnly) await recordVersionBeforeEdit(board, userId);
+  }
+  for (const { existing, input } of updates) {
+    await updateNode(userId, existing, input);
   }
 
   // A round's frame that comes back takes its cards back with it.
@@ -795,6 +951,12 @@ export async function upsertEdges(
   if (existingEdges.some((e) => e.board !== boardId)) {
     throw new Meteor.Error(403, "Edge belongs to another board");
   }
+  const newIds = inputs.flatMap((e) =>
+    existingById.has(e._id) ? [] : [e._id],
+  );
+  if (new Set(newIds).size !== newIds.length) {
+    throw badRequest("A new line can only be in a batch once");
+  }
 
   // Deleting a feeder arrow only hides it, so it can be put back; every
   // other line is really deleted, and nothing is hidden from here.
@@ -818,17 +980,37 @@ export async function upsertEdges(
     }),
   );
 
-  const inserts = inputs.filter((e) => !existingById.has(e._id));
-  if (inserts.length > 0) {
-    const count = await WhiteboardEdges.find({ board: boardId }).countAsync();
-    if (count + inserts.length > MAX_EDGES_PER_BOARD) {
-      throw badRequest("This board has too many arrows");
+  // Every line is checked before any is written.
+  inputs.forEach((input) => {
+    assertId(input._id, "edge");
+    if (typeof input.label === "string") {
+      assertText(input.label, MAX_LABEL_LENGTH);
     }
-  }
+    const existing = existingById.get(input._id);
+    if (existing) {
+      if (existing.auto && (input.source || input.target)) {
+        throw badRequest("Feeder arrows follow their tags");
+      }
+      if (
+        (input.source ?? existing.source) === (input.target ?? existing.target)
+      ) {
+        throw badRequest("A line needs two different ends");
+      }
+    } else if (
+      !input.source ||
+      !input.target ||
+      input.source === input.target
+    ) {
+      throw badRequest("New arrows need two different ends");
+    }
+  });
+  const endpoints = inputs.flatMap((input) =>
+    [input.source, input.target].filter((id): id is string => !!id),
+  );
+  if (endpoints.length > 0) await assertNodesOnBoard(boardId, endpoints);
 
   // A line's end can't come off a locked node, though the line can be
-  // restyled and lines can still be drawn to it. Checked for the whole batch
-  // before any of it is written.
+  // restyled and lines can still be drawn to it.
   const leaving = inputs.flatMap((input) => {
     const existing = existingById.get(input._id);
     if (!existing) return [];
@@ -852,95 +1034,97 @@ export async function upsertEdges(
     throw lockedError();
   }
 
-  await recordVersionBeforeEdit(board, userId);
+  const inserts = inputs.flatMap(({ source, target, ...input }) =>
+    !existingById.has(input._id) && source && target
+      ? [{ ...input, source, target }]
+      : [],
+  );
+  if (inserts.length > 0) {
+    // Counted and written under the board's lock, as upsertNodes does,
+    // checking again that the nodes the new lines join are still there.
+    const insertEnds = inserts.flatMap((e) => [e.source, e.target]);
+    await withBoardLock(boardId, async (renew) => {
+      await assertMayEditBoard(userId, boardId);
+      await assertNodesOnBoard(boardId, insertEnds);
+      const count = await WhiteboardEdges.find({ board: boardId }).countAsync();
+      if (count + inserts.length > MAX_EDGES_PER_BOARD) {
+        throw badRequest("This board has too many arrows");
+      }
+      await recordVersionBeforeLockedEdit(board, userId, renew);
+      for (const input of inserts) {
+        await WhiteboardEdges.insertAsync({
+          _id: input._id,
+          hunt: board.hunt,
+          board: boardId,
+          source: input.source,
+          target: input.target,
+          label: nonBlank(input.label),
+          pathStyle: input.pathStyle,
+          arrowHead: input.arrowHead,
+          color: input.color ?? undefined,
+          dashed: input.dashed,
+          contributors: appendContributor([], userId),
+          createdBy: userId,
+        });
+      }
+    });
+  } else {
+    await recordVersionBeforeEdit(board, userId);
+  }
 
   for (const input of inputs) {
-    assertId(input._id, "edge");
-    if (typeof input.label === "string") {
-      assertText(input.label, MAX_LABEL_LENGTH);
-    }
-    const label = nonBlank(input.label);
-    const endpoints = [input.source, input.target].filter(
-      (id): id is string => !!id,
-    );
-    if (endpoints.length > 0) await assertNodesOnBoard(boardId, endpoints);
-
     const existing = existingById.get(input._id);
-    if (existing) {
-      if (existing.auto && (input.source || input.target)) {
-        throw badRequest("Feeder arrows follow their tags");
+    if (!existing) continue;
+    const label = nonBlank(input.label);
+    const source = input.source ?? existing.source;
+    const target = input.target ?? existing.target;
+    const $set: Record<string, unknown> = {};
+    const $unset: Record<string, ""> = {};
+    if (input.source) $set.source = input.source;
+    if (input.target) $set.target = input.target;
+    // Restyling or relabelling is authorship; moving an end isn't.
+    let contentChanged = false;
+    LINE_STYLE_FIELDS.forEach((field) => {
+      const value = input[field];
+      if (value === undefined || (value ?? undefined) === existing[field]) {
+        return;
       }
-      const source = input.source ?? existing.source;
-      const target = input.target ?? existing.target;
-      if (source === target)
-        throw badRequest("A line needs two different ends");
-
-      const $set: Record<string, unknown> = {};
-      const $unset: Record<string, ""> = {};
-      if (input.source) $set.source = input.source;
-      if (input.target) $set.target = input.target;
-      // Restyling or relabelling is authorship; moving an end isn't.
-      let contentChanged = false;
-      LINE_STYLE_FIELDS.forEach((field) => {
-        const value = input[field];
-        if (value === undefined || (value ?? undefined) === existing[field]) {
-          return;
-        }
-        if (value === null) {
-          $unset[field] = "";
-        } else {
-          $set[field] = value;
-        }
-        contentChanged = true;
-      });
-      if (label && label !== existing.label) {
-        $set.label = label;
-        contentChanged = true;
+      if (value === null) {
+        $unset[field] = "";
+      } else {
+        $set[field] = value;
       }
-      if (input.label !== undefined && !label && !!existing.label) {
-        $unset.label = "";
-        contentChanged = true;
-      }
-      if (input.hidden === false && existing.hidden) {
-        $unset.hidden = "";
-        $unset.hiddenWithPuzzle = "";
-      }
-      if (contentChanged && !existing.auto) {
-        $set.contributors = appendContributor(existing.contributors, userId);
-      }
-      if (Object.keys($set).length === 0 && Object.keys($unset).length === 0) {
-        continue;
-      }
-      await WhiteboardEdges.updateAsync(existing._id, {
-        ...(Object.keys($set).length > 0 ? { $set } : {}),
-        ...(Object.keys($unset).length > 0 ? { $unset } : {}),
-      });
-      // An end that moved off a free point leaves that point unused.
-      await removeOrphanPoints(
-        boardId,
-        [existing.source, existing.target].filter(
-          (id) => id !== source && id !== target,
-        ),
-      );
-    } else {
-      if (!input.source || !input.target || input.source === input.target) {
-        throw badRequest("New arrows need two different ends");
-      }
-      await WhiteboardEdges.insertAsync({
-        _id: input._id,
-        hunt: board.hunt,
-        board: boardId,
-        source: input.source,
-        target: input.target,
-        label,
-        pathStyle: input.pathStyle,
-        arrowHead: input.arrowHead,
-        color: input.color ?? undefined,
-        dashed: input.dashed,
-        contributors: appendContributor([], userId),
-        createdBy: userId,
-      });
+      contentChanged = true;
+    });
+    if (label && label !== existing.label) {
+      $set.label = label;
+      contentChanged = true;
     }
+    if (input.label !== undefined && !label && !!existing.label) {
+      $unset.label = "";
+      contentChanged = true;
+    }
+    if (input.hidden === false && existing.hidden) {
+      $unset.hidden = "";
+      $unset.hiddenWithPuzzle = "";
+    }
+    if (contentChanged && !existing.auto) {
+      $set.contributors = appendContributor(existing.contributors, userId);
+    }
+    if (Object.keys($set).length === 0 && Object.keys($unset).length === 0) {
+      continue;
+    }
+    await WhiteboardEdges.updateAsync(existing._id, {
+      ...(Object.keys($set).length > 0 ? { $set } : {}),
+      ...(Object.keys($unset).length > 0 ? { $unset } : {}),
+    });
+    // An end that moved off a free point leaves that point unused.
+    await removeOrphanPoints(
+      boardId,
+      [existing.source, existing.target].filter(
+        (id) => id !== source && id !== target,
+      ),
+    );
   }
 }
 

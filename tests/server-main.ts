@@ -37,6 +37,7 @@ import "./unit/imports/lib/whiteboard-collapse";
 import "./unit/imports/lib/whiteboard-comments";
 import "./unit/imports/lib/whiteboard-connectors";
 import "./unit/imports/lib/whiteboard-contributors";
+import "./unit/imports/lib/whiteboard-exportFiles";
 import "./unit/imports/lib/whiteboard-feederFocus";
 import "./unit/imports/lib/whiteboard-feeders";
 import "./unit/imports/lib/whiteboard-frameTools";

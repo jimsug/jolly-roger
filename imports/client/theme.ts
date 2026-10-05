@@ -92,6 +92,9 @@ export interface Theme {
     whiteboardUnsolvedInside: string;
     // What a preview of an earlier version has differently from the board
     whiteboardPreviewChanged: string;
+    // The board behind everything on it, on screen and in a downloaded
+    // picture
+    whiteboardBackground: string;
     guess: {
       correct: {
         background: string;
@@ -215,6 +218,7 @@ export const lightTheme: Theme = {
     whiteboardFinishedTick: "var(--bs-success)",
     whiteboardUnsolvedInside: "var(--bs-warning)",
     whiteboardPreviewChanged: "var(--bs-pink)",
+    whiteboardBackground: "#fff",
     guess: {
       correct: {
         background: "#f0fff0",
@@ -363,6 +367,7 @@ export const darkTheme: Theme = {
     whiteboardFinishedTick: "var(--bs-success)",
     whiteboardUnsolvedInside: "var(--bs-warning)",
     whiteboardPreviewChanged: "var(--bs-pink)",
+    whiteboardBackground: "#141414",
     guess: {
       correct: {
         background: "#155724",

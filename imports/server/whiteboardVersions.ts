@@ -37,6 +37,7 @@ import {
   planItemRestore,
   planRestore,
   restoreItemSet,
+  VERSION_FORMAT,
   versionDecision,
   versionsToPrune,
 } from "../lib/whiteboard/versions";
@@ -51,10 +52,6 @@ import {
   tooMuchInkError,
 } from "./whiteboardShared";
 import withLock, { LockPreemptedError } from "./withLock";
-
-// A version's payload is gzip(EJSON.stringify({ format, nodes, edges })),
-// with every node and line on the board as stored, hidden ones included.
-const VERSION_FORMAT = 1;
 
 // How many writes a restore makes between renewals of the board's lock.
 export const WRITES_PER_RENEWAL = 200;
@@ -484,23 +481,14 @@ export async function recordVersionLocked(
   return versionId;
 }
 
-// Records the board before a rewrite (a restore or a reset) and checks the
-// lock is still held before the rewrite's first write. If it isn't, the
-// rewrite never runs, so the version recorded for it is taken away again.
-export async function recordVersionBeforeRewrite(
+// Checks the lock is still held before the first write of the edit a
+// version was just recorded for. If it isn't, that edit never runs, so the
+// version is taken away again.
+async function renewKeepingVersion(
   board: WhiteboardType,
-  userId: string,
-  kind: "restore" | "reset",
+  versionId: string | undefined,
   renew: () => Promise<void>,
-  extra: { restoredFromAt?: Date } = {},
 ) {
-  const versionId = await recordVersionLocked(
-    board,
-    userId,
-    kind,
-    renew,
-    extra,
-  );
   try {
     await renew();
   } catch (error) {
@@ -516,6 +504,25 @@ export async function recordVersionBeforeRewrite(
     }
     throw error;
   }
+}
+
+// Records the board before a rewrite (a restore or a reset) and checks the
+// lock is still held before the rewrite's first write.
+export async function recordVersionBeforeRewrite(
+  board: WhiteboardType,
+  userId: string,
+  kind: "restore" | "reset",
+  renew: () => Promise<void>,
+  extra: { restoredFromAt?: Date } = {},
+) {
+  const versionId = await recordVersionLocked(
+    board,
+    userId,
+    kind,
+    renew,
+    extra,
+  );
+  await renewKeepingVersion(board, versionId, renew);
 }
 
 // Called by every edit that can change the layout, after its checks and
@@ -558,6 +565,97 @@ export async function recordVersionBeforeEdit(
       error,
     });
   }
+}
+
+// recordVersionBeforeEdit for an edit that already holds the board's lock,
+// which also checks the lock is still held before the edit's first write.
+// Losing the lock stops the edit, and takes away a version recorded for it;
+// any other failure to record is logged and the edit goes ahead.
+export async function recordVersionBeforeLockedEdit(
+  board: WhiteboardType,
+  userId: string,
+  renew: () => Promise<void>,
+) {
+  let versionId: string | undefined;
+  try {
+    if (!(await Flags.activeAsync("disable.whiteboard_versions"))) {
+      versionId = await recordVersionLocked(board, userId, "edits", renew);
+    }
+  } catch (error) {
+    if (error instanceof LockPreemptedError) throw error;
+    Logger.warn("Couldn't record a whiteboard version", {
+      board: board._id,
+      user: userId,
+      error,
+    });
+  }
+  await renewKeepingVersion(board, versionId, renew);
+}
+
+// An export part-way through being fetched: the board as it was when its
+// first chunk was asked for, compressed once for all its chunks.
+interface PendingExport {
+  boardId: string;
+  hash: string;
+  chunks: Uint8Array<ArrayBuffer>[];
+}
+// By connection, which fetches one export at a time. Each is dropped once
+// its last chunk is sent, when the connection starts another, or when the
+// connection closes.
+const pendingExports = new Map<string, PendingExport>();
+const watchedConnections = new Set<string>();
+
+function keepExport(
+  connection: Pick<Meteor.Connection, "id" | "onClose">,
+  pending: PendingExport,
+) {
+  pendingExports.set(connection.id, pending);
+  if (watchedConnections.has(connection.id)) return;
+  watchedConnections.add(connection.id);
+  connection.onClose(() => {
+    pendingExports.delete(connection.id);
+    watchedConnections.delete(connection.id);
+  });
+}
+
+// One chunk of the board as it is now, in a version's payload format, for
+// anyone who can see the board, archived or not. Chunk 0 reads and
+// compresses the board; a later chunk asked for with chunk 0's hash comes
+// from that same export if this connection still has it, and otherwise the
+// board is read again, so a client fetching several checks they share a
+// hash. The same board always compresses the same way.
+export async function exportBoard(
+  userId: string,
+  boardId: string,
+  index: number,
+  hash: string | undefined,
+  connection: Pick<Meteor.Connection, "id" | "onClose"> | null,
+) {
+  await loadBoardAccess(userId, boardId);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Meteor.Error(400, "No such part of the board");
+  }
+  let pending = connection ? pendingExports.get(connection.id) : undefined;
+  if (index === 0 || pending?.boardId !== boardId || pending.hash !== hash) {
+    const nodes = await WhiteboardNodes.find({ board: boardId }).fetchAsync();
+    const edges = await WhiteboardEdges.find({ board: boardId }).fetchAsync();
+    const serialized = serializeBoard(nodes, edges);
+    pending = {
+      boardId,
+      hash: serialized.hash,
+      chunks: await compressVersion(serialized.json),
+    };
+  }
+  const data = pending.chunks[index];
+  if (connection) {
+    if (data && index < pending.chunks.length - 1) {
+      keepExport(connection, pending);
+    } else {
+      pendingExports.delete(connection.id);
+    }
+  }
+  if (!data) throw new Meteor.Error(400, "No such part of the board");
+  return { data, chunkCount: pending.chunks.length, hash: pending.hash };
 }
 
 // One chunk of a version's payload, for anyone who can see the board.
