@@ -33,6 +33,7 @@ type Node = Pick<
   | "strokeWidth"
   | "stroke"
   | "collapsed"
+  | "image"
 >;
 type Edge = Pick<
   WhiteboardEdgeType,
@@ -270,6 +271,46 @@ describe("whiteboard clipboard", function () {
       );
       assert.isEmpty(clip.edges);
       assert.equal(cards, 0);
+    });
+
+    it("copies an image with its address and both sizes, and pastes it as it was", function () {
+      const image = {
+        url: "https://s3.us-east-1.amazonaws.com/bucket/hunt/puzzle/upload",
+        width: 1600,
+        height: 900,
+      };
+      const nodes = [
+        node("i", "image", 40, 60, { width: 480, height: 270, image }),
+      ];
+      const { clip, cards } = copySelection(nodes, [], select(["i"]));
+      assert.equal(cards, 0);
+      assert.deepEqual(clip.nodes, [
+        {
+          id: "i",
+          type: "image",
+          x: 40,
+          y: 60,
+          width: 480,
+          height: 270,
+          image,
+        },
+      ]);
+      // A copy of the image, not the stored object, goes on the clipboard
+      assert.notStrictEqual(clip.nodes[0]!.image, image);
+      assert.deepEqual(readClip(clipText(clip)), clip);
+
+      const pasted = pasteClip(clip, { x: 10, y: 0 }, topLevel, counter());
+      assert.deepEqual(pasted.nodes, [
+        {
+          _id: "new1",
+          type: "image",
+          position: { x: 50, y: 60 },
+          parent: null,
+          width: 480,
+          height: 270,
+          image,
+        },
+      ]);
     });
 
     it("labels a frame as it's shown", function () {
@@ -631,6 +672,31 @@ describe("whiteboard clipboard", function () {
       });
       // Ink with nothing to draw
       bad({ nodes: [{ id: "k", type: "ink", x: 0, y: 0 }], edges: [] });
+      // An image with no image or no size, and an image on something else
+      const image = { url: "https://example.com/a.png", width: 4, height: 3 };
+      bad({
+        nodes: [{ id: "i", type: "image", x: 0, y: 0, width: 4, height: 3 }],
+        edges: [],
+      });
+      bad({
+        nodes: [{ id: "i", type: "image", x: 0, y: 0, image }],
+        edges: [],
+      });
+      bad({ nodes: [{ ...clip.nodes[0], image }], edges: [] });
+      bad({
+        nodes: [
+          {
+            id: "i",
+            type: "image",
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 3,
+            image: { ...image, width: 0 },
+          },
+        ],
+        edges: [],
+      });
     });
   });
 

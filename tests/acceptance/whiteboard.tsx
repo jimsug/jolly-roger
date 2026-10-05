@@ -110,6 +110,13 @@ const clearPuzzleSubscribers = new TypedMethod<{ userIds: string[] }, void>(
   "test.methods.whiteboard.clearPuzzleSubscribers",
 );
 
+// The image bucket uploads are checked against: configured as TEST_BUCKET,
+// or not at all.
+const TEST_BUCKET = { bucketName: "jr-test-images", bucketRegion: "us-east-1" };
+const setImageBucket = new TypedMethod<{ on: boolean }, void>(
+  "test.methods.whiteboard.setImageBucket",
+);
+
 if (Meteor.isServer) {
   const defineMethod: typeof import("../../imports/server/methods/defineMethod").default =
     require("../../imports/server/methods/defineMethod").default;
@@ -198,6 +205,35 @@ if (Meteor.isServer) {
       }
       await WhiteboardVersions.removeAsync({ board: boardId });
       await WhiteboardVersionChunks.removeAsync({ board: boardId });
+    },
+  });
+
+  const Settings: typeof import("../../imports/lib/models/Settings").default =
+    require("../../imports/lib/models/Settings").default;
+
+  defineMethod(setImageBucket, {
+    validate(arg: unknown) {
+      check(arg, { on: Boolean });
+      return arg;
+    },
+
+    async run({ on }) {
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+      if (on) {
+        await Settings.upsertAsync(
+          { name: "s3.image_bucket" },
+          {
+            $set: {
+              "value.bucketName": TEST_BUCKET.bucketName,
+              "value.bucketRegion": TEST_BUCKET.bucketRegion,
+            },
+          },
+        );
+      } else {
+        await Settings.removeAsync({ name: "s3.image_bucket" });
+      }
     },
   });
 
@@ -2112,8 +2148,31 @@ if (Meteor.isClient) {
       });
 
       describe("for someone who can't edit", function () {
+        // An image an operator put on the board, for a viewer to see
+        const image = Random.id();
+        // Just above the cards, so a board opened to fit everything still
+        // shows them
+        const imageAt = { x: 0, y: -300 };
+        let imageUrl: string;
+
         before(async function () {
           this.timeout(10000);
+          await setImageBucket.callPromise({ on: true });
+          const backing = (await ensureBoard()).puzzle;
+          imageUrl = `https://s3.${TEST_BUCKET.bucketRegion}.amazonaws.com/${TEST_BUCKET.bucketName}/${huntId}/${backing}/${Random.id()}`;
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: image,
+                type: "image",
+                position: imageAt,
+                width: 200,
+                height: 100,
+                image: { url: imageUrl, width: 400, height: 200 },
+              },
+            ],
+          });
           await setPolicy("operators");
           await promisify(Meteor.logout)();
           await login(MEMBER_EMAIL, MEMBER_PASSWORD);
@@ -2129,8 +2188,41 @@ if (Meteor.isClient) {
           await setPolicy("members");
           await deleteWhiteboardNodes.callPromise({
             boardId,
-            nodeIds: leftovers.splice(0),
+            nodeIds: [image, ...leftovers.splice(0)],
           });
+          await setImageBucket.callPromise({ on: false });
+        });
+
+        it("shows a viewer images, with no Image tool", async function () {
+          this.timeout(30000);
+          localStorage.setItem(
+            `whiteboard:viewport:${boardId}`,
+            JSON.stringify({
+              x: 150 - imageAt.x,
+              y: 150 - imageAt.y,
+              zoom: 1,
+            }),
+          );
+          try {
+            render(<TestApp />);
+            await goTo(boardPath);
+            await screen.findByText("Viewing only", {}, { timeout: 20000 });
+            const shown = await waitFor(
+              () => {
+                const found = document.querySelector(
+                  `.react-flow__node[data-id="${image}"] img`,
+                );
+                assert.isNotNull(found);
+                return found;
+              },
+              { timeout: 20000 },
+            );
+            assert.equal(shown.getAttribute("src"), imageUrl);
+            assert.isNull(screen.queryByRole("button", { name: "Image" }));
+            assert.isNull(document.querySelector(".jr-image-tool-input"));
+          } finally {
+            localStorage.removeItem(`whiteboard:viewport:${boardId}`);
+          }
         });
 
         it("shows non-editors why they can't edit and keeps the comment tool", async function () {
@@ -5014,7 +5106,15 @@ if (Meteor.isClient) {
               { timeout: 10000 },
             );
 
-            // The original is still what's selected, so it's copied again
+            // The copy is what's selected now, so the next one fans out
+            // from it
+            const first = (await copies())[0]!;
+            await waitFor(() =>
+              assert.isTrue(
+                nodeElement(first._id)?.classList.contains("selected"),
+              ),
+            );
+            assert.isFalse(nodeElement(id)?.classList.contains("selected"));
             await act(async () => {
               fireEvent.click(
                 screen.getByRole("button", { name: "Duplicate" }),
@@ -5025,13 +5125,14 @@ if (Meteor.isClient) {
               async () => {
                 const found = await copies();
                 assert.lengthOf(found, 2);
-                found.forEach((copy) => {
-                  assert.deepEqual(copy.position, {
-                    x: base.x + 24,
-                    y: base.y + 24,
-                  });
-                  assert.isUndefined(copy.parent);
-                });
+                assert.sameDeepMembers(
+                  found.map((copy) => copy.position),
+                  [
+                    { x: base.x + 24, y: base.y + 24 },
+                    { x: base.x + 48, y: base.y + 48 },
+                  ],
+                );
+                found.forEach((copy) => assert.isUndefined(copy.parent));
               },
               { timeout: 10000 },
             );
@@ -5126,6 +5227,73 @@ if (Meteor.isClient) {
           }
         });
 
+        it("duplicates the rest of a selection with a card in it, and says the card was left out", async function () {
+          this.timeout(30000);
+          const nodes = await WhiteboardNodes.find({
+            board: boardId,
+          }).fetchAsync();
+          const docs = new Map(nodes.map((n) => [n._id, n]));
+          const card = nodes.find((n) => {
+            if (n.type !== "puzzle" || n.hidden) return false;
+            for (let p = n.parent; p; p = docs.get(p)?.parent) {
+              const frame = docs.get(p);
+              if (!frame || frame.hidden || frame.collapsed) return false;
+            }
+            return true;
+          });
+          assert.exists(card);
+          const at = { ...card.position };
+          for (let p = card.parent; p; p = docs.get(p)?.parent) {
+            at.x += docs.get(p)!.position.x;
+            at.y += docs.get(p)!.position.y;
+          }
+          const text = `Mixed ${Random.id()}`;
+          const note = await stickyAt({ x: at.x, y: at.y + 300 }, text);
+          lookAt(at);
+          try {
+            await openBoard();
+            await pressBoard();
+            await select(card._id);
+            await act(async () => {
+              fireEvent.keyDown(document, {
+                key: "Control",
+                code: "ControlLeft",
+              });
+              await stabilize();
+            });
+            await select(note);
+            await act(async () => {
+              fireEvent.keyUp(document, {
+                key: "Control",
+                code: "ControlLeft",
+              });
+              await stabilize();
+            });
+            await press(pane(), { key: "d", ctrlKey: true });
+            await screen.findByText("Puzzle cards were left out");
+            await waitFor(
+              async () => {
+                const copies = (await withText([text]).fetchAsync()).filter(
+                  (n) => n._id !== note,
+                );
+                assert.lengthOf(copies, 1);
+              },
+              { timeout: 10000 },
+            );
+            assert.equal(
+              await WhiteboardNodes.find({
+                board: boardId,
+                puzzle: card.puzzle,
+              }).countAsync(),
+              1,
+            );
+          } finally {
+            forgetView();
+            const left = await withText([text]).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
+          }
+        });
+
         it("duplicates a frame beside the original, not inside it", async function () {
           this.timeout(30000);
           const base = { x: 35000, y: 30000 };
@@ -5188,6 +5356,91 @@ if (Meteor.isClient) {
             const left = await WhiteboardNodes.find({
               board: boardId,
               $or: [{ label }, { text }],
+            }).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
+          }
+        });
+
+        it("fans out duplicates of a collapsed frame with a line inside it", async function () {
+          this.timeout(30000);
+          const base = { x: 35500, y: 30000 };
+          const label = `Folded ${Random.id()}`;
+          const frame = Random.id();
+          const [a, b] = [Random.id(), Random.id()];
+          const inside = (_id: string, x: number) => ({
+            _id,
+            type: "sticky" as const,
+            parent: frame,
+            position: { x, y: 60 },
+            width: 120,
+            height: 100,
+            text: `In ${label}`,
+          });
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: frame,
+                type: "frame",
+                position: base,
+                width: 400,
+                height: 300,
+                label,
+                collapsed: true,
+              },
+              inside(a, 20),
+              inside(b, 220),
+            ],
+          });
+          await upsertWhiteboardEdges.callPromise({
+            boardId,
+            edges: [{ _id: Random.id(), source: a, target: b }],
+          });
+          const frameCopies = async () =>
+            (await WhiteboardNodes.find({ board: boardId, label }).fetchAsync())
+              .filter((n) => n._id !== frame)
+              .map((n) => n.position);
+          lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            await select(frame);
+            await press(pane(), { key: "d", ctrlKey: true });
+            const first = await waitFor(
+              async () => {
+                const copies = await WhiteboardNodes.find({
+                  board: boardId,
+                  label,
+                  _id: { $ne: frame },
+                }).fetchAsync();
+                assert.lengthOf(copies, 1);
+                return copies[0]!;
+              },
+              { timeout: 10000 },
+            );
+            // The copy's line, inside it, isn't drawn, which mustn't keep
+            // the copy from being selected
+            await waitFor(
+              () =>
+                assert.isTrue(
+                  nodeElement(first._id)?.classList.contains("selected"),
+                ),
+              { timeout: 10000 },
+            );
+            await press(pane(), { key: "d", ctrlKey: true });
+            await waitFor(
+              async () =>
+                assert.sameDeepMembers(await frameCopies(), [
+                  { x: base.x + 24, y: base.y + 24 },
+                  { x: base.x + 48, y: base.y + 48 },
+                ]),
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            const left = await WhiteboardNodes.find({
+              board: boardId,
+              $or: [{ label }, { text: `In ${label}` }],
             }).fetchAsync();
             await removeNodes(left.map((n) => n._id));
           }
@@ -5354,6 +5607,586 @@ if (Meteor.isClient) {
             forgetView();
             const left = await withText(texts).fetchAsync();
             await removeNodes(left.map((n) => n._id));
+          }
+        });
+      });
+
+      describe("images", function () {
+        const UPLOAD_URL = "https://upload.example.com/";
+        let backing: string;
+
+        before(async function () {
+          backing = (await ensureBoard()).puzzle;
+        });
+
+        afterEach(async function () {
+          await setImageBucket.callPromise({ on: false });
+        });
+
+        // A PNG of a solid colour, width by height pixels.
+        const pngFile = async (width: number, height: number) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext("2d")!.fillRect(0, 0, width, height);
+          const blob = await new Promise<Blob>((resolve) => {
+            canvas.toBlob((b) => resolve(b!), "image/png");
+          });
+          return new File([blob], "picture.png", { type: "image/png" });
+        };
+
+        // Stands in for createChatImageUpload and the upload to the bucket,
+        // handing out an address in the test bucket for each image. With
+        // hold, nothing is handed out until release is called.
+        const stubUploads = ({ hold = false } = {}) => {
+          const urls: string[] = [];
+          const held: (() => void)[] = [];
+          const upload = sinon
+            .stub(createChatImageUpload, "call")
+            .callsFake((...args: unknown[]) => {
+              const callback = args.at(-1);
+              if (typeof callback !== "function") return;
+              const publicUrl = `https://s3.${TEST_BUCKET.bucketRegion}.amazonaws.com/${TEST_BUCKET.bucketName}/${huntId}/${backing}/${Random.id()}`;
+              urls.push(publicUrl);
+              const answer = () =>
+                callback(undefined, {
+                  publicUrl,
+                  uploadUrl: UPLOAD_URL,
+                  fields: { key: "upload" },
+                });
+              if (hold) {
+                held.push(answer);
+              } else {
+                Meteor.defer(answer);
+              }
+            });
+          const realFetch = window.fetch.bind(window);
+          const fetch = sinon
+            .stub(window, "fetch")
+            .callsFake((input, init) =>
+              input === UPLOAD_URL
+                ? Promise.resolve(new Response(null))
+                : realFetch(input, init),
+            );
+          return {
+            urls,
+            upload,
+            release: () => held.splice(0).forEach((answer) => answer()),
+            restore: () => {
+              fetch.restore();
+              upload.restore();
+            },
+          };
+        };
+
+        const imageButton = () =>
+          screen.getByRole<HTMLButtonElement>("button", { name: "Image" });
+        const openWithImages = async () => {
+          await setImageBucket.callPromise({ on: true });
+          await openBoard();
+          await waitFor(() => assert.isFalse(imageButton().disabled), {
+            timeout: 10000,
+          });
+        };
+        const images = () =>
+          WhiteboardNodes.find({ board: boardId, type: "image" }).fetchAsync();
+        const removeImages = async () => {
+          const left = await images();
+          if (left.length > 0) await removeNodes(left.map((n) => n._id));
+        };
+        // Board point (x, y) on screen, for a view opened by lookAt(base).
+        const onScreen = (
+          base: { x: number; y: number },
+          x: number,
+          y: number,
+        ) => {
+          const box = pane().getBoundingClientRect();
+          return {
+            clientX: box.left + 150 - base.x + x,
+            clientY: box.top + 150 - base.y + y,
+          };
+        };
+
+        it("adds an image from the Image tool in the middle of the view, no wider than 480", async function () {
+          this.timeout(30000);
+          const base = { x: 50000, y: 50000 };
+          const stubs = stubUploads({ hold: true });
+          lookAt(base);
+          try {
+            await openWithImages();
+            const input = document.querySelector<HTMLInputElement>(
+              ".jr-image-tool-input",
+            )!;
+            assert.exists(input);
+            const picker = sinon.stub(input, "click");
+            try {
+              await act(async () => {
+                fireEvent.click(imageButton());
+                await stabilize();
+              });
+              sinon.assert.calledOnce(picker);
+            } finally {
+              picker.restore();
+            }
+
+            const file = await pngFile(960, 480);
+            await act(async () => {
+              fireEvent.change(input, { target: { files: [file] } });
+              await stabilize();
+            });
+            const box = pane().getBoundingClientRect();
+            const centre = {
+              x: base.x - 150 + box.width / 2,
+              y: base.y - 150 + box.height / 2,
+            };
+            // While it uploads, a placeholder the size it will be stands
+            // where it will land, and nothing is saved
+            const placeholder = await waitFor(
+              () => {
+                const found = document.querySelector<HTMLElement>(
+                  ".jr-image-uploading",
+                );
+                assert.exists(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            assert.equal(placeholder.style.width, "480px");
+            assert.equal(placeholder.style.height, "240px");
+            const [, left, top] = /translate\(([-\d.]+)px, ([-\d.]+)px\)/
+              .exec(placeholder.style.transform)!
+              .map(Number);
+            assert.closeTo(left!, centre.x - 240, 1);
+            assert.closeTo(top!, centre.y - 120, 1);
+            sinon.assert.calledOnce(stubs.upload);
+            assert.isEmpty(await images());
+            stubs.release();
+
+            const node = await waitFor(
+              async () => {
+                const [found, ...more] = await images();
+                assert.isEmpty(more);
+                assert.exists(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            sinon.assert.calledWith(stubs.upload, {
+              puzzleId: backing,
+              mimeType: "image/png",
+            });
+            assert.deepEqual(node.image, {
+              url: stubs.urls[0]!,
+              width: 960,
+              height: 480,
+            });
+            assert.equal(node.width, 480);
+            assert.equal(node.height, 240);
+            assert.closeTo(node.position.x + 240, centre.x, 1);
+            assert.closeTo(node.position.y + 120, centre.y, 1);
+            assert.isUndefined(node.parent);
+            const shown = await nodeShown(node._id);
+            await waitFor(() => {
+              const img = shown.querySelector("img");
+              assert.equal(img?.getAttribute("src"), stubs.urls[0]);
+              assert.equal(img?.getAttribute("draggable"), "false");
+            });
+            assert.isFalse(placeholder.isConnected);
+          } finally {
+            stubs.restore();
+            forgetView();
+            await removeImages();
+          }
+        });
+
+        it("pastes an image at the pointer, at its own size", async function () {
+          this.timeout(30000);
+          const base = { x: 51000, y: 50000 };
+          const stubs = stubUploads();
+          lookAt(base);
+          try {
+            await openWithImages();
+            await pressBoard();
+            const at = { x: base.x + 300, y: base.y + 200 };
+            await act(async () => {
+              fireEvent.pointerMove(pane(), {
+                pointerId: 1,
+                ...onScreen(base, at.x, at.y),
+              });
+              await stabilize();
+            });
+            const data = new DataTransfer();
+            data.items.add(await pngFile(200, 100));
+            const event = new ClipboardEvent("paste", {
+              clipboardData: data,
+              bubbles: true,
+              cancelable: true,
+            });
+            await act(async () => {
+              pane().dispatchEvent(event);
+              await stabilize();
+            });
+            assert.isTrue(event.defaultPrevented);
+            const node = await waitFor(
+              async () => {
+                const [found] = await images();
+                assert.exists(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            assert.deepEqual(node.image, {
+              url: stubs.urls[0]!,
+              width: 200,
+              height: 100,
+            });
+            assert.equal(node.width, 200);
+            assert.equal(node.height, 100);
+            assert.closeTo(node.position.x + 100, at.x, 1);
+            assert.closeTo(node.position.y + 50, at.y, 1);
+          } finally {
+            stubs.restore();
+            forgetView();
+            await removeImages();
+          }
+        });
+
+        it("adds an image file dropped on the board where it's dropped", async function () {
+          this.timeout(30000);
+          const base = { x: 52000, y: 50000 };
+          const stubs = stubUploads();
+          lookAt(base);
+          try {
+            await openWithImages();
+            const at = { x: base.x + 250, y: base.y + 150 };
+            const data = new DataTransfer();
+            data.items.add(await pngFile(120, 80));
+            const init = {
+              dataTransfer: data,
+              bubbles: true,
+              cancelable: true,
+              ...onScreen(base, at.x, at.y),
+            };
+            const over = new DragEvent("dragover", init);
+            const drop = new DragEvent("drop", init);
+            await act(async () => {
+              pane().dispatchEvent(over);
+              pane().dispatchEvent(drop);
+              await stabilize();
+            });
+            assert.isTrue(over.defaultPrevented);
+            assert.isTrue(drop.defaultPrevented);
+            const node = await waitFor(
+              async () => {
+                const [found] = await images();
+                assert.exists(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            assert.equal(node.image?.url, stubs.urls[0]);
+            assert.equal(node.width, 120);
+            assert.equal(node.height, 80);
+            assert.closeTo(node.position.x + 60, at.x, 1);
+            assert.closeTo(node.position.y + 40, at.y, 1);
+          } finally {
+            stubs.restore();
+            forgetView();
+            await removeImages();
+          }
+        });
+
+        it("leaves an image dropped into a comment to the comment", async function () {
+          this.timeout(30000);
+          const stubs = stubUploads();
+          try {
+            await openWithImages();
+            await act(async () => {
+              fireEvent.click(
+                screen.getByRole("button", { name: /^Comment:/ }),
+              );
+              await stabilize();
+            });
+            const at = paneAt(0.6, 0.6);
+            await act(async () => {
+              fireEvent.pointerDown(pane(), at);
+              fireEvent.pointerUp(pane(), at);
+              await stabilize();
+            });
+            const editor = await waitFor(() => {
+              const found = document.querySelector<HTMLElement>(
+                "dialog[open] [data-slate-editor]",
+              );
+              assert.ok(found);
+              return found;
+            });
+            await typeInto(editor, "See");
+            const text = editor
+              .querySelector("[data-slate-string]")!
+              .getBoundingClientRect();
+            const data = new DataTransfer();
+            data.items.add(await pngFile(40, 40));
+            const init = {
+              dataTransfer: data,
+              bubbles: true,
+              cancelable: true,
+              clientX: text.right - 1,
+              clientY: text.top + text.height / 2,
+            };
+            const drop = new DragEvent("drop", init);
+            await act(async () => {
+              editor.dispatchEvent(new DragEvent("dragover", init));
+              editor.dispatchEvent(drop);
+              await stabilize();
+            });
+            assert.isTrue(drop.defaultPrevented);
+            await waitFor(
+              () =>
+                assert.exists(
+                  editor.querySelector(`img[src="${stubs.urls[0]}"]`),
+                ),
+              { timeout: 10000 },
+            );
+            // Time for a board image to have started, were one coming
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 500);
+            });
+            sinon.assert.calledOnce(stubs.upload);
+            assert.isNull(document.querySelector(".jr-image-uploading"));
+            assert.isEmpty(await images());
+          } finally {
+            stubs.restore();
+            await removeImages();
+          }
+        });
+
+        // An image on the board as the Image tool would leave it
+        const placeImage = async (position: { x: number; y: number }) => {
+          const _id = Random.id();
+          const image = {
+            url: `https://s3.${TEST_BUCKET.bucketRegion}.amazonaws.com/${TEST_BUCKET.bucketName}/${huntId}/${backing}/${Random.id()}`,
+            width: 600,
+            height: 300,
+          };
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id,
+                type: "image",
+                position,
+                width: 300,
+                height: 150,
+                image,
+              },
+            ],
+          });
+          return { _id, image };
+        };
+
+        it("puts a deleted image back on undo, with the same upload", async function () {
+          this.timeout(30000);
+          const base = { x: 52500, y: 50000 };
+          await setImageBucket.callPromise({ on: true });
+          const { _id: id, image } = await placeImage(base);
+          lookAt(base);
+          try {
+            await openWithImages();
+            await select(id);
+            await press(document.body, { key: "Delete" });
+            await waitFor(async () => assert.isUndefined(await savedNode(id)), {
+              timeout: 10000,
+            });
+            await pressBoard();
+            await press(pane(), { key: "z", ctrlKey: true });
+            await waitFor(
+              async () => {
+                const node = await savedNode(id);
+                assert.equal(node?.type, "image");
+                assert.deepEqual(node?.image, image);
+                assert.equal(node?.width, 300);
+                assert.equal(node?.height, 150);
+                assert.deepEqual(node?.position, base);
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            await removeImages();
+          }
+        });
+
+        it("keeps an image's shape as it's resized", async function () {
+          this.timeout(30000);
+          const base = { x: 53000, y: 50000 };
+          await setImageBucket.callPromise({ on: true });
+          const { _id: id } = await placeImage(base);
+          lookAt(base);
+          try {
+            await openWithImages();
+            await select(id);
+            const corner = await waitFor(() => {
+              const found = nodeElement(id)?.querySelector(
+                ".react-flow__resize-control.handle.bottom.right",
+              );
+              assert.exists(found);
+              return found;
+            });
+            const box = corner.getBoundingClientRect();
+            const start = {
+              clientX: box.left + box.width / 2,
+              clientY: box.top + box.height / 2,
+            };
+            const end = {
+              clientX: start.clientX + 100,
+              clientY: start.clientY,
+            };
+            const mouse = { button: 0, view: window };
+            await act(async () => {
+              fireEvent.mouseDown(corner, { ...mouse, ...start });
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.mouseMove(window, { ...mouse, ...end });
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.mouseUp(window, { ...mouse, ...end });
+              await stabilize();
+            });
+            await waitFor(
+              async () => {
+                const resized = await savedNode(id);
+                assert.closeTo(resized?.width ?? 0, 400, 1);
+                assert.closeTo(resized?.height ?? 0, 200, 1);
+                assert.deepEqual(resized?.position, base);
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            await removeImages();
+          }
+        });
+
+        it("fans out duplicates of an image on Ctrl+D, selecting each new one", async function () {
+          this.timeout(30000);
+          const base = { x: 54000, y: 50000 };
+          await setImageBucket.callPromise({ on: true });
+          const { _id: id, image } = await placeImage(base);
+          lookAt(base);
+          try {
+            await openWithImages();
+            await pressBoard();
+            await select(id);
+            await press(pane(), { key: "d", ctrlKey: true });
+            const first = await waitFor(
+              async () => {
+                const copies = (await images()).filter((n) => n._id !== id);
+                assert.lengthOf(copies, 1);
+                return copies[0]!;
+              },
+              { timeout: 10000 },
+            );
+            await waitFor(() =>
+              assert.isTrue(
+                nodeElement(first._id)?.classList.contains("selected"),
+              ),
+            );
+            await press(pane(), { key: "d", ctrlKey: true });
+            await waitFor(
+              async () => {
+                const copies = (await images()).filter((n) => n._id !== id);
+                assert.lengthOf(copies, 2);
+                assert.sameDeepMembers(
+                  copies.map((n) => n.position),
+                  [
+                    { x: base.x + 24, y: base.y + 24 },
+                    { x: base.x + 48, y: base.y + 48 },
+                  ],
+                );
+                copies.forEach((n) => {
+                  assert.deepEqual(n.image, image);
+                  assert.equal(n.width, 300);
+                  assert.equal(n.height, 150);
+                });
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            await removeImages();
+          }
+        });
+
+        it("says why an upload failed, and leaves nothing on the board", async function () {
+          this.timeout(30000);
+          const upload = refuseCalls(createChatImageUpload);
+          try {
+            await openWithImages();
+            const input = document.querySelector<HTMLInputElement>(
+              ".jr-image-tool-input",
+            )!;
+            await act(async () => {
+              fireEvent.change(input, {
+                target: { files: [await pngFile(40, 40)] },
+              });
+              await stabilize();
+            });
+            await screen.findByText(
+              "Couldn't save: Refused for the test",
+              {},
+              { timeout: 10000 },
+            );
+            sinon.assert.calledOnce(upload);
+            assert.isNull(document.querySelector(".jr-image-uploading"));
+            assert.isEmpty(await images());
+          } finally {
+            upload.restore();
+          }
+        });
+
+        it("turns the Image tool, pasting and dropping off when there's nowhere to store images", async function () {
+          this.timeout(30000);
+          const upload = sinon.spy(createChatImageUpload, "call");
+          const off =
+            "Images can't be added here: this server has nowhere to store them.";
+          try {
+            await openBoard();
+            const button = imageButton();
+            assert.isTrue(button.disabled);
+            assert.equal(button.closest("span")?.title, off);
+            await pressBoard();
+            const data = new DataTransfer();
+            data.items.add(await pngFile(40, 40));
+            const drop = new DragEvent("drop", {
+              dataTransfer: data,
+              bubbles: true,
+              cancelable: true,
+              ...paneAt(0.5, 0.5),
+            });
+            await act(async () => {
+              pane().dispatchEvent(drop);
+              await stabilize();
+            });
+            assert.isTrue(drop.defaultPrevented);
+            await screen.findByText(off);
+            sinon.assert.notCalled(upload);
+            await act(async () => {
+              pane().dispatchEvent(
+                new ClipboardEvent("paste", {
+                  clipboardData: data,
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              );
+              await stabilize();
+            });
+            await screen.findByText(off);
+            sinon.assert.notCalled(upload);
+            assert.isEmpty(await images());
+          } finally {
+            upload.restore();
           }
         });
       });

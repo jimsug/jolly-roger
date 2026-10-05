@@ -103,7 +103,6 @@ import {
   hasLoadingImage as hasLoadingImageInContent,
   hasSendableContent,
 } from "../chatEditorContent";
-import EnabledChatImage from "../EnabledChatImage";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import {
   useOperatorActionsHiddenForHunt,
@@ -112,7 +111,7 @@ import {
 import useBlockUpdate from "../hooks/useBlockUpdate";
 import type { Action, CallState, JoinCallOptions } from "../hooks/useCallState";
 import useCallState from "../hooks/useCallState";
-import type { ChatImageUploadFailure } from "../hooks/useChatImageUpload";
+import useChatImagesEnabled from "../hooks/useChatImagesEnabled";
 import useChatImageUpload from "../hooks/useChatImageUpload";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import useDocumentVisible from "../hooks/useDocumentVisible";
@@ -122,6 +121,7 @@ import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
 import { trace } from "../tracing";
+import type { ChatImageUploadFailure } from "../uploadChatImage";
 import BookmarkButton from "./BookmarkButton";
 import ChatMessage from "./ChatMessage";
 import ChatMessageReactions from "./ChatMessageReactions";
@@ -1291,11 +1291,7 @@ const ChatInput = React.memo(
       uploadImageFile(file);
     }
 
-    useSubscribe("enabledChatImage");
-    const enabledChatImage = useTracker(
-      () => EnabledChatImage.findOne("enabledChatImage")?.enabled ?? false,
-      [],
-    );
+    const enabledChatImage = useChatImagesEnabled();
 
     const errorModal = (
       <Modal show onHide={clearUploadImageError}>

@@ -6,6 +6,7 @@ import { ancestorsOf } from "./arrange";
 import {
   MAX_EDGES_PER_BOARD,
   MAX_FRAME_DEPTH,
+  MAX_IMAGES_PER_BOARD,
   MAX_NODES_PER_BOARD,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_IDLE_MS,
@@ -665,6 +666,9 @@ export function restoreItemSet(
   return { nodes, edges };
 }
 
+const imageCount = (nodes: readonly { type: string }[]) =>
+  nodes.filter((n) => n.type === "image").length;
+
 export type ItemRestoreResult =
   | { ok: true; plan: RestorePlan; puzzles: string[] }
   | { ok: false; reason: "tooBig" };
@@ -675,11 +679,11 @@ export type ItemRestoreResult =
 // version card for a puzzle that now has another card updates that card.
 // Nothing live is removed. A node whose frame isn't on the board, or would
 // make a loop, goes to the top level where the version had it on the board.
-// Lines need both ends on the board afterwards, and free ends need a line.
-// With keepLocks, as for planRestore, a node keeps the lock it has on the
-// board and one the board no longer has comes back unlocked. Given
-// livePuzzles, a deleted puzzle's card and its lines are put back only as
-// forLivePuzzles says. Also returns the puzzles of the cards it touches.
+// Lines need both ends on the board afterwards, free ends need a line, and
+// the board's caps on nodes, lines and images hold. With keepLocks, as for
+// planRestore, a node keeps the lock it has on the board and one the board
+// no longer has comes back unlocked. Given livePuzzles, a deleted puzzle's
+// card and its lines are put back only as forLivePuzzles says. Also returns the puzzles of the cards it touches.
 export function planItemRestore(
   current: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
   stored: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
@@ -767,7 +771,10 @@ export function planItemRestore(
   const newEdges = [...wantedEdges.keys()].filter((id) => !liveEdges.has(id));
   if (
     current.nodes.length + newNodes.length > MAX_NODES_PER_BOARD ||
-    current.edges.length + newEdges.length > MAX_EDGES_PER_BOARD
+    current.edges.length + newEdges.length > MAX_EDGES_PER_BOARD ||
+    imageCount(current.nodes) +
+      imageCount(newNodes.flatMap((id) => wanted.get(id) ?? [])) >
+      MAX_IMAGES_PER_BOARD
   ) {
     return { ok: false, reason: "tooBig" };
   }

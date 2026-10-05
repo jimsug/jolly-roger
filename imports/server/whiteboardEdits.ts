@@ -24,6 +24,7 @@ import {
   MAX_DIMENSION,
   MAX_EDGES_PER_BOARD,
   MAX_FRAME_DEPTH,
+  MAX_IMAGES_PER_BOARD,
   MAX_INK_POINTS,
   MAX_LABEL_LENGTH,
   MAX_NODES_PER_BOARD,
@@ -32,6 +33,7 @@ import {
 import type { CommentAnchorInput } from "../methods/sendChatMessage";
 import type { WhiteboardEdgeInput } from "../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../methods/upsertWhiteboardNodes";
+import { imageBucket, imageObjectUrl } from "./getS3UploadParams";
 import { deferSyncRoundsOnBoard } from "./whiteboard";
 import { detachComments } from "./whiteboardComments";
 import {
@@ -45,7 +47,7 @@ import {
 import { recordVersionBeforeEdit, withBoardLock } from "./whiteboardVersions";
 
 // Types whose content belongs to whoever wrote it.
-const NATIVE_TYPES = new Set(["frame", "sticky", "text", "ink"]);
+const NATIVE_TYPES = new Set(["frame", "sticky", "text", "ink", "image"]);
 
 // Ink is split into segments and points are a line's loose end, so neither is
 // something a comment can sensibly hang off.
@@ -191,6 +193,78 @@ function validateCommonFields(input: WhiteboardNodeInput) {
   }
   if (input.points) validatePoints(input.points);
   if (input.stroke !== undefined) assertId(input.stroke, "stroke");
+  if (input.image) {
+    assertDimension(input.image.width);
+    assertDimension(input.image.height);
+  }
+}
+
+const sameImage = (
+  a: NonNullable<WhiteboardNodeInput["image"]>,
+  b: WhiteboardNodeType["image"],
+) => !!b && a.url === b.url && a.width === b.width && a.height === b.height;
+
+// An image node shows an object uploaded as chat images are (see
+// createChatImageUpload): one in the image bucket keyed by a hunt's id, a
+// puzzle's id and the upload's own. Anything else, including when there's no
+// bucket, is refused.
+async function assertStoredImages(urls: string[]) {
+  if (urls.length === 0) return;
+  const bucket = await imageBucket();
+  const prefix = bucket ? imageObjectUrl(bucket, "") : undefined;
+  urls.forEach((url) => {
+    const key =
+      prefix && url.startsWith(prefix) ? url.slice(prefix.length) : "";
+    const parts = key.split("/");
+    if (parts.length !== 3 || !parts.every((part) => Id.test(part))) {
+      throw badRequest("That image isn't one we stored");
+    }
+  });
+}
+
+// Image nodes come with an image, nothing else has one, and an image never
+// changes once it's on the board. Taken together with the cap on images, so
+// a batch that breaks either is refused before anything is written.
+async function assertImagesAllowed(
+  board: { _id: string },
+  inputs: WhiteboardNodeInput[],
+  existingById: Map<string, WhiteboardNodeType>,
+) {
+  const added: string[] = [];
+  inputs.forEach((input) => {
+    const existing = existingById.get(input._id);
+    if (existing) {
+      if (input.image === undefined) return;
+      if (existing.type !== "image") {
+        throw badRequest("Only image nodes have an image");
+      }
+      if (!sameImage(input.image, existing.image)) {
+        throw badRequest("An image can't be changed");
+      }
+      return;
+    }
+    if (input.type === "image") {
+      if (
+        !input.image ||
+        input.width === undefined ||
+        input.height === undefined
+      ) {
+        throw badRequest("Image nodes need an image and a size");
+      }
+      added.push(input.image.url);
+    } else if (input.image !== undefined) {
+      throw badRequest("Only image nodes have an image");
+    }
+  });
+  if (added.length === 0) return;
+  await assertStoredImages(added);
+  const count = await WhiteboardNodes.find({
+    board: board._id,
+    type: "image",
+  }).countAsync();
+  if (count + added.length > MAX_IMAGES_PER_BOARD) {
+    throw badRequest("This board can't take any more images");
+  }
 }
 
 async function updateNode(
@@ -387,6 +461,7 @@ async function insertNode(
     points: input.type === "ink" ? input.points : undefined,
     strokeWidth: input.type === "ink" ? input.strokeWidth : undefined,
     stroke: input.type === "ink" ? input.stroke : undefined,
+    image: input.type === "image" ? input.image : undefined,
     contributors: NATIVE_TYPES.has(input.type)
       ? appendContributor([], userId)
       : [],
@@ -514,6 +589,7 @@ export async function upsertNodes(
       : [];
   });
   await assertPuzzlesLive(board.hunt, puttingBack);
+  await assertImagesAllowed(board, inputs, existingById);
   if (inserts.length > 0) {
     const count = await WhiteboardNodes.find({ board: boardId }).countAsync();
     if (count + inserts.length > MAX_NODES_PER_BOARD) {

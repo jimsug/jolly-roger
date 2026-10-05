@@ -180,6 +180,31 @@ describe("whiteboard undo inverses", function () {
     });
   });
 
+  it("puts a deleted image back with the same upload and size", function () {
+    const image = { url: "https://example.com/a/b/c", width: 800, height: 400 };
+    const docs = docsOf([
+      node("pic", {
+        type: "image",
+        width: 240,
+        height: 120,
+        image,
+      }),
+    ]);
+    assert.deepEqual(inverseOf({ deleteNodes: ["pic"] }, docs), {
+      upsertNodes: [
+        {
+          _id: "pic",
+          type: "image",
+          position: { x: 10, y: 20 },
+          parent: null,
+          width: 240,
+          height: 120,
+          image,
+        },
+      ],
+    });
+  });
+
   it("brings back a whole ink stroke from one segment", function () {
     const docs = docsOf([
       node("one", { type: "ink", stroke: "s", points: [[0, 0, 0.5]] }),

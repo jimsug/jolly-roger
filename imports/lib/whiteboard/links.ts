@@ -84,7 +84,7 @@ export function boardTargetKey(target: BoardTarget | undefined): string {
 }
 
 // The query for a "Copy link to here": a card by its puzzle, a frame, sticky
-// note or text box by its id, and otherwise the view.
+// note, text box or image by its id, and otherwise the view.
 export function boardLinkQuery(
   node: Pick<WhiteboardNodeType, "_id" | "type" | "puzzle"> | undefined,
   view: BoardView,
@@ -94,7 +94,10 @@ export function boardLinkQuery(
   }
   if (
     node &&
-    (node.type === "frame" || node.type === "sticky" || node.type === "text")
+    (node.type === "frame" ||
+      node.type === "sticky" ||
+      node.type === "text" ||
+      node.type === "image")
   ) {
     return `node=${encodeURIComponent(node._id)}`;
   }

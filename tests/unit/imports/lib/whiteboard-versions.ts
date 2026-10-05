@@ -3,6 +3,7 @@ import type { WhiteboardEdgeType } from "../../../../imports/lib/models/Whiteboa
 import type { WhiteboardNodeType } from "../../../../imports/lib/models/WhiteboardNodes";
 import type { WhiteboardVersionKind } from "../../../../imports/lib/models/WhiteboardVersions";
 import {
+  MAX_IMAGES_PER_BOARD,
   MAX_NODES_PER_BOARD,
   MAX_VERSION_BYTES_PER_BOARD,
   VERSION_IDLE_MS,
@@ -1036,6 +1037,29 @@ describe("whiteboard versions", function () {
       assert.deepEqual(
         planItems({ nodes: live }, { nodes: [node("new")] }, ["new"]),
         { ok: false, reason: "tooBig" },
+      );
+    });
+
+    it("refuses past the image cap, but still puts back other nodes", function () {
+      const image = (_id: string) =>
+        node(_id, {
+          type: "image",
+          width: 100,
+          height: 50,
+          image: { url: `https://example.com/${_id}`, width: 200, height: 100 },
+        });
+      const live = Array.from({ length: MAX_IMAGES_PER_BOARD }, (_, i) =>
+        image(`i${i}`),
+      );
+      const version = { nodes: [image("gone"), node("note")] };
+      assert.deepEqual(planItems({ nodes: live }, version, ["gone"]), {
+        ok: false,
+        reason: "tooBig",
+      });
+      assert.isTrue(planItems({ nodes: live }, version, ["note"]).ok);
+      // An image already on the board isn't counted again
+      assert.isTrue(
+        planItems({ nodes: live }, { nodes: [image("i0")] }, ["i0"]).ok,
       );
     });
   });

@@ -18,6 +18,7 @@ files:
   - imports/client/components/whiteboard/FrameLabelLayer.tsx
   - imports/client/components/whiteboard/FrameNode.tsx
   - imports/client/components/whiteboard/HistoryPanel.tsx
+  - imports/client/components/whiteboard/ImageNode.tsx
   - imports/client/components/whiteboard/InkNode.tsx
   - imports/client/components/whiteboard/LockBadge.tsx
   - imports/client/components/whiteboard/LockLayoutButtons.tsx
@@ -34,6 +35,7 @@ files:
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
   - imports/client/components/whiteboard/boardWrites.ts
   - imports/client/hooks/useChatImageUpload.ts
+  - imports/client/hooks/useChatImagesEnabled.ts
   - imports/client/hooks/useKeyboardInset.ts
   - imports/client/hooks/usePuzzleViewers.ts
   - imports/client/hooks/usePuzzleViewerUsers.ts
@@ -44,6 +46,7 @@ files:
   - imports/client/hooks/useWhiteboardOthersEditing.ts
   - imports/client/hooks/useWhiteboardSync.ts
   - imports/client/hooks/useWhiteboardUndo.ts
+  - imports/client/uploadChatImage.ts
   - imports/lib/chatMessagePath.ts
   - imports/lib/models/Puzzles.ts
   - imports/lib/models/WhiteboardEdges.ts
@@ -82,6 +85,7 @@ files:
   - imports/methods/upsertWhiteboardEdges.ts
   - imports/methods/upsertWhiteboardNodes.ts
   - imports/server/daemons/whiteboardVersions.ts
+  - imports/server/getS3UploadParams.ts
   - imports/server/methods/addPuzzleAnswer.ts
   - imports/server/methods/destroyPuzzle.ts
   - imports/server/methods/fetchWhiteboardVersion.ts
@@ -115,7 +119,7 @@ updated: 2026-10-05
 Each hunt can have one shared whiteboard, at `/hunts/:huntId/whiteboard`. It
 starts as a map of the hunt: a frame for each round, a card for each puzzle in
 its round's frame, and an arrow from each feeder to its meta. People add
-sticky notes, text, their own frames, lines and freehand ink on top, pin
+sticky notes, text, images, their own frames, lines and freehand ink on top, pin
 comment threads to anything on it, and see each other's cursors move.
 
 An operator creates the board (`ensureWhiteboard` in
@@ -441,7 +445,7 @@ doesn't jump twice; if the link names something that isn't there, it fits
 then.
 
 The toolbar's link button, "Copy link to here", copies a link to the selected
-card (`?puzzle=`), to a selected frame, note or text box (`?node=`), or else
+card (`?puzzle=`), to a selected frame, note, text box or image (`?node=`), or else
 to the current view (`?v=`), for pasting into chat (`boardLinkQuery` in
 `imports/lib/whiteboard/links.ts`). Nothing can be selected on a read-only
 board, so there it always copies the view.
@@ -515,8 +519,9 @@ through `removeChatReaction`, which only checks that it's the caller's own.
 Pasting or dropping an image into the comment composer uploads it the way
 chat does (`createChatImageUpload`, then a POST to the bucket) and puts it in
 the comment, which can't be sent until the upload finishes. Both use
-`useChatImageUpload` in `imports/client/hooks/`, and each shows a failure its
-own way: chat in a dialog, the composer in a line under it. A failed image
+`useChatImageUpload` in `imports/client/hooks/`, which uploads through
+`uploadChatImage` in `imports/client/uploadChatImage.ts` (as the board's own
+images do, see Images), and each shows a failure its own way: chat in a dialog, the composer in a line under it. A failed image
 doesn't count as something to send, so a comment that is only a failed image
 can't be sent. When the server has no S3 image bucket, the image isn't
 uploaded and the composer says "Images can't be added here: this server has
@@ -558,8 +563,8 @@ browser's own. Each tool's tooltip shows its key.
 | / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
 | Delete or Backspace | Delete the selection, leaving out anything locked (see Locks) | edit |
 | Ctrl+C (Cmd+C) | Copy the selection (see Copy, paste and duplicate), unless some text on the page is selected | edit |
-| Ctrl+V (Cmd+V) | Paste a copy from a board, or text, at the pointer or the middle of the screen | edit |
-| Ctrl+D (Cmd+D) | Duplicate the selection, only with the Select tool; with nothing selected or another tool it's the browser's own | edit |
+| Ctrl+V (Cmd+V) | Paste a copy from a board, text or an image, at the pointer or the middle of the screen | edit |
+| Ctrl+D (Cmd+D) | Duplicate the selection and select the copy, only with the Select tool; with nothing selected or another tool it's the browser's own | edit |
 | Ctrl+L (Cmd+L) | Lock the selection, or unlock it if it's all locked (see Locks), only with the Select tool; with nothing selected or another tool it's the browser's own | edit |
 | Arrow keys | Move the selection 5 units, 20 with Shift; it joins or leaves a frame as a drop would | edit |
 | Enter | Start editing a focused sticky note or text box, unless someone else is typing in it | edit |
@@ -589,7 +594,7 @@ it was on, if any.
 
 ### Lines from handles
 
-Each card, note, text box and frame has a handle on each side. Dragging from
+Each card, note, text box, frame and image has a handle on each side. Dragging from
 one draws a line to wherever it's let go. Clicking one instead starts a line
 that ends at the next handle clicked; until then the handle is ringed in the
 theme's primary colour and a dashed line runs from it to the pointer, so it's
@@ -602,19 +607,21 @@ but not started from it.
 Ctrl+C (Cmd+C) copies the selection and Ctrl+V (Cmd+V) pastes it, on the
 same board or another one, for anyone who can edit. A copy takes:
 
-- the selected notes, text boxes, frames and ink, with everything inside a
-  selected frame (folded away or not) where it is in the frame, and every
-  segment of a selected ink stroke;
+- the selected notes, text boxes, frames, images and ink, with everything
+  inside a selected frame (folded away or not) where it is in the frame, and
+  every segment of a selected ink stroke;
 - each hand-drawn line whose ends are both in the copy, or free, as long as
   one end is in it or the line itself is selected, with its style and label;
 - the free ends those lines use, and no others.
 
 Puzzle cards are left out, since a puzzle has one card, along with any line
 to one; when cards are all that's selected, copying says "Puzzle cards can't
-be copied" and leaves the clipboard alone. Feeder arrows, comments, locks
-and who made what aren't copied either. A round's frame is copied as a
-plain frame with the round's name as its label, and a folded frame stays
-folded.
+be copied" and leaves the clipboard alone, and when there's more besides, a
+copy or duplicate takes the rest and says "Puzzle cards were left out".
+Feeder arrows, comments, locks and who made what aren't copied either. A
+round's frame is copied as a plain frame with the round's name as its label,
+and a folded frame stays folded. An image is copied by its address, with
+both its sizes, so its paste shows the same upload rather than a new one.
 
 A paste puts everything back with fresh ids, so it can go onto the board it
 came from or any other, as often as wanted. It keeps its layout, centred on
@@ -630,8 +637,17 @@ Pasted text that isn't a copy from a board becomes a sticky note with that
 text, trimmed and cut to the 2000 characters a note can hold; a single web
 address (http or https, nothing else with it) becomes a text box with the
 link instead. Both land as a paste does. An image on the clipboard is
-ignored. A copy from a board this version can't read says "That copy can't
-be pasted here".
+uploaded and added as an image node at the pointer or the middle of the
+screen (see Images) when there's no text with it, or the copied HTML is
+nothing but the image, as a browser's Copy Image gives. A copy from a
+spreadsheet or word processor, which brings a picture of itself along with
+its text, pastes as text, as before. A copy from a board
+this version can't read says "That copy can't be pasted here".
+
+Once a paste or duplicate is on the board, what it made is selected in
+place of what was selected before: the nodes at the top of it (a pasted
+frame carries what's in it) and its lines. So pressing Ctrl+D again copies
+the copy, and a row of copies fans out 24 units further each time.
 
 Ctrl+D (Cmd+D), or Duplicate under the selection (shown when nothing
 selected is a card, titled "Duplicate what's selected, a little below and
@@ -652,9 +668,73 @@ rather than in its frame and its parent, if any, given as another node in
 the copy. Nothing else goes on the clipboard, so pasting a copy into another
 app shows the JSON. A paste that starts `jolly-roger-whiteboard/` but isn't
 a version 1 copy that holds together (every parent a frame in the copy, no
-loops, every line between two nodes in it, values within the server's
-limits) is refused. `copySelection`, `readClip`, `clipFromText` and
+loops, every line between two nodes in it, an image node with its image and
+size and nothing else with an image, values within the server's limits) is
+refused. `copySelection`, `readClip`, `clipFromText` and
 `pasteClip` in `imports/lib/whiteboard/clipboard.ts` do the work.
+
+### Images
+
+An image node shows a picture uploaded to the server's S3 image bucket, the
+one chat images go to. There are three ways to add one, all for people who
+can edit:
+
+- the Image tool on the toolbar (titled "Image: pick a file to add in the
+  middle of the view, or paste or drop one on the board"), which opens a
+  file picker (images only, one or several) and puts each image in the
+  middle of the view;
+- pasting an image with Ctrl+V (Cmd+V) while the board has focus, which puts
+  it at the pointer, or the middle of the screen when the pointer isn't on
+  the board;
+- dropping image files on the board, which puts them where they're dropped.
+  A file dropped into the comment composer is left to it (it goes in the
+  comment, not on the board), and one dropped on a panel over the board,
+  such as History or Not on the board, adds nothing.
+
+Several images at once go 24 units right and down from each other. Each is
+read for its size in pixels first; a file the browser can't show as an
+image says "That file isn't an image the board can show" in the usual
+"Couldn't save" alert. While it uploads a dashed grey placeholder with a
+spinner sits where it will land, at its own size in pixels but no wider than
+480 units, keeping its shape. The placeholder is only on this screen and
+isn't saved. The upload goes through `createChatImageUpload` for the board's
+backing puzzle and a POST to the bucket (`uploadChatImage` in
+`imports/client/uploadChatImage.ts`); once it's done, the node is saved
+through `upsertNodes` in the frame under its middle, as one step for Undo.
+A failed upload takes the placeholder away and shows why in the "Couldn't
+save" alert, and nothing is saved. Images already on the board (as this
+client has them) and those still uploading count towards the board's cap
+on images, and files past it aren't uploaded at all: the alert says "This
+board can't take any more images", as the server would.
+
+When the server has no image bucket the Image tool is disabled, titled
+"Images can't be added here: this server has nowhere to store them.", and a
+pasted or dropped image shows the same words as a notice and uploads nothing.
+Dropping a file on a board that can't be edited does nothing, rather than
+leaving the page to show the file.
+
+An image draws at the node's size (`ImageNode`), and resizing it from a
+corner keeps its shape. It has handles for lines, takes comments ("an
+image"), can be locked, and lists who added it, like a note, but has no
+colour to pick. Zoomed right out it's a grey box with a picture icon. Copy,
+paste and duplicate carry images (see Copy, paste and duplicate), and Undo
+puts a deleted one back with the same upload.
+
+On the server, `upsertNodes` takes a new image node only with an `image`
+of `{ url, width, height }` (its size in pixels) and a width and height for
+the node. The address must be an object in the configured bucket named the
+way `createChatImageUpload` names chat images, by a hunt's id, a puzzle's id
+and an upload's id (`https://s3.<region>.amazonaws.com/<bucket>/<hunt>/<puzzle>/<upload>`).
+The hunt can be any hunt, so a copy from another hunt's board pastes with
+its images; anything else, a `data:` address included, or any image at all when there's
+no bucket, is refused with "That image isn't one we stored". Once the node
+is made its `image` never changes: an update that sends a different one is
+refused with "An image can't be changed", and one sent on any other kind of
+node with "Only image nodes have an image". A board takes at most
+`MAX_IMAGES_PER_BOARD` (100) images, which count towards its node cap too.
+Deleting an image node leaves the file in the bucket, as deleting a chat
+message does; purging a hunt removes everything under its id, so an image
+pasted from it into another hunt's board shows nothing after that.
 
 ### Not on the board
 
@@ -714,10 +794,10 @@ It covers the viewer's own edits this visit, up to the last 100:
   where it was and leaves it marked as moved by hand, as any move does;
 - text, frame labels, line labels and colours, which go back to what they
   were, or to none;
-- creating something (a note, text, frame, line or ink stroke), which undo
-  deletes, and a paste or duplicate, which undo deletes as a whole;
-- deleting something made on the board (a note, text, frame, ink stroke,
-  line or a line's free end), which undo puts back with the same id and
+- creating something (a note, text, frame, image, line or ink stroke), which
+  undo deletes, and a paste or duplicate, which undo deletes as a whole;
+- deleting something made on the board (a note, text, frame, image, ink
+  stroke, line or a line's free end), which undo puts back with the same id and
   fields, along with the lines that went with it and whatever was in a
   deleted frame, back in it;
 - deleting a card, a round's frame or a feeder arrow, which only hid it, so
@@ -795,8 +875,8 @@ who locked this, or an operator, can unlock it", and Ctrl+L says the same in
 a notice. A disabled button gets no hover in Bootstrap, so the title sits
 on a wrapper around it as well.
 
-A locked node shows a padlock: on the top-right corner of a card, note or
-text box, sitting over its edge so it isn't confused with a locked puzzle's
+A locked node shows a padlock: on the top-right corner of a card, note, text
+box or image, sitting over its edge so it isn't confused with a locked puzzle's
 padlock inside a card, and in the header of a frame. A locked ink stroke
 shows one, on the corner of whichever of its segments reaches furthest
 right (`InkNode`). Zoomed right out, a locked frame's label carries a small
@@ -1090,7 +1170,7 @@ isn't being restored with it), or that would make a loop, goes to the top
 level where the version had it on screen. A line whose other end isn't on the
 board isn't restored, nor is its free end, and neither is a card for a
 deleted puzzle or a line to one. Putting things back that would
-take the board past its node or line limit is refused with "This board is
+take the board past its node, line or image limit is refused with "This board is
 full".
 
 It's an edit, not a rewrite: it records a version of kind `edits` through
@@ -1609,7 +1689,8 @@ There is no flag for the edit policy: `members` is already the off position.
   the hidden puzzle in `puzzle`, the optional `editPolicy` and `editors`, and
   the optional `versionsPrunedBefore` and `lastRewrittenAt` from history.
 - `WhiteboardNodes` (`jr_whiteboard_nodes`): cards, frames, sticky notes, text,
-  ink segments and the free ends of lines. A node inside a frame has `parent`
+  ink segments, images and the free ends of lines. An image node has `image`
+  (`url`, and `width` and `height` in pixels), which never changes. A node inside a frame has `parent`
   set and a position relative to it. `hidden` marks a card or seeded frame
   someone removed, so placement doesn't put it back, and `hiddenWithPuzzle`
   one hidden because its puzzle was deleted; `manual` marks a node
@@ -1639,7 +1720,7 @@ There is no flag for the edit policy: `members` is already the off position.
   the root's id.
 
 The server enforces the limits in `imports/lib/whiteboard/limits.ts` (batch
-sizes, nodes and lines per board, text lengths, ink points, coordinate range,
+sizes, nodes, images and lines per board, text lengths, ink points, coordinate range,
 frame depth, the edit list, history's intervals and caps), and the client
 keeps to the ones it can. Purging a hunt removes all six collections, and
 merging users carries `createdBy`, `contributors`, `lockedBy`, the `editors`

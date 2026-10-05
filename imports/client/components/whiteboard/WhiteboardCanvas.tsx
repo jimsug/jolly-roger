@@ -11,6 +11,7 @@ import { faDiagramProject } from "@fortawesome/free-solid-svg-icons/faDiagramPro
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faEyeSlash } from "@fortawesome/free-solid-svg-icons/faEyeSlash";
 import { faFont } from "@fortawesome/free-solid-svg-icons/faFont";
+import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
 import { faLockOpen } from "@fortawesome/free-solid-svg-icons/faLockOpen";
@@ -64,6 +65,7 @@ import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
 import FormSelect from "react-bootstrap/FormSelect";
 import Modal from "react-bootstrap/Modal";
+import Spinner from "react-bootstrap/Spinner";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import styled, { css, useTheme } from "styled-components";
@@ -109,7 +111,11 @@ import {
   pasteClip,
   readClip,
 } from "../../../lib/whiteboard/clipboard";
-import { collapsedAncestors } from "../../../lib/whiteboard/collapse";
+import {
+  collapsedAncestors,
+  foldEnds,
+  foldedInto,
+} from "../../../lib/whiteboard/collapse";
 import {
   commentPosition,
   isUnread,
@@ -156,6 +162,7 @@ import {
 import {
   MAX_BATCH,
   MAX_FRAME_DEPTH,
+  MAX_IMAGES_PER_BOARD,
   MAX_LIVE_DRAG_NODES,
   MAX_LIVE_SELECTION,
 } from "../../../lib/whiteboard/limits";
@@ -200,6 +207,7 @@ import {
   useWhiteboardShowResolvedComments,
   useWhiteboardViewport,
 } from "../../hooks/persisted-state";
+import useChatImagesEnabled from "../../hooks/useChatImagesEnabled";
 import useKeyboardInset from "../../hooks/useKeyboardInset";
 import usePuzzleViewers from "../../hooks/usePuzzleViewers";
 import useRoundStates from "../../hooks/useRoundStates";
@@ -219,6 +227,7 @@ import useWhiteboardSync, {
   selectionUnits,
 } from "../../hooks/useWhiteboardSync";
 import useWhiteboardUndo from "../../hooks/useWhiteboardUndo";
+import uploadChatImage, { chatImageFailureReason } from "../../uploadChatImage";
 import WhiteboardPresence from "../../WhiteboardPresence";
 import CopyToClipboardButton from "../CopyToClipboardButton";
 import ArrangeIcon from "./ArrangeIcon";
@@ -243,6 +252,7 @@ import FrameNode from "./FrameNode";
 import { boxOf } from "./floatingEdgeParams";
 import type { VersionPreview } from "./HistoryPanel";
 import HistoryPanel, { loadVersion, versionMoment } from "./HistoryPanel";
+import ImageNode from "./ImageNode";
 import InkNode from "./InkNode";
 import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
 import LineStyleIcon from "./LineStyleIcon";
@@ -269,6 +279,7 @@ const nodeTypes = {
   text: TextNode,
   ink: InkNode,
   point: PointNode,
+  image: ImageNode,
 };
 const edgeTypes = { whiteboard: WhiteboardEdge };
 
@@ -399,8 +410,60 @@ const isTyping = (target: EventTarget | null) =>
 const inDialog = (target: EventTarget | null) =>
   target instanceof Element && !!target.closest(".modal");
 
-// How far a duplicate lands from what it copies, right and down.
+// How far a duplicate lands from what it copies, right and down. Several
+// images added at once are spread out by the same.
 const DUPLICATE_OFFSET = { x: 24, y: 24 };
+
+// The widest a new image is placed, in board units. Smaller ones go in at
+// their own size in pixels.
+const MAX_IMAGE_PLACE_WIDTH = 480;
+
+// An image's size in pixels, or undefined if the browser can't show it.
+function naturalSize(
+  file: File,
+): Promise<{ width: number; height: number } | undefined> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    const done = (size: { width: number; height: number } | undefined) => {
+      URL.revokeObjectURL(url);
+      resolve(size);
+    };
+    img.addEventListener("load", () =>
+      done(
+        img.naturalWidth > 0 && img.naturalHeight > 0
+          ? { width: img.naturalWidth, height: img.naturalHeight }
+          : undefined,
+      ),
+    );
+    img.addEventListener("error", () => done(undefined));
+    img.src = url;
+  });
+}
+
+const imageFiles = (files: FileList | null | undefined) =>
+  [...(files ?? [])].filter((file) => file.type.startsWith("image/"));
+
+// Whether copied HTML is nothing but images, as a browser's Copy Image gives,
+// rather than text that brings a picture of itself along, as office apps do.
+function htmlIsOnlyImages(html: string): boolean {
+  if (!html) return false;
+  const { body } = new DOMParser().parseFromString(html, "text/html");
+  return !!body.querySelector("img") && !body.textContent.trim();
+}
+
+// Whether something is on the board itself, rather than a panel over it.
+const onTheBoard = (target: EventTarget | null) =>
+  target instanceof Element && !!target.closest(".react-flow__renderer");
+
+// An image on its way up, where it will land on the board.
+interface ImageUpload {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 // Marks what a preview has differently from the board as it is now.
 const CHANGED_CLASS = "jr-changed";
@@ -663,6 +726,19 @@ const PlaceGhost = styled.div<{ $tool: PlaceTool }>`
   border-radius: ${({ $tool }) => ($tool === "frame" ? "10px" : "2px")};
   background: ${({ $tool }) =>
     $tool === "sticky" ? `${colors.fill.yellow}99` : "transparent"};
+`;
+
+const UploadPlaceholder = styled.output`
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  border: 2px dashed ${({ theme }) => theme.colors.border};
+  background: ${colors.fill.gray}99;
+  color: ${({ theme }) => theme.colors.textSecondary};
 `;
 
 const LocalStroke = styled.svg`
@@ -4233,6 +4309,54 @@ const CanvasInner = ({
       ),
     [showNotice, t],
   );
+  const cardsLeftOut = useCallback(
+    () =>
+      showNotice(
+        t("whiteboard.clipboard.cardsLeftOut", "Puzzle cards were left out"),
+      ),
+    [showNotice, t],
+  );
+
+  // What a paste or duplicate made, to select once it's on the board: the
+  // nodes at the top of it (a frame carries what's in it) and its lines.
+  const selectOnArrival = useRef<
+    { nodes: Set<string>; edges: Set<string>; until: number } | undefined
+  >(undefined);
+  useEffect(() => {
+    const wanted = selectOnArrival.current;
+    if (!wanted) return;
+    if (Date.now() > wanted.until) {
+      selectOnArrival.current = undefined;
+      return;
+    }
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const edgeIds = new Set(edges.map((e) => e.id));
+    if (
+      ![...wanted.nodes].every((id) => nodeIds.has(id)) ||
+      ![...wanted.edges].every((id) => edgeIds.has(id))
+    ) {
+      return;
+    }
+    selectOnArrival.current = undefined;
+    const { nodeLookup, edgeLookup, triggerNodeChanges, triggerEdgeChanges } =
+      storeApi.getState();
+    const nodeChanges: NodeChange<WhiteboardFlowNode>[] = [];
+    nodeLookup.forEach((node) => {
+      const selected = wanted.nodes.has(node.id);
+      if (!!node.selected !== selected) {
+        nodeChanges.push({ type: "select", id: node.id, selected });
+      }
+    });
+    const edgeChanges: EdgeChange<WhiteboardFlowEdge>[] = [];
+    edgeLookup.forEach((edge) => {
+      const selected = wanted.edges.has(edge.id);
+      if (!!edge.selected !== selected) {
+        edgeChanges.push({ type: "select", id: edge.id, selected });
+      }
+    });
+    triggerNodeChanges(nodeChanges);
+    triggerEdgeChanges(edgeChanges);
+  }, [nodes, edges, storeApi]);
 
   // Puts a copy on the board moved by offset, with fresh ids, as one edit to
   // undo. Whatever is at the top of it goes into the frame a drop there
@@ -4255,11 +4379,42 @@ const CanvasInner = ({
       };
       const pasted = pasteClip(clip, offset, placeAt, () => Random.id());
       if (pasted.nodes.length === 0) return;
+      const pastedIds = new Set(pasted.nodes.map((n) => n._id));
+      // A line inside a pasted frame that's collapsed isn't drawn, so isn't
+      // waited for.
+      const folded = foldedInto(
+        pasted.nodes.map((n) => ({
+          _id: n._id,
+          parent: n.parent ?? undefined,
+          collapsed: n.collapsed,
+        })),
+        new Set(),
+      );
+      const wanted = {
+        nodes: new Set(
+          pasted.nodes
+            .filter(
+              (n) =>
+                n.type !== "point" && !(n.parent && pastedIds.has(n.parent)),
+            )
+            .map((n) => n._id),
+        ),
+        edges: new Set(
+          pasted.edges
+            .filter((e) => foldEnds(e.source, e.target, folded) !== undefined)
+            .map((e) => e._id),
+        ),
+        until: Date.now() + 10_000,
+      };
+      selectOnArrival.current = wanted;
       const write = { upsertNodes: pasted.nodes, upsertEdges: pasted.edges };
       const settled = recordEdit(write);
       sendWrite(boardId, write, (error) => {
         settled(error);
         if (!error) return;
+        if (selectOnArrival.current === wanted) {
+          selectOnArrival.current = undefined;
+        }
         reportRefusal(error);
         chunks(
           pasted.nodes.map((n) => n._id),
@@ -4299,13 +4454,195 @@ const CanvasInner = ({
       if (cards > 0) cardsNotCopied();
       return;
     }
+    if (cards > 0) cardsLeftOut();
     pasteCopy(clip, DUPLICATE_OFFSET);
-  }, [copyOfSelection, cardsNotCopied, pasteCopy]);
+  }, [copyOfSelection, cardsNotCopied, cardsLeftOut, pasteCopy]);
+
+  // Images go to the bucket chat images go to, uploaded for the board's
+  // backing puzzle, and can't be added when the server has none.
+  const imagesEnabled = useChatImagesEnabled();
+  const imagesOff = t(
+    "whiteboard.comments.imagesOff",
+    "Images can't be added here: this server has nowhere to store them.",
+  );
+  const showSaveError = useCallback(
+    (reason: string) => setSaveError({ id: Date.now(), reason }),
+    [],
+  );
+  // Images being uploaded, drawn where they'll land. They aren't saved: the
+  // node is made once the upload is done.
+  const [uploads, setUploads] = useState<ImageUpload[]>([]);
+  // How many images are on their way up, which count towards the board's cap
+  // from the moment they're chosen.
+  const imagesUnderway = useRef(0);
+
+  // Uploads image files and puts each on the board centred on a point (the
+  // next a little down and to the right), at its size in pixels but no wider
+  // than MAX_IMAGE_PLACE_WIDTH, into the frame under its middle. Files that
+  // would take the board past its cap on images aren't uploaded.
+  const addImages = useCallback(
+    (files: File[], centre: XYPosition) => {
+      if (readOnly || files.length === 0) return;
+      if (!imagesEnabled) {
+        showNotice(imagesOff);
+        return;
+      }
+      const room =
+        MAX_IMAGES_PER_BOARD -
+        WhiteboardNodes.find({ board: boardId, type: "image" }).count() -
+        imagesUnderway.current;
+      if (files.length > room) {
+        showSaveError(
+          t("whiteboard.image.full", "This board can't take any more images"),
+        );
+      }
+      const taken = files.slice(0, Math.max(0, room));
+      imagesUnderway.current += taken.length;
+      taken.forEach((file, i) => {
+        const at = {
+          x: centre.x + i * DUPLICATE_OFFSET.x,
+          y: centre.y + i * DUPLICATE_OFFSET.y,
+        };
+        const id = Random.id();
+        let settled = false;
+        const finished = () => {
+          if (settled) return;
+          settled = true;
+          imagesUnderway.current -= 1;
+          setUploads((current) => current.filter((u) => u.id !== id));
+        };
+        naturalSize(file)
+          .then((natural) => {
+            if (!natural) {
+              finished();
+              showSaveError(
+                t(
+                  "whiteboard.image.unreadable",
+                  "That file isn't an image the board can show",
+                ),
+              );
+              return;
+            }
+            const scale = Math.min(1, MAX_IMAGE_PLACE_WIDTH / natural.width);
+            const width = Math.max(1, Math.round(natural.width * scale));
+            const height = Math.max(1, Math.round(natural.height * scale));
+            const rect = {
+              x: Math.round(at.x - width / 2),
+              y: Math.round(at.y - height / 2),
+              width,
+              height,
+            };
+            setUploads((current) => [...current, { id, ...rect }]);
+            uploadChatImage(
+              puzzleId,
+              file,
+              (url) => {
+                finished();
+                const { parent, position } = placementFor(id, rect, new Set());
+                updateNodes([
+                  {
+                    _id: id,
+                    type: "image",
+                    position: {
+                      x: Math.round(position.x),
+                      y: Math.round(position.y),
+                    },
+                    width,
+                    height,
+                    parent: parent ?? null,
+                    image: { url, ...natural },
+                  },
+                ]);
+              },
+              (failure) => {
+                finished();
+                const reason = chatImageFailureReason(failure);
+                if (reason === undefined) {
+                  showNotice(imagesOff);
+                } else {
+                  showSaveError(reason);
+                }
+              },
+            );
+          })
+          .catch((error: unknown) => {
+            finished();
+            showSaveError(
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+      });
+    },
+    [
+      readOnly,
+      imagesEnabled,
+      imagesOff,
+      showNotice,
+      showSaveError,
+      t,
+      boardId,
+      puzzleId,
+      placementFor,
+      updateNodes,
+    ],
+  );
+
+  // The Image tool picks files to put in the middle of the view.
+  const imageInput = useRef<HTMLInputElement>(null);
+  const chooseImage = useCallback(() => imageInput.current?.click(), []);
+  const onImageChosen = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = imageFiles(event.target.files);
+      event.target.value = "";
+      addImages(files, paneCenter());
+    },
+    [addImages, paneCenter],
+  );
+
+  // Image files dropped on the board land where they're dropped. A drop into
+  // something being typed in is left to it (the comment composer takes
+  // images of its own), and one on a panel over the board adds nothing. Any
+  // other file dropped here is kept from the browser, which would otherwise
+  // leave the page to show it.
+  const onDragOver = useCallback(
+    (event: React.DragEvent) => {
+      if (
+        event.defaultPrevented ||
+        !event.dataTransfer.types.includes("Files") ||
+        isTyping(event.target)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect =
+        !readOnly && onTheBoard(event.target) ? "copy" : "none";
+    },
+    [readOnly],
+  );
+  const onDrop = useCallback(
+    (event: React.DragEvent) => {
+      if (
+        event.defaultPrevented ||
+        !event.dataTransfer.types.includes("Files")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (isTyping(event.target) || !onTheBoard(event.target)) return;
+      addImages(
+        imageFiles(event.dataTransfer.files),
+        flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+      );
+    },
+    [addImages, flow],
+  );
 
   // Ctrl+C (Cmd+C) copies the selection, and Ctrl+V (Cmd+V) pastes, while
   // the board has focus, nothing is being typed and no text is selected.
-  // Text that isn't a copy from a board becomes a sticky note, or a text box
-  // if it's a web address. Only for those who can edit.
+  // Images on the clipboard, with no text beside them (or only an image's
+  // HTML), are uploaded and added at the pointer (see addImages). Text that
+  // isn't a copy from a board becomes a sticky note, or a text box if it's a
+  // web address. Only for those who can edit.
   useEffect(() => {
     const forTheBoard = (event: ClipboardEvent) =>
       !readOnly &&
@@ -4321,6 +4658,7 @@ const CanvasInner = ({
         if (cards > 0) cardsNotCopied();
         return;
       }
+      if (cards > 0) cardsLeftOut();
       event.preventDefault();
       event.clipboardData.setData("text/plain", clipText(clip));
     };
@@ -4342,6 +4680,16 @@ const CanvasInner = ({
         pasteCopy(clip, offsetToCentre(clip, pasteCentre()));
         return;
       }
+      const images = imageFiles(event.clipboardData.files);
+      if (
+        images.length > 0 &&
+        (!text.trim() ||
+          htmlIsOnlyImages(event.clipboardData.getData("text/html")))
+      ) {
+        event.preventDefault();
+        addImages(images, pasteCentre());
+        return;
+      }
       const clip = clipFromText(text, DEFAULT_SIZES);
       if (!clip) return;
       event.preventDefault();
@@ -4357,8 +4705,10 @@ const CanvasInner = ({
     readOnly,
     copyOfSelection,
     cardsNotCopied,
+    cardsLeftOut,
     pasteCopy,
     pasteCentre,
+    addImages,
     showNotice,
     t,
   ]);
@@ -5226,6 +5576,8 @@ const CanvasInner = ({
                   onPointerLeave={onPointerLeave}
                   onMouseDownCapture={onTapFollowUp}
                   onClickCapture={onTapFollowUp}
+                  onDragOver={onDragOver}
+                  onDrop={onDrop}
                 >
                   <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
                     nodes={shownNodes}
@@ -5371,6 +5723,27 @@ const CanvasInner = ({
                         <LocalStroke>
                           <AttachOutline id={attachPreview} />
                         </LocalStroke>
+                      </ViewportPortal>
+                    )}
+                    {uploads.length > 0 && (
+                      <ViewportPortal>
+                        {uploads.map((upload) => (
+                          <UploadPlaceholder
+                            key={upload.id}
+                            className="jr-image-uploading"
+                            aria-label={t(
+                              "whiteboard.image.uploading",
+                              "Uploading image",
+                            )}
+                            style={{
+                              transform: `translate(${upload.x}px, ${upload.y}px)`,
+                              width: upload.width,
+                              height: upload.height,
+                            }}
+                          >
+                            <Spinner animation="border" />
+                          </UploadPlaceholder>
+                        ))}
                       </ViewportPortal>
                     )}
                     {isPlaceTool(tool) && placeGhost && (
@@ -5578,6 +5951,42 @@ const CanvasInner = ({
                               <FontAwesomeIcon icon={faObjectGroup} />
                             </ToolButton>
                           </ButtonGroup>
+                          {/* A disabled button gets no hover, so the reason
+                            goes on a wrapper */}
+                          <span
+                            title={imagesEnabled ? undefined : imagesOff}
+                            className="d-inline-block"
+                          >
+                            <Button
+                              size="sm"
+                              variant="outline-secondary"
+                              onClick={chooseImage}
+                              disabled={!imagesEnabled}
+                              title={
+                                imagesEnabled
+                                  ? t(
+                                      "whiteboard.toolbar.imageHelp",
+                                      "Image: pick a file to add in the middle of the view, or paste or drop one on the board",
+                                    )
+                                  : imagesOff
+                              }
+                              aria-label={t(
+                                "whiteboard.toolbar.image",
+                                "Image",
+                              )}
+                            >
+                              <FontAwesomeIcon icon={faImage} />
+                            </Button>
+                          </span>
+                          <input
+                            ref={imageInput}
+                            className="jr-image-tool-input"
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            hidden
+                            onChange={onImageChosen}
+                          />
                           <ButtonGroup size="sm">
                             <Button
                               variant="outline-secondary"

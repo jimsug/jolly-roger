@@ -28,6 +28,9 @@ export type WhiteboardNodeInput = {
   points?: [number, number, number][];
   strokeWidth?: WhiteboardStrokeWidth;
   stroke?: string;
+  // New image nodes only: an upload to the image bucket and its size in
+  // pixels.
+  image?: { url: string; width: number; height: number };
 };
 
 export default new TypedMethod<

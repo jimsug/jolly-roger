@@ -25,6 +25,7 @@ const NodeInputPattern = {
   points: Match.Optional([InkPointPattern]),
   strokeWidth: Match.Optional(Match.OneOf(...WhiteboardStrokeWidths)),
   stroke: Match.Optional(String),
+  image: Match.Optional({ url: String, width: Number, height: Number }),
 };
 
 defineMethod(upsertWhiteboardNodes, {

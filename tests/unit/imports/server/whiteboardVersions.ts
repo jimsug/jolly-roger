@@ -13,6 +13,7 @@ import Hunts from "../../../../imports/lib/models/Hunts";
 import MergeOperations from "../../../../imports/lib/models/MergeOperations";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
+import Settings from "../../../../imports/lib/models/Settings";
 import WhiteboardEdges from "../../../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../../../imports/lib/models/WhiteboardNodes";
 import Whiteboards from "../../../../imports/lib/models/Whiteboards";
@@ -391,6 +392,48 @@ describe("whiteboard versions", function () {
       assert.ok(await WhiteboardNodes.findOneAsync(deleted));
       assert.notOk((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
       assert.ok((await Whiteboards.findOneAsync(boardId))?.lastRewrittenAt);
+    });
+
+    it("keeps an image node in a version and puts it back", async function () {
+      await Settings.insertAsync({
+        name: "s3.image_bucket",
+        value: { bucketName: "jr-test-images", bucketRegion: "us-east-1" },
+        createdBy: operator,
+      });
+      const backing = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+      const _id = Random.id();
+      const image = {
+        url: `https://s3.us-east-1.amazonaws.com/jr-test-images/${huntId}/${backing}/${Random.id()}`,
+        width: 640,
+        height: 480,
+      };
+      await upsertNodes(member, boardId, [
+        {
+          _id,
+          type: "image",
+          position: { x: 40, y: 60 },
+          width: 320,
+          height: 240,
+          image,
+        },
+      ]);
+      await nextWindow();
+      await deleteNodes(member, boardId, [_id]);
+      const version = await newest();
+      const payload = await payloadOf(version);
+      assert.deepEqual(payload.nodes.find((n) => n._id === _id)?.image, image);
+
+      await asUser(member, () =>
+        restoreWhiteboardVersion.callPromise({
+          boardId,
+          versionId: version._id,
+        }),
+      );
+      const restored = (await WhiteboardNodes.findOneAsync(_id))!;
+      assert.equal(restored.type, "image");
+      assert.deepEqual(restored.image, image);
+      assert.equal(restored.width, 320);
+      assert.equal(restored.height, 240);
     });
 
     it("doesn't put back a deleted puzzle's card, but moves it with the version", async function () {

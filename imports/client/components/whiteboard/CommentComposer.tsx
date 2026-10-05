@@ -1,4 +1,4 @@
-import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { useTracker } from "meteor/react-meteor-data";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Button from "react-bootstrap/Button";
 import { useTranslation } from "react-i18next";
@@ -11,10 +11,11 @@ import {
   hasLoadingImage,
   hasSendableContent,
 } from "../../chatEditorContent";
-import EnabledChatImage from "../../EnabledChatImage";
-import type { ChatImageUploadFailure } from "../../hooks/useChatImageUpload";
+import useChatImagesEnabled from "../../hooks/useChatImagesEnabled";
 import useChatImageUpload from "../../hooks/useChatImageUpload";
 import useMentionableUsers from "../../hooks/useMentionableUsers";
+import type { ChatImageUploadFailure } from "../../uploadChatImage";
+import { chatImageFailureReason } from "../../uploadChatImage";
 import type { FancyEditorHandle } from "../FancyEditor";
 import FancyEditor from "../FancyEditor";
 
@@ -115,11 +116,7 @@ const CommentComposer = ({
   }, [editorKey]);
   const rowRef = useRef<HTMLDivElement>(null);
 
-  useSubscribe("enabledChatImage");
-  const imagesEnabled = useTracker(
-    () => EnabledChatImage.findOne("enabledChatImage")?.enabled ?? false,
-    [],
-  );
+  const imagesEnabled = useChatImagesEnabled();
   const [imageNote, setImageNote] = useState<string>();
   const imagesOff = t(
     "whiteboard.comments.imagesOff",
@@ -127,18 +124,10 @@ const CommentComposer = ({
   );
   const onUploadFailed = useCallback(
     (failure: ChatImageUploadFailure) => {
-      let reason: string;
-      if (failure.stage === "request") {
-        if (!failure.error) {
-          setImageNote(imagesOff);
-          return;
-        }
-        reason = failure.error.reason ?? failure.error.message;
-      } else {
-        reason =
-          failure.error instanceof Error
-            ? failure.error.message
-            : String(failure.error);
+      const reason = chatImageFailureReason(failure);
+      if (reason === undefined) {
+        setImageNote(imagesOff);
+        return;
       }
       setImageNote(
         t(

@@ -12,6 +12,10 @@ export const MIN_SIZES = {
   sticky: { width: 80, height: 60 },
   text: { width: 60, height: 32 },
   frame: { width: CARD_HEIGHT, height: CARD_HEIGHT },
+  // Kept small: an image resizes with its shape kept, so a larger minimum
+  // would jump a long, thin one (placed at no more than 480 wide) to many
+  // times its size on the first drag.
+  image: { width: 8, height: 8 },
 };
 
 const ToolbarRow = styled.div`
@@ -20,9 +24,10 @@ const ToolbarRow = styled.div`
   gap: 6px;
 `;
 
-// What stickies, text boxes and frames all have: handles for lines and, while
-// the board can be edited and the node isn't locked, resize handles and a
-// colour picker, with anything else the node offers beside it.
+// What stickies, text boxes, frames and images all have: handles for lines
+// and, while the board can be edited and the node isn't locked, resize
+// handles and a colour picker (for those given a palette), with anything else
+// the node offers beside it.
 const NodeChrome = ({
   id,
   kind,
@@ -31,17 +36,21 @@ const NodeChrome = ({
   palette,
   fallback,
   resizable = true,
+  keepAspectRatio = false,
   locked = false,
   tools,
 }: {
   id: string;
   kind: keyof typeof MIN_SIZES;
   selected: boolean;
-  color: WhiteboardColor | undefined;
-  palette: Record<WhiteboardColor, string | undefined>;
+  color?: WhiteboardColor | undefined;
+  // Left out for a node with no colour of its own to pick.
+  palette?: Record<WhiteboardColor, string | undefined>;
   fallback?: string;
   // Off for a collapsed frame, whose size on screen isn't its own.
   resizable?: boolean;
+  // Resizing keeps the node's shape, as an image's does.
+  keepAspectRatio?: boolean;
   locked?: boolean;
   tools?: React.ReactNode;
 }) => {
@@ -51,6 +60,7 @@ const NodeChrome = ({
     [id, updateNodes],
   );
   const onResizeEnd = useCallback(() => persistResize(id), [id, persistResize]);
+  const showToolbar = (!locked && !!palette) || !!tools;
   return (
     <>
       {!readOnly && (
@@ -60,13 +70,14 @@ const NodeChrome = ({
               isVisible={selected}
               minWidth={MIN_SIZES[kind].width}
               minHeight={MIN_SIZES[kind].height}
+              keepAspectRatio={keepAspectRatio}
               onResizeEnd={onResizeEnd}
             />
           )}
-          {(!locked || tools) && (
+          {showToolbar && (
             <NodeToolbar position={Position.Top}>
               <ToolbarRow>
-                {!locked && (
+                {!locked && palette && (
                   <ColorPicker
                     value={color}
                     palette={palette}

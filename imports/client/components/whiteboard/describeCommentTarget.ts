@@ -65,6 +65,8 @@ export default function describeCommentTarget(
         snippet(node.text, t) ??
         t("whiteboard.commentTarget.text", "a text box")
       );
+    case "image":
+      return t("whiteboard.commentTarget.image", "an image");
     case "ink":
     case "point":
       // The server doesn't let comments go on these.

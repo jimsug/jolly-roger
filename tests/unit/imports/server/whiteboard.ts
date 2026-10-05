@@ -18,6 +18,7 @@ import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import PuzzleNotifications from "../../../../imports/lib/models/PuzzleNotifications";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
 import Servers from "../../../../imports/lib/models/Servers";
+import Settings from "../../../../imports/lib/models/Settings";
 import Tags from "../../../../imports/lib/models/Tags";
 import WhiteboardEdges from "../../../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../../../imports/lib/models/WhiteboardNodes";
@@ -34,6 +35,7 @@ import {
 import {
   MAX_BATCH,
   MAX_FRAME_DEPTH,
+  MAX_IMAGES_PER_BOARD,
   MAX_LIVE_SELECTION,
   MAX_NODES_PER_BOARD,
   MAX_WHITEBOARD_EDITORS,
@@ -1710,6 +1712,178 @@ describe("whiteboard", function () {
       const restored = (await WhiteboardEdges.findOneAsync(auto._id))!;
       assert.isUndefined(restored.hidden);
       assert.lengthOf(restored.contributors, 0);
+    });
+
+    describe("images", function () {
+      const bucket = {
+        bucketName: "jr-test-images",
+        bucketRegion: "ap-southeast-2",
+      };
+      const inBucket = (key: string) =>
+        `https://s3.${bucket.bucketRegion}.amazonaws.com/${bucket.bucketName}/${key}`;
+      let backing: string;
+      // Where an upload for the board's chat would be
+      const stored = () => inBucket(`${huntId}/${backing}/${Random.id()}`);
+      const imageInput = (url: string) => ({
+        _id: Random.id(),
+        type: "image" as const,
+        position: { x: 10, y: 20 },
+        width: 240,
+        height: 120,
+        image: { url, width: 800, height: 400 },
+      });
+
+      beforeEach(async function () {
+        backing = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+        await Settings.insertAsync({
+          name: "s3.image_bucket",
+          value: bucket,
+          createdBy: operator,
+        });
+      });
+
+      it("takes an image uploaded for the board, with its size", async function () {
+        const input = imageInput(stored());
+        await asUser(member, () =>
+          upsertWhiteboardNodes.callPromise({ boardId, nodes: [input] }),
+        );
+        const node = (await WhiteboardNodes.findOneAsync(input._id))!;
+        assert.equal(node.type, "image");
+        assert.deepEqual(node.image, input.image);
+        assert.equal(node.width, 240);
+        assert.equal(node.height, 120);
+        assert.deepEqual(
+          node.contributors.map((c) => c.user),
+          [member],
+        );
+      });
+
+      it("takes an image uploaded in another hunt, as a paste from there brings", async function () {
+        const input = imageInput(
+          inBucket(`${Random.id()}/${Random.id()}/${Random.id()}`),
+        );
+        await upsertNodes(member, boardId, [input]);
+        assert.deepEqual(
+          (await WhiteboardNodes.findOneAsync(input._id))!.image,
+          input.image,
+        );
+      });
+
+      it("refuses an image from anywhere else", async function () {
+        const elsewhere = [
+          "https://example.com/cat.png",
+          "data:image/png;base64,iVBORw0KGgo=",
+          inBucket(`${backing}/${Random.id()}`),
+          inBucket(`chat/${backing}/${Random.id()}`),
+          inBucket(`${huntId}/${backing}/${Random.id()}/more`),
+          inBucket(`${huntId}/${backing}/../${Random.id()}`),
+          `https://s3.${bucket.bucketRegion}.amazonaws.com/another-bucket/${huntId}/${backing}/${Random.id()}`,
+        ];
+        for (const url of elsewhere) {
+          const input = imageInput(url);
+          await assert.isRejected(
+            upsertNodes(member, boardId, [input]),
+            /That image isn't one we stored/,
+          );
+          assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
+        }
+      });
+
+      it("refuses every image when there's no bucket", async function () {
+        const url = stored();
+        await Settings.removeAsync({ name: "s3.image_bucket" });
+        await assert.isRejected(
+          upsertNodes(member, boardId, [imageInput(url)]),
+          /That image isn't one we stored/,
+        );
+      });
+
+      it("needs an image and a size on an image node, and no image on anything else", async function () {
+        const { image: _image, ...bare } = imageInput(stored());
+        await assert.isRejected(
+          upsertNodes(member, boardId, [bare]),
+          /need an image and a size/,
+        );
+        const { width: _width, ...unsized } = imageInput(stored());
+        await assert.isRejected(
+          upsertNodes(member, boardId, [unsized]),
+          /need an image and a size/,
+        );
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            { ...imageInput(stored()), type: "sticky" },
+          ]),
+          /Only image nodes have an image/,
+        );
+      });
+
+      it("caps the images on a board", async function () {
+        await upsertNodes(
+          member,
+          boardId,
+          Array.from({ length: MAX_IMAGES_PER_BOARD }, () =>
+            imageInput(stored()),
+          ),
+        );
+        const extra = imageInput(stored());
+        await assert.isRejected(
+          upsertNodes(member, boardId, [extra]),
+          /can't take any more images/,
+        );
+        assert.notOk(await WhiteboardNodes.findOneAsync(extra._id));
+        // Other nodes still go in
+        await upsertNodes(member, boardId, [
+          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
+        ]);
+      });
+
+      it("never changes an image once it's on the board", async function () {
+        const input = imageInput(stored());
+        await upsertNodes(member, boardId, [input]);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            { _id: input._id, image: { ...input.image, url: stored() } },
+          ]),
+          /An image can't be changed/,
+        );
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            { _id: input._id, image: { ...input.image, width: 1 } },
+          ]),
+          /An image can't be changed/,
+        );
+        // The same image with a new size on the board is just a resize
+        await upsertNodes(member, boardId, [
+          { _id: input._id, image: input.image, width: 480, height: 240 },
+        ]);
+        const node = (await WhiteboardNodes.findOneAsync(input._id))!;
+        assert.deepEqual(node.image, input.image);
+        assert.equal(node.width, 480);
+
+        const sticky = Random.id();
+        await upsertNodes(member, boardId, [
+          { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
+        ]);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [{ _id: sticky, image: input.image }]),
+          /Only image nodes have an image/,
+        );
+      });
+
+      it("locks, and deletes without touching the upload", async function () {
+        const input = imageInput(stored());
+        await upsertNodes(member, boardId, [input]);
+        await upsertNodes(member, boardId, [{ _id: input._id, locked: true }]);
+        await assert.isRejected(
+          upsertNodes(operator, boardId, [
+            { _id: input._id, position: { x: 0, y: 0 } },
+          ]),
+          /locked/,
+        );
+        await upsertNodes(member, boardId, [{ _id: input._id, locked: false }]);
+        await deleteNodes(member, boardId, [input._id]);
+        assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
+      });
     });
 
     describe("collapsing frames", function () {

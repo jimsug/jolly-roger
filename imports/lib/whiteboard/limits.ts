@@ -3,6 +3,8 @@
 // what would be refused.
 export const MAX_BATCH = 100;
 export const MAX_NODES_PER_BOARD = 5000;
+// Image nodes count towards MAX_NODES_PER_BOARD too.
+export const MAX_IMAGES_PER_BOARD = 100;
 export const MAX_EDGES_PER_BOARD = 3000;
 export const MAX_TEXT_LENGTH = 2000;
 export const MAX_LABEL_LENGTH = 200;

@@ -29,7 +29,8 @@ import {
 // plain text: CLIP_PREFIX, then the copy as JSON. Every node's position is on
 // the board, not relative to its frame, and a node's parent, if it has one,
 // is another node in the copy. Puzzle cards are never copied (a puzzle has
-// one card), nor are comments.
+// one card), nor are comments. An image is copied by its address, so a paste
+// shows the same upload.
 
 // Anything starting with this is meant to be a copy from a board, of some
 // version.
@@ -55,6 +56,13 @@ const ClipNode = z.object({
   strokeWidth: z.enum(WhiteboardStrokeWidths).optional(),
   stroke: z.string().min(1).optional(),
   collapsed: z.boolean().optional(),
+  image: z
+    .object({
+      url: z.string().min(1),
+      width: dimension,
+      height: dimension,
+    })
+    .optional(),
 });
 type ClipNode = z.infer<typeof ClipNode>;
 
@@ -84,6 +92,7 @@ const NODE_FIELDS = [
   "color",
   "points",
   "strokeWidth",
+  "image",
 ] as const;
 const EDGE_FIELDS = [
   "label",
@@ -129,6 +138,7 @@ type SourceNode = Pick<
   | "strokeWidth"
   | "stroke"
   | "collapsed"
+  | "image"
 >;
 type SourceEdge = Pick<
   WhiteboardEdgeType,
@@ -244,6 +254,10 @@ export function copySelection<N extends SourceNode>(
     if (node.points !== undefined) copy.points = node.points;
     if (node.strokeWidth !== undefined) copy.strokeWidth = node.strokeWidth;
     if (node.stroke !== undefined) copy.stroke = node.stroke;
+    if (node.image !== undefined) {
+      const { url, width, height } = node.image;
+      copy.image = { url, width, height };
+    }
     return [copy];
   });
 
@@ -272,6 +286,13 @@ function holdsTogether(clip: BoardClip): boolean {
   if (byId.size !== clip.nodes.length) return false;
   const nodesOk = clip.nodes.every((node) => {
     if (node.type === "ink" && (!node.points || !node.strokeWidth)) {
+      return false;
+    }
+    if (
+      node.type === "image"
+        ? !node.image || node.width === undefined || node.height === undefined
+        : node.image !== undefined
+    ) {
       return false;
     }
     let parent = node.parent;
@@ -397,6 +418,7 @@ interface PastedNode {
   strokeWidth?: ClipNode["strokeWidth"];
   stroke?: string;
   collapsed?: boolean;
+  image?: ClipNode["image"];
 }
 interface PastedEdge extends ClipEdge {
   _id: string;

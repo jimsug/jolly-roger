@@ -12,6 +12,7 @@ export const WhiteboardNodeKinds = [
   "ink",
   // The free end of a line that isn't attached to anything.
   "point",
+  "image",
 ] as const;
 export type WhiteboardNodeKind = (typeof WhiteboardNodeKinds)[number];
 
@@ -90,6 +91,17 @@ const WhiteboardNode = withCommon(
     points: WhiteboardInkPoint.array().optional(),
     strokeWidth: z.enum(WhiteboardStrokeWidths).optional(),
     stroke: foreignKey.optional(),
+
+    // type: "image". An object in the S3 image bucket, and its size in
+    // pixels. The node's own width and height are how big it shows. Never
+    // changes once the node is made.
+    image: z
+      .object({
+        url: nonEmptyString,
+        width: z.number().positive(),
+        height: z.number().positive(),
+      })
+      .optional(),
 
     // Who created and edited a board-native node, oldest first. Written only
     // by the server.
