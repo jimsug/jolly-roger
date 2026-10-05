@@ -139,6 +139,8 @@ const WhiteboardPage = () => {
   const disabled = useTracker(() => Flags.active("disable.whiteboard"), []);
   const connected = useTracker(() => Meteor.status().connected, []);
   const compact = useMediaQuery(compactQuery);
+  // A touch screen, which edits by touch unless it's compact.
+  const coarse = useMediaQuery("(pointer: coarse)");
   let access: WhiteboardAccess = policyAccess.access;
   let accessReason: WhiteboardAccessReason | undefined = policyAccess.reason;
   if (access !== "none" && !connected) {
@@ -258,6 +260,7 @@ const WhiteboardPage = () => {
             isOperator={policyAccess.isOperator}
             showMiniMap={!compact}
             compact={compact}
+            coarse={coarse && !compact}
             boardLoaded={!contentsLoading() && !inkLoading()}
             hideInk={hideInk}
             onHideInkChange={setHideInk}

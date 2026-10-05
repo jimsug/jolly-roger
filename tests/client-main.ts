@@ -80,6 +80,7 @@ import "./unit/imports/client/whiteboardBoardFiles";
 import "./unit/imports/client/whiteboardBoardWrites";
 import "./unit/imports/client/whiteboardImageNode";
 import "./unit/imports/client/whiteboardSearch";
+import "./unit/imports/client/whiteboardTouch";
 
 import "./acceptance/authentication";
 import "./acceptance/chatHooks";

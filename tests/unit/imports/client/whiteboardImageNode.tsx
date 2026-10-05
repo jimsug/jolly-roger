@@ -36,6 +36,7 @@ describe("whiteboard image node", function () {
     readOnly: true,
     readOnlyForLayout: false,
     compact: false,
+    coarse: false,
     updateNodes: sinon.fake(),
     updateEdge: sinon.fake(),
     persistResize: sinon.fake(),

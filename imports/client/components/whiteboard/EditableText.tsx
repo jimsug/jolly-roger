@@ -24,13 +24,25 @@ const editorStyles = css`
   padding: 0;
 `;
 
-const TextArea = styled.textarea`
+// On a touch screen the text being typed is 16px, which stops iOS zooming
+// in on it.
+const touchStyles = css<{ $touch: boolean }>`
+  ${({ $touch }) =>
+    $touch &&
+    css`
+      font-size: 16px;
+    `}
+`;
+
+const TextArea = styled.textarea<{ $touch: boolean }>`
   ${editorStyles}
+  ${touchStyles}
   height: 100%;
 `;
 
-const Input = styled.input`
+const Input = styled.input<{ $touch: boolean }>`
   ${editorStyles}
+  ${touchStyles}
 `;
 
 const Display = styled.div<{
@@ -167,7 +179,9 @@ const EditableText = ({
   // the canvas hears is being typed in.
   const nodeId = useNodeId();
   const id = nodeId ?? lineId;
-  const onEditingChange = useContext(WhiteboardContext)?.onEditingChange;
+  const board = useContext(WhiteboardContext);
+  const onEditingChange = board?.onEditingChange;
+  const touch = board?.coarse ?? false;
   useEffect(() => {
     if (!editing || !id || !onEditingChange) return undefined;
     const kind = nodeId ? "node" : "line";
@@ -296,6 +310,7 @@ const EditableText = ({
       onBlur: commit,
       onKeyDown,
       onFocus: selectAll,
+      $touch: touch,
     };
     return multiline ? <TextArea {...props} /> : <Input {...props} />;
   }

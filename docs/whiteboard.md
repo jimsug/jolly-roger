@@ -22,6 +22,7 @@ files:
   - imports/client/components/whiteboard/HistoryPanel.tsx
   - imports/client/components/whiteboard/ImageNode.tsx
   - imports/client/components/whiteboard/InkNode.tsx
+  - imports/client/components/whiteboard/KeepAboveKeyboard.tsx
   - imports/client/components/whiteboard/LockBadge.tsx
   - imports/client/components/whiteboard/LockLayoutButtons.tsx
   - imports/client/components/whiteboard/NodeChrome.tsx
@@ -34,11 +35,14 @@ files:
   - imports/client/components/whiteboard/ResetLayoutModal.tsx
   - imports/client/components/whiteboard/RoundStateContext.ts
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
+  - imports/client/components/whiteboard/TouchTargetSize.tsx
   - imports/client/components/whiteboard/WhiteboardCanvas.tsx
+  - imports/client/components/whiteboard/WhiteboardContext.ts
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
   - imports/client/components/whiteboard/WhosHere.tsx
   - imports/client/components/whiteboard/boardFiles.ts
   - imports/client/components/whiteboard/boardWrites.ts
+  - imports/client/components/whiteboard/touch.ts
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useChatImagesEnabled.ts
   - imports/client/hooks/useKeyboardInset.ts
@@ -732,6 +736,9 @@ unless the composer's suggestions are open, when it closes those, or the
 composer has something written in it, when it does nothing, so a slip of the
 key doesn't throw the text away.
 
+A touch screen has buttons for what's done here with keys (see Tablets and
+touch).
+
 With the Comment tool, a press on the board starts a comment where it was
 pressed once it's let go. A press that moves more than a few pixels first
 doesn't start one, whether it's a mouse, a pen or a finger.
@@ -745,6 +752,99 @@ while it's open. Closing it with its Close button or
 Escape puts focus back on its pin; deleting the thread puts focus on the node
 it was on, if any.
 
+### Tablets and touch
+
+A touch screen that isn't compact (see Phones) edits by touch: a tablet, or
+a touch laptop whose main pointer is a finger. `WhiteboardPage` asks
+`(pointer: coarse)` and passes `coarse` to the canvas when it matches and
+the screen isn't compact. That decides what the toolbar offers, that a
+tap places a note, and that only a selected node can be dragged. Otherwise
+what a press does is decided by the press itself
+(`pointerType === "touch"`), so a mouse on a tablet works as it does on a
+desktop, and a finger on a touch laptop draws, erases, draws lines,
+selects by long press and pinches as it would on a tablet, though it
+places a note as a mouse does.
+
+What works by touch:
+
+- **Placing.** With the sticky, text or frame tool, a tap places one at the
+  size a click gives, centred on the tap, and opens it for typing. As with
+  the Comment tool, a finger that moves more than 10px first pans the board
+  instead, and a second finger pinches; neither places anything. There's no
+  dragging out a size by touch: resize it after. A stylus places by tap
+  too, since the browser pans from its touch events whatever the canvas
+  does with its pointer events; only a mouse drags out a size. The tap puts focus in a
+  hidden input inside the board for a moment, since iOS only brings up its
+  keyboard for a focus made in the tap itself, and the note's editor takes
+  focus from it once the note shows. Text being typed on the board (a note,
+  a text box or a label) is 16px on a touch screen, so iOS doesn't zoom in
+  on it. If the keyboard
+  (`useKeyboardInset`) would cover the note, the board pans it up to 16px
+  above the keyboard, as far as its top can go without leaving the board.
+- **Selecting.** A long press on a node (an ink stroke too, which selects
+  the whole stroke), 500 ms without moving more than
+  10px (`LongPress` in `imports/client/components/whiteboard/touch.ts`),
+  adds it to the selection and shows its toolbar; a second long press adds
+  another. The click the browser makes on letting go is ignored, so it
+  doesn't select just that one again or follow a card's link, and the
+  browser's own long-press menu doesn't show on the board, though it still
+  does on the toolbars and comment panels, and for anyone who can't edit
+  (whose long press selects nothing). A tap on a node selects it as
+  a click does, and a tap on the empty board clears the selection.
+- **Select area.** A toggle on a touch screen's toolbar. While it's on, one
+  finger dragged on the empty board draws a box, and what's wholly inside it
+  is selected, as Shift-drag does with a mouse. Picking another tool, Cancel
+  or Escape turns it off. A second finger drops the box and anything it had
+  selected so far.
+- **Moving.** Only a selected node can be dragged (`dragOnlySelected`), so a
+  finger on one that isn't selected pans the board, as it would on the
+  empty board; a tap or long press, then a drag, moves it. This goes for a
+  mouse on a tablet too. A drag moves the node once it's gone 10px (React
+  Flow's `nodeDragThreshold`, 1px elsewhere), so a long press that wobbles
+  a little still selects. A finger gets a 44px target on a selected node's
+  handles and resize corners, and on a selected line's grips, at any zoom,
+  without them looking any bigger (`TouchTargetSize` sets the sizes, and
+  allows for React Flow scaling resize corners up when zoomed out).
+- **Pen and eraser.** One finger draws or erases. Pressure comes from a pen
+  that reports it and is simulated otherwise, as with a mouse. A stroke
+  drawn by touch goes out on the live channel as it's drawn, but the cursor
+  isn't sent for a finger. There's no palm rejection: a hand resting on the
+  screen counts as a finger.
+- **Lines.** The line tool draws with a finger dragged from one thing to
+  another. A handle can be dragged from, or tapped for click-to-connect;
+  while a click-to-connect line waits, every node's handles show, since
+  there's no hover to find them by.
+- **Two fingers.** Two fingers pan and pinch whatever tool is out. React
+  Flow does this itself while one finger pans (Select, or a tool that
+  places by tap); while the pen, the eraser, the line tool or Select area
+  has the first finger, the canvas does it: the board point between the
+  fingers stays between them and the zoom follows how far apart they are.
+  The second finger drops whatever the first had started (a line, an erase,
+  a long press, an area being selected, or a stroke, unless part of a long
+  one has already been saved, when it ends where it got to), and neither
+  finger does anything more until it's lifted.
+
+On a touch screen the edit toolbar gains, beside Undo and Redo, Delete
+(leaving out anything locked, as the key does), Copy, Paste and Duplicate,
+each greyed out with nothing selected except Paste. Copy and Paste use the
+Clipboard API (`navigator.clipboard.writeText` and `readText`), and each is
+left off where the browser doesn't have it. Paste takes a copy from a board
+or text, not images, and puts it in the middle of the view; the browser may
+ask first, and if the board has gone read-only by the time the text
+arrives (a version opened meanwhile, say) nothing is pasted. While a tool
+is out, Select area is on, a comment is being started, or a line is being
+drawn or waits for a click-to-connect end, a Cancel button does what Escape
+would: drops it, turns off Select area and goes back to Select.
+
+The tool buttons' names (read out by a screen reader, and shown as
+tooltips) describe touch rather than keys on a touch screen, for example
+"Sticky note: tap to place".
+
+What stays desktop only: the tool, pen width and other keys, Space to pan,
+Shift to snap a line's angle, Ctrl-click to add to the selection (a long
+press does that), dragging out a note's size, arrow-key nudges, and pasting
+images (Image on the toolbar still picks a file).
+
 ### Lines from handles
 
 Each card, note, text box, frame and image has a handle on each side. Dragging from
@@ -752,13 +852,16 @@ one draws a line to wherever it's let go. Clicking one instead starts a line
 that ends at the next handle clicked; until then the handle is ringed in the
 theme's primary colour and a dashed line runs from it to the pointer, so it's
 clear the next click joins something. Escape, or picking another tool, lets
-go of it. A locked node's handles only end lines: a line can be drawn to it,
+go of it, as does Cancel on a touch screen (see Tablets and touch), where a
+tap on a handle and then another joins them. A locked node's handles only end lines: a line can be drawn to it,
 but not started from it.
 
 ### Copy, paste and duplicate
 
 Ctrl+C (Cmd+C) copies the selection and Ctrl+V (Cmd+V) pastes it, on the
-same board or another one, for anyone who can edit. A copy takes:
+same board or another one, for anyone who can edit. On a touch screen the
+edit toolbar has Copy, Paste and Duplicate buttons too (see Tablets and
+touch); its Paste takes text only and lands in the middle of the view. A copy takes:
 
 - the selected notes, text boxes, frames, images and ink, with everything
   inside a selected frame (folded away or not) where it is in the frame, and
@@ -1662,6 +1765,9 @@ phone, so iOS doesn't zoom in when it takes focus, and Send is 44px tall.
 
 On any touch screen (`pointer: coarse`) a pin takes presses from 5px past its
 edge, a 44px target, without looking any bigger.
+
+A phone gets none of Tablets and touch (see Editing): compact wins over
+`coarse`, so a phone keeps the comment-only toolbar above.
 
 ## What cards and rounds show
 

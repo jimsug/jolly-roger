@@ -4,9 +4,11 @@ import { useTracker } from "meteor/react-meteor-data";
 import { faArrowPointer } from "@fortawesome/free-solid-svg-icons/faArrowPointer";
 import { faCircleCheck } from "@fortawesome/free-solid-svg-icons/faCircleCheck";
 import { faClockRotateLeft } from "@fortawesome/free-solid-svg-icons/faClockRotateLeft";
+import { faClone } from "@fortawesome/free-solid-svg-icons/faClone";
 import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
 import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
 import { faCompress } from "@fortawesome/free-solid-svg-icons/faCompress";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faDiagramProject } from "@fortawesome/free-solid-svg-icons/faDiagramProject";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faEyeSlash } from "@fortawesome/free-solid-svg-icons/faEyeSlash";
@@ -17,11 +19,13 @@ import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
 import { faLockOpen } from "@fortawesome/free-solid-svg-icons/faLockOpen";
 import { faNoteSticky } from "@fortawesome/free-solid-svg-icons/faNoteSticky";
 import { faObjectGroup } from "@fortawesome/free-solid-svg-icons/faObjectGroup";
+import { faPaste } from "@fortawesome/free-solid-svg-icons/faPaste";
 import { faPen } from "@fortawesome/free-solid-svg-icons/faPen";
 import { faRotateLeft } from "@fortawesome/free-solid-svg-icons/faRotateLeft";
 import { faRotateRight } from "@fortawesome/free-solid-svg-icons/faRotateRight";
 import { faSignature } from "@fortawesome/free-solid-svg-icons/faSignature";
 import { faSitemap } from "@fortawesome/free-solid-svg-icons/faSitemap";
+import { faTrashCan } from "@fortawesome/free-solid-svg-icons/faTrashCan";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type {
   AriaLabelConfig,
@@ -270,6 +274,7 @@ import type { VersionPreview } from "./HistoryPanel";
 import HistoryPanel, { loadVersion, versionMoment } from "./HistoryPanel";
 import ImageNode from "./ImageNode";
 import InkNode from "./InkNode";
+import KeepAboveKeyboard from "./KeepAboveKeyboard";
 import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
 import LineStyleIcon from "./LineStyleIcon";
 import LockLayoutButtons from "./LockLayoutButtons";
@@ -285,6 +290,8 @@ import ResetLayoutModal, { ResetLayoutButton } from "./ResetLayoutModal";
 import RoundStateContext from "./RoundStateContext";
 import StickyNode from "./StickyNode";
 import TextNode from "./TextNode";
+import TouchTargetSize from "./TouchTargetSize";
+import { CLICK_SLOP, LongPress, movedPastSlop, TOUCH_SLOP } from "./touch";
 import type { WhiteboardActions } from "./WhiteboardContext";
 import WhiteboardContext from "./WhiteboardContext";
 import WhiteboardEdge from "./WhiteboardEdge";
@@ -345,9 +352,10 @@ interface Connecting {
   pressedAt?: { x: number; y: number };
 }
 
-// A press with the Comment tool, which places a comment if it's let go
-// without moving. A touch press leaves the board free to pan and pinch.
-interface CommentPress {
+// A press with the Comment tool, or a finger with a sticky, text or frame
+// tool, which places one if it's let go without moving. A touch press leaves
+// the board free to pan and pinch.
+interface TapPress {
   point: XYPosition;
   clientX: number;
   clientY: number;
@@ -399,11 +407,6 @@ const DEFAULT_SIZES: Record<PlaceTool, { width: number; height: number }> = {
   text: { width: 240, height: 48 },
   frame: { width: 2 * CARD_WIDTH + 64, height: 2 * CARD_HEIGHT + 104 },
 };
-// A press that moves less than this (in screen pixels) is a click.
-const CLICK_SLOP = 4;
-// A finger wobbles more than a mouse or pen does, so a touch gets more room
-// before it counts as a pan rather than a tap.
-const TOUCH_SLOP = 10;
 // The parts of the canvas that sit over the board, where presses are the
 // controls' own rather than a tool's.
 const OVERLAYS =
@@ -487,10 +490,24 @@ interface ImageUpload {
 // Marks what a preview has differently from the board as it is now.
 const CHANGED_CLASS = "jr-changed";
 
+// An invisible target for a finger, `size` across, centred on the handle,
+// resize corner or grip it's the ::after of.
+const touchTarget = (size: string) => css`
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: ${size};
+  height: ${size};
+  transform: translate(-50%, -50%);
+`;
+
 const CanvasWrapper = styled.div<{
   $tool: Tool;
   $readOnly: boolean;
   $whosHereHeight: number;
+  $coarse: boolean;
+  $clickConnecting: boolean;
 }>`
   /* stylelint-disable selector-class-pattern -- React Flow's class names */
   position: relative;
@@ -589,6 +606,52 @@ const CanvasWrapper = styled.div<{
     box-shadow: 0 0 0 3px ${({ theme }) => theme.colors.background},
       0 0 0 5px ${({ theme }) => theme.colors.primary};
   }
+
+  /* On a touch screen, for someone who can edit, a long press on the board
+     selects rather than calling up the browser's own menu. A finger gets a
+     44px target on a selected node's handles and resize corners (sized by
+     TouchTargetSize, which allows for the zoom) and on a line's grips,
+     without them looking any bigger. There's no hover to show where a
+     click-to-connect line can end, so every handle shows until it's
+     joined. */
+  ${({ $coarse, $readOnly, $clickConnecting }) =>
+    $coarse &&
+    css`
+      ${
+        !$readOnly &&
+        css`
+        .react-flow__node,
+        .react-flow__pane {
+          -webkit-touch-callout: none;
+        }
+      `
+      }
+
+      .react-flow__node.selected .react-flow__handle::after {
+        ${touchTarget("var(--jr-touch-target, 44px)")}
+      }
+
+      .react-flow__resize-control.handle::after {
+        ${touchTarget("var(--jr-resize-target, 44px)")}
+      }
+
+      .jr-line-grip::after {
+        ${touchTarget("44px")}
+      }
+
+      ${
+        $clickConnecting &&
+        css`
+        .react-flow__handle {
+          opacity: 1;
+        }
+
+        .react-flow__handle::after {
+          ${touchTarget("var(--jr-touch-target, 44px)")}
+        }
+      `
+      }
+    `}
 `;
 
 const ToolBox = styled.div`
@@ -793,6 +856,36 @@ const LocalStroke = styled.svg`
   overflow: visible;
   pointer-events: none;
 `;
+
+// Takes focus for a moment when a tap places a note (see keyboardCatcher):
+// out of sight but still focusable, at 16px so iOS doesn't zoom in on it.
+const KeyboardCatcher = styled.input`
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  font-size: 16px;
+  pointer-events: none;
+`;
+
+// On a touch screen only a selected node can be dragged, so a finger on one
+// that isn't selected pans the board, as it would on the empty board (React
+// Flow keeps a draggable node's presses from panning). Each copy is kept
+// while its node is unchanged, so React Flow sees the same object.
+const notDraggable = new WeakMap<WhiteboardFlowNode, WhiteboardFlowNode>();
+const dragOnlySelected = (node: WhiteboardFlowNode) => {
+  if (node.selected || node.draggable === false) return node;
+  let copy = notDraggable.get(node);
+  if (!copy) {
+    copy = { ...node, draggable: false };
+    notDraggable.set(node, copy);
+  }
+  return copy;
+};
 
 type LiveDrag = NonNullable<WhiteboardLiveState["drag"]>[number];
 
@@ -1066,6 +1159,9 @@ interface CanvasProps {
   // a comment without stopping the board panning, and threads open in a
   // sheet along the bottom.
   compact: boolean;
+  // A touch screen that isn't compact (see WhiteboardPage): the toolbar
+  // gains buttons for what's otherwise done with keys, and Select area.
+  coarse: boolean;
   // Whether the board's nodes and lines have arrived.
   boardLoaded: boolean;
   // Whether this viewer has hidden ink, which WhiteboardPage then has sent
@@ -1109,6 +1205,7 @@ const CanvasInner = ({
   isOperator,
   showMiniMap,
   compact,
+  coarse,
   boardLoaded,
   hideInk,
   onHideInkChange: setHideInk,
@@ -1122,6 +1219,7 @@ const CanvasInner = ({
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const flow = useReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>();
+  const storeApi = useStoreApi<WhiteboardFlowNode, WhiteboardFlowEdge>();
   const wrapperRef = useRef<HTMLDivElement>(null);
   // An earlier version of the board being looked at, which can't be edited
   // or commented on.
@@ -1149,6 +1247,10 @@ const CanvasInner = ({
   const [confirmingRestore, setConfirmingRestore] = useState(false);
   const mayComment = access === "edit" || access === "comment";
   const readOnly = access !== "edit" || !!preview;
+  const readOnlyNow = useRef(readOnly);
+  useEffect(() => {
+    readOnlyNow.current = readOnly;
+  }, [readOnly]);
   const canComment = !preview && mayComment;
 
   // The hunt's puzzles and tags come from the puzzle page around the canvas,
@@ -1367,12 +1469,60 @@ const CanvasInner = ({
       timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
-  // Where a press with the Comment tool started, until it's let go there.
-  const commentPress = useRef<CommentPress | undefined>(undefined);
-  // Set when a tap places a comment, until the next press, so the click the
-  // browser makes from the tap afterwards doesn't also follow a link or take
-  // focus from the new comment's composer.
-  const commentTapped = useRef(false);
+  // Where a press with the Comment tool (or a finger with a placing tool)
+  // started, until it's let go there.
+  const tapPress = useRef<TapPress | undefined>(undefined);
+  // Set when a tap places a comment or a note, or a long press selects
+  // something, until the next press, so the click the browser makes from
+  // the tap afterwards doesn't also follow a link, take focus from what was
+  // just opened, or select only what's under it.
+  const tapped = useRef(false);
+  // Fingers on the board and where each last was on screen.
+  const touches = useRef(new Map<number, { x: number; y: number }>());
+  // Two fingers panning and zooming the board while the tool in use takes
+  // one finger for itself (see fingerPans), from where they started.
+  const pinch = useRef<
+    | {
+        ids: [number, number];
+        viewport: { x: number; y: number; zoom: number };
+        mid: { x: number; y: number };
+        distance: number;
+      }
+    | undefined
+  >(undefined);
+  // Fingers that have been part of a pinch, which do nothing more until
+  // they're lifted.
+  const spentTouches = useRef(new Set<number>());
+  // A finger held on a node, which selects it after a while.
+  const longPress = useRef(new LongPress());
+  useEffect(() => {
+    const pending = longPress.current;
+    return () => pending.cancel();
+  }, []);
+  // On a touch screen, whether one finger on the empty board draws a box to
+  // select what's in it rather than panning.
+  const [selectArea, setSelectArea] = useState(false);
+  const selectingArea = selectArea && coarse && !readOnly && tool === "select";
+  // Whether one finger on the empty board pans it, which React Flow does.
+  // The pen, the eraser, the line tool and Select area take a finger for
+  // themselves, and two fingers pan and zoom (see startPinch). With a tool
+  // that places something by tap, a finger that moves pans instead.
+  const fingerPans =
+    tool === "select"
+      ? !selectingArea
+      : (compact || coarse) && (tool === "comment" || isPlaceTool(tool));
+  // Takes focus in the moment a tap places a note, so a phone or tablet
+  // brings up its keyboard (which it only does for a focus inside the tap
+  // itself) and keeps it up as the note's editor takes focus over.
+  const keyboardCatcher = useRef<HTMLInputElement>(null);
+  // Anything typed before the note's editor took over isn't kept for the
+  // next tap.
+  const clearKeyboardCatcher = useCallback(
+    (event: React.FocusEvent<HTMLInputElement>) => {
+      event.currentTarget.value = "";
+    },
+    [],
+  );
   // The node a click-to-connect line starts from, and where the pointer is
   // while it waits for the next click.
   const clickConnectFrom = useRef<string | undefined>(undefined);
@@ -2715,12 +2865,14 @@ const CanvasInner = ({
       ]);
       setEditOnAppear(_id);
       // If the new node can't open for editing (e.g. a frame placed while
-      // zoomed right out shows no label), don't let it grab focus later.
-      tidyLater(
-        () =>
-          setEditOnAppear((current) => (current === _id ? undefined : current)),
-        3000,
-      );
+      // zoomed right out shows no label), don't let it grab focus later, nor
+      // leave the keyboard up for it.
+      tidyLater(() => {
+        setEditOnAppear((current) => (current === _id ? undefined : current));
+        if (document.activeElement === keyboardCatcher.current) {
+          keyboardCatcher.current?.blur();
+        }
+      }, 3000);
       setTool("select");
     },
     [placementFor, updateNodes, tidyLater],
@@ -3859,15 +4011,174 @@ const CanvasInner = ({
     tidyLater(() => setErasingStrokes(new Set()), 1500);
   }, [flow, erasingStrokes, deleteNodes, tidyLater]);
 
+  // A long press on a node adds it to the selection, leaving the rest
+  // selected, so a second long press selects two.
+  const selectByLongPress = useCallback(
+    (id: string) => {
+      const { nodeLookup, triggerNodeChanges } = storeApi.getState();
+      const node = nodeLookup.get(id);
+      if (!node || node.hidden) return;
+      tapped.current = true;
+      if (!node.selected) {
+        triggerNodeChanges([{ type: "select", id, selected: true }]);
+      }
+    },
+    [storeApi],
+  );
+
+  // Drops whatever one finger had started (a stroke, a note being placed, a
+  // line, an erase, a long press or an area being selected) when a second
+  // finger turns it into a pinch. A stroke long enough to have been saved
+  // in part is finished where it got to instead.
+  const dropFingerAction = useCallback(() => {
+    longPress.current.cancel();
+    tapPress.current = undefined;
+    const state = drawing.current;
+    if (state) {
+      drawing.current = undefined;
+      if (state.committed > 0) {
+        const rest = state.segmenter.finish(true);
+        if (rest) commitSegment(state, rest);
+      }
+      setLocalStroke(undefined);
+      live.setStroke(null);
+    }
+    setPlacing(undefined);
+    setConnecting(undefined);
+    setErasingStrokes(new Set());
+    // React Flow selects what the box covers as it's drawn, so that goes
+    // too.
+    const flowState = storeApi.getState();
+    if (flowState.userSelectionRect) {
+      flowState.resetSelectedElements();
+      storeApi.setState({
+        userSelectionRect: null,
+        userSelectionActive: false,
+      });
+    }
+  }, [commitSegment, live, storeApi]);
+
+  // Two fingers pan and zoom the board while a tool takes one finger for
+  // itself, which React Flow won't do then: the board point that was
+  // between them stays between them, and the zoom follows how far apart
+  // they are.
+  const startPinch = useCallback(() => {
+    const [first, second] = [...touches.current.entries()];
+    const box = storeApi.getState().domNode?.getBoundingClientRect();
+    if (!first || !second || !box) return;
+    const [firstId, a] = first;
+    const [secondId, b] = second;
+    pinch.current = {
+      ids: [firstId, secondId],
+      viewport: flow.getViewport(),
+      mid: { x: (a.x + b.x) / 2 - box.left, y: (a.y + b.y) / 2 - box.top },
+      distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+    };
+    spentTouches.current.add(firstId);
+    spentTouches.current.add(secondId);
+    dropFingerAction();
+    try {
+      wrapperRef.current?.setPointerCapture(secondId);
+    } catch {
+      // A finger already lifted can't be captured; its pointerup has gone.
+    }
+  }, [storeApi, flow, dropFingerAction]);
+  const movePinch = useCallback(() => {
+    const current = pinch.current;
+    const box = storeApi.getState().domNode?.getBoundingClientRect();
+    if (!current || !box) return;
+    const a = touches.current.get(current.ids[0]);
+    const b = touches.current.get(current.ids[1]);
+    if (!a || !b) return;
+    const { viewport, mid, distance } = current;
+    const zoom = Math.min(
+      MAX_ZOOM,
+      Math.max(
+        MIN_ZOOM,
+        (viewport.zoom * Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))) /
+          distance,
+      ),
+    );
+    const boardX = (mid.x - viewport.x) / viewport.zoom;
+    const boardY = (mid.y - viewport.y) / viewport.zoom;
+    void flow.setViewport({
+      x: (a.x + b.x) / 2 - box.left - boardX * zoom,
+      y: (a.y + b.y) / 2 - box.top - boardY * zoom,
+      zoom,
+    });
+  }, [storeApi, flow]);
+  // A finger lifted or cancelled, which ends a pinch it was part of. Says
+  // whether it had been part of one, when it has nothing more to do.
+  const liftFinger = useCallback((event: React.PointerEvent) => {
+    if (event.pointerType !== "touch") return false;
+    touches.current.delete(event.pointerId);
+    longPress.current.end(event.pointerId);
+    if (pinch.current?.ids.includes(event.pointerId)) {
+      pinch.current = undefined;
+    }
+    return spentTouches.current.delete(event.pointerId);
+  }, []);
+
   const onPointerDownCapture = useCallback(
     (event: React.PointerEvent) => {
-      commentTapped.current = false;
-      // A second finger means a pinch, not a tap.
-      if (
-        commentPress.current &&
-        commentPress.current.pointerId !== event.pointerId
-      ) {
-        commentPress.current = undefined;
+      tapped.current = false;
+      if (event.pointerType === "touch") {
+        // A first finger starts afresh, whatever was missed of the last
+        // gesture.
+        if (event.isPrimary) {
+          touches.current.clear();
+          spentTouches.current.clear();
+          pinch.current = undefined;
+        }
+        touches.current.set(event.pointerId, {
+          x: event.clientX,
+          y: event.clientY,
+        });
+        // A second finger means a pinch, not a tap, a long press or a
+        // stroke. React Flow pans and zooms unless the tool has the first
+        // finger, when the canvas does.
+        if (touches.current.size > 1) {
+          longPress.current.cancel();
+          tapPress.current = undefined;
+          if (
+            !fingerPans &&
+            touches.current.size === 2 &&
+            !pinch.current &&
+            onBoard(event)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            startPinch();
+          }
+          return;
+        }
+        if (
+          tool === "select" &&
+          !readOnly &&
+          event.button === 0 &&
+          // An ink stroke's press lands on its SVG path, not an HTMLElement
+          event.target instanceof Element
+        ) {
+          const node = event.target.closest<HTMLElement>(".react-flow__node");
+          const id = node?.dataset.id;
+          if (
+            id &&
+            onBoard(event) &&
+            !event.target.closest(
+              `${OVERLAYS}, .react-flow__handle, .react-flow__resize-control, input, textarea, [contenteditable="true"]`,
+            )
+          ) {
+            longPress.current.start(
+              event.pointerId,
+              { x: event.clientX, y: event.clientY },
+              () => selectByLongPress(id),
+            );
+          }
+        }
+      }
+      // A second pointer of another kind means the press isn't a tap either.
+      if (tapPress.current && tapPress.current.pointerId !== event.pointerId) {
+        tapPress.current = undefined;
         return;
       }
       if (
@@ -3884,8 +4195,13 @@ const CanvasInner = ({
         return;
       }
       const point = flowPoint(event);
-      if (tool === "comment") {
-        commentPress.current = {
+      // On a touch screen a finger or a stylus places a note by tap, and one
+      // that moves pans the board, which the browser does from its touch
+      // events whatever's done with the pointer's.
+      const placesByTap =
+        coarse && isPlaceTool(tool) && event.pointerType !== "mouse";
+      if (tool === "comment" || placesByTap) {
+        tapPress.current = {
           point,
           clientX: event.clientX,
           clientY: event.clientY,
@@ -3893,8 +4209,8 @@ const CanvasInner = ({
           pointerType: event.pointerType,
         };
         // A touch is left to React Flow too, so a finger that moves pans the
-        // board (and a second one pinches) instead of placing a comment.
-        if (event.pointerType === "touch") return;
+        // board (and a second one pinches) instead of placing anything.
+        if (event.pointerType === "touch" || placesByTap) return;
       }
       event.preventDefault();
       event.stopPropagation();
@@ -3945,6 +4261,10 @@ const CanvasInner = ({
       onBoard,
       readOnly,
       tool,
+      coarse,
+      fingerPans,
+      startPinch,
+      selectByLongPress,
       flowPoint,
       eraseAt,
       penColor,
@@ -4009,16 +4329,30 @@ const CanvasInner = ({
 
   const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
-      const press = commentPress.current;
+      const at = { x: event.clientX, y: event.clientY };
+      if (
+        event.pointerType === "touch" &&
+        touches.current.has(event.pointerId)
+      ) {
+        touches.current.set(event.pointerId, at);
+        if (pinch.current?.ids.includes(event.pointerId)) {
+          movePinch();
+          return;
+        }
+        if (spentTouches.current.has(event.pointerId)) return;
+        longPress.current.move(event.pointerId, at);
+      }
+      const press = tapPress.current;
       if (
         press &&
         press.pointerId === event.pointerId &&
-        Math.hypot(
-          event.clientX - press.clientX,
-          event.clientY - press.clientY,
-        ) > (press.pointerType === "touch" ? TOUCH_SLOP : CLICK_SLOP)
+        movedPastSlop(
+          { x: press.clientX, y: press.clientY },
+          at,
+          press.pointerType,
+        )
       ) {
-        commentPress.current = undefined;
+        tapPress.current = undefined;
       }
       if (!onBoard(event)) return;
       const point = flowPoint(event);
@@ -4050,7 +4384,7 @@ const CanvasInner = ({
       if (isPlaceTool(tool)) {
         if (placing) {
           setPlacing({ ...placing, current: point });
-        } else {
+        } else if (event.pointerType !== "touch") {
           setHover(point);
         }
         return;
@@ -4085,6 +4419,7 @@ const CanvasInner = ({
     },
     [
       onBoard,
+      movePinch,
       flowPoint,
       live,
       preview,
@@ -4102,6 +4437,7 @@ const CanvasInner = ({
   // pointercancel.
   const onPointerUp = useCallback(
     (event: React.PointerEvent) => {
+      if (liftFinger(event)) return;
       if (connecting) {
         const { fixed, edgeId, end } = connecting;
         // Worked out from where the pointer was let go, which can be a move
@@ -4141,11 +4477,18 @@ const CanvasInner = ({
         finishErasing();
         return;
       }
-      if (tool === "comment") {
-        const press = commentPress.current;
+      if (tool === "comment" || (isPlaceTool(tool) && tapPress.current)) {
+        const press = tapPress.current;
         if (!press || press.pointerId !== event.pointerId) return;
-        commentPress.current = undefined;
-        if (press.pointerType === "touch") commentTapped.current = true;
+        tapPress.current = undefined;
+        if (press.pointerType === "touch" || isPlaceTool(tool)) {
+          tapped.current = true;
+        }
+        if (isPlaceTool(tool)) {
+          keyboardCatcher.current?.focus({ preventScroll: true });
+          placeNode(tool, placementRect(tool, press.point, press.point));
+          return;
+        }
         setDraft(commentAnchorAt(press.point));
         setOpenThread(undefined);
         closeHiddenPanel();
@@ -4190,6 +4533,7 @@ const CanvasInner = ({
       closeHiddenPanel,
       compact,
       panToPin,
+      liftFinger,
     ],
   );
 
@@ -4198,28 +4542,38 @@ const CanvasInner = ({
   // else ends as usual.
   const onPointerCancel = useCallback(
     (event: React.PointerEvent) => {
+      if (liftFinger(event)) return;
       if (connecting) {
         setConnecting(undefined);
         return;
       }
-      if (tool === "comment") {
-        commentPress.current = undefined;
+      if (
+        tool === "comment" ||
+        tapPress.current?.pointerId === event.pointerId
+      ) {
+        tapPress.current = undefined;
         return;
       }
       onPointerUp(event);
     },
-    [connecting, tool, onPointerUp],
+    [liftFinger, connecting, tool, onPointerUp],
   );
+
+  // A long press on a phone or tablet calls up the browser's own menu, which
+  // shouldn't come with the selection it makes.
+  const onContextMenu = useCallback((event: React.MouseEvent) => {
+    if (longPress.current.waiting || tapped.current) event.preventDefault();
+  }, []);
 
   // The browser follows a tap with mouse events and a click, which would
   // take focus from the composer of the comment the tap just placed, or
   // follow a link it was on.
   const onTapFollowUp = useCallback((event: React.MouseEvent) => {
-    if (!commentTapped.current) return;
+    if (!tapped.current) return;
     event.preventDefault();
     if (event.type === "click") {
       event.stopPropagation();
-      commentTapped.current = false;
+      tapped.current = false;
     }
   }, []);
 
@@ -4269,7 +4623,6 @@ const CanvasInner = ({
   // A handle clicked rather than dragged starts a line that ends at the next
   // handle clicked (React Flow's click-to-connect). Until then a dashed line
   // runs from the handle to the pointer, and Escape lets go of it.
-  const storeApi = useStoreApi<WhiteboardFlowNode, WhiteboardFlowEdge>();
   const clickConnectStart = useStore((s) => s.connectionClickStartHandle);
   const onClickConnectStart: OnConnectStart = useCallback(
     (event, { nodeId }) => {
@@ -4367,6 +4720,7 @@ const CanvasInner = ({
       readOnly,
       readOnlyForLayout: accessReason === "narrow",
       compact,
+      coarse,
       updateNodes,
       updateEdge,
       persistResize,
@@ -4381,6 +4735,7 @@ const CanvasInner = ({
       readOnly,
       accessReason,
       compact,
+      coarse,
       updateNodes,
       updateEdge,
       persistResize,
@@ -4419,14 +4774,28 @@ const CanvasInner = ({
           : eds,
       );
     }
+    if (tool !== "select") setSelectArea(false);
     setPlacing(undefined);
     setHover(undefined);
     setAttachPreview(undefined);
-    commentPress.current = undefined;
+    tapPress.current = undefined;
+    longPress.current.cancel();
     setConnecting(undefined);
     setErasingStrokes(new Set());
     cancelClickConnect();
   }, [tool, setNodes, setEdges, cancelClickConnect]);
+
+  // What Escape does once nothing is open: drops a comment being started, a
+  // line being drawn or joined, or an erase, turns off Select area and goes
+  // back to Select. A touch screen has a Cancel button for it.
+  const cancelTool = useCallback(() => {
+    setDraft(undefined);
+    setSelectArea(false);
+    setConnecting(undefined);
+    setErasingStrokes(new Set());
+    cancelClickConnect();
+    setTool("select");
+  }, [cancelClickConnect]);
 
   // Whether the board has focus: the last press or focus was on it.
   const canvasActive = useRef(false);
@@ -4615,6 +4984,33 @@ const CanvasInner = ({
       showNotice,
       t,
     ],
+  );
+
+  // Pastes text centred on `at`: a copy from a board, or text that becomes
+  // a sticky note (or a text box, for a web address). Says whether there was
+  // anything to paste.
+  const pasteText = useCallback(
+    (text: string, at: XYPosition) => {
+      if (looksLikeClip(text)) {
+        const clip = readClip(text);
+        if (!clip) {
+          showNotice(
+            t(
+              "whiteboard.clipboard.unreadable",
+              "That copy can't be pasted here",
+            ),
+          );
+          return true;
+        }
+        pasteCopy(clip, offsetToCentre(clip, at));
+        return true;
+      }
+      const clip = clipFromText(text, DEFAULT_SIZES);
+      if (!clip) return false;
+      pasteCopy(clip, offsetToCentre(clip, at));
+      return true;
+    },
+    [pasteCopy, showNotice, t],
   );
 
   // A paste lands centred on the pointer while it's over the board, and
@@ -4848,17 +5244,7 @@ const CanvasInner = ({
       const text = event.clipboardData.getData("text/plain");
       if (looksLikeClip(text)) {
         event.preventDefault();
-        const clip = readClip(text);
-        if (!clip) {
-          showNotice(
-            t(
-              "whiteboard.clipboard.unreadable",
-              "That copy can't be pasted here",
-            ),
-          );
-          return;
-        }
-        pasteCopy(clip, offsetToCentre(clip, pasteCentre()));
+        pasteText(text, pasteCentre());
         return;
       }
       const images = imageFiles(event.clipboardData.files);
@@ -4871,10 +5257,7 @@ const CanvasInner = ({
         addImages(images, pasteCentre());
         return;
       }
-      const clip = clipFromText(text, DEFAULT_SIZES);
-      if (!clip) return;
-      event.preventDefault();
-      pasteCopy(clip, offsetToCentre(clip, pasteCentre()));
+      if (pasteText(text, pasteCentre())) event.preventDefault();
     };
     document.addEventListener("copy", onCopy);
     document.addEventListener("paste", onPaste);
@@ -4887,12 +5270,67 @@ const CanvasInner = ({
     copyOfSelection,
     cardsNotCopied,
     cardsLeftOut,
-    pasteCopy,
+    pasteText,
     pasteCentre,
     addImages,
-    showNotice,
-    t,
   ]);
+
+  // The touch screen toolbar's Copy and Paste, which go through the
+  // Clipboard API, so only show where the browser has it. Paste takes a copy
+  // from a board or text (not images) and puts it in the middle of the view.
+  // (absent outside a secure context)
+  const clipboard = navigator.clipboard as Clipboard | undefined;
+  const canCopyByButton = typeof clipboard?.writeText === "function";
+  const canPasteByButton = typeof clipboard?.readText === "function";
+  const copyByButton = useCallback(() => {
+    const { clip, cards } = copyOfSelection();
+    if (clip.nodes.length === 0) {
+      if (cards > 0) cardsNotCopied();
+      return;
+    }
+    if (cards > 0) cardsLeftOut();
+    navigator.clipboard.writeText(clipText(clip)).catch(() => {
+      showNotice(t("whiteboard.clipboard.copyFailed", "Couldn't copy that"));
+    });
+  }, [copyOfSelection, cardsNotCopied, cardsLeftOut, showNotice, t]);
+  const pasteByButton = useCallback(() => {
+    navigator.clipboard
+      .readText()
+      .then((text) => {
+        // The browser can wait on the viewer to allow the paste, by when the
+        // board may have gone read-only (a version opened, say).
+        if (readOnlyNow.current) return;
+        if (!pasteText(text, paneCenter())) {
+          showNotice(
+            t(
+              "whiteboard.clipboard.nothing",
+              "There's nothing on the clipboard to paste",
+            ),
+          );
+        }
+      })
+      .catch(() => {
+        showNotice(
+          t("whiteboard.clipboard.pasteFailed", "Couldn't read the clipboard"),
+        );
+      });
+  }, [pasteText, paneCenter, showNotice, t]);
+  // The touch screen toolbar's Delete, which leaves out anything locked, as
+  // the Delete key does (see onBeforeDelete).
+  const deleteSelection = useCallback(() => {
+    const doomedNodes = flow.getNodes().filter((n) => n.selected);
+    const doomedEdges = flow.getEdges().filter((e) => e.selected);
+    if (doomedNodes.length === 0 && doomedEdges.length === 0) return;
+    void flow.deleteElements({ nodes: doomedNodes, edges: doomedEdges });
+  }, [flow]);
+  const somethingSelected = useMemo(
+    () => nodes.some((n) => n.selected) || edges.some((e) => e.selected),
+    [nodes, edges],
+  );
+  const toggleSelectArea = useCallback(() => {
+    setSelectArea((current) => !current);
+    setTool("select");
+  }, []);
 
   // Whether there's anything selected to duplicate from the node toolbar:
   // nodes but no cards, which can't be copied.
@@ -4955,11 +5393,7 @@ const CanvasInner = ({
           setSidePanel(undefined);
           return;
         }
-        setDraft(undefined);
-        setConnecting(undefined);
-        setErasingStrokes(new Set());
-        cancelClickConnect();
-        setTool("select");
+        cancelTool();
         return;
       }
       // A tool's key picks it, and 1, 2 and 3 set the pen's width, while the
@@ -5106,7 +5540,7 @@ const CanvasInner = ({
     backToNow,
     sidePanel,
     dismissComment,
-    cancelClickConnect,
+    cancelTool,
     selectAll,
     setPenWidth,
     threadRows,
@@ -5160,7 +5594,7 @@ const CanvasInner = ({
     closeComment();
   }, [closeComment]);
   const stopCommenting = useCallback(() => {
-    commentPress.current = undefined;
+    tapPress.current = undefined;
     setTool("select");
   }, []);
   // With a thread (or a comment being started) in the list's place, the
@@ -5360,12 +5794,14 @@ const CanvasInner = ({
     if (capturing) {
       return nodes.map((n) => (n.selected ? { ...n, selected: false } : n));
     }
-    return changed.size === 0
-      ? nodes
-      : nodes.map((n) =>
-          changed.has(n.id) ? { ...n, className: CHANGED_CLASS } : n,
-        );
-  }, [nodes, changed, capturing]);
+    const shown =
+      changed.size === 0
+        ? nodes
+        : nodes.map((n) =>
+            changed.has(n.id) ? { ...n, className: CHANGED_CLASS } : n,
+          );
+    return coarse ? shown.map(dragOnlySelected) : shown;
+  }, [nodes, changed, capturing, coarse]);
   const shownEdges = useMemo(() => {
     if (capturing) {
       return edges.map((e) => (e.selected ? { ...e, selected: false } : e));
@@ -5498,6 +5934,17 @@ const CanvasInner = ({
   );
 
   const drawingTool = tool !== "select";
+  // What the touch screen toolbar's Cancel drops, as Escape would.
+  const toolInUse =
+    drawingTool ||
+    selectingArea ||
+    !!draft ||
+    !!connecting ||
+    !!clickConnectStart;
+  const deleteTitle = t("whiteboard.toolbar.delete", "Delete");
+  const copyTitle = t("whiteboard.toolbar.copy", "Copy");
+  const pasteTitle = t("whiteboard.toolbar.paste", "Paste");
+  const duplicateTitle = t("whiteboard.duplicate.button", "Duplicate");
   // The line being drawn, or the end being moved. A new line shows what both
   // its ends are on; moving an end shows just where that end will go.
   const lineAttached =
@@ -5929,6 +6376,8 @@ const CanvasInner = ({
                   $tool={tool}
                   $readOnly={readOnly}
                   $whosHereHeight={whosHereHeight}
+                  $coarse={coarse}
+                  $clickConnecting={!!clickConnectStart}
                   onPointerDownCapture={onPointerDownCapture}
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}
@@ -5936,9 +6385,22 @@ const CanvasInner = ({
                   onPointerLeave={onPointerLeave}
                   onMouseDownCapture={onTapFollowUp}
                   onClickCapture={onTapFollowUp}
+                  onContextMenu={onContextMenu}
                   onDragOver={onDragOver}
                   onDrop={onDrop}
                 >
+                  {coarse && !readOnly && (
+                    <KeyboardCatcher
+                      ref={keyboardCatcher}
+                      tabIndex={-1}
+                      aria-hidden
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                      onBlur={clearKeyboardCatcher}
+                    />
+                  )}
                   <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
                     nodes={
                       fitsOnOpen && !loadedOnce ? NO_FLOW_NODES : shownNodes
@@ -5976,13 +6438,20 @@ const CanvasInner = ({
                     elementsSelectable={
                       (!readOnly || !!preview) && !drawingTool
                     }
-                    panOnDrag={!drawingTool || (compact && tool === "comment")}
-                    selectionOnDrag={false}
+                    panOnDrag={fingerPans}
+                    selectionOnDrag={selectingArea}
+                    // A finger wobbles, so on a touch screen a node only moves
+                    // once it's dragged as far as a tap could go.
+                    nodeDragThreshold={coarse ? TOUCH_SLOP : 1}
                     deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
                     onlyRenderVisibleElements={!capturing}
                     ariaLabelConfig={ariaLabelConfig}
                   >
                     <Background />
+                    {coarse && <TouchTargetSize wrapperRef={wrapperRef} />}
+                    {coarse && typingIn && (
+                      <KeepAboveKeyboard nodeId={typingIn} />
+                    )}
                     <Controls showInteractive={false} />
                     {showMiniMap && (
                       <MiniMap<WhiteboardFlowNode>
@@ -6221,10 +6690,17 @@ const CanvasInner = ({
                               tool="select"
                               active={tool === "select"}
                               onSelect={pickTool}
-                              title={t(
-                                "whiteboard.toolbar.select",
-                                "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add; Ctrl/⌘+C, Ctrl/⌘+V and Ctrl/⌘+D copy, paste and duplicate)",
-                              )}
+                              title={
+                                coarse
+                                  ? t(
+                                      "whiteboard.toolbar.selectTouch",
+                                      "Select and move (long press to add)",
+                                    )
+                                  : t(
+                                      "whiteboard.toolbar.select",
+                                      "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add; Ctrl/⌘+C, Ctrl/⌘+V and Ctrl/⌘+D copy, paste and duplicate)",
+                                    )
+                              }
                             >
                               <FontAwesomeIcon icon={faArrowPointer} />
                             </ToolButton>
@@ -6232,10 +6708,17 @@ const CanvasInner = ({
                               tool="pen"
                               active={tool === "pen"}
                               onSelect={pickTool}
-                              title={t(
-                                "whiteboard.toolbar.pen",
-                                "Draw (hold Space to pan)",
-                              )}
+                              title={
+                                coarse
+                                  ? t(
+                                      "whiteboard.toolbar.penTouch",
+                                      "Draw (two fingers pan)",
+                                    )
+                                  : t(
+                                      "whiteboard.toolbar.pen",
+                                      "Draw (hold Space to pan)",
+                                    )
+                              }
                             >
                               <FontAwesomeIcon icon={faPen} />
                             </ToolButton>
@@ -6262,6 +6745,27 @@ const CanvasInner = ({
                               <LineStyleIcon kind="end" />
                             </ToolButton>
                           </ButtonGroup>
+                          {coarse && (
+                            <Button
+                              size="sm"
+                              variant={
+                                selectingArea
+                                  ? "secondary"
+                                  : "outline-secondary"
+                              }
+                              onClick={toggleSelectArea}
+                              aria-pressed={selectingArea}
+                              title={t(
+                                "whiteboard.toolbar.selectAreaHelp",
+                                "Drag on the board to draw a box and select what's inside it, instead of panning",
+                              )}
+                            >
+                              {t(
+                                "whiteboard.toolbar.selectArea",
+                                "Select area",
+                              )}
+                            </Button>
+                          )}
                           {tool === "connector" && (
                             <LineStyleControls
                               value={lineStyle}
@@ -6303,10 +6807,17 @@ const CanvasInner = ({
                               tool="sticky"
                               active={tool === "sticky"}
                               onSelect={pickTool}
-                              title={t(
-                                "whiteboard.toolbar.sticky",
-                                "Sticky note: click to place, or drag to size",
-                              )}
+                              title={
+                                coarse
+                                  ? t(
+                                      "whiteboard.toolbar.stickyTouch",
+                                      "Sticky note: tap to place",
+                                    )
+                                  : t(
+                                      "whiteboard.toolbar.sticky",
+                                      "Sticky note: click to place, or drag to size",
+                                    )
+                              }
                             >
                               <FontAwesomeIcon icon={faNoteSticky} />
                             </ToolButton>
@@ -6314,10 +6825,17 @@ const CanvasInner = ({
                               tool="text"
                               active={tool === "text"}
                               onSelect={pickTool}
-                              title={t(
-                                "whiteboard.toolbar.text",
-                                "Text: click to place, or drag to size",
-                              )}
+                              title={
+                                coarse
+                                  ? t(
+                                      "whiteboard.toolbar.textTouch",
+                                      "Text: tap to place",
+                                    )
+                                  : t(
+                                      "whiteboard.toolbar.text",
+                                      "Text: click to place, or drag to size",
+                                    )
+                              }
                             >
                               <FontAwesomeIcon icon={faFont} />
                             </ToolButton>
@@ -6325,10 +6843,17 @@ const CanvasInner = ({
                               tool="frame"
                               active={tool === "frame"}
                               onSelect={pickTool}
-                              title={t(
-                                "whiteboard.toolbar.frame",
-                                "Frame: click to place, or drag to size",
-                              )}
+                              title={
+                                coarse
+                                  ? t(
+                                      "whiteboard.toolbar.frameTouch",
+                                      "Frame: tap to place",
+                                    )
+                                  : t(
+                                      "whiteboard.toolbar.frame",
+                                      "Frame: click to place, or drag to size",
+                                    )
+                              }
                             >
                               <FontAwesomeIcon icon={faObjectGroup} />
                             </ToolButton>
@@ -6397,6 +6922,58 @@ const CanvasInner = ({
                               <FontAwesomeIcon icon={faRotateRight} />
                             </Button>
                           </ButtonGroup>
+                          {coarse && (
+                            <ButtonGroup size="sm">
+                              <Button
+                                variant="outline-secondary"
+                                onClick={deleteSelection}
+                                disabled={!somethingSelected}
+                                title={deleteTitle}
+                                aria-label={deleteTitle}
+                              >
+                                <FontAwesomeIcon icon={faTrashCan} />
+                              </Button>
+                              {canCopyByButton && (
+                                <Button
+                                  variant="outline-secondary"
+                                  onClick={copyByButton}
+                                  disabled={!somethingSelected}
+                                  title={copyTitle}
+                                  aria-label={copyTitle}
+                                >
+                                  <FontAwesomeIcon icon={faCopy} />
+                                </Button>
+                              )}
+                              {canPasteByButton && (
+                                <Button
+                                  variant="outline-secondary"
+                                  onClick={pasteByButton}
+                                  title={pasteTitle}
+                                  aria-label={pasteTitle}
+                                >
+                                  <FontAwesomeIcon icon={faPaste} />
+                                </Button>
+                              )}
+                              <Button
+                                variant="outline-secondary"
+                                onClick={duplicateSelection}
+                                disabled={!somethingSelected}
+                                title={duplicateTitle}
+                                aria-label={duplicateTitle}
+                              >
+                                <FontAwesomeIcon icon={faClone} />
+                              </Button>
+                            </ButtonGroup>
+                          )}
+                          {coarse && toolInUse && (
+                            <Button
+                              size="sm"
+                              variant="outline-secondary"
+                              onClick={cancelTool}
+                            >
+                              {t("common.cancel", "Cancel")}
+                            </Button>
+                          )}
                           {/* A disabled button gets no hover, so the reason
                             goes on a wrapper */}
                           <span title={lockTitle} className="d-inline-block">

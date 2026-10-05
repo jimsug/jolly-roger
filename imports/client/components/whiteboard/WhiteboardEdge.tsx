@@ -90,7 +90,7 @@ const EdgeGrip = ({
   );
   return (
     <Grip
-      className="nodrag nopan"
+      className="nodrag nopan jr-line-grip"
       style={{
         transform: `translate(-50%, -50%) translate(${x}px, ${y}px) scale(${scale})`,
       }}

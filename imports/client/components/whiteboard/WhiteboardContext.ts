@@ -14,6 +14,9 @@ export interface WhiteboardActions {
   // A phone-sized screen, where the board can only be looked at and
   // commented on, with bigger targets for fingers.
   compact: boolean;
+  // A touch screen that isn't compact, where text being typed is 16px so
+  // iOS doesn't zoom in on it.
+  coarse: boolean;
   // Each saves through its method and reports a refusal on the board;
   // onDone hears whether it was refused, once every batch is back.
   updateNodes: (
