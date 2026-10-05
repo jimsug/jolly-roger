@@ -45,6 +45,7 @@ import "./unit/imports/lib/whiteboard-links";
 import "./unit/imports/lib/whiteboard-liveDrags";
 import "./unit/imports/lib/whiteboard-minimap";
 import "./unit/imports/lib/whiteboard-notOnBoard";
+import "./unit/imports/lib/whiteboard-outline";
 import "./unit/imports/lib/whiteboard-remoteActivity";
 import "./unit/imports/lib/whiteboard-reset";
 import "./unit/imports/lib/whiteboard-rounds";

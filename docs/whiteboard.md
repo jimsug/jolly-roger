@@ -25,6 +25,7 @@ files:
   - imports/client/components/whiteboard/LockLayoutButtons.tsx
   - imports/client/components/whiteboard/NodeChrome.tsx
   - imports/client/components/whiteboard/NodeHandles.tsx
+  - imports/client/components/whiteboard/OutlinePanel.tsx
   - imports/client/components/whiteboard/PeopleContext.ts
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
   - imports/client/components/whiteboard/RemoteEditingContext.ts
@@ -73,6 +74,7 @@ files:
   - imports/lib/whiteboard/links.ts
   - imports/lib/whiteboard/minimap.ts
   - imports/lib/whiteboard/notOnBoard.ts
+  - imports/lib/whiteboard/outline.ts
   - imports/lib/whiteboard/remoteActivity.ts
   - imports/lib/whiteboard/reset.ts
   - imports/lib/whiteboard/rounds.ts
@@ -435,6 +437,50 @@ the screen, so a search never moves anything by itself. The matching is
 `searchBoard` in `imports/lib/whiteboard/search.ts`. Hidden feeder arrows
 aren't found; the "Not on the board" panel lists them.
 
+### Outline
+
+The Outline button, just after the search field on both toolbars, opens a
+panel listing the board's frames as a tree: the rounds seeded from tags,
+Ungrouped, and frames people made, nested as they are on the board. Each
+level runs top to bottom and then left to right, as the frames sit, with
+Ungrouped last. Each row shows the frame's label ("Unnamed frame" for a
+hand-made one with none), a padlock if it's locked, a mark if it's
+collapsed for everyone, the round's tick once it's finished or its star
+once it's ready to meta, and "n/m solved" counting the cards directly
+inside it, as its header does (see Rounds). Frames someone took off the
+board aren't listed. The tree is `outlineTree` in
+`imports/lib/whiteboard/outline.ts`, which also tolerates a parent loop by
+listing the frames in it at the top level, as the board draws them. It
+follows the board live, and works for anyone who can see the board,
+archived hunts included.
+
+Picking a row fits the view to that frame, with a tenth of the view's room
+round it and the zoom kept within the board's limits, and pulses it as the
+search does. Beside a wide board the panel stays open, so the fit also
+leaves the panel's width clear on the right and the frame isn't left under
+it. A frame inside a collapsed one opens that one for this viewer first
+(see Collapsed rounds) and is fitted once it's drawn; a collapsed frame
+itself is fitted as it's drawn, folded to its header. "Fit whole board",
+above the tree, fits everything on show. A row with frames nested in it
+has a chevron that folds them away in the panel only, leaving the board
+alone; what's folded, and the row last focused, last until the board is
+left, and opening the panel again scrolls back to that row. The rows are a
+tree for the keyboard: Up and Down move between them (Up from the first
+goes to Fit whole board), Home and End go to the first and last, Right
+opens a folded row or steps into an open one, Left folds an open row or
+steps out to its parent, and Enter fits the view to the frame. Escape
+closes the panel, from inside it or from the board, and Delete and
+Backspace in the panel don't touch the board's selection.
+
+The Outline shares the top-right slot with Not on the board, Comments and
+History, so only one of them shows at a time, and like them it gives way to
+an open thread or a comment being started. The Outline button shows as
+pressed only while the panel itself is showing; pressed while a thread has
+its place, it closes the thread and brings the Outline back. On a phone it
+opens as a sheet along the bottom, like a thread's, with rows 44px tall;
+picking a row closes the sheet as the board moves to the frame, so the
+frame isn't left under it.
+
 ### Links
 
 The board page follows four kinds of link, each of which waits for the board
@@ -505,10 +551,10 @@ hunt, or while offline) there's no Comment tool, so the Comments button
 carries it instead.
 
 The toolbar's Comments button opens a panel in the same place as the "Not on
-the board" and History panels, so only one of them shows at a time. It lists the board's
-threads with unread ones first and then the most recent activity first,
-leaving out resolved threads unless the resolved toggle is on, as the pins
-do. Each row shows what the comment is on, the first line of the comment,
+the board", History and Outline panels, so only one of them shows at a
+time. It lists the board's threads with unread ones first and then the most
+recent activity first, leaving out resolved threads unless the resolved
+toggle is on, as the pins do. Each row shows what the comment is on, the first line of the comment,
 the number of replies and, for an unread thread, a dot. Picking a row shows
 the thread the way "Show on board" in chat does: the board pans to the pin,
 the thread opens and the pin pulses. The panel comes back when the thread is
@@ -578,7 +624,7 @@ browser's own. Each tool's tooltip shows its key.
 | N | Go to the next comment thread with something unread (see Comments) | |
 | 1, 2, 3 | Thin, medium or thick pen | edit |
 | Ctrl+A (Cmd+A on a Mac) | Select everything but frames (a selected frame carries its contents anyway) and no lines, switching to Select | edit |
-| Escape | Close an open Feeders popover, then an open comment thread, then the Comments list, then leave a preview, then close History; with none of those open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
+| Escape | Close an open Feeders popover, then an open comment thread, then the Comments list, then leave a preview, then close History or the Outline; with none of those open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
 | / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
 | Delete or Backspace | Delete the selection, leaving out anything locked (see Locks) | edit |
 | Ctrl+C (Cmd+C) | Copy the selection (see Copy, paste and duplicate), unless some text on the page is selected | edit |
@@ -1362,9 +1408,14 @@ payload's hash. Chunk 0 reads and compresses the board; a board of more than
 one chunk is then kept on that server for the connection, which asks for
 the rest with chunk 0's hash and gets them from the same compression. It's
 dropped once its last chunk is sent, when the connection starts another
-export, or when the connection closes. If the server no longer has it (the
-connection dropped and came back), the board is read again, and a hash that
-differs from chunk 0's means the board changed in between: the client then
+export, when the connection closes, or five minutes after a chunk of it was
+last fetched (`EXPORT_KEPT_MS`), so a download abandoned part-way doesn't
+hold the compressed board in memory for as long as the tab stays open. That
+last is checked whenever anyone on that server asks for a chunk, which
+drops every stale export, rather than on a timer. If the server no longer
+has it (the connection dropped and came back, or it expired), the board is
+read again, and a hash that differs from chunk 0's means the board changed
+in between: the client then
 says "Couldn't download the board: it changed while it was downloading. Try
 again." The method isn't unblocked, so one connection's export calls run
 one after another. The client joins the chunks, unpacks them with
@@ -1484,15 +1535,15 @@ do so from a desktop.
 On a phone the viewer can pan and pinch, open puzzles from cards, show and
 hide resolved pins, hide ink (see Ink), open a pin's thread, place a
 comment, reply, react, resolve and reopen, delete their own thread while
-nobody else has replied (operators can always), use search and the Comments
-list, copy a link to the view, follow "Show on board" from chat, and open a
+nobody else has replied (operators can always), use search, the Outline and
+the Comments list, copy a link to the view, follow "Show on board" from chat, and open a
 collapsed round for themselves ("Show (only for you)", see Collapsed
 rounds). Nothing else: no tools, no moving, no folding rounds for everyone,
 no who-can-edit button.
 
 The toolbar says "Viewing only" with "Editing needs a wider screen. You can
-still comment." under it, and its Comment, Comments, resolved and Hide ink
-buttons are 44px square. While the Comment tool is out, a banner under the
+still comment." under it, and its Outline, Comment, Comments, resolved and
+Hide ink buttons are 44px square. While the Comment tool is out, a banner under the
 toolbar says "Tap where your comment goes", with Cancel to put the tool
 away.
 

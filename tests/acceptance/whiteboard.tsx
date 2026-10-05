@@ -1296,6 +1296,315 @@ if (Meteor.isClient) {
         );
         await waitFor(() => assert.equal(location.current?.search, ""));
       });
+
+      describe("the outline", function () {
+        // From the fixture hunt
+        const gamesIsland = "nPbTi6DPvjAkot94n";
+        let roundFrame: string;
+        // A collapsed frame of the test's own, with one nested in it, well
+        // away from the rounds.
+        const outer = Random.id();
+        const inner = Random.id();
+
+        before(async function () {
+          this.timeout(10000);
+          const round = await WhiteboardNodes.findOneAsync({
+            board: boardId,
+            tag: gamesIsland,
+          });
+          assert.ok(round);
+          roundFrame = round._id;
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: outer,
+                type: "frame",
+                position: { x: 30000, y: 30000 },
+                width: 900,
+                height: 700,
+                label: "Outline outer",
+              },
+              {
+                _id: inner,
+                type: "frame",
+                parent: outer,
+                position: { x: 100, y: 120 },
+                width: 400,
+                height: 300,
+                label: "Outline inner",
+              },
+            ],
+          });
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [{ _id: outer, collapsed: true }],
+          });
+        });
+
+        after(async function () {
+          await deleteWhiteboardNodes.callPromise({
+            boardId,
+            nodeIds: [inner, outer],
+          });
+        });
+
+        const openOutline = async () => {
+          await screen.findByRole(
+            "combobox",
+            { name: "Search the board" },
+            { timeout: 20000 },
+          );
+          await act(async () => {
+            fireEvent.click(
+              await screen.findByRole(
+                "button",
+                { name: "Outline" },
+                { timeout: 20000 },
+              ),
+            );
+            await stabilize();
+          });
+          return screen.findByRole("tree", { name: "Outline" });
+        };
+        const row = (name: RegExp) => screen.getByRole("treeitem", { name });
+
+        // The frame is marked, and the view takes all of it in.
+        const assertFitted = (frameId: string) => {
+          assert.isNotNull(
+            document.querySelector(`.jr-node-pulse[data-node="${frameId}"]`),
+          );
+          const frame = nodeElement(frameId);
+          assert.isNotNull(frame);
+          const box = frame.getBoundingClientRect();
+          const pane = document
+            .querySelector(".react-flow__pane")!
+            .getBoundingClientRect();
+          assert.isAtLeast(box.left, pane.left - 1);
+          assert.isAtLeast(box.top, pane.top - 1);
+          assert.isAtMost(box.right, pane.right + 1);
+          assert.isAtMost(box.bottom, pane.bottom + 1);
+        };
+
+        it("lists the rounds with their counts and nesting, and fits the view to one", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          await openOutline();
+          const round = await screen.findByRole(
+            "treeitem",
+            { name: /^games-island/ },
+            { timeout: 10000 },
+          );
+          assert.match(round.textContent ?? "", /\d+\/\d+ solved/);
+          assert.equal(round.getAttribute("aria-level"), "1");
+
+          const outerRow = row(/^Outline outer/);
+          assert.equal(outerRow.getAttribute("aria-expanded"), "true");
+          within(outerRow).getByText("Collapsed on the board");
+          const innerRow = row(/^Outline inner/);
+          assert.equal(innerRow.getAttribute("aria-level"), "2");
+          assert.isNull(innerRow.getAttribute("aria-expanded"));
+          const rows = screen.getAllByRole("treeitem");
+          assert.equal(rows.indexOf(innerRow), rows.indexOf(outerRow) + 1);
+
+          await act(async () => {
+            fireEvent.click(round);
+            await stabilize();
+          });
+          await waitFor(() => assertFitted(roundFrame), { timeout: 10000 });
+          // The panel stays open beside a wide board, clear of the frame
+          const panel = screen
+            .getByRole("tree", { name: "Outline" })
+            .closest("section")!;
+          await waitFor(
+            () =>
+              assert.isAtMost(
+                nodeElement(roundFrame)!.getBoundingClientRect().right,
+                panel.getBoundingClientRect().left + 1,
+              ),
+            { timeout: 10000 },
+          );
+        });
+
+        it("fits the whole board, follows the board live, and gives focus back on Escape", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          const tree = await openOutline();
+          const round = await within(tree).findByRole(
+            "treeitem",
+            { name: /^games-island/ },
+            { timeout: 10000 },
+          );
+          await act(async () => {
+            fireEvent.click(round);
+            await stabilize();
+          });
+          await waitFor(() => assertFitted(roundFrame), { timeout: 10000 });
+          const viewport = () =>
+            document.querySelector<HTMLElement>(".react-flow__viewport")!.style
+              .transform;
+          // Once the board has stopped moving
+          let before = viewport();
+          await waitFor(
+            () => {
+              const now = viewport();
+              const settled = now === before;
+              before = now;
+              assert.isTrue(settled);
+            },
+            { timeout: 10000, interval: 500 },
+          );
+          await act(async () => {
+            fireEvent.click(
+              screen.getByRole("button", { name: "Fit whole board" }),
+            );
+            await stabilize();
+          });
+          await waitFor(() => assert.notEqual(viewport(), before), {
+            timeout: 10000,
+          });
+
+          // A frame added while the panel is open gets a row
+          const added = Random.id();
+          try {
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [
+                {
+                  _id: added,
+                  type: "frame",
+                  position: { x: 32000, y: 30000 },
+                  width: 400,
+                  height: 300,
+                  label: "Outline added",
+                },
+              ],
+            });
+            const addedRow = await screen.findByRole(
+              "treeitem",
+              { name: /^Outline added/ },
+              { timeout: 10000 },
+            );
+
+            // Escape from a row closes the panel and focus goes back to
+            // its button
+            act(() => addedRow.focus());
+            await act(async () => {
+              fireEvent.keyDown(addedRow, { key: "Escape" });
+              await stabilize();
+            });
+            assert.isNull(screen.queryByRole("tree", { name: "Outline" }));
+            assert.equal(
+              document.activeElement,
+              screen.getByRole("button", { name: "Outline" }),
+            );
+          } finally {
+            await deleteWhiteboardNodes.callPromise({
+              boardId,
+              nodeIds: [added],
+            });
+          }
+        });
+
+        it("moves between rows with the arrow keys, folds them, and fits on Enter", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          await openOutline();
+          const outerRow = await screen.findByRole(
+            "treeitem",
+            { name: /^Outline outer/ },
+            { timeout: 10000 },
+          );
+          const press = async (target: Element, key: string) => {
+            await act(async () => {
+              fireEvent.keyDown(target, { key });
+              await stabilize();
+            });
+          };
+          act(() => outerRow.focus());
+          await press(outerRow, "ArrowDown");
+          assert.equal(document.activeElement, row(/^Outline inner/));
+          await press(document.activeElement!, "ArrowLeft");
+          assert.equal(document.activeElement, outerRow);
+          await press(outerRow, "ArrowLeft");
+          assert.equal(outerRow.getAttribute("aria-expanded"), "false");
+          assert.isNull(
+            screen.queryByRole("treeitem", { name: /^Outline inner/ }),
+          );
+          await press(outerRow, "ArrowRight");
+          assert.equal(outerRow.getAttribute("aria-expanded"), "true");
+          await press(outerRow, "ArrowRight");
+          const innerRow = row(/^Outline inner/);
+          assert.equal(document.activeElement, innerRow);
+
+          // The frame it's in is collapsed, so it's opened for this viewer
+          // first.
+          await press(innerRow, "Enter");
+          await waitFor(() => assertFitted(inner), { timeout: 10000 });
+        });
+
+        it("works for a viewer on an archived hunt", async function () {
+          this.timeout(30000);
+          await setHuntArchived.callPromise({ huntId, isArchived: true });
+          try {
+            render(<TestApp />);
+            await goTo(boardPath);
+            await screen.findByText("Viewing only", {}, { timeout: 20000 });
+            await openOutline();
+            const round = await screen.findByRole(
+              "treeitem",
+              { name: /^games-island/ },
+              { timeout: 10000 },
+            );
+            await act(async () => {
+              fireEvent.click(round);
+              await stabilize();
+            });
+            await waitFor(() => assertFitted(roundFrame), { timeout: 10000 });
+          } finally {
+            await setHuntArchived.callPromise({ huntId, isArchived: false });
+          }
+        });
+
+        it("opens as a sheet on a phone, and closes it once a frame is picked", async function () {
+          this.timeout(30000);
+          const phone = simulatePhone();
+          try {
+            render(<TestApp />);
+            await goTo(boardPath);
+            await screen.findByText(
+              "Editing needs a wider screen. You can still comment.",
+              {},
+              { timeout: 20000 },
+            );
+            const tree = await openOutline();
+            const sheet = tree.closest(".react-flow__panel.jr-comment-sheet");
+            assert.isNotNull(sheet);
+            const round = await within(tree).findByRole(
+              "treeitem",
+              { name: /^games-island/ },
+              { timeout: 10000 },
+            );
+            assert.isAtLeast(round.getBoundingClientRect().height, 44);
+            await act(async () => {
+              fireEvent.click(round);
+              await stabilize();
+            });
+            await waitFor(
+              () => {
+                assert.isNull(screen.queryByRole("tree", { name: "Outline" }));
+                assertFitted(roundFrame);
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            phone.restore();
+          }
+        });
+      });
     });
 
     describe("deleted and replaced puzzles", function () {

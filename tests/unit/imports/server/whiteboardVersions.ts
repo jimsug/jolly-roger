@@ -52,6 +52,7 @@ import { resetLayout } from "../../../../imports/server/whiteboardReset";
 import {
   compressVersion,
   decodeVersion,
+  EXPORT_KEPT_MS,
   exportBoard,
   pruneWhiteboardVersions,
   restoreItems,
@@ -494,6 +495,89 @@ describe("whiteboard versions", function () {
         const third = await exportBoard(member, boardId, 0, undefined, null);
         await exportBoard(member, boardId, 1, third.hash, null);
         assert.equal(reads(), 4);
+      });
+
+      it("drops an export nothing has fetched from for five minutes", async function () {
+        const reads = boardReads();
+        const conn = connection();
+        // Only Date, so the database's own timers still run
+        const clock = sinon.useFakeTimers({
+          now: Date.now(),
+          toFake: ["Date"],
+        });
+        const other = connection();
+        try {
+          const first = await exportBoard(member, boardId, 0, undefined, conn);
+          clock.tick(EXPORT_KEPT_MS - 1000);
+          // Another connection's export sweeps, but this one isn't stale yet
+          await exportBoard(member, boardId, 0, undefined, other);
+          assert.equal(reads(), 2);
+          clock.tick(1000);
+          await WhiteboardNodes.insertAsync({
+            hunt: huntId,
+            board: boardId,
+            type: "text",
+            position: { x: 0, y: 0 },
+            createdBy: member,
+          });
+          const second = await exportBoard(
+            member,
+            boardId,
+            1,
+            first.hash,
+            conn,
+          );
+          assert.equal(reads(), 3);
+          assert.notEqual(second.hash, first.hash);
+        } finally {
+          other.close();
+        }
+      });
+
+      it("keeps an export for its next chunk until five minutes are up", async function () {
+        const reads = boardReads();
+        const conn = connection();
+        const clock = sinon.useFakeTimers({
+          now: Date.now(),
+          toFake: ["Date"],
+        });
+        const first = await exportBoard(member, boardId, 0, undefined, conn);
+        clock.tick(EXPORT_KEPT_MS - 1000);
+        const second = await exportBoard(member, boardId, 1, first.hash, conn);
+        assert.equal(second.hash, first.hash);
+        assert.equal(reads(), 1);
+      });
+
+      it("counts the five minutes from the last chunk fetched", async function () {
+        // A second sticky that doesn't compress, so there are more than two
+        // chunks
+        await WhiteboardNodes.insertAsync({
+          hunt: huntId,
+          board: boardId,
+          type: "sticky",
+          position: { x: 0, y: 0 },
+          text: randomBytes(6 * 1024 * 1024).toString("base64"),
+          createdBy: member,
+        });
+        const reads = boardReads();
+        const conn = connection();
+        const clock = sinon.useFakeTimers({
+          now: Date.now(),
+          toFake: ["Date"],
+        });
+        try {
+          const first = await exportBoard(member, boardId, 0, undefined, conn);
+          assert.isAtLeast(first.chunkCount, 3);
+          clock.tick(EXPORT_KEPT_MS - 1000);
+          await exportBoard(member, boardId, 1, first.hash, conn);
+          // Over five minutes since chunk 0, but not since chunk 1
+          clock.tick(2000);
+          const third = await exportBoard(member, boardId, 2, first.hash, conn);
+          assert.equal(third.hash, first.hash);
+          assert.equal(reads(), 1);
+        } finally {
+          conn.close();
+        }
       });
     });
 

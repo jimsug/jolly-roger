@@ -21,6 +21,7 @@ import { faPen } from "@fortawesome/free-solid-svg-icons/faPen";
 import { faRotateLeft } from "@fortawesome/free-solid-svg-icons/faRotateLeft";
 import { faRotateRight } from "@fortawesome/free-solid-svg-icons/faRotateRight";
 import { faSignature } from "@fortawesome/free-solid-svg-icons/faSignature";
+import { faSitemap } from "@fortawesome/free-solid-svg-icons/faSitemap";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type {
   AriaLabelConfig,
@@ -40,6 +41,7 @@ import {
   Background,
   ConnectionMode,
   Controls,
+  getViewportForBounds,
   MiniMap,
   NodeToolbar,
   Panel,
@@ -271,6 +273,7 @@ import LineStyleIcon from "./LineStyleIcon";
 import LockLayoutButtons from "./LockLayoutButtons";
 import { MIN_SIZES } from "./NodeChrome";
 import NodePulse from "./NodePulse";
+import OutlinePanel, { OUTLINE_WIDTH } from "./OutlinePanel";
 import PeopleContext from "./PeopleContext";
 import PointNode from "./PointNode";
 import PuzzleCardNode from "./PuzzleCardNode";
@@ -526,9 +529,9 @@ const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
     );
   }
 
-  /* On a phone a thread opens in a sheet along the bottom, as wide as the
-     board, clear of the keyboard and short of the top of both the screen
-     and the board. */
+  /* On a phone a thread, or the Outline, opens in a sheet along the bottom,
+     as wide as the board, clear of the keyboard and short of the top of
+     both the screen and the board. */
   .react-flow__panel.bottom.center.jr-comment-sheet {
     left: 0;
     right: 0;
@@ -639,10 +642,10 @@ const PreviewItemBox = styled(ToolBox)`
   font-size: 13px;
 `;
 
-// Where a thread's panel goes: the top right of the board or, on a phone, a
-// sheet along its bottom that rises above the keyboard. It stays the same
-// element either way, so the screen changing size mid-reply doesn't throw
-// away what's been typed.
+// Where a thread's panel, or the Outline, goes: the top right of the board
+// or, on a phone, a sheet along its bottom that rises above the keyboard. It
+// stays the same element either way, so the screen changing size mid-reply
+// doesn't throw away what's been typed.
 const CommentPanelPlace = ({
   compact,
   children,
@@ -672,6 +675,16 @@ const CommentPanelPlace = ({
     </Panel>
   );
 };
+
+// The Outline's toolbar button, finger-sized on a phone.
+const OutlineButton = styled(Button)<{ $compact: boolean }>`
+  ${({ $compact }) =>
+    $compact &&
+    css`
+      min-width: 44px;
+      min-height: 44px;
+    `}
+`;
 
 // The read-only toolbar's buttons, finger-sized on a phone.
 const ReadOnlyButtons = styled(ButtonGroup)<{ $compact: boolean }>`
@@ -992,6 +1005,17 @@ const unannounced = (reason: WhiteboardAccessReason | undefined) =>
 const SHEET_OFFSET = 0.3;
 // How long a pin or node pulses after the board pans to it.
 const PULSE_MS = 2200;
+// The room left round a frame the Outline fits the view to, as a share of
+// the view.
+const OUTLINE_FIT_PADDING = 0.1;
+// Beside a wide board the Outline stays open at the top right, so a fit
+// leaves its width clear on that side, with the panel's margin and a gap.
+const OUTLINE_FIT_PADDING_BESIDE = {
+  top: OUTLINE_FIT_PADDING,
+  bottom: OUTLINE_FIT_PADDING,
+  left: OUTLINE_FIT_PADDING,
+  right: `${OUTLINE_WIDTH + 40}px`,
+} as const;
 // How long a note about a link that couldn't be followed stays up.
 const NOTICE_MS = 8000;
 
@@ -1291,9 +1315,10 @@ const CanvasInner = ({
   const [penColor, setPenColor] = useWhiteboardPenColor();
   const [penWidth, setPenWidth] = useWhiteboardPenWidth();
   // The panel at the top right, under any open thread: what isn't on the
-  // board, or the list of comments. Only one shows at a time.
+  // board, the list of comments, History or the Outline. Only one shows at a
+  // time.
   const [sidePanel, setSidePanel] = useState<
-    "hidden" | "comments" | "history"
+    "hidden" | "comments" | "history" | "outline"
   >();
   const closeHiddenPanel = useCallback(
     () =>
@@ -3386,6 +3411,46 @@ const CanvasInner = ({
     },
     [flow, nodeCenter, panTo, pulseAt],
   );
+  const outlineFitPadding = compact
+    ? OUTLINE_FIT_PADDING
+    : OUTLINE_FIT_PADDING_BESIDE;
+  // Fits the view to a frame and marks it, if it's drawn, and says whether
+  // it was. The zoom is kept within the board's own limits.
+  const fitViewToFrame = useCallback(
+    (id: string) => {
+      const rect = absoluteRect(id);
+      const wrapper = wrapperRef.current;
+      if (!rect || rect.width <= 0 || rect.height <= 0 || !wrapper) {
+        return false;
+      }
+      void flow.setViewport(
+        getViewportForBounds(
+          rect,
+          wrapper.clientWidth,
+          wrapper.clientHeight,
+          MIN_ZOOM,
+          MAX_ZOOM,
+          outlineFitPadding,
+        ),
+        { duration: 400 },
+      );
+      pulseAt({ node: id });
+      return true;
+    },
+    [absoluteRect, flow, pulseAt, outlineFitPadding],
+  );
+  // A frame picked in the Outline from inside a collapsed frame, fitted to
+  // once that frame is open for this viewer and it's drawn.
+  const [pendingFit, setPendingFit] = useState<string>();
+  useEffect(() => {
+    if (!pendingFit) return;
+    const doc = nodeDocs.find((d) => d._id === pendingFit);
+    if (!doc || doc.hidden || fitViewToFrame(pendingFit))
+      setPendingFit(undefined);
+    // nodes isn't read: it re-runs this once React Flow has drawn the frame
+    // its collapsed parent hid.
+  }, [pendingFit, nodeDocs, nodes, fitViewToFrame]);
+
   // A line the search found inside a collapsed frame, shown once the frame
   // is open and the line is drawn to its real ends.
   const [pendingLine, setPendingLine] = useState<string>();
@@ -4837,7 +4902,8 @@ const CanvasInner = ({
         return;
       }
       // Escape closes an open thread first, then the Comments list, then
-      // leaves a preview, then closes History; then it drops a comment being
+      // leaves a preview, then closes History or the Outline (which also
+      // closes itself on Escape from inside it); then it drops a comment being
       // started, a line being drawn or joined, or an erase, and goes back to
       // Select. The thread's panel closes itself on Escape from inside it,
       // and the restore confirmation does the same. An open Feeders popover
@@ -4856,7 +4922,7 @@ const CanvasInner = ({
           backToNow();
           return;
         }
-        if (sidePanel === "history") {
+        if (sidePanel === "history" || sidePanel === "outline") {
           setSidePanel(undefined);
           return;
         }
@@ -5082,6 +5148,49 @@ const CanvasInner = ({
     setSidePanel((current) => (current === "history" ? undefined : "history"));
     closeComment();
   }, [closeComment]);
+  const outlineButtonRef = useRef<HTMLButtonElement>(null);
+  // The Outline's folded rows and the row last focused in it, kept while
+  // the board is open.
+  const [outlineFolded, setOutlineFolded] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [outlineCurrent, setOutlineCurrent] = useState<string>();
+  // An open thread or a comment being started hides the Outline, and the
+  // button then closes it and brings the Outline back.
+  const outlineShown = sidePanel === "outline" && !draft && !openThreadData;
+  const toggleOutline = useCallback(() => {
+    if (outlineShown) {
+      setSidePanel(undefined);
+      return;
+    }
+    setSidePanel("outline");
+    closeComment();
+  }, [outlineShown, closeComment]);
+  // Closing the Outline from inside it puts focus back on its button.
+  const closeOutline = useCallback(() => {
+    setSidePanel((current) => (current === "outline" ? undefined : current));
+    outlineButtonRef.current?.focus();
+  }, []);
+  // On a phone the Outline's sheet covers the bottom of the board, so picking
+  // a row closes it as the board starts to move.
+  const closeOutlineSheet = useCallback(() => {
+    if (!compact) return;
+    setSidePanel((current) => (current === "outline" ? undefined : current));
+  }, [compact]);
+  const showOutlineFrame = useCallback(
+    (id: string) => {
+      // A frame inside a collapsed one is fitted to once that one is open.
+      const later = peekAround(id) || !fitViewToFrame(id);
+      setPendingFit(later ? id : undefined);
+      closeOutlineSheet();
+    },
+    [peekAround, fitViewToFrame, closeOutlineSheet],
+  );
+  const fitWholeBoard = useCallback(() => {
+    setPendingFit(undefined);
+    void flow.fitView({ padding: outlineFitPadding, duration: 400 });
+    closeOutlineSheet();
+  }, [flow, outlineFitPadding, closeOutlineSheet]);
 
   const showVersion = useCallback(
     (version: WhiteboardVersionType) => {
@@ -5412,6 +5521,7 @@ const CanvasInner = ({
       )}
     </AccessNotice>
   ) : null;
+  const outlineTitle = t("whiteboard.outline.title", "Outline");
   const searchTools = (
     <>
       <BoardSearch
@@ -5423,6 +5533,18 @@ const CanvasInner = ({
         onShow={showSearchHit}
         onPutBack={putBackSearchHit}
       />
+      <OutlineButton
+        ref={outlineButtonRef}
+        size="sm"
+        variant={outlineShown ? "secondary" : "outline-secondary"}
+        $compact={compact}
+        onClick={toggleOutline}
+        title={outlineTitle}
+        aria-label={outlineTitle}
+        aria-pressed={outlineShown}
+      >
+        <FontAwesomeIcon icon={faSitemap} />
+      </OutlineButton>
       <CopyToClipboardButton
         size="sm"
         variant="outline-secondary"
@@ -6576,6 +6698,23 @@ const CanvasInner = ({
                           onDeleted={closeDeletedComment}
                           onDraftSent={onDraftSent}
                           onError={reportRefusal}
+                        />
+                      </CommentPanelPlace>
+                    )}
+                    {outlineShown && (
+                      <CommentPanelPlace compact={compact}>
+                        <OutlinePanel
+                          nodes={nodeDocs}
+                          tagNames={tagNames}
+                          rounds={rounds}
+                          compact={compact}
+                          folded={outlineFolded}
+                          setFolded={setOutlineFolded}
+                          current={outlineCurrent}
+                          setCurrent={setOutlineCurrent}
+                          onShow={showOutlineFrame}
+                          onFitAll={fitWholeBoard}
+                          onClose={closeOutline}
                         />
                       </CommentPanelPlace>
                     )}

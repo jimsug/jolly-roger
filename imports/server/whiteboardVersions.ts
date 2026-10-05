@@ -598,12 +598,26 @@ interface PendingExport {
   boardId: string;
   hash: string;
   chunks: Uint8Array<ArrayBuffer>[];
+  // When a chunk of it was last fetched.
+  fetchedAt: number;
 }
+// How long an export is kept for its later chunks after its last fetch.
+export const EXPORT_KEPT_MS = 5 * 60 * 1000;
 // By connection, which fetches one export at a time. Each is dropped once
-// its last chunk is sent, when the connection starts another, or when the
-// connection closes.
+// its last chunk is sent, when the connection starts another, when the
+// connection closes, or once nothing has fetched from it for EXPORT_KEPT_MS
+// (checked on the next export anyone asks for), so an abandoned export
+// doesn't sit in memory as long as its connection stays open.
 const pendingExports = new Map<string, PendingExport>();
 const watchedConnections = new Set<string>();
+
+function dropStaleExports(now: number) {
+  pendingExports.forEach((pending, connectionId) => {
+    if (now - pending.fetchedAt >= EXPORT_KEPT_MS) {
+      pendingExports.delete(connectionId);
+    }
+  });
+}
 
 function keepExport(
   connection: Pick<Meteor.Connection, "id" | "onClose">,
@@ -635,6 +649,7 @@ export async function exportBoard(
   if (!Number.isInteger(index) || index < 0) {
     throw new Meteor.Error(400, "No such part of the board");
   }
+  dropStaleExports(Date.now());
   let pending = connection ? pendingExports.get(connection.id) : undefined;
   if (index === 0 || pending?.boardId !== boardId || pending.hash !== hash) {
     const nodes = await WhiteboardNodes.find({ board: boardId }).fetchAsync();
@@ -644,7 +659,10 @@ export async function exportBoard(
       boardId,
       hash: serialized.hash,
       chunks: await compressVersion(serialized.json),
+      fetchedAt: Date.now(),
     };
+  } else {
+    pending.fetchedAt = Date.now();
   }
   const data = pending.chunks[index];
   if (connection) {
