@@ -1915,8 +1915,9 @@ Its comments and lines go with it, since its id is kept.
 "Reset layout…" (a grid button beside History in the toolbar) is there for
 people who can edit, while history is turned on. It asks first: "Reset the
 layout? Every card and round frame goes back to where the puzzle list puts
-it. Notes, drawings, lines and comments stay. The board as it is now is
-saved in history, so you can undo this from there." with a checkbox, "Also
+it, and collapsed rounds open. Notes, drawings, lines and comments stay. The
+board as it is now is saved in history, so you can undo this from there."
+with a checkbox, "Also
 put back cards and rounds taken off the board". The question stays up, its
 buttons disabled, until the server answers, and a refusal shows in it. Once
 it's done, a notice says "Layout reset. Undo it from History." with an "Open
@@ -1934,7 +1935,8 @@ that fails, nothing on the board changes. It then lays the hunt out with
 - Each round's frame, Ungrouped and each card keeps its id and gets the
   frame, position and size the layout gives it, and is no longer marked as
   moved by hand. A card someone dragged into their own frame goes back to
-  its round.
+  its round. A frame that was collapsed is opened, for everyone, since the
+  layout it gets is the open one; people's own frames keep their fold.
 - Frames and cards the layout needs that aren't on the board are added, one
   at a time, frames first. If someone puts a card on the board by hand at
   the same moment, theirs is the one placed.

@@ -252,6 +252,27 @@ describe("whiteboard planReset", function () {
     assert.isEmpty(planReset(seed, nodes, { putBack: true }).stack);
   });
 
+  it("opens every frame it places and leaves cards alone", function () {
+    const { tags, puzzles, puzzle, tag } = fixtures();
+    const a = puzzle("a", ["group:one"]);
+    puzzle("b", []);
+    const one = tag("group:one");
+    const nodes = [
+      frame("frameOne", { tag: one._id }),
+      frame("ungrouped", { frameKind: "ungrouped" }),
+      card("cardA", a._id),
+    ];
+    const { nodes: seed } = seedLayout(puzzles, tags, "Ungrouped");
+
+    const plan = planReset(seed, nodes, { putBack: false });
+    const frames = plan.place.filter((p) => p.seed.type === "frame");
+    const cards = plan.place.filter((p) => p.seed.type === "puzzle");
+    assert.lengthOf(frames, 2);
+    assert.lengthOf(cards, 2);
+    frames.forEach((p) => assert.equal(p.$unset.collapsed, ""));
+    cards.forEach((p) => assert.isUndefined(p.$unset.collapsed));
+  });
+
   it("clears manual on everything it places", function () {
     const { tags, puzzles, puzzle, tag } = fixtures();
     const a = puzzle("a", ["group:one"]);

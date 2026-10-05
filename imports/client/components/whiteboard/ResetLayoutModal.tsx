@@ -78,7 +78,7 @@ const ResetLayoutModal = ({
         <p>
           {t(
             "whiteboard.reset.body",
-            "Every card and round frame goes back to where the puzzle list puts it. Notes, drawings, lines and comments stay. The board as it is now is saved in history, so you can undo this from there.",
+            "Every card and round frame goes back to where the puzzle list puts it, and collapsed rounds open. Notes, drawings, lines and comments stay. The board as it is now is saved in history, so you can undo this from there.",
           )}
         </p>
         <FormCheck

@@ -5999,7 +5999,7 @@ describe("whiteboard", function () {
       assert.ok((await Whiteboards.findOneAsync(boardId))?.lastRewrittenAt);
     });
 
-    it("keeps comment anchors and collapsed frames through a reset", async function () {
+    it("keeps comment anchors through a reset and opens collapsed frames", async function () {
       const card = await angerCard();
       const angerFrame = await frameFor(anger._id);
       await upsertNodes(member, boardId, [
@@ -6021,7 +6021,8 @@ describe("whiteboard", function () {
         x: 10,
         y: 20,
       });
-      assert.isTrue((await frameFor(anger._id)).collapsed);
+      // The frame gets the open layout, so it's opened for everyone
+      assert.isUndefined((await frameFor(anger._id)).collapsed);
     });
 
     it("records a reset version first and restores from it", async function () {

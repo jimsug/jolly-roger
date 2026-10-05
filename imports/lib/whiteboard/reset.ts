@@ -69,7 +69,7 @@ export interface ResetPlacement {
   node?: string;
   seed: SeedNode;
   $set: { position: Point; width: number; height: number };
-  $unset: { manual: ""; hidden?: ""; hiddenWithPuzzle?: "" };
+  $unset: { manual: ""; collapsed?: ""; hidden?: ""; hiddenWithPuzzle?: "" };
 }
 
 export interface ResetPlan {
@@ -143,6 +143,7 @@ export function planReset(
       $set: { position, width: s.width, height: s.height },
       $unset: {
         manual: "",
+        ...(s.type === "frame" ? { collapsed: "" as const } : {}),
         ...(putBack
           ? { hidden: "" as const, hiddenWithPuzzle: "" as const }
           : {}),

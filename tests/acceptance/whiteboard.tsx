@@ -11333,7 +11333,7 @@ if (Meteor.isClient) {
           });
           assert.include(
             dialog.textContent ?? "",
-            "Every card and round frame goes back to where the puzzle list puts it.",
+            "Every card and round frame goes back to where the puzzle list puts it, and collapsed rounds open.",
           );
           assert.isFalse(
             within(dialog).getByRole<HTMLInputElement>("checkbox", {

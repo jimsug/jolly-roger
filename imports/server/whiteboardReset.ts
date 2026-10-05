@@ -92,8 +92,8 @@ const modifierFor = (
 });
 
 // Lays the board's cards and round frames out again as a new board's would
-// be, keeping everything else (notes, text, ink, user frames, lines, comments)
-// where it is. The board as it was is recorded first, so History can undo it.
+// be, opening any round frame that was collapsed, and keeping everything else
+// (notes, text, ink, user frames, lines, comments) where it is. The board as it was is recorded first, so History can undo it.
 // With putBack, cards, round frames and feeder arrows someone took off the
 // board come back too.
 export async function resetLayout(
