@@ -11,11 +11,8 @@ import {
   hasLoadingImage,
   hasSendableContent,
 } from "../../chatEditorContent";
-import useChatImagesEnabled from "../../hooks/useChatImagesEnabled";
-import useChatImageUpload from "../../hooks/useChatImageUpload";
+import useEditorImageUpload from "../../hooks/useEditorImageUpload";
 import useMentionableUsers from "../../hooks/useMentionableUsers";
-import type { ChatImageUploadFailure } from "../../uploadChatImage";
-import { chatImageFailureReason } from "../../uploadChatImage";
 import type { FancyEditorHandle } from "../FancyEditor";
 import FancyEditor from "../FancyEditor";
 
@@ -116,55 +113,9 @@ const CommentComposer = ({
   }, [editorKey]);
   const rowRef = useRef<HTMLDivElement>(null);
 
-  const imagesEnabled = useChatImagesEnabled();
-  const [imageNote, setImageNote] = useState<string>();
-  const imagesOff = t(
-    "whiteboard.comments.imagesOff",
-    "Images can't be added here: this server has nowhere to store them.",
-  );
-  const onUploadFailed = useCallback(
-    (failure: ChatImageUploadFailure) => {
-      const reason = chatImageFailureReason(failure, t);
-      if (reason === undefined) {
-        setImageNote(imagesOff);
-        return;
-      }
-      setImageNote(
-        t(
-          "whiteboard.comments.imageFailed",
-          "Couldn't add the image: {{reason}}",
-          {
-            reason,
-            // React escapes text, so i18next's escaping would only show
-            // entities. Goes once both i18n inits stop escaping.
-            interpolation: { escapeValue: false },
-          },
-        ),
-      );
-    },
-    [imagesOff, t],
-  );
-  const upload = useChatImageUpload(puzzleId, editor, onUploadFailed);
-  const uploadImage = useCallback(
-    (file: File) => {
-      if (!imagesEnabled) {
-        setImageNote(imagesOff);
-        return;
-      }
-      setImageNote(undefined);
-      upload(file);
-    },
-    [imagesEnabled, imagesOff, upload],
-  );
-  // The editor keeps the function it was made with, so it calls through this
-  // for the current one.
-  const uploadRef = useRef(uploadImage);
-  useEffect(() => {
-    uploadRef.current = uploadImage;
-  }, [uploadImage]);
-  const uploadImageFile = useCallback(
-    (file: File) => uploadRef.current(file),
-    [],
+  const { imageNote, setImageNote, uploadImageFile } = useEditorImageUpload(
+    puzzleId,
+    editor,
   );
 
   const hasText = hasSendableContent(content);
@@ -188,7 +139,7 @@ const CommentComposer = ({
       setEditorKey((key) => key + 1);
     });
     return true;
-  }, [disabled, content, onSend, changeContent]);
+  }, [disabled, content, onSend, changeContent, setImageNote]);
 
   return (
     <>

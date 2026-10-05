@@ -235,22 +235,14 @@ describe("PuzzleModalForm", function () {
       assert.isUndefined(remembered());
     });
 
-    it("remembers only the tags an edit adds", async function () {
-      await renderForm(
-        { ...puzzle, tags: ["cryptic"] },
-        { tags: huntTags, onSubmit: (_payload, callback) => callback() },
-      );
-      save();
-      assert.isUndefined(remembered());
-
-      cleanup();
+    it("remembers nothing from an edit, even one that adds tags", async function () {
       await renderForm(
         { ...puzzle, tags: ["cryptic"] },
         { tags: huntTags, onSubmit: (_payload, callback) => callback() },
       );
       addContentTag("loc:atrium");
       save();
-      assert.deepEqual(remembered(), ["where:atrium"]);
+      assert.isUndefined(remembered());
     });
 
     it("remembers nothing from an edit that leaves the tags alone", async function () {
@@ -263,6 +255,64 @@ describe("PuzzleModalForm", function () {
       fireEvent.change(title, { target: { value: "Renamed" } });
       save();
       assert.isUndefined(remembered());
+    });
+  });
+
+  describe("saving an edit's tags", function () {
+    const huntTags = [
+      tag("atrium", "where:atrium"),
+      tag("cryptic", "cryptic"),
+      tag("events", "group:events"),
+      tag("stuck", "is:stuck"),
+    ];
+    const save = () =>
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const addContentTag = (name: string) => {
+      const content = screen.getByLabelText("Content tags");
+      fireEvent.change(content, { target: { value: name } });
+      fireEvent.keyDown(content, { key: "Enter", code: "Enter", keyCode: 13 });
+    };
+    const renderEdit = async (tags: string[]) => {
+      let submitted: string[] | undefined;
+      const rendered = await renderForm(
+        { ...puzzle, tags },
+        {
+          tags: huntTags,
+          onSubmit: (payload, callback) => {
+            submitted = payload.tags;
+            callback();
+          },
+        },
+      );
+      return { ...rendered, submitted: () => submitted };
+    };
+
+    it("doesn't put back a tag removed elsewhere when saving something else", async function () {
+      const { title, updatePuzzle, submitted } = await renderEdit([
+        "cryptic",
+        "stuck",
+      ]);
+      // Someone else takes a tag off in another tab
+      updatePuzzle({ ...puzzle, tags: ["cryptic"] });
+      fireEvent.change(title, { target: { value: "Renamed" } });
+      save();
+      assert.deepEqual(submitted(), ["cryptic"]);
+    });
+
+    it("sends only its own changes on top of changes made elsewhere", async function () {
+      const { updatePuzzle, submitted } = await renderEdit([
+        "cryptic",
+        "stuck",
+      ]);
+      addContentTag("where:atrium");
+      // Meanwhile someone else takes one tag off and puts another on
+      updatePuzzle({ ...puzzle, tags: ["cryptic", "events"] });
+      save();
+      assert.deepEqual(submitted(), [
+        "cryptic",
+        "group:events",
+        "where:atrium",
+      ]);
     });
   });
 });

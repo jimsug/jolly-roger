@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import BSImage from "react-bootstrap/Image";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
+import styled from "styled-components";
 import type { ChatMessageContentType } from "../../lib/models/ChatMessages";
 import Puzzles from "../../lib/models/Puzzles";
 import nodeIsImage from "../../lib/nodeIsImage";
@@ -110,19 +111,34 @@ const PuzzleMention = ({ puzzleId }: { puzzleId: string }) => {
   );
 };
 
+const DeletedMessage = styled.div`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-style: italic;
+`;
+
 const ChatMessage = ({
   message,
   displayNames,
   selfUserId,
   roles,
   imageOnLoad,
+  deleted = false,
 }: {
   message: ChatMessageContentType;
   displayNames: Map<string, string>;
   selfUserId: string;
   roles: string[];
   imageOnLoad?: () => void;
+  // Its sender deleted it, which leaves this in its place
+  deleted?: boolean;
 }) => {
+  const { t } = useTranslation();
+  if (deleted) {
+    return (
+      <DeletedMessage>{t("chat.deleted", "Message deleted")}</DeletedMessage>
+    );
+  }
+
   const children = message.children.map((child, i) => {
     if (nodeIsMention(child)) {
       const displayName = displayNames.get(child.userId);

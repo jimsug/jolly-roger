@@ -5,6 +5,7 @@ import ChatMessages from "../../lib/models/ChatMessages";
 import MeteorUsers from "../../lib/models/MeteorUsers";
 import Puzzles from "../../lib/models/Puzzles";
 import sendChatMessage from "../../methods/sendChatMessage";
+import { parseChatMessageContent } from "../chatMessageContent";
 import sendChatMessageInternal from "../sendChatMessageInternal";
 import {
   assertMayReplyInThread,
@@ -52,33 +53,7 @@ defineMethod(sendChatMessage, {
       );
     }
 
-    const contentObj = JSON.parse(content);
-    check(contentObj, {
-      type: "message" as const,
-      children: [
-        Match.OneOf(
-          {
-            type: "mention" as const,
-            userId: String,
-          },
-          {
-            type: "role-mention" as const,
-            roleId: "operator" as const,
-          },
-          {
-            type: "image" as const,
-            url: String,
-          },
-          {
-            type: "puzzle" as const,
-            puzzleId: String,
-          },
-          {
-            text: String,
-          },
-        ),
-      ],
-    });
+    const contentObj = parseChatMessageContent(content);
 
     if (comment) {
       if (parentId !== undefined) {

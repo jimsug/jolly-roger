@@ -29,7 +29,11 @@ import Hunts from "../../lib/models/Hunts";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
 import { recentTagName, recentTagsToOffer } from "../../lib/recentTags";
-import { compareTagNames, isFunctionalTag } from "../../lib/tagNames";
+import {
+  compareTagNames,
+  isFunctionalTag,
+  tagsAfterEdit,
+} from "../../lib/tagNames";
 import { useAddPuzzleHuntRecentTags } from "../hooks/persisted-state";
 import useTagSynonyms from "../hooks/useTagSynonyms";
 import LabelledRadioGroup from "./LabelledRadioGroup";
@@ -158,6 +162,10 @@ const PuzzleModalForm = ({
   // Whether the tags came from a prefill, which belongs to whatever opened
   // the form with it: the next show() without tags clears them.
   const tagsPrefilled = useRef(false);
+  // The puzzle's tags as this edit first changed them, so that a save only
+  // adds and removes what the edit did (see tagsAfterEdit). Unset when the
+  // tags were replaced by a prefill.
+  const tagsBefore = useRef<string[] | undefined>(undefined);
   // show() reads the tag names through a ref so that it stays the same
   // function, as otherwise showOnMount would reopen the form whenever the
   // hunt's tags change.
@@ -252,30 +260,19 @@ const PuzzleModalForm = ({
     }
   }, [lockedSummaryDirty, puzzle, lockedSummary]);
 
-  // The tags a save adds to the recent list: every tag of a new puzzle, and
-  // the ones an edit adds, so that editing a puzzle's title doesn't bring up
-  // the tags it already had. An edit that leaves the tags alone adds none,
-  // even if someone else has changed them since the form opened.
-  const tagsToRemember = useCallback(
-    (submitted: string[]) => {
-      if (puzzle && !tagsDirty) {
-        return [];
-      }
-      const remembered = submitted.map((name) =>
-        recentTagName(name, propsTags, tagSynonyms),
-      );
-      if (!puzzle) {
-        return remembered;
-      }
-      const before = new Set(
-        tagNamesForIds(puzzle.tags).map((name) =>
-          recentTagName(name, propsTags, tagSynonyms).toLowerCase(),
-        ),
-      );
-      return remembered.filter((name) => !before.has(name.toLowerCase()));
-    },
-    [puzzle, tagsDirty, propsTags, tagSynonyms, tagNamesForIds],
-  );
+  // What a save sends for the tags. An edit goes from the puzzle's tags as
+  // they are now, so that a tag someone else has added or removed since the
+  // form opened stays that way unless this edit changed it too.
+  const tagsToSave = useCallback(() => {
+    if (!puzzle) {
+      return tags;
+    }
+    const live = tagNamesForIds(puzzle.tags);
+    if (!tagsDirty) {
+      return live;
+    }
+    return tagsAfterEdit(live, tagsBefore.current ?? live, tags);
+  }, [puzzle, tags, tagsDirty, tagNamesForIds]);
 
   const onFormSubmit = useCallback(
     (callback: () => void) => {
@@ -284,7 +281,7 @@ const PuzzleModalForm = ({
         huntId,
         title,
         url: url !== "" ? url : undefined, // Make sure we send undefined if url is falsy
-        tags,
+        tags: tagsToSave(),
         expectedAnswerCount,
         completedWithNoAnswer: considerCompletedWithNoAnswer,
       };
@@ -334,7 +331,13 @@ const PuzzleModalForm = ({
           setLockedSummaryDirty(false);
           setConfirmingDuplicateUrl(false);
           setAllowDuplicateUrls(false);
-          addPuzzleHuntRecentTags(tagsToRemember(tags));
+          // Only a new puzzle's tags count as recent: editing a puzzle is
+          // usually about that puzzle, not the next one to be added
+          if (!puzzle) {
+            addPuzzleHuntRecentTags(
+              tags.map((name) => recentTagName(name, propsTags, tagSynonyms)),
+            );
+          }
           callback();
         }
       });
@@ -345,6 +348,10 @@ const PuzzleModalForm = ({
       title,
       url,
       tags,
+      tagsToSave,
+      puzzle,
+      propsTags,
+      tagSynonyms,
       expectedAnswerCount,
       docType,
       allowDuplicateUrls,
@@ -352,7 +359,6 @@ const PuzzleModalForm = ({
       allowLocked,
       currentLocked,
       currentLockedSummary,
-      tagsToRemember,
       addPuzzleHuntRecentTags,
       t,
     ],
@@ -379,10 +385,12 @@ const PuzzleModalForm = ({
       setTags(tagNamesForIdsRef.current([...new Set(prefill.tagIds)]));
       setTagsDirty(true);
       tagsPrefilled.current = true;
+      tagsBefore.current = undefined;
     } else if (tagsPrefilled.current) {
       setTags([]);
       setTagsDirty(true);
       tagsPrefilled.current = false;
+      tagsBefore.current = undefined;
     }
 
     if (formRef.current) {
@@ -463,6 +471,17 @@ const PuzzleModalForm = ({
     [currentTags, tagSynonyms],
   );
 
+  const changeTags = useCallback(
+    (next: string[]) => {
+      if (!tagsDirty) {
+        tagsBefore.current = currentTags;
+      }
+      setTags(next);
+      setTagsDirty(true);
+    },
+    [tagsDirty, currentTags],
+  );
+
   // Each tag input replaces its own half of the tag list and keeps the other.
   const onTagHalfChange = useCallback(
     (
@@ -477,14 +496,13 @@ const PuzzleModalForm = ({
         case "pop-value":
         case "remove-value":
         case "select-option":
-          setTags([...otherHalf, ...value.map((v) => v.value)]);
-          setTagsDirty(true);
+          changeTags([...otherHalf, ...value.map((v) => v.value)]);
           break;
         default:
           break;
       }
     },
-    [],
+    [changeTags],
   );
 
   const offeredRecentTags = useMemo(
@@ -496,11 +514,10 @@ const PuzzleModalForm = ({
     (event: React.MouseEvent<HTMLButtonElement>) => {
       const name = event.currentTarget.dataset.tag;
       if (name) {
-        setTags([...currentTags, name]);
-        setTagsDirty(true);
+        changeTags([...currentTags, name]);
       }
     },
-    [currentTags],
+    [changeTags, currentTags],
   );
 
   const onFunctionalTagsChange = useCallback(

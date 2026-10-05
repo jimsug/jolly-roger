@@ -1,10 +1,12 @@
+import { Random } from "meteor/random";
 import type { Descendant } from "slate";
+import type { ChatMessageContentType } from "../lib/models/ChatMessages";
 import nodeIsImage from "../lib/nodeIsImage";
 import nodeIsMention from "../lib/nodeIsMention";
 import nodeIsPuzzle from "../lib/nodeIsPuzzle";
 import nodeIsRoleMention from "../lib/nodeIsRoleMention";
 import nodeIsText from "../lib/nodeIsText";
-import type { MessageElement } from "./components/FancyEditor";
+import type { CustomText, MessageElement } from "./components/FancyEditor";
 
 // Turns what's in a chat editor into a message to send, shared by puzzle chat
 // and whiteboard comments so both send the same thing.
@@ -77,4 +79,40 @@ export function cleanEditorMessage(content: Descendant[]) {
         return child;
       }),
   };
+}
+
+const emptyText = (): CustomText => ({ text: "" });
+const isEditorText = (node: MessageElement["children"][number] | undefined) =>
+  node !== undefined && !("type" in node);
+
+// A sent message back in an editor, for editing it. Slate wants text on each
+// side of an inline element, so empty text goes between and around them, and
+// images come back as uploaded.
+export function editorContentFromMessage(
+  content: ChatMessageContentType,
+): Descendant[] {
+  const children: MessageElement["children"] = [];
+  content.children.forEach((child) => {
+    if (nodeIsText(child)) {
+      children.push({ text: child.text });
+      return;
+    }
+    if (!isEditorText(children.at(-1))) children.push(emptyText());
+    if (nodeIsMention(child)) {
+      children.push({ ...child, children: [emptyText()] });
+    } else if (nodeIsRoleMention(child)) {
+      children.push({ ...child, children: [emptyText()] });
+    } else if (nodeIsPuzzle(child)) {
+      children.push({ ...child, children: [emptyText()] });
+    } else if (nodeIsImage(child)) {
+      children.push({
+        ...child,
+        tempId: Random.id(),
+        status: "success",
+        children: [emptyText()],
+      });
+    }
+  });
+  if (!isEditorText(children.at(-1))) children.push(emptyText());
+  return [{ type: "message", children }];
 }

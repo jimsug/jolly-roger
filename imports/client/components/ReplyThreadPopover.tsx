@@ -10,11 +10,15 @@ import styled from "styled-components";
 import type { ChatMessageType } from "../../lib/models/ChatMessages";
 import ChatMessages from "../../lib/models/ChatMessages";
 import ChatMessage from "./ChatMessage";
+import EditedMark from "./EditedMark";
 
 // How many ancestors the popover shows before offering "More"
 const MAX_REPLY_ANCESTORS = 3;
 
-type ThreadMessage = Pick<ChatMessageType, "_id" | "sender" | "content">;
+type ThreadMessage = Pick<
+  ChatMessageType,
+  "_id" | "sender" | "content" | "editedAt" | "deletedAt"
+>;
 
 const ReplyIconButton = styled.button`
   border: none;
@@ -144,11 +148,18 @@ const ReplyThreadPopover = ({
                       ? (displayNames.get(ancestor.sender) ?? "???")
                       : "jolly-roger"}
                   </strong>
+                  {ancestor.editedAt && !ancestor.deletedAt && (
+                    <>
+                      {" "}
+                      <EditedMark editedAt={ancestor.editedAt} />
+                    </>
+                  )}
                   <ChatMessage
                     message={ancestor.content}
                     displayNames={displayNames}
                     selfUserId={selfUserId}
                     roles={roles}
+                    deleted={!!ancestor.deletedAt}
                   />
                 </ReplyPopoverMessage>
               ))}

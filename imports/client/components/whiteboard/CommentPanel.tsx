@@ -33,6 +33,7 @@ import indexedDisplayNames from "../../indexedDisplayNames";
 import Avatar from "../Avatar";
 import ChatMessage from "../ChatMessage";
 import ChatMessageReactions from "../ChatMessageReactions";
+import EditedMark from "../EditedMark";
 import RelativeTime from "../RelativeTime";
 import CommentComposer from "./CommentComposer";
 
@@ -173,6 +174,7 @@ const CommentEntry = ({
     [onError],
   );
   const react = t("chat.react", "React");
+  const deleted = !!message.deletedAt;
   return (
     <Entry>
       <Avatar
@@ -190,8 +192,14 @@ const CommentEntry = ({
             {(message.sender && displayNames.get(message.sender)) ??
               t("whiteboard.comments.unknownAuthor", "Someone")}{" "}
             · <RelativeTime date={message.timestamp} minimumUnit="minute" />
+            {message.editedAt && !deleted && (
+              <>
+                {" "}
+                <EditedMark editedAt={message.editedAt} />
+              </>
+            )}
           </Meta>
-          {canComment && (
+          {canComment && !deleted && (
             <ReactButton
               ref={pickerTarget}
               size="sm"
@@ -209,6 +217,7 @@ const CommentEntry = ({
           displayNames={displayNames}
           selfUserId={selfUserId}
           roles={roles}
+          deleted={deleted}
         />
         <ChatMessageReactions
           messageId={message._id}

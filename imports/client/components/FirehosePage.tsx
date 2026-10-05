@@ -34,6 +34,7 @@ import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
 import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import indexedDisplayNames from "../indexedDisplayNames";
+import EditedMark from "./EditedMark";
 import FixedLayout from "./styling/FixedLayout";
 
 const FirehosePageLayout = styled.div`
@@ -60,6 +61,11 @@ const PreWrapSpan = styled.span`
   display: block;
   white-space: pre-wrap;
   padding-left: 1em;
+`;
+
+const DeletedSpan = styled.span`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-style: italic;
 `;
 
 function asFlatString(
@@ -106,10 +112,18 @@ const Message = React.memo(
           {displayName}
           {": "}
         </span>
-        {hasNewline ? (
+        {msg.deletedAt ? (
+          <DeletedSpan>{t("chat.deleted", "Message deleted")}</DeletedSpan>
+        ) : hasNewline ? (
           <PreWrapSpan>{messageText}</PreWrapSpan>
         ) : (
           <span>{messageText}</span>
+        )}
+        {msg.editedAt && !msg.deletedAt && (
+          <>
+            {" "}
+            <EditedMark editedAt={msg.editedAt} />
+          </>
         )}
       </div>
     );

@@ -43,6 +43,28 @@ describe("whiteboard groupThreads", function () {
     assert.deepEqual(thread.lastActivity, at(5));
   });
 
+  it("shows deleted replies but leaves them out of the count", function () {
+    const threads = groupThreads(
+      [
+        message("root", { sender: "a", comment: { x: 0, y: 0 } }),
+        message("kept", { sender: "b", thread: "root", timestamp: at(3) }),
+        message("gone", {
+          sender: "c",
+          thread: "root",
+          timestamp: at(5),
+          deletedAt: at(6),
+        }),
+      ],
+      isReaction,
+    );
+    const thread = threads.get("root")!;
+    assert.deepEqual(
+      thread.replies.map((m) => m._id),
+      ["kept", "gone"],
+    );
+    assert.equal(thread.replyCount, 1);
+  });
+
   it("marks resolved threads", function () {
     const threads = groupThreads(
       [message("root", { comment: { x: 0, y: 0, resolvedAt: at(9) } })],
@@ -109,6 +131,26 @@ describe("whiteboard isUnread", function () {
 
   it("ignores your own replies", function () {
     assert.isFalse(isUnread(thread, +at(2), "me"));
+  });
+
+  it("ignores a reply its sender has deleted", function () {
+    const withDeleted = groupThreads(
+      [
+        message("root", {
+          sender: "a",
+          comment: { x: 0, y: 0 },
+          timestamp: at(1),
+        }),
+        message("r1", {
+          sender: "b",
+          thread: "root",
+          timestamp: at(9),
+          deletedAt: at(10),
+        }),
+      ],
+      isReaction,
+    ).get("root")!;
+    assert.isFalse(isUnread(withDeleted, +at(2), "me"));
   });
 });
 

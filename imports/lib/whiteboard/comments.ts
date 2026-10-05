@@ -6,13 +6,16 @@ import type { Point, Rect } from "./layout";
 
 type CommentMessage = Pick<
   ChatMessageType,
-  "_id" | "sender" | "timestamp" | "thread" | "comment"
+  "_id" | "sender" | "timestamp" | "thread" | "comment" | "deletedAt"
 >;
 
 export interface CommentThread<M extends CommentMessage = CommentMessage> {
   root: M;
-  // Replies (reactions excluded), oldest first.
+  // Replies (reactions excluded), oldest first, including deleted ones,
+  // which still show in their place.
   replies: M[];
+  // How many replies there are, leaving out deleted ones.
+  replyCount: number;
   reactions: M[];
   // Everyone who has posted, starting with whoever left the comment.
   participants: string[];
@@ -33,6 +36,7 @@ export function groupThreads<M extends CommentMessage>(
       threads.set(root._id, {
         root,
         replies: [],
+        replyCount: 0,
         reactions: [],
         participants: root.sender ? [root.sender] : [],
         lastActivity: root.timestamp,
@@ -51,6 +55,7 @@ export function groupThreads<M extends CommentMessage>(
         return;
       }
       thread.replies.push(message);
+      if (!message.deletedAt) thread.replyCount += 1;
       if (message.sender && !thread.participants.includes(message.sender)) {
         thread.participants.push(message.sender);
       }
@@ -82,7 +87,7 @@ export function isUnread(
   selfId: string | undefined,
 ): boolean {
   const latest = [thread.root, ...thread.replies]
-    .filter((m) => m.sender !== selfId)
+    .filter((m) => m.sender !== selfId && !m.deletedAt)
     .reduce((max, m) => Math.max(max, +m.timestamp), 0);
   return latest > (seenAt ?? 0);
 }

@@ -21,6 +21,7 @@ import {
   tagSynonymMatcher,
   tagSynonymNames,
   tagSynonymRuleProblems,
+  tagsAfterEdit,
 } from "../../../../imports/lib/tagNames";
 
 describe("normalizeTagName", function () {
@@ -440,5 +441,50 @@ describe("tagSynonymRuleProblems", function () {
       ]),
       [],
     );
+  });
+});
+
+describe("tagsAfterEdit", function () {
+  it("is the edit's tags when nobody else changed them", function () {
+    assert.deepEqual(tagsAfterEdit(["a", "b"], ["a", "b"], ["b", "c"]), [
+      "b",
+      "c",
+    ]);
+  });
+
+  it("keeps a removal made elsewhere that the edit didn't touch", function () {
+    assert.deepEqual(tagsAfterEdit(["a"], ["a", "b"], ["a", "b", "c"]), [
+      "a",
+      "c",
+    ]);
+  });
+
+  it("keeps an addition made elsewhere", function () {
+    assert.deepEqual(tagsAfterEdit(["a", "d"], ["a"], ["a", "c"]), [
+      "a",
+      "d",
+      "c",
+    ]);
+  });
+
+  it("takes off what the edit took off, even if added back elsewhere", function () {
+    assert.deepEqual(tagsAfterEdit(["a", "b"], ["a", "b"], ["a"]), ["a"]);
+  });
+
+  it("adds nothing twice when both sides added the same tag", function () {
+    assert.deepEqual(tagsAfterEdit(["a", "C"], ["a"], ["a", "c"]), ["a", "C"]);
+  });
+
+  it("matches names loosely and ignoring case", function () {
+    assert.deepEqual(
+      tagsAfterEdit(["Group: Events"], ["group:  events"], []),
+      [],
+    );
+  });
+
+  it("handles empty lists", function () {
+    assert.deepEqual(tagsAfterEdit([], [], []), []);
+    assert.deepEqual(tagsAfterEdit([], [], ["a"]), ["a"]);
+    assert.deepEqual(tagsAfterEdit(["a"], [], []), ["a"]);
   });
 });

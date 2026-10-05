@@ -76,7 +76,11 @@ Chat supports rich text editing, including bulleted lists, \_italics\_,
 \*bold\*, \`monospace\`, \`\`\`code blocks\`\`\`, and @-mentions with formatting
 previews. You can also upload images directly into chat, link another puzzle by
 typing `!` and part of its title, reply to a message, react to it with an emoji,
-and pin it so it stays in view at the top of the chat.
+and pin it so it stays in view at the top of the chat. You can edit or delete
+your own messages; a deleted one leaves "Message deleted" in its place so
+replies to it still make sense. A hunt's Discord firehose channel isn't told
+about either, and keeps the message as it was sent; notifications already sent
+about an edited message keep the text they were sent with.
 
 We work hard to make sure that puzzle chat is visible whenever it is active, so
 remote hunters desperately trying to get your attention are hard to ignore.

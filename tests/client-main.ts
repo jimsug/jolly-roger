@@ -60,6 +60,7 @@ import "./unit/imports/Logger";
 import "./unit/imports/client/bookmarkButton";
 import "./unit/imports/client/breadcrumb";
 import "./unit/imports/client/chatEditorContent";
+import "./unit/imports/client/ChatHistoryMessage";
 import "./unit/imports/client/CommentPanel";
 import "./unit/imports/client/DocumentDisplay";
 import "./unit/imports/client/EditableText";
@@ -94,6 +95,7 @@ import "./unit/imports/client/whiteboardSearch";
 import "./unit/imports/client/whiteboardTouch";
 
 import "./acceptance/authentication";
+import "./acceptance/chatEditing";
 import "./acceptance/chatHooks";
 import "./acceptance/chatMessages";
 import "./acceptance/dingwords";

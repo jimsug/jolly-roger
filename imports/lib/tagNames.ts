@@ -8,6 +8,29 @@ export function normalizeTagName(name: string): string {
   return name.trim().replaceAll(/\s+/g, " ");
 }
 
+// The tags to save from an edit of a puzzle's tags when someone else may have
+// changed them meanwhile: the puzzle's tags now (live), less the ones the
+// edit took off and plus the ones it put on, going by the list it started
+// from (before) and the one it ended with (after). Names match loosely, as
+// above, and ignoring case.
+export function tagsAfterEdit(
+  live: readonly string[],
+  before: readonly string[],
+  after: readonly string[],
+): string[] {
+  const key = (name: string) => normalizeTagName(name).toLowerCase();
+  const beforeKeys = new Set(before.map(key));
+  const afterKeys = new Set(after.map(key));
+  const kept = live.filter(
+    (name) => afterKeys.has(key(name)) || !beforeKeys.has(key(name)),
+  );
+  const keptKeys = new Set(kept.map(key));
+  const added = after.filter(
+    (name) => !beforeKeys.has(key(name)) && !keptKeys.has(key(name)),
+  );
+  return [...kept, ...added];
+}
+
 // Applied when a tag is created or renamed. Existing tags still resolve by
 // name whatever their length, so nothing written before the cap breaks.
 export const MAX_TAG_NAME_LENGTH = 100;

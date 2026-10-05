@@ -50,6 +50,7 @@ import createGuess from "../../../../imports/methods/createGuess";
 import createHunt from "../../../../imports/methods/createHunt";
 import createPuzzle from "../../../../imports/methods/createPuzzle";
 import createWhiteboard from "../../../../imports/methods/createWhiteboard";
+import deleteChatMessage from "../../../../imports/methods/deleteChatMessage";
 import deleteWhiteboardComment from "../../../../imports/methods/deleteWhiteboardComment";
 import deleteWhiteboardEdges from "../../../../imports/methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../../../imports/methods/deleteWhiteboardNodes";
@@ -62,6 +63,7 @@ import dismissChatNotification from "../../../../imports/methods/dismissChatNoti
 import dismissChatNotificationsForPuzzle from "../../../../imports/methods/dismissChatNotificationsForPuzzle";
 import dismissPendingAnnouncement from "../../../../imports/methods/dismissPendingAnnouncement";
 import dismissPuzzleNotification from "../../../../imports/methods/dismissPuzzleNotification";
+import editChatMessage from "../../../../imports/methods/editChatMessage";
 import ensurePuzzleDocument from "../../../../imports/methods/ensurePuzzleDocument";
 import exportWhiteboard from "../../../../imports/methods/exportWhiteboard";
 import fetchWhiteboardVersion from "../../../../imports/methods/fetchWhiteboardVersion";
@@ -171,6 +173,7 @@ const METHODS = {
   createHunt,
   createPuzzle,
   createWhiteboard,
+  deleteChatMessage,
   deleteWhiteboardComment,
   deleteWhiteboardEdges,
   deleteWhiteboardNodes,
@@ -183,6 +186,7 @@ const METHODS = {
   dismissChatNotificationsForPuzzle,
   dismissPendingAnnouncement,
   dismissPuzzleNotification,
+  editChatMessage,
   ensurePuzzleDocument,
   exportWhiteboard,
   fetchWhiteboardVersion,
@@ -276,12 +280,14 @@ const PUZZLE_METHODS: Record<
     direction: 0,
     confidence: 50,
   }),
+  deleteChatMessage: "allowed",
   deleteWhiteboardComment: "allowed",
   destroyPuzzle: ({ puzzle }) => ({
     puzzleId: puzzle,
     copySheetsToReplacement: false,
   }),
   dismissChatNotificationsForPuzzle: "allowed",
+  editChatMessage: "allowed",
   ensurePuzzleDocument: ({ puzzle }) => ({ puzzleId: puzzle }),
   registerPuzzleInterest: ({ puzzle }) => ({ puzzleId: puzzle, score: 1 }),
   removeChatReaction: "allowed",

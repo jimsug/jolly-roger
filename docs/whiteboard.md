@@ -3,6 +3,7 @@ files:
   - imports/client/chatEditorContent.ts
   - imports/client/components/AvatarStack.tsx
   - imports/client/components/ChatMessageReactions.tsx
+  - imports/client/components/DeleteChatMessageModal.tsx
   - imports/client/components/HighlightsPanel.tsx
   - imports/client/components/NotificationCenter.tsx
   - imports/client/components/OwnProfilePage.tsx
@@ -50,6 +51,7 @@ files:
   - imports/client/components/whiteboard/touch.ts
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useChatImagesEnabled.ts
+  - imports/client/hooks/useEditorImageUpload.ts
   - imports/client/hooks/useKeyboardInset.ts
   - imports/client/hooks/usePuzzleViewers.ts
   - imports/client/hooks/usePuzzleViewerUsers.ts
@@ -109,7 +111,9 @@ files:
   - imports/server/getS3UploadParams.ts
   - imports/server/hooks/ChatNotificationHooks.ts
   - imports/server/methods/addPuzzleAnswer.ts
+  - imports/server/methods/deleteChatMessage.ts
   - imports/server/methods/destroyPuzzle.ts
+  - imports/server/methods/editChatMessage.ts
   - imports/server/methods/exportWhiteboard.ts
   - imports/server/methods/fetchWhiteboardVersion.ts
   - imports/server/methods/placeWhiteboardCardsByTags.ts
@@ -692,7 +696,9 @@ through `removeChatReaction`, which only checks that it's the caller's own.
 Pasting or dropping an image into the comment composer uploads it the way
 chat does (`createChatImageUpload`, then a POST to the bucket) and puts it in
 the comment, which can't be sent until the upload finishes. Both use
-`useChatImageUpload` in `imports/client/hooks/`, which uploads through
+`useChatImageUpload` in `imports/client/hooks/` (the composer, and chat's
+in-place edit, through `useEditorImageUpload`, which keeps the note under
+the editor), which uploads through
 `uploadChatImage` in `imports/client/uploadChatImage.ts` (as the board's own
 images do, see Images), and each shows a failure its own way: chat in a dialog, the composer in a line under it.
 `uploadChatImage` sends a PNG, JPEG or GIF as it is (so a GIF stays
@@ -1470,6 +1476,30 @@ every reply to it go and that it can't be undone. Cancel leaves the thread as
 it was. Who may delete is unchanged: the author until someone else replies,
 and operators at any time.
 
+### Editing and deleting from chat
+
+Comments and their replies are chat messages, so the chat's own Edit and
+Delete (on the hover pill of the user's own messages) work on them too, under
+the board's rules rather than chat's:
+
+- **Edit** changes the text and nothing else: a comment keeps its pin, a reply
+  keeps its thread, and nobody is notified again. Notifications already sent
+  keep the text as it was. Like a new reply, an edit needs a board that can
+  be commented on, so it's refused on an archived hunt. An edited comment or
+  reply shows "(edited)" in the thread's panel, with when in its tooltip.
+- **Delete on a reply** works as in chat: the reply stays in the thread as
+  "Message deleted", its reactions and notifications go, and replies to it keep
+  their place. It can't be pinned or reacted to again. The pin's count, the
+  Comments list and unread dots leave it out, but it still counts as someone
+  else's reply when the comment's author goes to delete the thread. It's
+  refused on an archived hunt, as an edit is.
+- **Delete on a comment** goes through `deleteWhiteboardComment`, the same as
+  Delete on the thread's panel, with the panel's wording, and the whole thread
+  goes. Chat offers it only while nobody else has replied; an operator deletes
+  a thread others have replied to from the board.
+  `ChatMessages.methods.delete` refuses a comment, so a comment is never left
+  as "Message deleted" with its thread hanging off it.
+
 ## History
 
 The board keeps earlier versions of itself, so anyone can see how it was and
@@ -1861,12 +1891,14 @@ do so from a desktop.
 On a phone the viewer can pan and pinch, open puzzles from cards, show and
 hide resolved pins, hide ink (see Ink), open a pin's thread, place a
 comment, reply, react, resolve and reopen, delete their own thread while
-nobody else has replied (operators can always), use search, the Outline and
-the Comments list, copy a link to the view, follow "Show on board" from chat,
-open a collapsed round for themselves ("Show (only for you)", see Collapsed
-rounds), and see who's here, jump to someone's cursor and follow them (see
-Who's here, and following someone). Nothing else: no tools, no moving, no
-folding rounds for everyone, no who-can-edit button.
+nobody else has replied (operators can always), edit or delete their own
+comments and replies from chat (see Editing and deleting from chat), use
+search, the Outline and the Comments list, copy a link to the view, follow
+"Show on board" from chat, open a collapsed round for themselves ("Show (only
+for you)", see Collapsed rounds), and see who's here, jump to someone's
+cursor and follow them (see Who's here, and following someone). Nothing
+else: no tools, no moving, no folding rounds for everyone, no who-can-edit
+button.
 
 The toolbar says "Viewing only" with "Editing needs a wider screen. You can
 still comment." under it, and its Outline, Comment, Comments, resolved and

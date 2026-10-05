@@ -2,6 +2,7 @@ import { assert } from "chai";
 import type { Descendant } from "slate";
 import {
   cleanEditorMessage,
+  editorContentFromMessage,
   hasLoadingImage,
   hasSendableContent,
 } from "../../../../imports/client/chatEditorContent";
@@ -32,5 +33,52 @@ describe("chatEditorContent", function () {
     assert.isFalse(hasSendableContent(message(image("error"))));
     assert.isFalse(hasSendableContent(message({ text: "" }, image("error"))));
     assert.deepEqual(cleanEditorMessage(message(image("error"))).children, []);
+  });
+
+  describe("editorContentFromMessage", function () {
+    it("puts empty text around and between inline elements", function () {
+      const [block] = editorContentFromMessage({
+        type: "message",
+        children: [
+          { type: "mention", userId: "u1" },
+          { type: "puzzle", puzzleId: "p1" },
+          { text: "hello" },
+          { type: "image", url: "https://images.example.com/a.png" },
+        ],
+      }) as { children: Record<string, unknown>[] }[];
+      assert.deepEqual(
+        block!.children.map((child) =>
+          "type" in child ? child.type : child.text,
+        ),
+        ["", "mention", "", "puzzle", "hello", "image", ""],
+      );
+      const image = block!.children[5]!;
+      assert.equal(image.status, "success");
+      assert.isString(image.tempId);
+    });
+
+    it("gives an empty message one empty text", function () {
+      assert.deepEqual(
+        editorContentFromMessage({ type: "message", children: [] }),
+        message({ text: "" }),
+      );
+    });
+
+    it("cleans back to the message it came from", function () {
+      const sent = {
+        type: "message" as const,
+        children: [
+          { text: "see " },
+          { type: "puzzle" as const, puzzleId: "p1" },
+          { text: " and ask " },
+          { type: "role-mention" as const, roleId: "operator" as const },
+          { type: "image" as const, url: "https://images.example.com/a.png" },
+        ],
+      };
+      assert.deepEqual(
+        cleanEditorMessage(editorContentFromMessage(sent)),
+        sent,
+      );
+    });
   });
 });

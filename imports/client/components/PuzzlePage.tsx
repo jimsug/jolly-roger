@@ -15,11 +15,13 @@ import { faKey } from "@fortawesome/free-solid-svg-icons/faKey";
 import { faLightbulb as faLightbulbSolid } from "@fortawesome/free-solid-svg-icons/faLightbulb";
 import { faLocationCrosshairs } from "@fortawesome/free-solid-svg-icons/faLocationCrosshairs";
 import { faPaperPlane } from "@fortawesome/free-solid-svg-icons/faPaperPlane";
+import { faPencil } from "@fortawesome/free-solid-svg-icons/faPencil";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
 import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
 import { faReplyAll } from "@fortawesome/free-solid-svg-icons/faReplyAll";
 import { faThumbtack } from "@fortawesome/free-solid-svg-icons/faThumbtack";
 import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { ComponentPropsWithRef, FC } from "react";
@@ -130,10 +132,12 @@ import ChatPeople from "./ChatPeople";
 import type { TickerSyncMessage, TickerToastType } from "./ChatTicker";
 import ChatTicker, { isTickerSyncMessage, tickerDuration } from "./ChatTicker";
 import CopyToClipboardButton from "./CopyToClipboardButton";
+import DeleteChatMessageModal from "./DeleteChatMessageModal";
 import DocumentDisplay, {
   DocumentMessage,
   googleDocumentUrl,
 } from "./DocumentDisplay";
+import EditedMark from "./EditedMark";
 import type { FancyEditorHandle } from "./FancyEditor";
 import FancyEditor from "./FancyEditor";
 import GuessState from "./GuessState";
@@ -144,6 +148,7 @@ import {
   GuessDirectionBadge,
 } from "./guessDetails";
 import HighlightsPanel from "./HighlightsPanel";
+import InlineChatEditor from "./InlineChatEditor";
 import InsertImage from "./InsertImage";
 import Markdown from "./Markdown";
 import MinimizedChatInfo from "./MinimizedChatInfo";
@@ -185,7 +190,9 @@ type FilteredChatFields =
   | "pinTs"
   | "parentId"
   | "comment"
-  | "thread";
+  | "thread"
+  | "editedAt"
+  | "deletedAt";
 type FilteredChatMessageType = Pick<ChatMessageType, FilteredChatFields>;
 // Shared by every message without reactions, so their memoised props hold
 const NO_REACTIONS: FilteredChatMessageType[] = [];
@@ -460,6 +467,12 @@ const ChatMessageTimestamp = styled.span`
   color: #666;
 `;
 
+const ChatMessageEditedMark = styled(EditedMark)`
+  float: right;
+  margin-left: 4px;
+  font-style: italic;
+`;
+
 const ChatSectionDiv = styled.div`
   flex: 1 1 auto;
   display: flex;
@@ -611,7 +624,8 @@ const AnswerFormControl = styled(FormControl)`
   font-weight: 400;
 `;
 
-const ChatHistoryMessage = React.memo(
+// Exported for tests/unit/imports/client/ChatHistoryMessage.tsx
+export const ChatHistoryMessage = React.memo(
   ({
     message,
     reactions,
@@ -628,6 +642,11 @@ const ChatHistoryMessage = React.memo(
     scrollToMessage,
     onReply,
     imageOnLoad,
+    canDelete = false,
+    isEditing = false,
+    onEdit,
+    onEditDone,
+    onDelete,
   }: {
     message: FilteredChatMessageType;
     // The reactions to this message
@@ -648,6 +667,16 @@ const ChatHistoryMessage = React.memo(
     scrollToMessage: (messageId: string) => void;
     onReply: (messageId: string) => void;
     imageOnLoad: () => void;
+    // The user sent it and may delete it now (a comment whose thread others
+    // have replied to is the board's to delete)
+    canDelete?: boolean;
+    // The message is being edited in place
+    isEditing?: boolean;
+    // Without these (as for the pinned pane's copy), the user's own messages
+    // offer no Edit or Delete
+    onEdit?: (messageId: string) => void;
+    onEditDone?: () => void;
+    onDelete?: (message: FilteredChatMessageType) => void;
   }) => {
     const { t, i18n } = useTranslation();
     const ts = shortCalendarTimeFormat(message.timestamp, t, i18n.language);
@@ -717,6 +746,17 @@ const ChatHistoryMessage = React.memo(
 
     const reply = useCallback(() => onReply(messageId), [onReply, messageId]);
 
+    // Its sender deleted it: it stays only to keep replies in context
+    const isDeleted = !!message.deletedAt;
+    const canEdit =
+      !!onEdit && message.sender !== undefined && message.sender === selfUserId;
+    const edit = useCallback(() => onEdit?.(messageId), [onEdit, messageId]);
+    const stopEditing = useCallback(() => onEditDone?.(), [onEditDone]);
+    const askToDelete = useCallback(
+      () => onDelete?.(message),
+      [onDelete, message],
+    );
+
     return (
       <ChatMessageDiv
         ref={setMessageRef}
@@ -726,47 +766,70 @@ const ChatHistoryMessage = React.memo(
         $isReplyTarget={isReplyTarget}
         $isPulsing={isPulsing}
       >
-        <ChatMessageActions>
-          <SplitPill>
-            <PillSection
-              type="button"
-              ref={pickerTargetRef}
-              title={t("chat.react", "React")}
-              onClick={togglePicker}
-            >
-              <FontAwesomeIcon icon={faFaceSmile} />
-            </PillSection>
-            {boardFocus && commentThread && (
+        {!isDeleted && !isEditing && (
+          <ChatMessageActions>
+            <SplitPill>
               <PillSection
                 type="button"
-                title={t("whiteboard.chat.showOnBoard", "Show on board")}
-                onClick={showOnBoard}
+                ref={pickerTargetRef}
+                title={t("chat.react", "React")}
+                onClick={togglePicker}
               >
-                <FontAwesomeIcon icon={faLocationCrosshairs} />
+                <FontAwesomeIcon icon={faFaceSmile} />
               </PillSection>
-            )}
-            <PillSection
-              type="button"
-              title={t("chat.reply", "Reply")}
-              onClick={reply}
-            >
-              <FontAwesomeIcon icon={faReplyAll} />
-            </PillSection>
-            <PillSection
-              type="button"
-              title={
-                message.pinTs
-                  ? t("chat.unpin", "Remove pin")
-                  : t("chat.pin", "Pin")
-              }
-              disabled={pinning}
-              onClick={togglePin}
-            >
-              <FontAwesomeIcon icon={faThumbtack} />
-            </PillSection>
-          </SplitPill>
-        </ChatMessageActions>
+              {boardFocus && commentThread && (
+                <PillSection
+                  type="button"
+                  title={t("whiteboard.chat.showOnBoard", "Show on board")}
+                  onClick={showOnBoard}
+                >
+                  <FontAwesomeIcon icon={faLocationCrosshairs} />
+                </PillSection>
+              )}
+              <PillSection
+                type="button"
+                title={t("chat.reply", "Reply")}
+                onClick={reply}
+              >
+                <FontAwesomeIcon icon={faReplyAll} />
+              </PillSection>
+              <PillSection
+                type="button"
+                title={
+                  message.pinTs
+                    ? t("chat.unpin", "Remove pin")
+                    : t("chat.pin", "Pin")
+                }
+                disabled={pinning}
+                onClick={togglePin}
+              >
+                <FontAwesomeIcon icon={faThumbtack} />
+              </PillSection>
+              {canEdit && (
+                <PillSection
+                  type="button"
+                  title={t("chat.actions.edit", "Edit message")}
+                  onClick={edit}
+                >
+                  <FontAwesomeIcon icon={faPencil} />
+                </PillSection>
+              )}
+              {canDelete && onDelete && (
+                <PillSection
+                  type="button"
+                  title={t("chat.actions.delete", "Delete message")}
+                  onClick={askToDelete}
+                >
+                  <FontAwesomeIcon icon={faTrash} />
+                </PillSection>
+              )}
+            </SplitPill>
+          </ChatMessageActions>
+        )}
         {!suppressSender && <ChatMessageTimestamp>{ts}</ChatMessageTimestamp>}
+        {message.editedAt && !isDeleted && !isEditing && (
+          <ChatMessageEditedMark editedAt={message.editedAt} />
+        )}
         {(!suppressSender || parentId) && (
           <ChatMessageSender>
             {parentId && (
@@ -786,13 +849,18 @@ const ChatHistoryMessage = React.memo(
             <strong>{senderDisplayName}</strong>
           </ChatMessageSender>
         )}
-        <ChatMessage
-          message={message.content}
-          displayNames={displayNames}
-          selfUserId={selfUserId}
-          roles={roles}
-          imageOnLoad={imageOnLoad}
-        />
+        {isEditing && !isDeleted ? (
+          <InlineChatEditor message={message} onDone={stopEditing} />
+        ) : (
+          <ChatMessage
+            message={message.content}
+            displayNames={displayNames}
+            selfUserId={selfUserId}
+            roles={roles}
+            imageOnLoad={imageOnLoad}
+            deleted={isDeleted}
+          />
+        )}
         {boardFocus && message.comment && (
           <CommentNote>
             <FontAwesomeIcon icon={faComment} />{" "}
@@ -814,17 +882,19 @@ const ChatHistoryMessage = React.memo(
             </span>
           </CommentNote>
         )}
-        <ChatMessageReactions
-          messageId={messageId}
-          puzzleId={message.puzzle}
-          reactions={reactions}
-          displayNames={displayNames}
-          selfUserId={selfUserId}
-          pickerTarget={pickerTargetRef}
-          showPicker={showPicker}
-          onHidePicker={hidePicker}
-          onError={showActionError}
-        />
+        {!isDeleted && (
+          <ChatMessageReactions
+            messageId={messageId}
+            puzzleId={message.puzzle}
+            reactions={reactions}
+            displayNames={displayNames}
+            selfUserId={selfUserId}
+            pickerTarget={pickerTargetRef}
+            showPicker={showPicker}
+            onHidePicker={hidePicker}
+            onError={showActionError}
+          />
+        )}
         {actionError && (
           <Alert variant="danger" dismissible onClose={clearActionError}>
             {actionError}
@@ -872,6 +942,31 @@ const ChatHistory = React.memo(
       () => chatMessages.filter((message) => !isReaction(message)),
       [chatMessages],
     );
+
+    // Whiteboard comments that someone other than their author has replied
+    // to, which only an operator can delete (from the board)
+    const commentsWithOthersReplies = useMemo(() => {
+      const authors = new Map(
+        visibleMessages
+          .filter((message) => message.comment)
+          .map((message) => [message._id, message.sender]),
+      );
+      return new Set(
+        visibleMessages
+          .filter(
+            (message) =>
+              message.thread && message.sender !== authors.get(message.thread),
+          )
+          .map((message) => message.thread),
+      );
+    }, [visibleMessages]);
+
+    // The message being edited in place, and the one being asked about
+    // deleting
+    const [editingId, setEditingId] = useState<string>();
+    const stopEditing = useCallback(() => setEditingId(undefined), []);
+    const [deleting, setDeleting] = useState<FilteredChatMessageType>();
+    const stopDeleting = useCallback(() => setDeleting(undefined), []);
 
     const historyRef = useRef<HTMLDivElement>(null);
     const scrollBottomTarget = useRef(0);
@@ -1129,10 +1224,26 @@ const ChatHistory = React.memo(
                 scrollToMessage={scrollToMessage}
                 onReply={onReply}
                 imageOnLoad={scrollChat}
+                canDelete={
+                  msg.sender === selfUser._id &&
+                  !msg.deletedAt &&
+                  !(msg.comment && commentsWithOthersReplies.has(msg._id))
+                }
+                isEditing={editingId === msg._id}
+                onEdit={setEditingId}
+                onEditDone={stopEditing}
+                onDelete={setDeleting}
               />
             );
           })}
         </ChatHistoryDiv>
+        <DeleteChatMessageModal
+          message={deleting}
+          displayNames={displayNames}
+          selfUserId={selfUser._id}
+          roles={roles}
+          onHide={stopDeleting}
+        />
       </ChatHistoryWrapper>
     );
   },
@@ -1539,6 +1650,7 @@ const ChatSection = React.memo(
       chatMessages.forEach((message) => {
         if (
           message.pinTs &&
+          !message.deletedAt &&
           !isReaction(message) &&
           (!newest?.pinTs || message.pinTs > newest.pinTs)
         ) {
@@ -3222,6 +3334,7 @@ const PuzzlePage = React.memo((props: PuzzlePageProps) => {
       if (
         message.sender === undefined ||
         message.timestamp.getTime() <= lastSeen ||
+        message.deletedAt ||
         isReaction(message)
       ) {
         continue;

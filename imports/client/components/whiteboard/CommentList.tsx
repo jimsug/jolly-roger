@@ -80,7 +80,7 @@ const CommentListRow = ({
   const id = row.thread.root._id;
   const show = useCallback(() => onShow(id), [onShow, id]);
   const replies = t("whiteboard.comments.replies", "{{count}} replies", {
-    count: row.thread.replies.length,
+    count: row.thread.replyCount,
   });
   return (
     <li>

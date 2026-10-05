@@ -27,7 +27,7 @@ defineMethod(setChatMessagePin, {
     });
     const message = await ChatMessages.findOneAsync(
       { _id: messageId, hunt: { $in: user?.hunts ?? [] } },
-      { projection: { content: 1, parentId: 1 } },
+      { projection: { content: 1, parentId: 1, deletedAt: 1 } },
     );
     if (!message) {
       throw new Meteor.Error(404, "Unknown message");
@@ -37,9 +37,15 @@ defineMethod(setChatMessagePin, {
     if (isReaction(message)) {
       throw new Meteor.Error(400, "A reaction can't be pinned");
     }
+    // A deleted message has nothing left to pin. It can still be unpinned.
+    if (pinned && message.deletedAt) {
+      throw new Meteor.Error(400, "That message has been deleted");
+    }
 
+    // The pin is only set while the message is undeleted, so a pin that
+    // races a delete can't land on the emptied message
     await ChatMessages.updateAsync(
-      messageId,
+      pinned ? { _id: messageId, deletedAt: { $exists: false } } : messageId,
       pinned ? { $set: { pinTs: new Date() } } : { $unset: { pinTs: "" } },
     );
   },

@@ -31,6 +31,7 @@ type HighlightMessage = Pick<
   | "parentId"
   | "comment"
   | "thread"
+  | "deletedAt"
 >;
 
 const HighlightsRow = styled.div`
@@ -209,9 +210,11 @@ const HighlightsPanel = React.memo(
           key: "replies",
           title: t("chat.highlights.replies", "Replies"),
           // Someone else's replies to the user, not the user's own follow-ups
+          // or replies their senders have deleted
           messages: messages.filter(
             (m) =>
               m.sender !== selfUserId &&
+              !m.deletedAt &&
               m.parentId &&
               messagesById.get(m.parentId)?.sender === selfUserId,
           ),
@@ -228,7 +231,7 @@ const HighlightsPanel = React.memo(
         {
           key: "pins",
           title: t("chat.highlights.pins", "Pins"),
-          messages: messages.filter((m) => m.pinTs),
+          messages: messages.filter((m) => m.pinTs && !m.deletedAt),
         },
         {
           key: "system",

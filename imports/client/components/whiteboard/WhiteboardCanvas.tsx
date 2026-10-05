@@ -3933,7 +3933,7 @@ const CanvasInner = ({
         id,
         anchor: thread.root.comment!,
         author: thread.root.sender,
-        replies: thread.replies.length,
+        replies: thread.replyCount,
         unread: isUnread(thread, seenComments[id], selfId),
         resolved: thread.resolved,
       });
@@ -5065,7 +5065,7 @@ const CanvasInner = ({
   // backing puzzle, and can't be added when the server has none.
   const imagesEnabled = useChatImagesEnabled();
   const imagesOff = t(
-    "whiteboard.comments.imagesOff",
+    "chat.images.off",
     "Images can't be added here: this server has nowhere to store them.",
   );
   const showSaveError = useCallback(

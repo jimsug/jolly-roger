@@ -4,8 +4,8 @@ import type { ChatMessageContentType } from "../lib/models/ChatMessages";
 import ChatMessages from "../lib/models/ChatMessages";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import Puzzles from "../lib/models/Puzzles";
-import nodeIsPuzzle from "../lib/nodeIsPuzzle";
 import type { CommentAnchorInput } from "../methods/sendChatMessage";
+import { assertPuzzleLinksInHunt } from "./chatMessageContent";
 import GlobalHooks from "./GlobalHooks";
 import withLock from "./withLock";
 
@@ -50,7 +50,7 @@ export default async function sendChatMessageInternal({
   let thread: string | undefined;
   if (parentId !== undefined) {
     const parent = await ChatMessages.findOneAsync(parentId, {
-      projection: { puzzle: 1, comment: 1, thread: 1 },
+      projection: { puzzle: 1, comment: 1, thread: 1, deletedAt: 1 },
     });
     if (parent?.puzzle !== puzzleId) {
       throw new Meteor.Error(
@@ -58,27 +58,15 @@ export default async function sendChatMessageInternal({
         `Message ${parentId} is not on puzzle ${puzzleId}`,
       );
     }
+    // A deleted message can still be replied to, but its reactions went with
+    // its content and none are shown on it
+    if (parent.deletedAt && isReaction({ content, parentId })) {
+      throw new Meteor.Error(400, "That message has been deleted");
+    }
     thread = parent.comment ? parent._id : parent.thread;
   }
 
-  const mentionedPuzzles = content.children
-    .filter(nodeIsPuzzle)
-    .map((child) => child.puzzleId);
-  if (mentionedPuzzles.length > 0) {
-    const known = new Set(
-      await Puzzles.find(
-        { _id: { $in: mentionedPuzzles }, hunt: puzzle.hunt },
-        { projection: { _id: 1 } },
-      ).mapAsync((p) => p._id),
-    );
-    const unknown = mentionedPuzzles.find((id) => !known.has(id));
-    if (unknown !== undefined) {
-      throw new Meteor.Error(
-        400,
-        `Puzzle ${unknown} is not in hunt ${puzzle.hunt}`,
-      );
-    }
-  }
+  await assertPuzzleLinksInHunt(content, puzzle.hunt);
 
   const insert = () =>
     ChatMessages.insertAsync({
@@ -121,6 +109,16 @@ export default async function sendChatMessageInternal({
     );
     if (!reaction.isNew) {
       return reaction.id;
+    }
+    // A delete that set deletedAt after the check above may have looked for
+    // reactions before this one was inserted, so it is taken back here
+    // instead
+    const parentNow = await ChatMessages.findOneAsync(parentId, {
+      projection: { deletedAt: 1 },
+    });
+    if (parentNow?.deletedAt) {
+      await ChatMessages.removeAsync(reaction.id);
+      throw new Meteor.Error(400, "That message has been deleted");
     }
     msgId = reaction.id;
   } else {

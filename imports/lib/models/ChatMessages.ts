@@ -95,6 +95,13 @@ const ChatMessage = withCommon(
     // The comment a reply (at any depth) belongs to. Written only by the
     // server.
     thread: foreignKey.optional(),
+    // When the sender last changed the message's content.
+    editedAt: z.date().optional(),
+    // When the sender deleted the message. The content is emptied and pins
+    // and reactions go, but the message stays (shown as "Message deleted")
+    // so that replies to it keep their place. Unlike `deleted`, which hides a
+    // message from every finder, this one is still published.
+    deletedAt: z.date().optional(),
   }),
 );
 const ChatMessages = new SoftDeletedModel("jr_chatmessages", ChatMessage);
