@@ -40,6 +40,9 @@ import { COLLAPSED_FRAME_HEIGHT } from "../../imports/lib/whiteboard/collapse";
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
+  cardSlot,
+  FRAME_HEADER,
+  FRAME_PADDING,
   GAP,
 } from "../../imports/lib/whiteboard/layout";
 import addHuntUser from "../../imports/methods/addHuntUser";
@@ -253,7 +256,11 @@ if (Meteor.isClient) {
   // opening at zoom 1 and the first card well inside the canvas, so screen
   // pixels are board units.
   const sideBySideCards = async (boardId: string) => {
-    subs.push(await typedSubscribe.async(whiteboardContents, { boardId }));
+    // Not typedSubscribe.async, whose handle is undefined when a page left
+    // the same subscription ready
+    const contents = typedSubscribe(whiteboardContents, { boardId });
+    subs.push(contents);
+    await waitFor(() => assert.isTrue(contents.ready()), { timeout: 10000 });
     const nodes = await WhiteboardNodes.find({ board: boardId }).fetchAsync();
     const frames = new Map(
       nodes
@@ -3431,6 +3438,11 @@ if (Meteor.isClient) {
               const moved = await savedNode(sticky);
               assert.equal(moved?.parent, frame);
               assert.deepEqual(moved?.position, { x: 340, y: 100 });
+              // It overhangs the frame's right edge by 40, so that grows
+              assert.equal(
+                (await savedNode(frame))?.width,
+                440 + FRAME_PADDING,
+              );
             },
             { timeout: 10000 },
           );
@@ -3443,6 +3455,11 @@ if (Meteor.isClient) {
                 x: base.x + 420,
                 y: base.y + 100,
               });
+              // and doesn't shrink again
+              assert.equal(
+                (await savedNode(frame))?.width,
+                440 + FRAME_PADDING,
+              );
             },
             { timeout: 10000 },
           );
@@ -3450,6 +3467,447 @@ if (Meteor.isClient) {
           forgetView();
           await removeNodes([sticky, frame]);
         }
+      });
+
+      describe("frame tools", function () {
+        const click = async (element: Element) => {
+          await act(async () => {
+            fireEvent.click(element);
+            await stabilize();
+          });
+        };
+        const clickButton = async (name: string) =>
+          click(await screen.findByRole("button", { name }));
+        const onScreen = async (id: string) => {
+          const box = (await nodeShown(id)).getBoundingClientRect();
+          return { left: box.left, top: box.top };
+        };
+        // A frame of our own at `base`, with notes inside it where given.
+        const frameWith = async (
+          base: { x: number; y: number },
+          size: { width: number; height: number },
+          notes: { x: number; y: number }[],
+        ) => {
+          const frame = Random.id();
+          const ids = notes.map(() => Random.id());
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              { _id: frame, type: "frame", position: base, ...size },
+              ...ids.map((_id, i) => ({
+                _id,
+                type: "sticky" as const,
+                parent: frame,
+                position: notes[i]!,
+                width: 160,
+                height: 120,
+              })),
+            ],
+          });
+          return { frame, notes: ids };
+        };
+
+        it("fits a frame round what's in it without moving anything on screen", async function () {
+          this.timeout(30000);
+          const base = { x: 35000, y: 35000 };
+          const { frame, notes } = await frameWith(
+            base,
+            { width: 1200, height: 900 },
+            [
+              { x: 200, y: 200 },
+              { x: 500, y: 300 },
+            ],
+          );
+          lookAt(base);
+          try {
+            await openBoard();
+            const before = await onScreen(notes[1]!);
+            await select(frame);
+            await clickButton("Fit to contents");
+            await waitFor(
+              async () => {
+                const fitted = await savedNode(frame);
+                assert.deepEqual(fitted?.position, {
+                  x: base.x + 200 - FRAME_PADDING,
+                  y: base.y + 200 - FRAME_HEADER,
+                });
+                assert.equal(fitted?.width, 660 - 200 + FRAME_PADDING * 2);
+                assert.equal(
+                  fitted?.height,
+                  420 - 200 + FRAME_HEADER + FRAME_PADDING,
+                );
+                assert.deepEqual((await savedNode(notes[0]!))?.position, {
+                  x: FRAME_PADDING,
+                  y: FRAME_HEADER,
+                });
+                assert.deepEqual((await savedNode(notes[1]!))?.position, {
+                  x: 300 + FRAME_PADDING,
+                  y: 100 + FRAME_HEADER,
+                });
+              },
+              { timeout: 10000 },
+            );
+            const after = await onScreen(notes[1]!);
+            assert.closeTo(after.left, before.left, 1);
+            assert.closeTo(after.top, before.top, 1);
+          } finally {
+            forgetView();
+            await removeNodes([...notes, frame]);
+          }
+        });
+
+        it("grows a frame when a note is dropped past its edge", async function () {
+          this.timeout(30000);
+          const base = { x: 36000, y: 35000 };
+          const { frame } = await frameWith(
+            base,
+            { width: 400, height: 300 },
+            [],
+          );
+          const note = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: note,
+                type: "sticky",
+                position: { x: base.x + 600, y: base.y + 100 },
+                width: 100,
+                height: 80,
+              },
+            ],
+          });
+          lookAt(base);
+          try {
+            await openBoard();
+            const element = await nodeShown(note);
+            const box = element.getBoundingClientRect();
+            const start = {
+              clientX: box.left + box.width / 2,
+              clientY: box.top + box.height / 2,
+            };
+            const mouse = { button: 0, view: window };
+            const at = (dx: number) => ({
+              ...mouse,
+              clientX: start.clientX - dx,
+              clientY: start.clientY,
+            });
+            await act(async () => {
+              fireEvent.mouseDown(element, { ...mouse, ...start });
+              await stabilize();
+            });
+            // The first move starts the drag, and the node moves as far as
+            // the pointer moves from there. Its middle ends up 10 inside the
+            // frame's right edge, so it overhangs by 40.
+            const to = at(262);
+            for (const point of [at(2), to]) {
+              await act(async () => {
+                fireEvent.mouseMove(window, point);
+                await stabilize();
+              });
+            }
+            await act(async () => {
+              fireEvent.mouseUp(window, to);
+              await stabilize();
+            });
+            await waitFor(
+              async () => {
+                const dropped = await savedNode(note);
+                assert.equal(dropped?.parent, frame);
+                assert.deepEqual(dropped?.position, { x: 340, y: 100 });
+                const grown = await savedNode(frame);
+                assert.equal(grown?.width, 440 + FRAME_PADDING);
+                assert.equal(grown?.height, 300);
+                assert.deepEqual(grown?.position, base);
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            await removeNodes([note, frame]);
+          }
+        });
+
+        it("tidies a round's cards round a note, and undoes it as one step", async function () {
+          this.timeout(30000);
+          const { a, frame } = await sideBySideCards(boardId);
+          const note = Random.id();
+          const notePosition = {
+            x: cardSlot(3).x + CARD_WIDTH + 40,
+            y: FRAME_HEADER,
+          };
+          const away = { x: cardSlot(3).x + CARD_WIDTH + 240, y: FRAME_HEADER };
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: note,
+                type: "sticky",
+                parent: frame._id,
+                position: notePosition,
+                width: 160,
+                height: 120,
+              },
+              { _id: a._id, position: away },
+            ],
+          });
+          const slots = new Set(
+            Array.from({ length: 64 }, (_, i) => JSON.stringify(cardSlot(i))),
+          );
+          try {
+            await openBoard();
+            await select(frame._id);
+            await clickButton("Tidy");
+            await waitFor(
+              async () => {
+                const cards = await WhiteboardNodes.find({
+                  board: boardId,
+                  parent: frame._id,
+                  type: "puzzle",
+                  hidden: { $ne: true },
+                }).fetchAsync();
+                const taken = cards.map((c) => JSON.stringify(c.position));
+                taken.forEach((at) => assert.isTrue(slots.has(at), at));
+                assert.equal(new Set(taken).size, taken.length);
+                assert.notDeepEqual(
+                  cards.find((c) => c._id === a._id)?.position,
+                  away,
+                );
+              },
+              { timeout: 10000 },
+            );
+            assert.deepEqual((await savedNode(note))?.position, notePosition);
+            await waitFor(
+              () =>
+                assert.isFalse(
+                  screen.getByRole<HTMLButtonElement>("button", {
+                    name: "Undo",
+                  }).disabled,
+                ),
+              { timeout: 10000 },
+            );
+
+            await pressBoard();
+            await press(pane(), { key: "z", ctrlKey: true });
+            await waitFor(
+              async () =>
+                assert.deepEqual((await savedNode(a._id))?.position, away),
+              { timeout: 10000 },
+            );
+            assert.deepEqual((await savedNode(note))?.position, notePosition);
+          } finally {
+            forgetView();
+            await removeNodes([note]);
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: a._id, parent: a.parent, position: a.position }],
+            });
+          }
+        });
+
+        it("refuses to fit a frame when something locked in it would have to move", async function () {
+          this.timeout(30000);
+          const base = { x: 37000, y: 35000 };
+          const { frame, notes } = await frameWith(
+            base,
+            { width: 1200, height: 900 },
+            [{ x: 200, y: 200 }],
+          );
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [{ _id: notes[0]!, locked: true }],
+          });
+          lookAt(base);
+          try {
+            await openBoard();
+            await select(frame);
+            await clickButton("Fit to contents");
+            await screen.findByText("That's locked");
+            const held = await savedNode(frame);
+            assert.deepEqual(held?.position, base);
+            assert.equal(held?.width, 1200);
+            assert.deepEqual((await savedNode(notes[0]!))?.position, {
+              x: 200,
+              y: 200,
+            });
+          } finally {
+            forgetView();
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: notes[0]!, locked: false }],
+            });
+            await removeNodes([...notes, frame]);
+          }
+        });
+
+        it("tidies a locked frame only when it needn't grow, and never offers to fit it", async function () {
+          this.timeout(30000);
+          const { a, frame } = await sideBySideCards(boardId);
+          const away = { x: cardSlot(3).x + CARD_WIDTH + 240, y: FRAME_HEADER };
+          // Sizes are set before the board opens, so it never draws the
+          // frame changing size under it
+          const lockedAt = async (size: { width: number; height: number }) => {
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [
+                { _id: frame._id, locked: false, ...size },
+                { _id: a._id, position: away },
+              ],
+            });
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: frame._id, locked: true }],
+            });
+          };
+          const tidy = async () => {
+            await openBoard();
+            await select(frame._id);
+            await screen.findByRole("button", { name: "Tidy" });
+            assert.isNull(
+              screen.queryByRole("button", { name: "Fit to contents" }),
+            );
+            await clickButton("Tidy");
+          };
+          lookAt(frame.position);
+          try {
+            // Big enough for the cards already
+            await lockedAt({ width: 4000, height: 4000 });
+            await tidy();
+            await waitFor(
+              async () =>
+                assert.notDeepEqual((await savedNode(a._id))?.position, away),
+              { timeout: 10000 },
+            );
+            const tidied = await savedNode(frame._id);
+            assert.equal(tidied?.width, 4000);
+            assert.equal(tidied?.height, 4000);
+            cleanup();
+
+            // Too small for them, so it would have to grow
+            await lockedAt({ width: 200, height: 200 });
+            await tidy();
+            await screen.findByText("That's locked");
+            assert.deepEqual((await savedNode(a._id))?.position, away);
+            assert.equal((await savedNode(frame._id))?.width, 200);
+          } finally {
+            forgetView();
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [
+                {
+                  _id: frame._id,
+                  locked: false,
+                  width: frame.width,
+                  height: frame.height,
+                },
+              ],
+            });
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: a._id, parent: a.parent, position: a.position }],
+            });
+          }
+        });
+
+        it("grows a frame for a nudge past its edge from inside it", async function () {
+          this.timeout(30000);
+          const base = { x: 38000, y: 35000 };
+          const { frame } = await frameWith(
+            base,
+            { width: 400, height: 300 },
+            [],
+          );
+          const note = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: note,
+                type: "sticky",
+                parent: frame,
+                position: { x: 280, y: 100 },
+                width: 100,
+                height: 80,
+              },
+            ],
+          });
+          lookAt(base);
+          try {
+            await openBoard();
+            await select(note);
+            const node = await nodeShown(note);
+            // Two steps of 20 take its right edge 20 past the frame's
+            await press(node, { key: "ArrowRight", shiftKey: true });
+            await press(node, { key: "ArrowRight", shiftKey: true });
+            await waitFor(
+              async () => {
+                const moved = await savedNode(note);
+                assert.equal(moved?.parent, frame);
+                assert.deepEqual(moved?.position, { x: 320, y: 100 });
+                assert.equal(
+                  (await savedNode(frame))?.width,
+                  420 + FRAME_PADDING,
+                );
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            await removeNodes([note, frame]);
+          }
+        });
+
+        it("doesn't grow a locked frame for a note nudged into it", async function () {
+          this.timeout(30000);
+          const base = { x: 39000, y: 35000 };
+          const { frame } = await frameWith(
+            base,
+            { width: 400, height: 300 },
+            [],
+          );
+          const note = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              { _id: frame, locked: true },
+              {
+                _id: note,
+                type: "sticky",
+                // Its middle is 20 past the frame's right edge
+                position: { x: base.x + 420, y: base.y + 100 },
+                width: 100,
+                height: 80,
+              },
+            ],
+          });
+          lookAt(base);
+          try {
+            await openBoard();
+            await select(note);
+            const node = await nodeShown(note);
+            for (let i = 0; i < 4; i++) {
+              await press(node, { key: "ArrowLeft", shiftKey: true });
+            }
+            await waitFor(
+              async () => {
+                const moved = await savedNode(note);
+                assert.equal(moved?.parent, frame);
+                assert.deepEqual(moved?.position, { x: 340, y: 100 });
+              },
+              { timeout: 10000 },
+            );
+            const held = await savedNode(frame);
+            assert.equal(held?.width, 400);
+            assert.equal(held?.height, 300);
+          } finally {
+            forgetView();
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: frame, locked: false }],
+            });
+            await removeNodes([note, frame]);
+          }
+        });
       });
 
       describe("undo and redo", function () {

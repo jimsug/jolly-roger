@@ -61,6 +61,7 @@ defineMethod(addPuzzleAnswer, {
         $addToSet: {
           answers: answer,
         },
+        $set: { answersUpdatedAt: new Date() },
       },
     );
 

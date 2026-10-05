@@ -142,6 +142,7 @@ const FeedersContents = ({
           lockedSummary: 1,
           hunt: 1,
           updatedAt: 1,
+          answersUpdatedAt: 1,
         },
       },
     ).fetch();

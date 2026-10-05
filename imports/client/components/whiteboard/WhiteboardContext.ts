@@ -27,6 +27,10 @@ export interface WhiteboardActions {
   // Persists a node's size and position, and its children's positions, after
   // a resize (resizing from the top or left moves the origin).
   persistResize: (id: string) => void;
+  // Fit to contents and Tidy, for a frame. Both refuse with a notice when a
+  // lock is in the way.
+  fitToContents: (frameId: string) => void;
+  tidyCards: (frameId: string) => void;
   // Starts dragging one end of a line, from its grip.
   beginEndpointDrag: (
     edgeId: string,

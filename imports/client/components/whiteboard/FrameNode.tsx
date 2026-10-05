@@ -173,6 +173,46 @@ const CollapseForAllButton = ({
   );
 };
 
+// Fit to contents and Tidy, for the toolbar above a selected frame that's
+// open. A locked frame can't be fitted, so it only gets Tidy, which can
+// still go through when the frame needn't grow.
+const FrameToolButtons = ({ id, locked }: { id: string; locked: boolean }) => {
+  const { t } = useTranslation();
+  const { fitToContents, tidyCards } = useWhiteboard();
+  const fit = useCallback(() => fitToContents(id), [id, fitToContents]);
+  const tidy = useCallback(() => tidyCards(id), [id, tidyCards]);
+  return (
+    <>
+      {!locked && (
+        <Button
+          size="sm"
+          variant="outline-secondary"
+          className="nodrag"
+          title={t(
+            "whiteboard.frame.fitTitle",
+            "Make the frame just big enough for what's in it, without moving anything",
+          )}
+          onClick={fit}
+        >
+          {t("whiteboard.frame.fit", "Fit to contents")}
+        </Button>
+      )}
+      <Button
+        size="sm"
+        variant="outline-secondary"
+        className="nodrag"
+        title={t(
+          "whiteboard.frame.tidyTitle",
+          "Lay the cards out in rows, metas first, leaving everything else where it is",
+        )}
+        onClick={tidy}
+      >
+        {t("whiteboard.frame.tidy", "Tidy")}
+      </Button>
+    </>
+  );
+};
+
 // Opens a collapsed frame for this viewer only, or folds it again.
 const PeekButton = ({
   id,
@@ -313,11 +353,14 @@ const FrameNode = ({ id, data, selected }: NodeProps<FrameNodeType>) => {
         resizable={!collapsed}
         locked={locked}
         tools={
-          <CollapseForAllButton
-            id={id}
-            collapsedForAll={collapsedForAll}
-            variant="toolbar"
-          />
+          <>
+            <CollapseForAllButton
+              id={id}
+              collapsedForAll={collapsedForAll}
+              variant="toolbar"
+            />
+            {!collapsed && <FrameToolButtons id={id} locked={locked} />}
+          </>
         }
       />
       {detail === "far" ? null : (

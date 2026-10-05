@@ -97,15 +97,18 @@ export default async function transitionGuess(
   });
 
   if (newState === "correct") {
-    // Mark this puzzle as solved.
+    // Mark this puzzle as solved. A puzzle that already has the answer is
+    // left alone, so answersUpdatedAt says when its answers last changed.
     await Puzzles.updateAsync(
       {
         _id: guess.puzzle,
+        answers: { $ne: guessText },
       },
       {
         $addToSet: {
           answers: guessText,
         },
+        $set: { answersUpdatedAt: new Date() },
       },
     );
     await GlobalHooks.runPuzzleSolvedHooks(guess.puzzle, guessText);
@@ -125,11 +128,13 @@ export default async function transitionGuess(
       await Puzzles.updateAsync(
         {
           _id: guess.puzzle,
+          answers: guess.guess,
         },
         {
           $pull: {
             answers: guess.guess,
           },
+          $set: { answersUpdatedAt: new Date() },
         },
       );
       await GlobalHooks.runPuzzleNoLongerSolvedHooks(guess.puzzle, guess.guess);

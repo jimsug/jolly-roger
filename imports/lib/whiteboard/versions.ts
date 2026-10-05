@@ -579,11 +579,14 @@ export type ItemRestoreResult =
 // Nothing live is removed. A node whose frame isn't on the board, or would
 // make a loop, goes to the top level where the version had it on the board.
 // Lines need both ends on the board afterwards, and free ends need a line.
-// Also returns the puzzles of the cards it touches.
+// With keepLocks, as for planRestore, a node keeps the lock it has on the
+// board and one the board no longer has comes back unlocked. Also returns
+// the puzzles of the cards it touches.
 export function planItemRestore(
   current: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
   target: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
   items: { nodes: Set<string>; edges: Set<string> },
+  { keepLocks = false }: { keepLocks?: boolean } = {},
 ): ItemRestoreResult {
   const liveNodes = new Map(current.nodes.map((n) => [n._id, n]));
   const targetNodes = new Map(target.nodes.map((n) => [n._id, n]));
@@ -611,7 +614,8 @@ export function planItemRestore(
     const _id = idOf.get(n._id) ?? n._id;
     if (wanted.has(_id)) return;
     const parent = n.parent ? idOf.get(n.parent) : undefined;
-    wanted.set(_id, { ...n, _id, parent });
+    const node = { ...n, _id, parent };
+    wanted.set(_id, keepLocks ? withLiveLock(node, liveNodes.get(_id)) : node);
     storedAs.set(_id, n);
   });
 

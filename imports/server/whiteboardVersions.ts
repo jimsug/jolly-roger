@@ -832,7 +832,11 @@ export async function restoreItems(
 
   const { puzzles, restored } = await withBoardLock(boardId, async (renew) => {
     // Anything may have changed while this waited for the lock
-    const { board: current } = await assertMayEditBoard(userId, boardId);
+    const {
+      board: current,
+      hunt,
+      user,
+    } = await assertMayEditBoard(userId, boardId);
     await assertHistoryEnabled();
     const target = await readVersionLocked(version, renew);
 
@@ -844,7 +848,11 @@ export async function restoreItems(
 
     const live = await readBoard(boardId);
     await renew();
-    const result = planItemRestore(live, target, items);
+    // Only operators can put back the locks a version has, as for a whole
+    // restore.
+    const result = planItemRestore(live, target, items, {
+      keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
+    });
     if (!result.ok) throw new Meteor.Error(400, "This board is full");
     const { plan } = result;
     // Restoring an item is a person's edit, so like Place by tags it doesn't

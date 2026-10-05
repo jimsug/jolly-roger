@@ -33,6 +33,7 @@ type Puzzle = Pick<
   | "expectedAnswerCount"
   | "completedWithNoAnswer"
   | "updatedAt"
+  | "answersUpdatedAt"
 >;
 type Node = Pick<
   WhiteboardNodeType,
@@ -130,6 +131,17 @@ describe("whiteboard feeders", function () {
       h.puzzle("otherMetameta", ["is:metameta"]);
       h.puzzle("feeder", ["group:a"]);
       assert.sameMembers(h.of(metameta), ["roundMeta", "bareMeta"]);
+    });
+
+    it("lists only the metas sharing a metameta's group: tags, when it has any", function () {
+      const h = hunt();
+      const metameta = h.puzzle("metameta", ["is:metameta", "group:act1"]);
+      h.puzzle("inAct", ["meta-for:a", "group:act1"]);
+      h.puzzle("bareInAct", ["is:meta", "group:act1", "group:b"]);
+      h.puzzle("otherAct", ["meta-for:c", "group:act2"]);
+      h.puzzle("noAct", ["meta-for:d"]);
+      h.puzzle("feederInAct", ["group:act1"]);
+      assert.sameMembers(h.of(metameta), ["inAct", "bareInAct"]);
     });
 
     it("goes by meta-for: on a metameta that has one", function () {
@@ -250,6 +262,29 @@ describe("whiteboard feeders", function () {
       // A loose card a little above the frames, to their right
       h.card("beside", { x: 4000, y: 990 });
       assert.deepEqual(h.of(meta), ["left", "right", "beside", "below"]);
+    });
+
+    it("goes by when the answers last changed, or failing that the puzzle", function () {
+      const h = hunt();
+      const meta = h.puzzle("meta", ["meta-for:a"]);
+      // Answered first, but retagged since
+      const retagged = h.puzzle("retagged", ["group:a"], {
+        answers: ["ONE"],
+        updatedAt: 9000,
+      });
+      retagged.answersUpdatedAt = new Date(1000);
+      const recent = h.puzzle("recent", ["group:a"], {
+        answers: ["TWO"],
+        updatedAt: 5000,
+      });
+      recent.answersUpdatedAt = new Date(5000);
+      // Answered before answersUpdatedAt was recorded
+      h.puzzle("legacy", ["group:a"], { answers: ["THREE"], updatedAt: 3000 });
+      assert.deepEqual(h.of(meta, { order: "solveTime" }), [
+        "recent",
+        "legacy",
+        "retagged",
+      ]);
     });
 
     it("orders by solve time, newest answer first, then the rest by board", function () {

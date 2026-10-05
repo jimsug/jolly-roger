@@ -115,6 +115,16 @@ import {
   snapAngle,
 } from "../../../lib/whiteboard/connectors";
 import { feederFocus } from "../../../lib/whiteboard/feederFocus";
+import type {
+  Box,
+  BoxChange,
+  FrameAround,
+} from "../../../lib/whiteboard/frameTools";
+import {
+  fitFrame,
+  growFrameFor,
+  tidyFrame,
+} from "../../../lib/whiteboard/frameTools";
 import type { InkPoint } from "../../../lib/whiteboard/ink";
 import {
   distanceToInk,
@@ -131,6 +141,7 @@ import {
   CARD_WIDTH,
   frameLabel,
   POINT_SIZE,
+  roundMetas,
 } from "../../../lib/whiteboard/layout";
 import {
   MAX_BATCH,
@@ -297,6 +308,38 @@ interface CommentPress {
 
 // Where nodes are being moved to, each in its frame (if any).
 type NodeMoves = Map<string, { position: XYPosition; parent?: string }>;
+
+// A node that has just been dropped, nudged or aligned, where it now is.
+interface Landed {
+  id: string;
+  parent: string | undefined;
+  position: XYPosition;
+}
+
+// A node's box in its frame, for the frame tools. A collapsed frame counts
+// at its stored size, not the header it's drawn as.
+function frameToolBox(n: WhiteboardFlowNode): Box {
+  const { doc } = n.data;
+  return {
+    id: n.id,
+    x: n.position.x,
+    y: n.position.y,
+    width: n.measured?.width ?? n.width ?? doc.width ?? 0,
+    height: n.data.collapsed
+      ? (doc.height ?? 0)
+      : (n.measured?.height ?? n.height ?? doc.height ?? 0),
+    locked: !!doc.locked,
+  };
+}
+
+// One input per node, later fields winning.
+function mergeInputs(inputs: WhiteboardNodeInput[]): WhiteboardNodeInput[] {
+  const byId = new Map<string, WhiteboardNodeInput>();
+  inputs.forEach((input) => {
+    byId.set(input._id, { ...byId.get(input._id), ...input });
+  });
+  return [...byId.values()];
+}
 
 const isPlaceTool = (tool: Tool): tool is PlaceTool =>
   tool === "sticky" || tool === "text" || tool === "frame";
@@ -1782,12 +1825,214 @@ const CanvasInner = ({
     [frameAt, isWithin, absoluteRect],
   );
 
+  // A node's box for the frame tools. Something someone else is dragging
+  // counts where it's saved: where they have it is theirs to save.
+  const toolBox = useCallback((n: WhiteboardFlowNode): Box => {
+    const found = frameToolBox(n);
+    return remoteDragged.current.has(n.id)
+      ? { ...found, ...n.data.doc.position }
+      : found;
+  }, []);
+
+  // The frame tools' changes, less any to something someone else is
+  // dragging other than the frame being worked on, which are theirs to save.
+  const notDraggedByOthers = useCallback(
+    (changes: BoxChange[], frameId: string) =>
+      changes.filter(
+        (c) => c.id === frameId || !remoteDragged.current.has(c.id),
+      ),
+    [],
+  );
+
+  // A frame, what's directly in it, and the frames around it (innermost
+  // first) with what's directly in each, as the frame tools take them.
+  const aroundFrame = useCallback(
+    (frameId: string) => {
+      const all = flow.getNodes();
+      const byId = new Map(all.map((n) => [n.id, n]));
+      const childrenOf = (id: string) => all.filter((n) => n.parentId === id);
+      const ancestors: FrameAround[] = [];
+      let parentId = byId.get(frameId)?.parentId;
+      for (let i = 0; parentId && i < MAX_FRAME_DEPTH; i++) {
+        const parent = byId.get(parentId);
+        if (!parent) break;
+        ancestors.push({
+          frame: toolBox(parent),
+          children: childrenOf(parent.id).map(toolBox),
+        });
+        parentId = parent.parentId;
+      }
+      return {
+        frame: byId.get(frameId),
+        children: childrenOf(frameId),
+        ancestors,
+      };
+    },
+    [flow, toolBox],
+  );
+
+  // Shows the frame tools' changes straight away and holds them until the
+  // server has them, and gives them back as inputs to save.
+  const showBoxChanges = useCallback(
+    (changes: BoxChange[]): WhiteboardNodeInput[] => {
+      if (changes.length === 0) return [];
+      const byId = new Map(changes.map((c) => [c.id, c]));
+      changes.forEach(({ id, ...change }) => markPending(id, change));
+      setNodes((nds) =>
+        nds.map((n) => {
+          const change = byId.get(n.id);
+          if (!change) return n;
+          return {
+            ...n,
+            ...(change.position ? { position: change.position } : {}),
+            ...(change.width !== undefined ? { width: change.width } : {}),
+            ...(change.height !== undefined && !n.data.collapsed
+              ? { height: change.height }
+              : {}),
+          };
+        }),
+      );
+      return changes.map(({ id, ...change }) => ({ _id: id, ...change }));
+    },
+    [markPending, setNodes],
+  );
+
+  // Grows the frames that what has just landed in them overhangs on the
+  // right or bottom, and the frames around those, never shrinking anything.
+  // A frame that's locked, or that would make a locked frame around it grow,
+  // stays as it is. Gives back the inputs to save with the move.
+  const growForLanded = useCallback(
+    (landed: Landed[]): WhiteboardNodeInput[] => {
+      const byFrame = new Map<string, Box[]>();
+      landed.forEach(({ id, parent, position }) => {
+        const node = parent && flow.getNode(id);
+        if (!parent || !node) return;
+        byFrame.set(parent, [
+          ...(byFrame.get(parent) ?? []),
+          { ...frameToolBox(node), ...position },
+        ]);
+      });
+      // Growing only reaches right and down, so where two frames grow the
+      // same frame around them, the bigger size takes both.
+      const grown = new Map<string, BoxChange>();
+      byFrame.forEach((boxes, frameId) => {
+        const { frame, ancestors } = aroundFrame(frameId);
+        if (!frame || frame.data.collapsed) return;
+        const result = growFrameFor(toolBox(frame), boxes, ancestors);
+        if (result.locked.length > 0) return;
+        result.changes.forEach(({ id, width, height }) => {
+          const merged = { ...grown.get(id), id };
+          if (width !== undefined) {
+            merged.width = Math.max(width, merged.width ?? 0);
+          }
+          if (height !== undefined) {
+            merged.height = Math.max(height, merged.height ?? 0);
+          }
+          grown.set(id, merged);
+        });
+      });
+      return showBoxChanges([...grown.values()]);
+    },
+    [flow, toolBox, aroundFrame, showBoxChanges],
+  );
+
+  const showLockRefused = useCallback(
+    () => showNotice(t("whiteboard.lock.refused", "That's locked")),
+    [showNotice, t],
+  );
+
+  // Fit to contents: the frame shrinks or grows to just take what's in it,
+  // and the frames around it grow if it would overhang them, with nothing
+  // moving on the board.
+  const fitToContents = useCallback(
+    (frameId: string) => {
+      const { frame, children, ancestors } = aroundFrame(frameId);
+      if (!frame || frame.data.collapsed) return;
+      const result = fitFrame(
+        toolBox(frame),
+        children.map(toolBox),
+        ancestors,
+        MIN_SIZES.frame,
+      );
+      if (result.locked.length > 0) {
+        showLockRefused();
+        return;
+      }
+      updateNodes(showBoxChanges(notDraggedByOthers(result.changes, frameId)));
+    },
+    [
+      aroundFrame,
+      toolBox,
+      notDraggedByOthers,
+      showBoxChanges,
+      showLockRefused,
+      updateNodes,
+    ],
+  );
+
+  // Tidy: lays a frame's cards out as a new board would, metas first, going
+  // round everything else in it, and grows the frame to take them.
+  const tidyCards = useCallback(
+    (frameId: string) => {
+      const { frame, children, ancestors } = aroundFrame(frameId);
+      if (!frame || frame.data.collapsed) return;
+      const puzzles = Puzzles.find(
+        { hunt: huntId },
+        { projection: { tags: 1, createdAt: 1 } },
+      ).fetch();
+      const tags = Tags.find(
+        { hunt: huntId },
+        { projection: { name: 1 } },
+      ).fetch();
+      const metaPuzzles = roundMetas(frame.data.doc.tag, tags, puzzles);
+      const createdAt = new Map(puzzles.map((p) => [p._id, +p.createdAt]));
+      // A card someone else is dragging stays put like everything else
+      const isCard = (n: WhiteboardFlowNode) =>
+        n.type === "puzzle" && !remoteDragged.current.has(n.id);
+      const cards = children.filter(isCard);
+      const result = tidyFrame(
+        toolBox(frame),
+        cards.map((n) => ({
+          ...toolBox(n),
+          createdAt:
+            (n.data.doc.puzzle
+              ? createdAt.get(n.data.doc.puzzle)
+              : undefined) ?? Number.MAX_SAFE_INTEGER,
+        })),
+        new Set(
+          cards
+            .filter(
+              (n) => n.data.doc.puzzle && metaPuzzles.has(n.data.doc.puzzle),
+            )
+            .map((n) => n.id),
+        ),
+        children.filter((n) => !isCard(n)).map(toolBox),
+        ancestors,
+      );
+      if (result.locked.length > 0) {
+        showLockRefused();
+        return;
+      }
+      updateNodes(showBoxChanges(notDraggedByOthers(result.changes, frameId)));
+    },
+    [
+      huntId,
+      aroundFrame,
+      toolBox,
+      notDraggedByOthers,
+      showBoxChanges,
+      showLockRefused,
+      updateNodes,
+    ],
+  );
+
   // Saves the nodes nudged with the arrow keys.
   const saveNudges = useCallback(() => {
     const inputs: WhiteboardNodeInput[] = [];
     const nudgedIds = new Set(nudged.current);
     const frames = frameRects();
     const moves: NodeMoves = new Map();
+    const landed: Landed[] = [];
     // Something someone else is dragging shows where they have it, which is
     // theirs to save, so a nudge made from there is dropped
     const draggedByOthers: string[] = [];
@@ -1801,9 +2046,10 @@ const CanvasInner = ({
       // Like a drop, something nudged into or out of a frame joins or leaves
       // it. Things carried along (free line ends, the rest of a stroke) and
       // things inside a frame that moved too keep their frame.
-      const carried =
-        companions.current.has(id) ||
-        [...nudgedIds].some((other) => other !== id && isWithin(id, other));
+      const insideMoved = [...nudgedIds].some(
+        (other) => other !== id && isWithin(id, other),
+      );
+      const carried = companions.current.has(id) || insideMoved;
       const rect = carried ? undefined : absoluteRect(id);
       if (rect) {
         const { parent, position } = placementFor(id, rect, nudgedIds, frames);
@@ -1811,17 +2057,22 @@ const CanvasInner = ({
           inputs.push({ _id: id, position, parent: parent ?? null });
           markPending(id, { position, parent: parent ?? null });
           moves.set(id, { position, parent });
+          landed.push({ id, parent, position });
           return;
         }
       }
       inputs.push({ _id: id, position: node.position });
       markPending(id, { position: node.position });
+      // Something moving with its frame stays where it was in it
+      if (!insideMoved) {
+        landed.push({ id, parent: node.parentId, position: node.position });
+      }
     });
     nudged.current.clear();
     companions.current.clear();
     if (draggedByOthers.length > 0) clearPending(draggedByOthers);
     showMoves(moves);
-    updateNodes(inputs);
+    updateNodes(mergeInputs([...inputs, ...growForLanded(landed)]));
   }, [
     flow,
     frameRects,
@@ -1831,6 +2082,7 @@ const CanvasInner = ({
     markPending,
     clearPending,
     showMoves,
+    growForLanded,
     updateNodes,
   ]);
   useEffect(() => {
@@ -1951,6 +2203,7 @@ const CanvasInner = ({
       const frames = frameRects();
       const inputs: WhiteboardNodeInput[] = [];
       const moves: NodeMoves = new Map();
+      const landed: Landed[] = [];
 
       dragged.forEach((node) => {
         // A line's free end dragged on its own onto something attaches there.
@@ -1971,11 +2224,17 @@ const CanvasInner = ({
         if (target === node.parentId) {
           inputs.push({ _id: node.id, position: node.position });
           markPending(node.id, { position: node.position });
+          landed.push({
+            id: node.id,
+            parent: node.parentId,
+            position: node.position,
+          });
           return;
         }
         inputs.push({ _id: node.id, position, parent: target ?? null });
         markPending(node.id, { position, parent: target ?? null });
         moves.set(node.id, { position, parent: target });
+        landed.push({ id: node.id, parent: target, position });
       });
 
       dragActive.current = false;
@@ -1984,13 +2243,18 @@ const CanvasInner = ({
         if (!carried || draggedIds.has(id)) return;
         inputs.push({ _id: id, position: carried.position });
         markPending(id, { position: carried.position });
+        landed.push({
+          id,
+          parent: carried.parentId,
+          position: carried.position,
+        });
       });
       companions.current.clear();
 
       showMoves(moves);
       // Others drop their copy of the drag only once the saved positions
       // are on their way, so they never see the node jump back.
-      updateNodes(inputs, () => {
+      updateNodes(mergeInputs([...inputs, ...growForLanded(landed)]), () => {
         if (!dragActive.current) live.setDrag(null);
       });
       markBusy([...draggedIds], false);
@@ -2006,6 +2270,7 @@ const CanvasInner = ({
       frameRects,
       markPending,
       showMoves,
+      growForLanded,
       updateNodes,
     ],
   );
@@ -2338,6 +2603,7 @@ const CanvasInner = ({
 
       const moved: NodeMoves = new Map();
       const inputs: WhiteboardNodeInput[] = [];
+      const landed: Landed[] = [];
       const movingIds = new Set(
         [...units.values()].flatMap((members) => members.map((m) => m.id)),
       );
@@ -2373,6 +2639,7 @@ const CanvasInner = ({
             moved.set(m.id, { position, parent });
             inputs.push({ _id: m.id, position, parent: parent ?? null });
             markPending(m.id, { position, parent: parent ?? null });
+            landed.push({ id: m.id, parent, position });
             return;
           }
           const position = {
@@ -2382,10 +2649,11 @@ const CanvasInner = ({
           moved.set(m.id, { position, parent: m.parentId });
           inputs.push({ _id: m.id, position });
           markPending(m.id, { position });
+          landed.push({ id: m.id, parent: m.parentId, position });
         });
       });
       showMoves(moved);
-      updateNodes(inputs);
+      updateNodes(mergeInputs([...inputs, ...growForLanded(landed)]));
     },
     [
       flow,
@@ -2394,6 +2662,7 @@ const CanvasInner = ({
       placementFor,
       markPending,
       showMoves,
+      growForLanded,
       updateNodes,
     ],
   );
@@ -3821,6 +4090,8 @@ const CanvasInner = ({
       updateNodes,
       updateEdge,
       persistResize,
+      fitToContents,
+      tidyCards,
       beginEndpointDrag,
       onEditingChange,
       editOnAppear,
@@ -3833,6 +4104,8 @@ const CanvasInner = ({
       updateNodes,
       updateEdge,
       persistResize,
+      fitToContents,
+      tidyCards,
       beginEndpointDrag,
       onEditingChange,
       editOnAppear,

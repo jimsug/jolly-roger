@@ -559,6 +559,47 @@ describe("whiteboard locks", function () {
     assert.deepEqual((await node(note)).position, { x: 100, y: 100 });
   });
 
+  it("keeps the board's locks when someone who isn't an operator restores one item", async function () {
+    const moved = await sticky({ x: 100, y: 100 });
+    const removed = await sticky({ x: 300, y: 100 });
+    await setLocked(member, moved, true);
+    await setLocked(member, removed, true);
+    await nextWindow();
+    await sticky({ x: 9000, y: 9000 });
+    const version = await newestVersion();
+
+    await setLocked(member, moved, false);
+    await upsertNodes(member, boardId, [
+      { _id: moved, position: { x: 700, y: 700 } },
+    ]);
+    await setLocked(member, removed, false);
+    await deleteNodes(member, boardId, [removed]);
+
+    assert.isTrue(
+      await restoreItems(other, boardId, version._id, [moved, removed]),
+    );
+    // Where the version had it, unlocked as the board had it
+    const movedNow = await node(moved);
+    assert.deepEqual(movedNow.position, { x: 100, y: 100 });
+    assert.notProperty(movedNow, "locked");
+    assert.notProperty(movedNow, "lockedBy");
+    // Put back, but not locked
+    const removedNow = await node(removed);
+    assert.deepEqual(removedNow.position, { x: 300, y: 100 });
+    assert.notProperty(removedNow, "locked");
+    assert.notProperty(removedNow, "lockedBy");
+
+    // An operator puts back the version's lock
+    await upsertNodes(member, boardId, [
+      { _id: moved, position: { x: 700, y: 700 } },
+    ]);
+    assert.isTrue(await restoreItems(operator, boardId, version._id, [moved]));
+    const relocked = await node(moved);
+    assert.deepEqual(relocked.position, { x: 100, y: 100 });
+    assert.isTrue(relocked.locked);
+    assert.equal(relocked.lockedBy, member);
+  });
+
   describe("setLayoutLocked", function () {
     const frames = () =>
       WhiteboardNodes.find({ board: boardId, type: "frame" }).fetchAsync();

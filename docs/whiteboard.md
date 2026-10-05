@@ -40,6 +40,7 @@ files:
   - imports/client/hooks/useWhiteboardSync.ts
   - imports/client/hooks/useWhiteboardUndo.ts
   - imports/lib/chatMessagePath.ts
+  - imports/lib/models/Puzzles.ts
   - imports/lib/models/WhiteboardEdges.ts
   - imports/lib/models/WhiteboardNodes.ts
   - imports/lib/models/WhiteboardVersions.ts
@@ -52,6 +53,7 @@ files:
   - imports/lib/whiteboard/comments.ts
   - imports/lib/whiteboard/feederFocus.ts
   - imports/lib/whiteboard/feeders.ts
+  - imports/lib/whiteboard/frameTools.ts
   - imports/lib/whiteboard/layout.ts
   - imports/lib/whiteboard/limits.ts
   - imports/lib/whiteboard/links.ts
@@ -71,6 +73,7 @@ files:
   - imports/methods/upsertWhiteboardEdges.ts
   - imports/methods/upsertWhiteboardNodes.ts
   - imports/server/daemons/whiteboardVersions.ts
+  - imports/server/methods/addPuzzleAnswer.ts
   - imports/server/methods/fetchWhiteboardVersion.ts
   - imports/server/methods/placeWhiteboardCardsByTags.ts
   - imports/server/methods/resetWhiteboardLayout.ts
@@ -82,6 +85,7 @@ files:
   - imports/server/models/WhiteboardVersionChunks.ts
   - imports/server/publications/whiteboardVersions.ts
   - imports/server/tagSynonyms.ts
+  - imports/server/transitionGuess.ts
   - imports/server/whiteboard.ts
   - imports/server/whiteboardEdits.ts
   - imports/server/whiteboardLive.ts
@@ -501,9 +505,10 @@ doesn't have them.
 It covers the viewer's own edits this visit, up to the last 100:
 
 - moves, resizes and moves into or out of a frame, including a whole drag,
-  align or distribute, a burst of arrow-key nudges, and Place by tags, each as
-  one step. Undoing a move puts the node back where it was and leaves it
-  marked as moved by hand, as any move does;
+  align or distribute, a burst of arrow-key nudges, Fit to contents, Tidy
+  and Place by tags, each as one step, and a move that grows the frames it
+  lands in undoes the growth with it. Undoing a move puts the node back
+  where it was and leaves it marked as moved by hand, as any move does;
 - text, frame labels, line labels and colours, which go back to what they
   were, or to none;
 - creating something (a note, text, frame, line or ink stroke), which undo
@@ -597,13 +602,15 @@ padlock. The padlock's title says who locked it ("Locked by Carol"), or just
 
 On the client a locked node isn't draggable (React Flow's per-node
 `draggable: false`, which also keeps it out of arrow-key nudges and out of a
-group drag), has no resize handles or colour picker, and its text or label
-can't be opened for editing (a frame keeps its fold button, and a frame
-label being typed when a lock arrives is kept as unsaved, as notes keep
-theirs). The eraser passes over locked ink. Delete leaves locked nodes out
+group drag), has no resize handles or colour picker (and a frame no Fit to
+contents button), and its text or label can't be opened for editing (a
+frame keeps its fold button, and a frame label being typed when a lock
+arrives is kept as unsaved, as notes keep theirs). The eraser passes over locked ink. Delete leaves locked nodes out
 and says "Some of those are locked", or "That's locked" when everything
 selected is. Align and distribute leave locked nodes out (`selectionUnits`
-skips them), Place by tags sends only the unlocked cards selected, and the
+skips them), Place by tags sends only the unlocked cards selected, Fit to
+contents and Tidy say "That's locked" when a lock is in the way (see
+Rounds), a locked frame doesn't grow for something dropped into it, and the
 end of a line attached to a locked node can't be dragged off it ("That's
 locked").
 
@@ -657,7 +664,10 @@ covers, or the lock itself, on a node that's locked on the board
 (`restoreItems`), since both are a person's edit to chosen things. Whoever
 locked it, or an operator, unlocks it first. Restore this item on a node
 that's unlocked on the board, or one the board no longer has, puts it back
-as the version has it, lock included, whoever asks.
+as the version has it. For an operator that includes the version's lock;
+for anyone else, as for Restore this version, a node unlocked on the board
+stays unlocked, and one the board no longer has comes back unlocked
+(`planItemRestore` with `keepLocks`).
 
 #### Lock layout
 
@@ -1123,9 +1133,10 @@ At full zoom a meta's card (Meta or Metameta badge) has a chevron beside its
 badge, "Feeders", that opens a popover listing the puzzles that feed it
 (`FeedersButton`). For a `meta-for:X` card they're the puzzles tagged
 `group:X`, as feeder arrows pair them; for a metameta without a `meta-for:`
-tag, the hunt's round metas (`is:meta` or `meta-for:`, but not other
-metametas); and for a bare `is:meta` card, the other puzzles in its own
-rounds. Tags are read through the synonym table. The header counts them, "5
+tag, the round metas (`is:meta` or `meta-for:`, but not other metametas)
+sharing one of its `group:` tags, or every round meta in the hunt when it
+has no `group:` tag; and for a bare `is:meta` card, the other puzzles in its
+own rounds. Tags are read through the synonym table. The header counts them, "5
 of 8 solved", leaving out puzzles with nothing to solve. Each row is the
 puzzle's title and its answers on its solvedness colour, unsolved rows
 greyed, a locked puzzle (in a hunt that has them) with its padlock and locked
@@ -1137,11 +1148,15 @@ apart, so frames side by side read left to right even when one sits a little
 higher, and a frame inside a round is read in place among the round's own
 cards. A card at the top level counts as a frame of its own, and puzzles
 without a card on show go last. "By solve time" puts the most recently
-answered first, going by when the puzzle last changed, then the rest in
-board order. Puzzles don't record when each answer came in, so any later
-change to an answered puzzle moves it up too: a retag, an unlock, or a note
-posted from its sheet. The choice is each viewer's own, kept in local
-storage (`whiteboard:feederOrder`) and read each time a popover opens.
+answered first, then the rest in board order. It goes by the puzzle's
+`answersUpdatedAt`, which the server sets whenever an answer is added or
+removed (`addPuzzleAnswer`, and a guess becoming correct or stopping being
+correct in `transitionGuess`, which `removePuzzleAnswer` goes through), and
+nothing else touches. A puzzle answered before that was recorded, or marked
+complete with no answer, goes by when it last changed at all, so a retag,
+an unlock or a note from its sheet moves one of those up. The choice is
+each viewer's own, kept in local storage (`whiteboard:feederOrder`) and read
+each time a popover opens.
 "Copy answers" copies a line per feeder in the order shown, its answers
 joined by commas, or a blank line for one without an answer, ready to paste
 into a sheet.
@@ -1192,6 +1207,57 @@ The counts are worked out on the client once per board, in the canvas's
 reading only the fields they need, so moving a card or renaming a puzzle
 doesn't recount. Frame headers and the far-zoom pills read their frame's
 state from `RoundStateContext`.
+
+#### Fit to contents, Tidy, and frames that grow
+
+A selected frame that isn't collapsed has two more buttons in the toolbar
+above it, beside "Collapse for everyone", for anyone who can edit:
+
+- **Fit to contents** makes the frame just big enough for everything
+  directly in it, with 24 units of padding at the sides and bottom and the
+  56-unit header above, shrinking or growing it on any side, but no smaller
+  than a frame can be resized to. Nothing moves on the board: when the
+  frame's top or left edge moves, everything in it is moved the other way in
+  the same save, as a resize from the top or left does. If the fitted frame
+  would then overhang a frame it's in, that frame grows to take it, and so
+  on outwards, again keeping their contents still. A frame with nothing in
+  it is left alone. A collapsed frame inside counts at its full size.
+- **Tidy** lays the frame's cards out as a new board would: the round's metas
+  (`meta-for:X` for a frame tagged `group:X`, from `roundMetas`) on their own
+  row or rows at the top, then the other cards, each in the order their
+  puzzles were created, four to a row, through `placeIntoFrame`. Notes, text,
+  ink, line ends and frames inside it stay where they are, and the cards go
+  round them; so do locked cards, which stay put. The frame and the frames
+  around it grow to take the cards, but nothing shrinks. Moved cards are
+  marked as moved by hand, as any move does, so placement leaves them be
+  until Place by tags or Reset layout.
+
+Separately, dropping something into a frame (or moving it within one), or
+nudging or aligning it there, grows the frame when the thing would overhang
+its right or bottom edge, to take it with 24 units to spare, and the frames
+around it the same way if they'd then be overhung. This is saved with the
+move. It never shrinks a frame or grows one up or left, and a locked frame,
+or one inside a locked frame that would have to grow, doesn't grow.
+
+A locked frame has no Fit to contents button. Fit to contents is refused
+with the board's "That's locked" notice, changing nothing, when a locked
+frame around it would have to grow, or when its top or left edge would move
+and something locked is inside, since that would have to move the other
+way, and likewise for something locked in a frame around it that has to
+grow up or left. Tidy works on a locked frame, since its lock doesn't cover
+what's in it, but is refused the same way when that frame, or a locked
+frame around it, would have to grow; otherwise it just goes round locked
+cards. Something another person is dragging is theirs to save: Fit to
+contents and Tidy count it where it was last saved, Tidy goes round it, and
+neither moves it. Each is one step for Undo, and a drop that grows frames
+is one step with the move. A frame grows to a size worked out from what
+this client has, so if someone else has just made it bigger and that
+hasn't arrived yet, a drop that grows it saves the smaller size over
+theirs, as two resizes at once would.
+Everything is worked out on the client by `fitFrame`, `tidyFrame` and
+`growFrameFor` in `imports/lib/whiteboard/frameTools.ts` and saved through
+`upsertNodes` like a resize; the server needs nothing new, and records a
+version for it as for any edit.
 
 ### Feeder arrows
 

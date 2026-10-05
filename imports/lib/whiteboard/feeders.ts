@@ -22,6 +22,7 @@ type FeederPuzzle = Pick<
   | "expectedAnswerCount"
   | "completedWithNoAnswer"
   | "updatedAt"
+  | "answersUpdatedAt"
 >;
 
 type FeederNode = Pick<
@@ -61,9 +62,10 @@ function hasKind(
 
 // The puzzles that feed a meta, unordered. A meta-for:X puzzle is fed by the
 // puzzles tagged group:X, as computeFeederPairs pairs them for the arrows. A
-// metameta without a meta-for: tag is fed by the hunt's round metas (is:meta
-// or meta-for:, and not metametas themselves), and a bare is:meta by the
-// other puzzles in its own rounds. Anything else has none. Tags go through
+// metameta without a meta-for: tag is fed by the round metas (is:meta or
+// meta-for:, and not metametas themselves) sharing one of its group: tags,
+// or every round meta in the hunt when it has none, and a bare is:meta by
+// the other puzzles in its own rounds. Anything else has none. Tags go through
 // the synonym table, though it can't hold rules into or out of group:,
 // meta-for: or is:, so the pairing is the one computeFeederPairs makes.
 function feederSet<P extends FeederPuzzle>(
@@ -80,10 +82,15 @@ function feederSet<P extends FeederPuzzle>(
     );
   }
   if (hasKind(meta, names, ["metameta"], synonyms)) {
+    const groups = tagValues(meta, names, "group", synonyms);
     return others.filter(
       (p) =>
         hasKind(p, names, ["meta", "metaFor"], synonyms) &&
-        !hasKind(p, names, ["metameta"], synonyms),
+        !hasKind(p, names, ["metameta"], synonyms) &&
+        (groups.size === 0 ||
+          [...tagValues(p, names, "group", synonyms)].some((g) =>
+            groups.has(g),
+          )),
     );
   }
   if (hasKind(meta, names, ["meta"], synonyms)) {
@@ -170,11 +177,13 @@ function compareKeys(a: BoardKey | undefined, b: BoardKey | undefined) {
 const answered = (p: FeederPuzzle) =>
   p.answers.length > 0 || computeSolvedness(p) === "solved";
 
+// When a puzzle's answers last changed. A puzzle answered before that was
+// recorded goes by when it last changed at all.
+const answeredAt = (p: FeederPuzzle) => +(p.answersUpdatedAt ?? p.updatedAt);
+
 // The puzzles that feed `meta`, in board order (see boardKeys), or by solve
-// time: the most recently answered first, by when the puzzle last changed
-// (puzzles don't record when each answer came in, so any later edit, such as
-// a retag or a note from its sheet, moves it up too), then the rest in board
-// order.
+// time: the most recently answered first, by when the puzzle's answers last
+// changed, then the rest in board order.
 export function feedersOf<P extends FeederPuzzle>(
   meta: P,
   puzzles: P[],
@@ -196,7 +205,7 @@ export function feedersOf<P extends FeederPuzzle>(
   return feeders.toSorted((a, b) => {
     if (answered(a) !== answered(b)) return answered(a) ? -1 : 1;
     if (!answered(a)) return 0;
-    return +b.updatedAt - +a.updatedAt;
+    return answeredAt(b) - answeredAt(a);
   });
 }
 
