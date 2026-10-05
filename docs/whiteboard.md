@@ -54,6 +54,7 @@ files:
   - imports/lib/puzzleTagStatus.ts
   - imports/lib/puzzleViewers.ts
   - imports/lib/tagNames.ts
+  - imports/lib/whiteboard/clipboard.ts
   - imports/lib/whiteboard/collapse.ts
   - imports/lib/whiteboard/comments.ts
   - imports/lib/whiteboard/feederFocus.ts
@@ -534,11 +535,11 @@ on the board.
 
 ### Keyboard
 
-The tool keys, 1 to 3, N, Ctrl+A, Ctrl+L and the undo and redo keys only
-work while the board has focus (the last press or focus was on it) and
-nothing is being typed: not in a text box, a note being edited, the comment
-composer or the search field, where Ctrl+Z is the browser's own. Each tool's
-tooltip shows its key.
+The tool keys, 1 to 3, N, Ctrl+A, Ctrl+L, Ctrl+C, Ctrl+V, Ctrl+D and the
+undo and redo keys only work while the board has focus (the last press or
+focus was on it) and nothing is being typed: not in a text box, a note being
+edited, the comment composer or the search field, where Ctrl+Z is the
+browser's own. Each tool's tooltip shows its key.
 
 | Key | Does | Needs |
 |---|---|---|
@@ -556,6 +557,9 @@ tooltip shows its key.
 | Escape | Close an open Feeders popover, then an open comment thread, then the Comments list, then leave a preview, then close History; with none of those open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
 | / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
 | Delete or Backspace | Delete the selection, leaving out anything locked (see Locks) | edit |
+| Ctrl+C (Cmd+C) | Copy the selection (see Copy, paste and duplicate), unless some text on the page is selected | edit |
+| Ctrl+V (Cmd+V) | Paste a copy from a board, or text, at the pointer or the middle of the screen | edit |
+| Ctrl+D (Cmd+D) | Duplicate the selection, only with the Select tool; with nothing selected or another tool it's the browser's own | edit |
 | Ctrl+L (Cmd+L) | Lock the selection, or unlock it if it's all locked (see Locks), only with the Select tool; with nothing selected or another tool it's the browser's own | edit |
 | Arrow keys | Move the selection 5 units, 20 with Shift; it joins or leaves a frame as a drop would | edit |
 | Enter | Start editing a focused sticky note or text box, unless someone else is typing in it | edit |
@@ -592,6 +596,65 @@ theme's primary colour and a dashed line runs from it to the pointer, so it's
 clear the next click joins something. Escape, or picking another tool, lets
 go of it. A locked node's handles only end lines: a line can be drawn to it,
 but not started from it.
+
+### Copy, paste and duplicate
+
+Ctrl+C (Cmd+C) copies the selection and Ctrl+V (Cmd+V) pastes it, on the
+same board or another one, for anyone who can edit. A copy takes:
+
+- the selected notes, text boxes, frames and ink, with everything inside a
+  selected frame (folded away or not) where it is in the frame, and every
+  segment of a selected ink stroke;
+- each hand-drawn line whose ends are both in the copy, or free, as long as
+  one end is in it or the line itself is selected, with its style and label;
+- the free ends those lines use, and no others.
+
+Puzzle cards are left out, since a puzzle has one card, along with any line
+to one; when cards are all that's selected, copying says "Puzzle cards can't
+be copied" and leaves the clipboard alone. Feeder arrows, comments, locks
+and who made what aren't copied either. A round's frame is copied as a
+plain frame with the round's name as its label, and a folded frame stays
+folded.
+
+A paste puts everything back with fresh ids, so it can go onto the board it
+came from or any other, as often as wanted. It keeps its layout, centred on
+the pointer while that's over the board (not its toolbars) and otherwise on
+the middle of the screen. Anything at the top of the copy goes where a drop
+would put it: into the innermost frame under its middle, though never a
+collapsed or locked one, nor a frame that was copied or anything inside it
+(so a duplicated frame sits beside the original rather than in it), or
+otherwise the top level; an ink stroke goes as one, by the middle of the
+whole stroke. What was inside a copied frame stays inside the pasted one.
+
+Pasted text that isn't a copy from a board becomes a sticky note with that
+text, trimmed and cut to the 2000 characters a note can hold; a single web
+address (http or https, nothing else with it) becomes a text box with the
+link instead. Both land as a paste does. An image on the clipboard is
+ignored. A copy from a board this version can't read says "That copy can't
+be pasted here".
+
+Ctrl+D (Cmd+D), or Duplicate under the selection (shown when nothing
+selected is a card, titled "Duplicate what's selected, a little below and
+to the right [Ctrl/⌘+D]"), copies the selection in place, 24 units right
+and down, without touching the clipboard. It takes the same things a copy
+does and lands by the same rules.
+
+A paste or duplicate goes through `upsertNodes` and then `upsertEdges` as
+new inserts, so the board's caps, access and locks apply as for anything
+drawn: what's pasted is unlocked, and lists the person who pasted it as its
+creator. It's one step for Undo, which deletes the lot. If the server
+refuses any of it, the usual "Couldn't save" alert shows and whatever got
+through is deleted again.
+
+On the clipboard a copy is plain text: `jolly-roger-whiteboard/1` on the
+first line, then the copy as JSON, with each node's position on the board
+rather than in its frame and its parent, if any, given as another node in
+the copy. Nothing else goes on the clipboard, so pasting a copy into another
+app shows the JSON. A paste that starts `jolly-roger-whiteboard/` but isn't
+a version 1 copy that holds together (every parent a frame in the copy, no
+loops, every line between two nodes in it, values within the server's
+limits) is refused. `copySelection`, `readClip`, `clipFromText` and
+`pasteClip` in `imports/lib/whiteboard/clipboard.ts` do the work.
 
 ### Not on the board
 
@@ -652,7 +715,7 @@ It covers the viewer's own edits this visit, up to the last 100:
 - text, frame labels, line labels and colours, which go back to what they
   were, or to none;
 - creating something (a note, text, frame, line or ink stroke), which undo
-  deletes;
+  deletes, and a paste or duplicate, which undo deletes as a whole;
 - deleting something made on the board (a note, text, frame, ink stroke,
   line or a line's free end), which undo puts back with the same id and
   fields, along with the lines that went with it and whatever was in a

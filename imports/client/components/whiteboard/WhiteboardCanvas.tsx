@@ -99,6 +99,16 @@ import {
   distributeItems,
   sortParentsFirst,
 } from "../../../lib/whiteboard/arrange";
+import type { BoardClip } from "../../../lib/whiteboard/clipboard";
+import {
+  clipFromText,
+  clipText,
+  copySelection,
+  looksLikeClip,
+  offsetToCentre,
+  pasteClip,
+  readClip,
+} from "../../../lib/whiteboard/clipboard";
 import { collapsedAncestors } from "../../../lib/whiteboard/collapse";
 import {
   commentPosition,
@@ -214,7 +224,7 @@ import CopyToClipboardButton from "../CopyToClipboardButton";
 import ArrangeIcon from "./ArrangeIcon";
 import BoardSearch from "./BoardSearch";
 import type { Done } from "./boardWrites";
-import { callAll, chunks } from "./boardWrites";
+import { callAll, chunks, sendWrite } from "./boardWrites";
 import ChatLoadedContext from "./ChatLoadedContext";
 import type { CollapseActions, FoldSummary } from "./CollapseContext";
 import CollapseContext from "./CollapseContext";
@@ -380,6 +390,17 @@ const MINI_MAP_FRAMES = {
   ...colors.stroke,
   black: colors.fill.black,
 };
+
+const isTyping = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable ||
+    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+// A dialog over the page (deleting a comment, who can edit) has its own keys.
+const inDialog = (target: EventTarget | null) =>
+  target instanceof Element && !!target.closest(".modal");
+
+// How far a duplicate lands from what it copies, right and down.
+const DUPLICATE_OFFSET = { x: 24, y: 24 };
 
 // Marks what a preview has differently from the board as it is now.
 const CHANGED_CLASS = "jr-changed";
@@ -3718,10 +3739,12 @@ const CanvasInner = ({
     [flow, resolveEndpoint, endpointPosition],
   );
 
-  // With the line tool, what a line started here would attach to, from the
-  // pointer's last position on screen; kept up to date as the view or the
-  // board changes under a still pointer.
+  // Where the pointer last was on screen while over the board itself (not
+  // its toolbars and panels), for a paste to land at.
   const lastPointer = useRef<{ x: number; y: number } | undefined>(undefined);
+  // With the line tool, what a line started here would attach to, from the
+  // pointer's last position; kept up to date as the view or the board
+  // changes under a still pointer.
   const refreshAttachPreview = useCallback(() => {
     if (tool !== "connector") return;
     const at = lastPointer.current;
@@ -4179,15 +4202,181 @@ const CanvasInner = ({
     };
   }, []);
 
+  // What the selection copies (see imports/lib/whiteboard/clipboard.ts),
+  // from the board as the client has it, so it takes in what's folded away
+  // in a collapsed frame.
+  const copyOfSelection = useCallback(() => {
+    const selectedNodes = flow
+      .getNodes()
+      .filter((n) => n.selected)
+      .map((n) => n.id);
+    const selectedEdges = flow
+      .getEdges()
+      .filter((e) => e.selected)
+      .map((e) => e.id);
+    return copySelection(
+      WhiteboardNodes.find({ board: boardId }).fetch(),
+      WhiteboardEdges.find({ board: boardId }).fetch(),
+      { nodes: selectedNodes, edges: selectedEdges },
+      (frame) =>
+        frameLabel(
+          frame,
+          frame.tag ? Tags.findOne(frame.tag)?.name : undefined,
+        ),
+    );
+  }, [flow, boardId]);
+
+  const cardsNotCopied = useCallback(
+    () =>
+      showNotice(
+        t("whiteboard.clipboard.cards", "Puzzle cards can't be copied"),
+      ),
+    [showNotice, t],
+  );
+
+  // Puts a copy on the board moved by offset, with fresh ids, as one edit to
+  // undo. Whatever is at the top of it goes into the frame a drop there
+  // would, but never a collapsed or locked one, nor a frame it was copied
+  // from or anything inside that. If any of it is refused, what got through
+  // is taken off again.
+  const pasteCopy = useCallback(
+    (clip: BoardClip, offset: XYPosition) => {
+      const frames = frameRects();
+      const copiedFrames = clip.nodes
+        .filter((n) => n.type === "frame")
+        .map((n) => n.id);
+      const exclude = (frame: string) =>
+        !!flow.getNode(frame)?.data.doc.locked ||
+        copiedFrames.some((copied) => isWithin(frame, copied));
+      const placeAt = (point: XYPosition) => {
+        const id = frameAt(point, exclude, frames);
+        const rect = id ? absoluteRect(id) : undefined;
+        return id && rect ? { id, rect } : undefined;
+      };
+      const pasted = pasteClip(clip, offset, placeAt, () => Random.id());
+      if (pasted.nodes.length === 0) return;
+      const write = { upsertNodes: pasted.nodes, upsertEdges: pasted.edges };
+      const settled = recordEdit(write);
+      sendWrite(boardId, write, (error) => {
+        settled(error);
+        if (!error) return;
+        reportRefusal(error);
+        chunks(
+          pasted.nodes.map((n) => n._id),
+          MAX_BATCH,
+        ).forEach((nodeIds) =>
+          deleteWhiteboardNodes.call({ boardId, nodeIds }),
+        );
+      });
+    },
+    [
+      flow,
+      frameRects,
+      frameAt,
+      isWithin,
+      absoluteRect,
+      boardId,
+      recordEdit,
+      reportRefusal,
+    ],
+  );
+
+  // A paste lands centred on the pointer while it's over the board, and
+  // otherwise on the middle of the screen.
+  const pasteCentre = useCallback(
+    () =>
+      lastPointer.current
+        ? flow.screenToFlowPosition(lastPointer.current)
+        : paneCenter(),
+    [flow, paneCenter],
+  );
+
+  // Ctrl+D (Cmd+D) and the Duplicate button copy the selection in place,
+  // a little down and to the right, leaving the clipboard alone.
+  const duplicateSelection = useCallback(() => {
+    const { clip, cards } = copyOfSelection();
+    if (clip.nodes.length === 0) {
+      if (cards > 0) cardsNotCopied();
+      return;
+    }
+    pasteCopy(clip, DUPLICATE_OFFSET);
+  }, [copyOfSelection, cardsNotCopied, pasteCopy]);
+
+  // Ctrl+C (Cmd+C) copies the selection, and Ctrl+V (Cmd+V) pastes, while
+  // the board has focus, nothing is being typed and no text is selected.
+  // Text that isn't a copy from a board becomes a sticky note, or a text box
+  // if it's a web address. Only for those who can edit.
   useEffect(() => {
-    const isTyping = (target: EventTarget | null) =>
-      target instanceof HTMLElement &&
-      (target.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
-    // A dialog over the page (deleting a comment, who can edit) has its own
-    // keys.
-    const inDialog = (target: EventTarget | null) =>
-      target instanceof Element && !!target.closest(".modal");
+    const forTheBoard = (event: ClipboardEvent) =>
+      !readOnly &&
+      canvasActive.current &&
+      !isTyping(event.target) &&
+      !inDialog(event.target) &&
+      !event.defaultPrevented;
+    const onCopy = (event: ClipboardEvent) => {
+      if (!forTheBoard(event) || !event.clipboardData) return;
+      if (document.getSelection()?.isCollapsed === false) return;
+      const { clip, cards } = copyOfSelection();
+      if (clip.nodes.length === 0) {
+        if (cards > 0) cardsNotCopied();
+        return;
+      }
+      event.preventDefault();
+      event.clipboardData.setData("text/plain", clipText(clip));
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      if (!forTheBoard(event) || !event.clipboardData) return;
+      const text = event.clipboardData.getData("text/plain");
+      if (looksLikeClip(text)) {
+        event.preventDefault();
+        const clip = readClip(text);
+        if (!clip) {
+          showNotice(
+            t(
+              "whiteboard.clipboard.unreadable",
+              "That copy can't be pasted here",
+            ),
+          );
+          return;
+        }
+        pasteCopy(clip, offsetToCentre(clip, pasteCentre()));
+        return;
+      }
+      const clip = clipFromText(text, DEFAULT_SIZES);
+      if (!clip) return;
+      event.preventDefault();
+      pasteCopy(clip, offsetToCentre(clip, pasteCentre()));
+    };
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("paste", onPaste);
+    };
+  }, [
+    readOnly,
+    copyOfSelection,
+    cardsNotCopied,
+    pasteCopy,
+    pasteCentre,
+    showNotice,
+    t,
+  ]);
+
+  // Whether there's anything selected to duplicate from the node toolbar:
+  // nodes but no cards, which can't be copied.
+  const duplicableKey = useMemo(() => {
+    const selected = nodes.filter((n) => n.selected && n.type !== "point");
+    return selected.some((n) => n.type === "puzzle")
+      ? ""
+      : selected.map((n) => n.id).join(" ");
+  }, [nodes]);
+  const duplicable = useMemo(
+    () => (duplicableKey ? duplicableKey.split(" ") : []),
+    [duplicableKey],
+  );
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (inDialog(event.target)) return;
       if (event.code === "Space") spaceHeld.current = true;
@@ -4291,6 +4480,24 @@ const CanvasInner = ({
         toggleLock();
         return;
       }
+      // Ctrl+D (Cmd+D) duplicates the selection. With nothing selected or
+      // another tool it's left to the browser.
+      if (
+        modified &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "d" &&
+        !readOnly &&
+        tool === "select" &&
+        canvasActive.current &&
+        !isTyping(event.target) &&
+        (flow.getNodes().some((n) => n.selected) ||
+          flow.getEdges().some((e) => e.selected))
+      ) {
+        event.preventDefault();
+        duplicateSelection();
+        return;
+      }
       if (
         modified &&
         !event.shiftKey &&
@@ -4375,6 +4582,7 @@ const CanvasInner = ({
     flow,
     lockSelection,
     toggleLock,
+    duplicateSelection,
   ]);
 
   // Double-clicking a card opens its puzzle, on any board, as long as nothing
@@ -5260,7 +5468,7 @@ const CanvasInner = ({
                               onSelect={setTool}
                               title={t(
                                 "whiteboard.toolbar.select",
-                                "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add)",
+                                "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add; Ctrl/⌘+C, Ctrl/⌘+V and Ctrl/⌘+D copy, paste and duplicate)",
                               )}
                             >
                               <FontAwesomeIcon icon={faArrowPointer} />
@@ -5533,6 +5741,30 @@ const CanvasInner = ({
                                 "whiteboard.placeByTags.button",
                                 "Place by tags",
                               )}
+                            </Button>
+                          </ToolBox>
+                        </NodeToolbar>
+                      )}
+                    {!readOnly &&
+                      tool === "select" &&
+                      duplicable.length > 0 && (
+                        <NodeToolbar
+                          nodeId={duplicable}
+                          isVisible
+                          position={Position.Bottom}
+                        >
+                          <ToolBox>
+                            <Button
+                              size="sm"
+                              variant="outline-secondary"
+                              onClick={duplicateSelection}
+                              aria-keyshortcuts="Control+D Meta+D"
+                              title={t(
+                                "whiteboard.duplicate.title",
+                                "Duplicate what's selected, a little below and to the right [Ctrl/⌘+D]",
+                              )}
+                            >
+                              {t("whiteboard.duplicate.button", "Duplicate")}
                             </Button>
                           </ToolBox>
                         </NodeToolbar>

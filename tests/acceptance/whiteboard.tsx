@@ -2205,6 +2205,59 @@ if (Meteor.isClient) {
           );
         });
 
+        it("does nothing with a viewer's copy, paste or duplicate", async function () {
+          this.timeout(30000);
+          render(<TestApp />);
+          await goTo(boardPath);
+          await screen.findByText("Viewing only", {}, { timeout: 20000 });
+          await waitFor(
+            () =>
+              assert.isNotNull(
+                document.querySelector(".react-flow__node-puzzle"),
+              ),
+            { timeout: 20000 },
+          );
+          const pane = document.querySelector(".react-flow__pane")!;
+          const box = pane.getBoundingClientRect();
+          const at = {
+            button: 0,
+            pointerId: 1,
+            clientX: box.left + box.width * 0.6,
+            clientY: box.top + box.height * 0.6,
+          };
+          await act(async () => {
+            fireEvent.pointerDown(pane, at);
+            fireEvent.pointerUp(pane, at);
+            await stabilize();
+          });
+          const saves = sinon.spy(upsertWhiteboardNodes, "call");
+          try {
+            const data = new DataTransfer();
+            data.setData("text/plain", "A viewer's note");
+            const event = new ClipboardEvent("paste", {
+              clipboardData: data,
+              bubbles: true,
+              cancelable: true,
+            });
+            const copy = new ClipboardEvent("copy", {
+              clipboardData: new DataTransfer(),
+              bubbles: true,
+              cancelable: true,
+            });
+            await act(async () => {
+              pane.dispatchEvent(event);
+              pane.dispatchEvent(copy);
+              fireEvent.keyDown(pane, { key: "d", ctrlKey: true });
+              await stabilize();
+            });
+            assert.isFalse(event.defaultPrevented);
+            assert.isFalse(copy.defaultPrevented);
+            sinon.assert.notCalled(saves);
+          } finally {
+            saves.restore();
+          }
+        });
+
         it("disables Restore this item for a viewer", async function () {
           this.timeout(60000);
           // A version with a note on it, made as an operator
@@ -3357,9 +3410,10 @@ if (Meteor.isClient) {
         };
         const recolour = async (id: string, colour: string) => {
           await select(id);
+          // The colour picker's, not Duplicate's
           const toolbar = await waitFor(() => {
             const found = document.querySelector<HTMLElement>(
-              ".react-flow__node-toolbar",
+              `.react-flow__node-toolbar:has([aria-label="${colour}"])`,
             );
             assert.exists(found);
             return found;
@@ -4718,9 +4772,10 @@ if (Meteor.isClient) {
           try {
             await openBoard();
             await select(id);
+            // The colour picker's, not Duplicate's
             const toolbar = await waitFor(() => {
               const found = document.querySelector<HTMLElement>(
-                ".react-flow__node-toolbar",
+                '.react-flow__node-toolbar:has([aria-label="Red"])',
               );
               assert.exists(found);
               return found;
@@ -4758,6 +4813,547 @@ if (Meteor.isClient) {
           } finally {
             forgetView();
             await removeNodes([id]);
+          }
+        });
+      });
+
+      describe("copy, paste and duplicate", function () {
+        // Sends the board (or target) a copy or paste as the browser would,
+        // with a clipboard of its own.
+        const clipboard = async (
+          type: "copy" | "paste",
+          text?: string,
+          target: Element = pane(),
+        ) => {
+          const data = new DataTransfer();
+          if (text !== undefined) data.setData("text/plain", text);
+          const event = new ClipboardEvent(type, {
+            clipboardData: data,
+            bubbles: true,
+            cancelable: true,
+          });
+          await act(async () => {
+            target.dispatchEvent(event);
+            await stabilize();
+          });
+          return { text: data.getData("text/plain"), event };
+        };
+        // The middle of the view, on the board, when lookAt(base) opened it.
+        const viewCentre = (base: { x: number; y: number }) => {
+          const box = pane().getBoundingClientRect();
+          return {
+            x: base.x - 150 + box.width / 2,
+            y: base.y - 150 + box.height / 2,
+          };
+        };
+        const undoButton = () =>
+          screen.getByRole<HTMLButtonElement>("button", { name: "Undo" });
+        const stickyAt = async (
+          position: { x: number; y: number },
+          text: string,
+        ) => {
+          const _id = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              { _id, type: "sticky", position, width: 160, height: 120, text },
+            ],
+          });
+          return _id;
+        };
+        const withText = (texts: string[]) =>
+          WhiteboardNodes.find({ board: boardId, text: { $in: texts } });
+
+        it("copies notes with the line between them and pastes them in the middle of the view, undone as one", async function () {
+          this.timeout(30000);
+          const base = { x: 32000, y: 32000 };
+          const texts = [`A ${Random.id()}`, `B ${Random.id()}`];
+          const a = await stickyAt(base, texts[0]!);
+          const b = await stickyAt(
+            { x: base.x + 300, y: base.y + 40 },
+            texts[1]!,
+          );
+          await upsertWhiteboardEdges.callPromise({
+            boardId,
+            edges: [
+              {
+                _id: Random.id(),
+                source: a,
+                target: b,
+                label: "then",
+                dashed: true,
+              },
+            ],
+          });
+          const copies = () =>
+            withText(texts)
+              .fetchAsync()
+              .then((found) => found.filter((n) => n._id !== a && n._id !== b));
+          lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            await select(a);
+            await act(async () => {
+              fireEvent.keyDown(document, {
+                key: "Control",
+                code: "ControlLeft",
+              });
+              await stabilize();
+            });
+            await select(b);
+            await act(async () => {
+              fireEvent.keyUp(document, {
+                key: "Control",
+                code: "ControlLeft",
+              });
+              await stabilize();
+            });
+
+            const copied = await clipboard("copy");
+            assert.isTrue(copied.event.defaultPrevented);
+            assert.isTrue(copied.text.startsWith("jolly-roger-whiteboard/1\n"));
+            const json = JSON.parse(
+              copied.text.slice(copied.text.indexOf("\n")),
+            );
+            assert.lengthOf(json.nodes, 2);
+            assert.lengthOf(json.edges, 1);
+
+            const pasted = await clipboard("paste", copied.text);
+            assert.isTrue(pasted.event.defaultPrevented);
+            const centre = viewCentre(base);
+            await waitFor(
+              async () => {
+                const found = await copies();
+                assert.lengthOf(found, 2);
+                const [a2, b2] = texts.map(
+                  (text) => found.find((n) => n.text === text)!,
+                );
+                // The same shape, its middle in the middle of the view
+                assert.equal(b2!.position.x - a2!.position.x, 300);
+                assert.equal(b2!.position.y - a2!.position.y, 40);
+                assert.closeTo(a2!.position.x + 230, centre.x, 1);
+                assert.closeTo(a2!.position.y + 80, centre.y, 1);
+                found.forEach((n) => {
+                  assert.isUndefined(n.parent);
+                  assert.isUndefined(n.locked);
+                  assert.equal(n.contributors[0]?.user, Meteor.userId());
+                });
+                const joined = await WhiteboardEdges.findOneAsync({
+                  source: a2!._id,
+                  target: b2!._id,
+                });
+                assert.equal(joined?.label, "then");
+                assert.isTrue(joined?.dashed);
+              },
+              { timeout: 10000 },
+            );
+            const pastedIds = (await copies()).map((n) => n._id);
+
+            await waitFor(() => assert.isFalse(undoButton().disabled), {
+              timeout: 10000,
+            });
+            await pressBoard();
+            await press(pane(), { key: "z", ctrlKey: true });
+            await waitFor(
+              async () => {
+                assert.isEmpty(await copies());
+                assert.equal(
+                  await WhiteboardEdges.find({
+                    board: boardId,
+                    $or: [
+                      { source: { $in: pastedIds } },
+                      { target: { $in: pastedIds } },
+                    ],
+                  }).countAsync(),
+                  0,
+                );
+              },
+              { timeout: 10000 },
+            );
+            assert.exists(await savedNode(a));
+            assert.exists(await savedNode(b));
+          } finally {
+            forgetView();
+            const left = await withText(texts).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
+          }
+        });
+
+        it("duplicates the selection a little down and to the right on Ctrl+D and from its button", async function () {
+          this.timeout(30000);
+          const base = { x: 33000, y: 32000 };
+          const text = `D ${Random.id()}`;
+          const id = await stickyAt(base, text);
+          const copies = async () =>
+            (await withText([text]).fetchAsync()).filter((n) => n._id !== id);
+          lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            await select(id);
+            const button = await screen.findByRole("button", {
+              name: "Duplicate",
+            });
+            assert.include(button.title, "Ctrl/⌘+D");
+            assert.equal(
+              button.getAttribute("aria-keyshortcuts"),
+              "Control+D Meta+D",
+            );
+            await press(pane(), { key: "d", ctrlKey: true });
+            await waitFor(
+              async () => {
+                const [copy, ...more] = await copies();
+                assert.isEmpty(more);
+                assert.deepEqual(copy?.position, {
+                  x: base.x + 24,
+                  y: base.y + 24,
+                });
+                assert.isUndefined(copy?.parent);
+              },
+              { timeout: 10000 },
+            );
+
+            // The original is still what's selected, so it's copied again
+            await act(async () => {
+              fireEvent.click(
+                screen.getByRole("button", { name: "Duplicate" }),
+              );
+              await stabilize();
+            });
+            await waitFor(
+              async () => {
+                const found = await copies();
+                assert.lengthOf(found, 2);
+                found.forEach((copy) => {
+                  assert.deepEqual(copy.position, {
+                    x: base.x + 24,
+                    y: base.y + 24,
+                  });
+                  assert.isUndefined(copy.parent);
+                });
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            const left = await withText([text]).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
+          }
+        });
+
+        it("pastes text as a sticky note and a web address as a linked text box", async function () {
+          this.timeout(30000);
+          const base = { x: 34000, y: 32000 };
+          const note = `Legend ${Random.id()}`;
+          const url = `https://example.com/${Random.id()}`;
+          lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            const centre = viewCentre(base);
+
+            await clipboard("paste", `  ${note}\n`);
+            await waitFor(
+              async () => {
+                const sticky = await WhiteboardNodes.findOneAsync({
+                  board: boardId,
+                  text: note,
+                });
+                assert.equal(sticky?.type, "sticky");
+                assert.closeTo(sticky!.position.x + 100, centre.x, 1);
+                assert.closeTo(sticky!.position.y + 80, centre.y, 1);
+              },
+              { timeout: 10000 },
+            );
+
+            await clipboard("paste", url);
+            const link = await waitFor(
+              async () => {
+                const found = await WhiteboardNodes.findOneAsync({
+                  board: boardId,
+                  text: url,
+                });
+                assert.equal(found?.type, "text");
+                return found!;
+              },
+              { timeout: 10000 },
+            );
+            const shown = await nodeShown(link._id);
+            await waitFor(() =>
+              assert.exists(shown.querySelector(`a[href="${url}"]`)),
+            );
+          } finally {
+            forgetView();
+            const left = await withText([note, url]).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
+          }
+        });
+
+        it("says puzzle cards can't be copied when they're all that's selected", async function () {
+          this.timeout(30000);
+          const nodes = await WhiteboardNodes.find({
+            board: boardId,
+          }).fetchAsync();
+          const docs = new Map(nodes.map((n) => [n._id, n]));
+          const shownCard = nodes.find((n) => {
+            if (n.type !== "puzzle" || n.hidden) return false;
+            for (let p = n.parent; p; p = docs.get(p)?.parent) {
+              const frame = docs.get(p);
+              if (!frame || frame.hidden || frame.collapsed) return false;
+            }
+            return true;
+          });
+          assert.exists(shownCard);
+          const card = shownCard;
+          const at = { ...card.position };
+          for (let p = card.parent; p; p = docs.get(p)?.parent) {
+            at.x += docs.get(p)!.position.x;
+            at.y += docs.get(p)!.position.y;
+          }
+          lookAt(at);
+          try {
+            await openBoard();
+            await pressBoard();
+            await select(card._id);
+            assert.isNull(screen.queryByRole("button", { name: "Duplicate" }));
+            const copied = await clipboard("copy");
+            assert.isFalse(copied.event.defaultPrevented);
+            assert.equal(copied.text, "");
+            await screen.findByText("Puzzle cards can't be copied");
+          } finally {
+            forgetView();
+          }
+        });
+
+        it("duplicates a frame beside the original, not inside it", async function () {
+          this.timeout(30000);
+          const base = { x: 35000, y: 30000 };
+          const label = `Frame ${Random.id()}`;
+          const text = `Inside ${Random.id()}`;
+          const frame = Random.id();
+          const inside = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: frame,
+                type: "frame",
+                position: base,
+                width: 400,
+                height: 300,
+                label,
+              },
+              {
+                _id: inside,
+                type: "sticky",
+                parent: frame,
+                position: { x: 40, y: 60 },
+                width: 160,
+                height: 120,
+                text,
+              },
+            ],
+          });
+          const copyOf = async (id: string, query: object) =>
+            (
+              await WhiteboardNodes.find({
+                board: boardId,
+                ...query,
+              }).fetchAsync()
+            ).find((n) => n._id !== id);
+          lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            await select(frame);
+            await press(pane(), { key: "d", ctrlKey: true });
+            await waitFor(
+              async () => {
+                const frameCopy = await copyOf(frame, { label });
+                assert.exists(frameCopy);
+                assert.isUndefined(frameCopy.parent);
+                assert.deepEqual(frameCopy.position, {
+                  x: base.x + 24,
+                  y: base.y + 24,
+                });
+                const insideCopy = await copyOf(inside, { text });
+                assert.equal(insideCopy?.parent, frameCopy._id);
+                assert.deepEqual(insideCopy?.position, { x: 40, y: 60 });
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            const left = await WhiteboardNodes.find({
+              board: boardId,
+              $or: [{ label }, { text }],
+            }).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
+          }
+        });
+
+        it("pastes centred on the pointer, into the frame under it but not a locked one", async function () {
+          this.timeout(30000);
+          const base = { x: 36000, y: 30000 };
+          const outer = Random.id();
+          const locked = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: outer,
+                type: "frame",
+                position: base,
+                width: 600,
+                height: 500,
+              },
+              {
+                _id: locked,
+                type: "frame",
+                parent: outer,
+                position: { x: 200, y: 150 },
+                width: 300,
+                height: 250,
+              },
+            ],
+          });
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [{ _id: locked, locked: true }],
+          });
+          const note = `Pointed ${Random.id()}`;
+          const screenAt = lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            // The middle of the locked frame
+            const at = { x: base.x + 350, y: base.y + 275 };
+            await act(async () => {
+              fireEvent.pointerMove(pane(), {
+                pointerId: 1,
+                ...screenAt(at.x, at.y),
+              });
+              await stabilize();
+            });
+            await clipboard("paste", note);
+            await waitFor(
+              async () => {
+                const sticky = await WhiteboardNodes.findOneAsync({
+                  board: boardId,
+                  text: note,
+                });
+                assert.exists(sticky);
+                assert.equal(sticky.parent, outer);
+                assert.closeTo(base.x + sticky.position.x + 100, at.x, 1);
+                assert.closeTo(base.y + sticky.position.y + 80, at.y, 1);
+              },
+              { timeout: 10000 },
+            );
+          } finally {
+            forgetView();
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [{ _id: locked, locked: false }],
+            });
+            const left = await WhiteboardNodes.find({
+              board: boardId,
+              text: note,
+            }).fetchAsync();
+            await removeNodes([locked, outer, ...left.map((n) => n._id)]);
+          }
+        });
+
+        it("leaves a copy or paste in the search field to the field", async function () {
+          this.timeout(30000);
+          const base = { x: 38000, y: 30000 };
+          const note = `Typed ${Random.id()}`;
+          const selected = `Selected ${Random.id()}`;
+          const id = await stickyAt(base, selected);
+          lookAt(base);
+          try {
+            await openBoard();
+            await pressBoard();
+            await select(id);
+            const search = screen.getByRole("combobox", {
+              name: "Search the board",
+            });
+            await act(async () => {
+              search.focus();
+              await stabilize();
+            });
+            const pasted = await clipboard("paste", note, search);
+            assert.isFalse(pasted.event.defaultPrevented);
+            const copied = await clipboard("copy", undefined, search);
+            assert.isFalse(copied.event.defaultPrevented);
+            assert.notExists(
+              await WhiteboardNodes.findOneAsync({
+                board: boardId,
+                text: note,
+              }),
+            );
+          } finally {
+            forgetView();
+            await removeNodes([id]);
+          }
+        });
+
+        it("takes a refused paste off the board again and says so", async function () {
+          this.timeout(30000);
+          const base = { x: 37000, y: 30000 };
+          const texts = [`R ${Random.id()}`, `S ${Random.id()}`];
+          const a = await stickyAt(base, texts[0]!);
+          const b = await stickyAt({ x: base.x + 300, y: base.y }, texts[1]!);
+          await upsertWhiteboardEdges.callPromise({
+            boardId,
+            edges: [{ _id: Random.id(), source: a, target: b }],
+          });
+          const copies = () =>
+            withText(texts)
+              .fetchAsync()
+              .then((found) => found.filter((n) => n._id !== a && n._id !== b));
+          lookAt(base);
+          let refuse: sinon.SinonStub | undefined;
+          try {
+            await openBoard();
+            await pressBoard();
+            await select(a);
+            await act(async () => {
+              fireEvent.keyDown(document, {
+                key: "Control",
+                code: "ControlLeft",
+              });
+              await stabilize();
+            });
+            await select(b);
+            await act(async () => {
+              fireEvent.keyUp(document, {
+                key: "Control",
+                code: "ControlLeft",
+              });
+              await stabilize();
+            });
+            const copied = await clipboard("copy");
+            assert.lengthOf(
+              JSON.parse(copied.text.slice(copied.text.indexOf("\n"))).edges,
+              1,
+            );
+
+            refuse = refuseCalls(upsertWhiteboardEdges);
+            await clipboard("paste", copied.text);
+            await screen.findByText("Couldn't save: Refused for the test");
+            assert.isTrue(refuse.calledOnce);
+            await waitFor(async () => assert.isEmpty(await copies()), {
+              timeout: 10000,
+            });
+            assert.isTrue(undoButton().disabled);
+            assert.exists(await savedNode(a));
+            assert.exists(await savedNode(b));
+          } finally {
+            refuse?.restore();
+            forgetView();
+            const left = await withText(texts).fetchAsync();
+            await removeNodes(left.map((n) => n._id));
           }
         });
       });

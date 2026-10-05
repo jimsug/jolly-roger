@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import WhiteboardEdges from "../../lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../lib/models/WhiteboardNodes";
 import Whiteboards from "../../lib/models/Whiteboards";
-import { MAX_BATCH } from "../../lib/whiteboard/limits";
 import type { Stamps, UndoStacks } from "../../lib/whiteboard/undo";
 import {
   carryForward,
@@ -17,22 +16,16 @@ import {
   takeRedo,
   takeUndo,
 } from "../../lib/whiteboard/undo";
-import deleteWhiteboardEdges from "../../methods/deleteWhiteboardEdges";
-import deleteWhiteboardNodes from "../../methods/deleteWhiteboardNodes";
-import placeWhiteboardCardsByTags from "../../methods/placeWhiteboardCardsByTags";
-import upsertWhiteboardEdges from "../../methods/upsertWhiteboardEdges";
-import upsertWhiteboardNodes from "../../methods/upsertWhiteboardNodes";
 import type {
   BoardDocs,
   BoardWrite,
   Done,
 } from "../components/whiteboard/boardWrites";
 import {
-  chunks,
   dependedOnKeys,
   inverseOf,
-  parentsFirst,
   parseKey,
+  sendWrite,
   touchedKeys,
 } from "../components/whiteboard/boardWrites";
 
@@ -78,41 +71,6 @@ const stampsOf = (keys: Iterable<string>): Map<string, number | null> =>
 
 const overlaps = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
   [...b].some((key) => a.has(key));
-
-// Sends a write's methods one after another, stopping at the first refusal.
-function sendWrite(boardId: string, write: BoardWrite, done: Done) {
-  const steps: ((next: Done) => void)[] = [
-    ...chunks(parentsFirst(write.upsertNodes ?? []), MAX_BATCH).map(
-      (nodes) => (next: Done) =>
-        upsertWhiteboardNodes.call({ boardId, nodes }, next),
-    ),
-    ...chunks(write.upsertEdges ?? [], MAX_BATCH).map(
-      (edges) => (next: Done) =>
-        upsertWhiteboardEdges.call({ boardId, edges }, next),
-    ),
-    ...chunks(write.deleteEdges ?? [], MAX_BATCH).map(
-      (edgeIds) => (next: Done) =>
-        deleteWhiteboardEdges.call({ boardId, edgeIds }, next),
-    ),
-    ...chunks(write.deleteNodes ?? [], MAX_BATCH).map(
-      (nodeIds) => (next: Done) =>
-        deleteWhiteboardNodes.call({ boardId, nodeIds }, next),
-    ),
-    ...chunks(write.placeByTags ?? [], MAX_BATCH).map(
-      (nodeIds) => (next: Done) =>
-        placeWhiteboardCardsByTags.call({ boardId, nodeIds }, next),
-    ),
-  ];
-  const run = (i: number) => {
-    const step = steps[i];
-    if (!step) {
-      done();
-      return;
-    }
-    step((error) => (error ? done(error) : run(i + 1)));
-  };
-  run(0);
-}
 
 function sendWrites(boardId: string, writes: BoardWrite[], done: Done) {
   const run = (i: number) => {

@@ -2,8 +2,14 @@ import type { Meteor } from "meteor/meteor";
 import type { WhiteboardEdgeType } from "../../../lib/models/WhiteboardEdges";
 import { LINE_STYLE_FIELDS } from "../../../lib/models/WhiteboardEdges";
 import type { WhiteboardNodeType } from "../../../lib/models/WhiteboardNodes";
+import { MAX_BATCH } from "../../../lib/whiteboard/limits";
+import deleteWhiteboardEdges from "../../../methods/deleteWhiteboardEdges";
+import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
+import placeWhiteboardCardsByTags from "../../../methods/placeWhiteboardCardsByTags";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
+import upsertWhiteboardEdges from "../../../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../../../methods/upsertWhiteboardNodes";
+import upsertWhiteboardNodes from "../../../methods/upsertWhiteboardNodes";
 
 // One edit to a board as the methods it takes, sent in this order: nodes
 // first (so lines can refer to them), then lines, then deletions, then
@@ -350,6 +356,41 @@ export function inverseOf(write: BoardWrite, docs: BoardDocs): BoardWrite {
   });
   builder.restoreOrphanedPoints(docs);
   return builder.build();
+}
+
+// Sends a write's methods one after another, stopping at the first refusal.
+export function sendWrite(boardId: string, write: BoardWrite, done: Done) {
+  const steps: ((next: Done) => void)[] = [
+    ...chunks(parentsFirst(write.upsertNodes ?? []), MAX_BATCH).map(
+      (nodes) => (next: Done) =>
+        upsertWhiteboardNodes.call({ boardId, nodes }, next),
+    ),
+    ...chunks(write.upsertEdges ?? [], MAX_BATCH).map(
+      (edges) => (next: Done) =>
+        upsertWhiteboardEdges.call({ boardId, edges }, next),
+    ),
+    ...chunks(write.deleteEdges ?? [], MAX_BATCH).map(
+      (edgeIds) => (next: Done) =>
+        deleteWhiteboardEdges.call({ boardId, edgeIds }, next),
+    ),
+    ...chunks(write.deleteNodes ?? [], MAX_BATCH).map(
+      (nodeIds) => (next: Done) =>
+        deleteWhiteboardNodes.call({ boardId, nodeIds }, next),
+    ),
+    ...chunks(write.placeByTags ?? [], MAX_BATCH).map(
+      (nodeIds) => (next: Done) =>
+        placeWhiteboardCardsByTags.call({ boardId, nodeIds }, next),
+    ),
+  ];
+  const run = (i: number) => {
+    const step = steps[i];
+    if (!step) {
+      done();
+      return;
+    }
+    step((error) => (error ? done(error) : run(i + 1)));
+  };
+  run(0);
 }
 
 // Every document a write or its inverse touches, as stamp keys.
