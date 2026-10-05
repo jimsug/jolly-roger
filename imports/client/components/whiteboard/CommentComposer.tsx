@@ -22,8 +22,11 @@ const Row = styled.div`
   gap: 6px;
 `;
 
-// On a phone the text is 16px, below which iOS zooms in on focus.
+// On a phone the text is 16px, below which iOS zooms in on focus. The box
+// pads the editor, so its placeholder sits at the editor's top.
 const EditorBox = styled.div<{ $compact: boolean }>`
+  --fancy-editor-placeholder-top: 0;
+
   flex: 1 1 auto;
   min-width: 0;
   max-height: 160px;

@@ -767,11 +767,14 @@ const renderPlaceholder = ({
 }: RenderPlaceholderProps) => {
   // Override the `style` from `attributes` -- the value provided by default by
   // slate-react carries a top: 0 that causes the placeholder text to not sit
-  // on the baseline correctly.  9px appears to be about right.
+  // on the baseline correctly. The placeholder sits at the editable's padding
+  // edge, so it needs the editable's own top padding: 9px for chat's editor,
+  // and whatever --fancy-editor-placeholder-top says for one padded by its
+  // container instead.
   const { style: givenStyle, ...rest } = attributes;
   const style = {
     ...givenStyle,
-    top: "9px",
+    top: "var(--fancy-editor-placeholder-top, 9px)",
   };
   const attrs = {
     ...rest,
