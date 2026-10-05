@@ -31,7 +31,9 @@ import type {
   OnBeforeDelete,
   OnConnectEnd,
   OnConnectStart,
+  OnMove,
   OnMoveEnd,
+  OnMoveStart,
   OnNodeDrag,
   XYPosition,
 } from "@xyflow/react";
@@ -286,6 +288,8 @@ import TextNode from "./TextNode";
 import type { WhiteboardActions } from "./WhiteboardContext";
 import WhiteboardContext from "./WhiteboardContext";
 import WhiteboardEdge from "./WhiteboardEdge";
+import type { ViewportMoves } from "./WhosHere";
+import WhosHere, { ViewSender } from "./WhosHere";
 
 const nodeTypes = {
   puzzle: PuzzleCardNode,
@@ -403,7 +407,7 @@ const TOUCH_SLOP = 10;
 // The parts of the canvas that sit over the board, where presses are the
 // controls' own rather than a tool's.
 const OVERLAYS =
-  ".react-flow__panel, .react-flow__controls, .react-flow__minimap, .react-flow__node-toolbar, .jr-comment-pin";
+  ".react-flow__panel, .react-flow__controls, .react-flow__minimap, .react-flow__node-toolbar, .jr-comment-pin, .jr-whos-here";
 // How close (in screen pixels) a line end has to be to something to attach to
 // it: just outside its edge, or either side of a frame's border.
 const ATTACH_MARGIN = 8;
@@ -483,7 +487,11 @@ interface ImageUpload {
 // Marks what a preview has differently from the board as it is now.
 const CHANGED_CLASS = "jr-changed";
 
-const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
+const CanvasWrapper = styled.div<{
+  $tool: Tool;
+  $readOnly: boolean;
+  $whosHereHeight: number;
+}>`
   /* stylelint-disable selector-class-pattern -- React Flow's class names */
   position: relative;
   width: 100%;
@@ -528,6 +536,15 @@ const CanvasWrapper = styled.div<{ $tool: Tool; $readOnly: boolean }>`
       0 0 3px ${({ theme }) => theme.colors.whiteboardPreviewChanged}
     );
   }
+
+  /* The panels at the top right open below who's here (see WhosHere). */
+  ${({ $whosHereHeight }) =>
+    $whosHereHeight > 0 &&
+    css`
+      .react-flow__panel.top.right {
+        top: ${$whosHereHeight}px;
+      }
+    `}
 
   /* On a phone a thread, or the Outline, opens in a sheet along the bottom,
      as wide as the board, clear of the keyboard and short of the top of
@@ -2652,8 +2669,20 @@ const CanvasInner = ({
     (_event, viewport) => setSavedViewport(viewport),
     [setSavedViewport],
   );
+  // Told of every pan and zoom, so following someone stops when the viewer
+  // moves the board themselves (see WhosHere).
+  const viewportMoves = useRef<ViewportMoves>(undefined);
+  // How far down the top-right panels start, to clear who's here.
+  const [whosHereHeight, setWhosHereHeight] = useState(0);
+  const onMoveStart: OnMoveStart = useCallback(
+    (event) => viewportMoves.current?.start(event),
+    [],
+  );
   const refreshAttachPreviewRef = useRef<() => void>(undefined);
-  const onMove = useCallback(() => refreshAttachPreviewRef.current?.(), []);
+  const onMove: OnMove = useCallback((event) => {
+    refreshAttachPreviewRef.current?.();
+    viewportMoves.current?.move(event);
+  }, []);
 
   const paneCenter = useCallback(() => {
     const rect = wrapperRef.current?.getBoundingClientRect();
@@ -5899,6 +5928,7 @@ const CanvasInner = ({
                   ref={wrapperRef}
                   $tool={tool}
                   $readOnly={readOnly}
+                  $whosHereHeight={whosHereHeight}
                   onPointerDownCapture={onPointerDownCapture}
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}
@@ -5927,6 +5957,7 @@ const CanvasInner = ({
                     onNodeDragStop={onNodeDragStop}
                     onNodeMouseEnter={onNodeMouseEnter}
                     onNodeMouseLeave={onNodeMouseLeave}
+                    onMoveStart={onMoveStart}
                     onMove={onMove}
                     onMoveEnd={onMoveEnd}
                     connectionMode={ConnectionMode.Loose}
@@ -5971,6 +6002,21 @@ const CanvasInner = ({
                       <CursorLayer
                         boardId={boardId}
                         liveEnabled={liveEnabled}
+                      />
+                    )}
+                    <ViewSender
+                      enabled={liveEnabled && mayComment && !preview}
+                      setView={live.setView}
+                    />
+                    {liveEnabled && (
+                      <WhosHere
+                        boardId={boardId}
+                        sending={mayComment}
+                        paused={!!preview}
+                        compact={compact}
+                        setFollowedUser={live.setFollowedUser}
+                        movesRef={viewportMoves}
+                        onHeight={setWhosHereHeight}
                       />
                     )}
                     <CommentLayer

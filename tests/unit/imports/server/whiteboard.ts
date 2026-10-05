@@ -38,6 +38,7 @@ import {
   LIVE_UPDATE_BURST,
   LIVE_UPDATES_PER_SECOND,
   MAX_BATCH,
+  MAX_COORDINATE,
   MAX_EDGES_PER_BOARD,
   MAX_FRAME_DEPTH,
   MAX_IMAGES_PER_BOARD,
@@ -46,6 +47,8 @@ import {
   MAX_NODES_PER_BOARD,
   MAX_WHITEBOARD_EDITORS,
 } from "../../../../imports/lib/whiteboard/limits";
+import type { BoardView } from "../../../../imports/lib/whiteboard/links";
+import { MAX_ZOOM, MIN_ZOOM } from "../../../../imports/lib/whiteboard/links";
 import addPuzzleTag from "../../../../imports/methods/addPuzzleTag";
 import createWhiteboard from "../../../../imports/methods/createWhiteboard";
 import deleteWhiteboardComment from "../../../../imports/methods/deleteWhiteboardComment";
@@ -3191,6 +3194,135 @@ describe("whiteboard", function () {
       );
     });
 
+    describe("view and following", function () {
+      it("keeps a view on the board at a zoom it allows, and publishes it with who's followed", async function () {
+        const mine = new StubSubscription(member);
+        Object.assign(mine, { connection: fakeConnection().connection });
+        const theirs = fakeConnection();
+        const view = { x: -250.5, y: 1200, zoom: 0.75 };
+        await setLive(operator, theirs.connection, boardId, state);
+        await setLive(member, mine.connection, boardId, {
+          ...state,
+          view,
+          followedUser: operator,
+        });
+        await setLive(operator, theirs.connection, boardId, {
+          ...state,
+          view: { x: 0, y: 0, zoom: MAX_ZOOM },
+        });
+
+        const doc = await WhiteboardPresence.findOneAsync({
+          connection: mine.connection.id,
+        });
+        assert.deepEqual(doc?.view, view);
+        assert.equal(doc?.followedUser, operator);
+
+        // What the operator sees of the member, and the member of the
+        // operator
+        const asOperator = new StubSubscription(operator);
+        Object.assign(asOperator, { connection: fakeConnection().connection });
+        const seen = await (
+          await publishHandler(whiteboardPresence.name).call(asOperator, {
+            boardId,
+          })
+        ).fetchAsync();
+        const memberDoc = seen.find((p: { user: string }) => p.user === member);
+        assert.deepEqual(memberDoc?.view, view);
+        assert.equal(memberDoc?.followedUser, operator);
+        const theirDoc = (
+          await (
+            await publishHandler(whiteboardPresence.name).call(mine, {
+              boardId,
+            })
+          ).fetchAsync()
+        ).find((p: { user: string }) => p.user === operator);
+        assert.deepEqual(theirDoc?.view, { x: 0, y: 0, zoom: MAX_ZOOM });
+        assert.isNull(theirDoc?.followedUser);
+        theirs.close();
+      });
+
+      it("refuses a view off the board or at a zoom the board doesn't allow", async function () {
+        const { connection } = fakeConnection();
+        for (const view of [
+          { x: Number.POSITIVE_INFINITY, y: 0, zoom: 1 },
+          { x: 0, y: MAX_COORDINATE + 1, zoom: 1 },
+          { x: 0, y: 0, zoom: MIN_ZOOM / 2 },
+          { x: 0, y: 0, zoom: MAX_ZOOM + 0.5 },
+          { x: 0, y: 0, zoom: Number.NaN },
+        ]) {
+          await assert.isRejected(
+            setLive(member, connection, boardId, { ...state, view }),
+            /Invalid live update/,
+          );
+        }
+        await assert.isRejected(
+          asUser(
+            member,
+            () =>
+              setWhiteboardLive.callPromise({
+                boardId,
+                ...state,
+                view: { x: 0, y: 0 } as unknown as BoardView,
+              }),
+            connection,
+          ),
+          /Match error/,
+        );
+        // The ends of the range will do
+        await setLive(member, connection, boardId, {
+          ...state,
+          view: { x: MAX_COORDINATE, y: -MAX_COORDINATE, zoom: MIN_ZOOM },
+        });
+        assert.equal(await WhiteboardPresence.find({}).countAsync(), 1);
+      });
+
+      it("only follows someone on the board", async function () {
+        const { connection } = fakeConnection();
+        await assert.isRejected(
+          setLive(member, connection, boardId, {
+            ...state,
+            followedUser: "not an id!",
+          }),
+          /Invalid live update/,
+        );
+        // A member of the hunt, but not on the board
+        await assert.isRejected(
+          setLive(member, connection, boardId, {
+            ...state,
+            followedUser: operator,
+          }),
+          /must be on this board/,
+        );
+        // On another hunt's board
+        const otherHunt = await createTestHunt(operator);
+        await MeteorUsers.updateAsync(operator, {
+          $addToSet: { hunts: otherHunt },
+          $set: { [`roles.${otherHunt}`]: ["operator"] },
+        });
+        const otherBoard = await ensureWhiteboard(operator, otherHunt);
+        const elsewhere = fakeConnection();
+        await setLive(operator, elsewhere.connection, otherBoard, state);
+        await assert.isRejected(
+          setLive(member, connection, boardId, {
+            ...state,
+            followedUser: operator,
+          }),
+          /must be on this board/,
+        );
+        await setLive(operator, fakeConnection().connection, boardId, state);
+        await setLive(member, connection, boardId, {
+          ...state,
+          followedUser: operator,
+        });
+        assert.equal(
+          (await WhiteboardPresence.findOneAsync({ connection: connection.id }))
+            ?.followedUser,
+          operator,
+        );
+        elsewhere.close();
+      });
+    });
+
     describe("selection and editing", function () {
       const nodeIds = async (count: number) =>
         (
@@ -4076,6 +4208,11 @@ describe("whiteboard", function () {
         }),
       );
       await setLive(source, fakeConnection().connection, boardId, state);
+      const watcher = fakeConnection();
+      await setLive(member, watcher.connection, boardId, {
+        ...state,
+        followedUser: source,
+      });
 
       await runJob(
         mergeUsersJob,
@@ -4099,7 +4236,15 @@ describe("whiteboard", function () {
         (await ChatMessages.findOneAsync(root._id))?.comment?.resolvedBy,
         target,
       );
-      assert.equal(await WhiteboardPresence.find({}).countAsync(), 0);
+      assert.equal(
+        await WhiteboardPresence.find({ user: source }).countAsync(),
+        0,
+      );
+      // and nobody follows them any more
+      assert.isNull(
+        (await WhiteboardPresence.findOneAsync({ user: member }))?.followedUser,
+      );
+      watcher.close();
     });
 
     it("moves the merged account onto the editor list", async function () {
@@ -4346,13 +4491,60 @@ describe("whiteboard", function () {
       }
     });
 
+    it("keeps the view and who's followed from someone who can comment but not edit", async function () {
+      await setPolicy(operator, "operators");
+      const ours = fakeConnection();
+      const theirs = fakeConnection();
+      const view = { x: 10, y: 20, zoom: 1.5 };
+      try {
+        await setLive(operator, ours.connection, boardId, state);
+        await setLive(member, theirs.connection, boardId, {
+          ...(await busy()),
+          view,
+          followedUser: operator,
+        });
+        const doc = await presenceOf(theirs.connection);
+        assert.isNull(doc?.drag);
+        assert.deepEqual(doc?.view, view);
+        assert.equal(doc?.followedUser, operator);
+      } finally {
+        ours.close();
+        theirs.close();
+      }
+    });
+
+    it("sends no view and follows nobody on an archived hunt", async function () {
+      const ours = fakeConnection();
+      const theirs = fakeConnection();
+      try {
+        await setLive(operator, ours.connection, boardId, state);
+        await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+        await setLive(member, theirs.connection, boardId, {
+          ...state,
+          view: { x: 10, y: 20, zoom: 1 },
+          followedUser: operator,
+        });
+        const doc = await presenceOf(theirs.connection);
+        assert.isNull(doc?.view);
+        assert.isNull(doc?.followedUser);
+      } finally {
+        ours.close();
+        theirs.close();
+      }
+    });
+
     it("clears the live state of people who lose edit rights", async function () {
       const live = await busy();
+      const view = { x: 10, y: 20, zoom: 1 };
       const theirs = fakeConnection();
       const ours = fakeConnection();
       try {
-        await setLive(member, theirs.connection, boardId, live);
         await setLive(operator, ours.connection, boardId, live);
+        await setLive(member, theirs.connection, boardId, {
+          ...live,
+          view,
+          followedUser: operator,
+        });
         assert.deepEqual(
           (await presenceOf(theirs.connection))?.drag,
           live.drag,
@@ -4365,6 +4557,9 @@ describe("whiteboard", function () {
         assert.isNull(doc?.stroke);
         assert.isNull(doc?.selection);
         assert.isNull(doc?.editing);
+        // They can still comment, so what they look at and follow stays
+        assert.deepEqual(doc?.view, view);
+        assert.equal(doc?.followedUser, operator);
         assert.deepEqual((await presenceOf(ours.connection))?.drag, live.drag);
 
         // and their next update keeps it that way
@@ -4559,18 +4754,53 @@ describe("whiteboard", function () {
         }
       });
 
+      it("clears the view and who's followed of someone who leaves the hunt, before they next move", async function () {
+        const live = await busy();
+        const theirs = fakeConnection();
+        const ours = fakeConnection();
+        try {
+          await setLive(operator, ours.connection, boardId, live);
+          await setLive(member, theirs.connection, boardId, {
+            ...live,
+            view: { x: 1, y: 1, zoom: 1 },
+            followedUser: operator,
+          });
+          assert.equal(
+            (await presenceOf(theirs.connection))?.followedUser,
+            operator,
+          );
+          await MeteorUsers.updateAsync(member, { $set: { hunts: [] } });
+          await waitForAssertion(async () => {
+            const doc = await presenceOf(theirs.connection);
+            assert.isNull(doc?.view);
+            assert.isNull(doc?.followedUser);
+            assert.isNull(doc?.drag);
+            assert.isNull(doc?.editing);
+          }, 12000);
+        } finally {
+          theirs.close();
+          ours.close();
+        }
+      });
+
       it("clears everyone's live edits on a hunt that's archived, before they next move", async function () {
         const live = await busy();
         const theirs = fakeConnection();
         const ours = fakeConnection();
         try {
-          await setLive(member, theirs.connection, boardId, live);
           await setLive(operator, ours.connection, boardId, live);
+          await setLive(member, theirs.connection, boardId, {
+            ...live,
+            view: { x: 1, y: 1, zoom: 1 },
+            followedUser: operator,
+          });
           await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
           await waitForAssertion(async () => {
             for (const connection of [theirs.connection, ours.connection]) {
               const doc = await presenceOf(connection);
               assert.deepEqual(doc?.cursor, live.cursor);
+              assert.isNull(doc?.view);
+              assert.isNull(doc?.followedUser);
               assert.isNull(doc?.drag);
               assert.isNull(doc?.stroke);
               assert.isNull(doc?.selection);

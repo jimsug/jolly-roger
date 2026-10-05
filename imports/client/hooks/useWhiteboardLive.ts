@@ -8,6 +8,9 @@ import setWhiteboardLive from "../../methods/setWhiteboardLive";
 const ACTIVE_INTERVAL = 100;
 const IDLE_INTERVAL = 200;
 const MIN_CURSOR_MOVE = 2;
+// What the viewer is looking at goes no more often than this, even while a
+// drag sends everything else faster.
+const VIEW_INTERVAL = 200;
 
 type LiveState = Required<WhiteboardLiveState>;
 
@@ -17,6 +20,8 @@ interface LiveSender {
   setStroke: (stroke: LiveState["stroke"]) => void;
   setSelection: (selection: LiveState["selection"]) => void;
   setEditing: (editing: LiveState["editing"]) => void;
+  setView: (view: LiveState["view"]) => void;
+  setFollowedUser: (user: LiveState["followedUser"]) => void;
 }
 
 const empty = (): LiveState => ({
@@ -26,16 +31,21 @@ const empty = (): LiveState => ({
   selection: null,
   editing: null,
   editingAt: null,
+  view: null,
+  followedUser: null,
 });
 
-// Sends this tab's cursor, drag, half-drawn stroke, selection and the text
-// being typed in to everyone else on the board, throttled, and only when
-// something changed (a long edit counts as changing every
-// EDITING_KEEPALIVE_MS). Nothing goes out from a hidden tab, and the selection
-// and text being typed in aren't shown while the window is in the
-// background. Live updates are best-effort: one that's lost (or removed by
-// the server when the presence subscription restarts) is replaced by the
-// next.
+const sameView = (a: LiveState["view"], b: LiveState["view"]) =>
+  a === b || (!!a && !!b && a.x === b.x && a.y === b.y && a.zoom === b.zoom);
+
+// Sends this tab's cursor, drag, half-drawn stroke, selection, the text
+// being typed in, what the viewer is looking at and who they're following to
+// everyone else on the board, throttled, and only when something changed (a
+// long edit counts as changing every EDITING_KEEPALIVE_MS). Nothing goes out
+// from a hidden tab, and the selection and text being typed in aren't shown
+// while the window is in the background. Live updates are best-effort: one
+// that's lost (or removed by the server when the presence subscription
+// restarts) is replaced by the next.
 export default function useWhiteboardLive(
   boardId: string,
   enabled: boolean,
@@ -43,6 +53,9 @@ export default function useWhiteboardLive(
   const state = useRef<LiveState>(empty());
   const lastSent = useRef<string>(JSON.stringify(empty()));
   const lastSentAt = useRef(0);
+  // The view last sent, and when, so it goes at most every VIEW_INTERVAL.
+  const sentView = useRef<LiveState["view"]>(null);
+  const viewSentAt = useRef(0);
   const timer = useRef<number | undefined>(undefined);
   // Whether the window has focus. Assumed until it's lost, since a tab can
   // be opened without ever getting a focus event.
@@ -63,26 +76,47 @@ export default function useWhiteboardLive(
     [],
   );
 
+  // What the send timer runs, kept current below so the timer and the send
+  // can each start the other.
+  const onTimer = useRef<() => void>(() => undefined);
+  const schedule = useCallback(() => {
+    if (liveOn.current !== boardId || timer.current !== undefined) return;
+    const active = !!state.current.drag || !!state.current.stroke;
+    const interval = active ? ACTIVE_INTERVAL : IDLE_INTERVAL;
+    let wait = Math.max(0, lastSentAt.current + interval - Date.now());
+    if (!sameView(state.current.view, sentView.current)) {
+      wait = Math.max(wait, viewSentAt.current + VIEW_INTERVAL - Date.now());
+    }
+    timer.current = window.setTimeout(() => onTimer.current(), wait);
+  }, [boardId]);
+
   const flush = useCallback(() => {
     timer.current = undefined;
     if (liveOn.current !== boardId || document.visibilityState === "hidden") {
       return;
     }
-    const payload = shown();
+    const now = Date.now();
+    // A copy, since shown() is the live state itself while the window has
+    // focus. A view that changed too soon after the last one waits for the
+    // next send, which is scheduled for when it's due.
+    const payload = { ...shown() };
+    const viewDue = now - viewSentAt.current >= VIEW_INTERVAL;
+    if (!viewDue && !sameView(payload.view, sentView.current)) {
+      payload.view = sentView.current;
+    }
     const json = JSON.stringify(payload);
-    if (json === lastSent.current) return;
-    lastSent.current = json;
-    lastSentAt.current = Date.now();
-    setWhiteboardLive.call({ boardId, ...payload });
-  }, [boardId, shown]);
-
-  const schedule = useCallback(() => {
-    if (liveOn.current !== boardId || timer.current !== undefined) return;
-    const active = !!state.current.drag || !!state.current.stroke;
-    const interval = active ? ACTIVE_INTERVAL : IDLE_INTERVAL;
-    const wait = Math.max(0, lastSentAt.current + interval - Date.now());
-    timer.current = window.setTimeout(flush, wait);
-  }, [boardId, flush]);
+    if (json !== lastSent.current) {
+      lastSent.current = json;
+      lastSentAt.current = now;
+      if (!sameView(payload.view, sentView.current)) viewSentAt.current = now;
+      sentView.current = payload.view;
+      setWhiteboardLive.call({ boardId, ...payload });
+    }
+    if (!sameView(state.current.view, sentView.current)) schedule();
+  }, [boardId, shown, schedule]);
+  useEffect(() => {
+    onTimer.current = flush;
+  }, [flush]);
 
   // A long edit sends a fresh editingAt now and then, so others keep seeing
   // it as live rather than as a tab that has stalled. The timer runs only
@@ -106,8 +140,8 @@ export default function useWhiteboardLive(
   useEffect(() => {
     liveOn.current = enabled ? boardId : undefined;
     if (state.current.editing) startKeepAlive();
-    // A hidden tab drops off the board at once. Its selection and editing
-    // are kept, to show again once it's back.
+    // A hidden tab drops off the board at once. Its selection, editing,
+    // view and who it follows are kept, to show again once it's back.
     const onVisibility = () => {
       if (!enabled) return;
       if (document.visibilityState === "hidden") {
@@ -116,8 +150,11 @@ export default function useWhiteboardLive(
           selection: state.current.selection,
           editing: state.current.editing,
           editingAt: state.current.editingAt,
+          view: state.current.view,
+          followedUser: state.current.followedUser,
         };
         lastSent.current = JSON.stringify(empty());
+        sentView.current = null;
         setWhiteboardLive.call({ boardId, ...empty() });
       } else {
         schedule();
@@ -184,6 +221,16 @@ export default function useWhiteboardLive(
         };
         if (editing) startKeepAlive();
         else stopKeepAlive();
+        schedule();
+      },
+      setView: (view) => {
+        if (sameView(view, state.current.view)) return;
+        state.current = { ...state.current, view };
+        schedule();
+      },
+      setFollowedUser: (followedUser) => {
+        if (followedUser === state.current.followedUser) return;
+        state.current = { ...state.current, followedUser };
         schedule();
       },
     }),

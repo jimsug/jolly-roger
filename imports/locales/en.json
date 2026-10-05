@@ -87,6 +87,10 @@
       "replies_one": "{{count}} reply",
       "replies_other": "{{count}} replies"
     },
+    "follow": {
+      "followingYou_one": "{{name}} is following you",
+      "followingYou_other": "{{count}} people are following you"
+    },
     "frame": {
       "comments_one": "{{count}} comment",
       "comments_other": "{{count}} comments",

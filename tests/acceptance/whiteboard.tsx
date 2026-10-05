@@ -74,6 +74,7 @@ import setWhiteboardLayoutLocked from "../../imports/methods/setWhiteboardLayout
 import setWhiteboardLive from "../../imports/methods/setWhiteboardLive";
 import TypedMethod from "../../imports/methods/TypedMethod";
 import undestroyPuzzle from "../../imports/methods/undestroyPuzzle";
+import updateProfile from "../../imports/methods/updateProfile";
 import upsertWhiteboardEdges from "../../imports/methods/upsertWhiteboardEdges";
 import upsertWhiteboardNodes from "../../imports/methods/upsertWhiteboardNodes";
 import resetDatabase from "../lib/resetDatabase";
@@ -7778,6 +7779,7 @@ if (Meteor.isClient) {
         const OTHER_PASSWORD = "password";
         const OTHER_NAME = "Second Member";
         let other: ReturnType<typeof DDP.connect>;
+        let otherId: string;
         // Presence as their connection sees it, this page's included
         let theirPresence: Mongo.Collection<{
           _id: string;
@@ -7802,14 +7804,15 @@ if (Meteor.isClient) {
           theirPresence = new Mongo.Collection("jr_whiteboard_presence", {
             connection: other,
           });
-          await other.callAsync("login", {
+          const login = (await other.callAsync("login", {
             user: { email: OTHER_EMAIL },
             password: (
               Accounts as unknown as {
                 _hashPassword: (password: string) => unknown;
               }
             )._hashPassword(OTHER_PASSWORD),
-          });
+          })) as { id: string };
+          otherId = login.id;
         });
 
         after(function () {
@@ -8672,6 +8675,427 @@ if (Meteor.isClient) {
           // With no preview, Escape closes History
           await press(document.body, { key: "Escape" });
           assert.isNull(screen.queryByRole("button", { name: "Now" }));
+        });
+
+        describe("who's here and following", function () {
+          const theirFace = () =>
+            screen.getByRole("button", {
+              name: `${OTHER_NAME}: jump to or follow`,
+            });
+          // The board point at the centre of the canvas, and the zoom
+          const viewCentre = () => {
+            const viewport = new DOMMatrixReadOnly(
+              getComputedStyle(document.querySelector(".react-flow__viewport")!)
+                .transform,
+            );
+            const box = pane().getBoundingClientRect();
+            return {
+              x: (box.width / 2 - viewport.e) / viewport.a,
+              y: (box.height / 2 - viewport.f) / viewport.a,
+              zoom: viewport.a,
+            };
+          };
+          const assertCentredOn = (view: {
+            x: number;
+            y: number;
+            zoom?: number;
+          }) => {
+            const now = viewCentre();
+            assert.closeTo(now.x, view.x, 2);
+            assert.closeTo(now.y, view.y, 2);
+            if (view.zoom !== undefined) {
+              assert.closeTo(now.zoom, view.zoom, 0.001);
+            }
+          };
+          const pickAction = async (name: string) => {
+            const face = await waitFor(() => theirFace(), { timeout: 10000 });
+            await act(async () => {
+              fireEvent.click(face);
+              await stabilize();
+            });
+            const action = await screen.findByRole("button", { name });
+            await act(async () => {
+              fireEvent.click(action);
+              await stabilize();
+            });
+          };
+          const follow = async (view: {
+            x: number;
+            y: number;
+            zoom: number;
+          }) => {
+            await theirLive({ view });
+            await pickAction("Follow");
+            await screen.findByText(`Following ${OTHER_NAME}`);
+            await waitFor(() => assertCentredOn(view), { timeout: 5000 });
+          };
+          const theirId = () => otherId;
+          const Presence: typeof import("../../imports/client/WhiteboardPresence").default =
+            require("../../imports/client/WhiteboardPresence").default;
+          // Their live state, once it has reached this page
+          const theirsHere = () =>
+            Presence.findOneAsync({ board: boardId, user: theirId() });
+          // This page's live state, as their connection sees it
+          const mineThere = async () =>
+            (await theirPresence.findOneAsync({
+              board: boardId,
+              user: Meteor.userId()!,
+            })) as { view?: unknown; followedUser?: string | null } | undefined;
+
+          afterEach(async function () {
+            await theirLive();
+          });
+
+          it("shows them after you, and jumps to their cursor", async function () {
+            this.timeout(30000);
+            lookAt({ x: 0, y: 0 });
+            try {
+              await openBoard();
+              await theirLive({ cursor: { x: 29000, y: 29500 } });
+              const face = await waitFor(() => theirFace(), {
+                timeout: 10000,
+              });
+              // You first, and not a button, then them
+              const stack = face.parentElement!;
+              assert.equal(stack.firstElementChild?.tagName, "DIV");
+              assert.equal(stack.children[1], face);
+              assert.isNull(
+                within(stack).queryByRole("button", { name: /\(you\)/ }),
+              );
+
+              await pickAction("Jump to their cursor");
+              await waitFor(() => assertCentredOn({ x: 29000, y: 29500 }), {
+                timeout: 5000,
+              });
+            } finally {
+              forgetView();
+            }
+          });
+
+          it("can't jump to someone whose pointer hasn't been on the board", async function () {
+            this.timeout(30000);
+            await openBoard();
+            const face = await waitFor(() => theirFace(), { timeout: 10000 });
+            await act(async () => {
+              fireEvent.click(face);
+              await stabilize();
+            });
+            const jump = await screen.findByRole("button", {
+              name: "Jump to their cursor",
+            });
+            assert.isTrue((jump as HTMLButtonElement).disabled);
+          });
+
+          it("follows their view as it changes, until a wheel moves the board", async function () {
+            this.timeout(30000);
+            lookAt({ x: 0, y: 0 });
+            try {
+              await openBoard();
+              await follow({ x: 30000, y: 30000, zoom: 0.5 });
+              // They hear who's following them
+              const subscription = other.subscribe(whiteboardPresence.name, {
+                boardId,
+              });
+              try {
+                const them = theirId();
+                await waitFor(
+                  async () => {
+                    const mine = await theirPresence.findOneAsync({
+                      board: boardId,
+                      user: Meteor.userId()!,
+                    });
+                    assert.equal(
+                      (mine as { followedUser?: string })?.followedUser,
+                      them,
+                    );
+                  },
+                  { timeout: 5000 },
+                );
+              } finally {
+                subscription.stop();
+              }
+
+              await theirLive({ view: { x: 30400, y: 30100, zoom: 1 } });
+              await waitFor(
+                () => assertCentredOn({ x: 30400, y: 30100, zoom: 1 }),
+                { timeout: 5000 },
+              );
+
+              // A click on the empty board doesn't move it
+              const box = pane().getBoundingClientRect();
+              const mouse = {
+                button: 0,
+                view: window,
+                clientX: box.left + 100,
+                clientY: box.top + 100,
+              };
+              await act(async () => {
+                fireEvent.mouseDown(pane(), mouse);
+                fireEvent.mouseUp(window, mouse);
+                fireEvent.click(pane(), mouse);
+                await stabilize();
+              });
+              assert.exists(screen.getByText(`Following ${OTHER_NAME}`));
+
+              await act(async () => {
+                fireEvent.wheel(pane(), {
+                  deltaY: -120,
+                  clientX: box.left + 100,
+                  clientY: box.top + 100,
+                });
+                await stabilize();
+              });
+              await screen.findByText(
+                `Stopped following ${OTHER_NAME}: you moved the board.`,
+              );
+              const stoppedAt = viewCentre();
+              await theirLive({ view: { x: 31000, y: 31000, zoom: 1 } });
+              await waitFor(
+                async () =>
+                  assert.deepEqual((await theirsHere())?.view, {
+                    x: 31000,
+                    y: 31000,
+                    zoom: 1,
+                  }),
+                { timeout: 5000 },
+              );
+              await act(async () => {
+                await stabilize();
+              });
+              assertCentredOn(stoppedAt);
+            } finally {
+              forgetView();
+            }
+          });
+
+          it("stops following when a control moves the board", async function () {
+            this.timeout(30000);
+            lookAt({ x: 0, y: 0 });
+            try {
+              await openBoard();
+              await follow({ x: 30200, y: 30200, zoom: 1 });
+              await act(async () => {
+                fireEvent.click(
+                  screen.getByRole("button", { name: "Zoom in" }),
+                );
+                await stabilize();
+              });
+              await screen.findByText(
+                `Stopped following ${OTHER_NAME}: you moved the board.`,
+              );
+            } finally {
+              forgetView();
+            }
+          });
+
+          it("pauses following while an earlier version is shown", async function () {
+            this.timeout(40000);
+            await clearWhiteboardVersions.callPromise({ boardId });
+            const note = Random.id();
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [
+                {
+                  _id: note,
+                  type: "sticky",
+                  position: { x: 30500, y: 30500 },
+                  width: 200,
+                  height: 160,
+                  text: "Added before following",
+                },
+              ],
+            });
+            await other.callAsync(upsertWhiteboardNodes.name, {
+              boardId,
+              nodes: [{ _id: note, text: "Edited by them" }],
+            });
+            const subscription = other.subscribe(whiteboardPresence.name, {
+              boardId,
+            });
+            lookAt({ x: 0, y: 0 });
+            try {
+              await openBoard();
+              await follow({ x: 30000, y: 30000, zoom: 1 });
+              await waitFor(
+                async () =>
+                  assert.equal((await mineThere())?.followedUser, theirId()),
+                { timeout: 5000 },
+              );
+
+              await act(async () => {
+                fireEvent.click(
+                  screen.getByRole("button", { name: "History" }),
+                );
+                await stabilize();
+              });
+              const row = await waitFor(
+                () => {
+                  const found = [
+                    ...document.querySelectorAll<HTMLElement>(
+                      ".react-flow__panel.top.right button",
+                    ),
+                  ].find((b) => b.textContent?.includes(OTHER_NAME));
+                  assert.exists(found);
+                  return found;
+                },
+                { timeout: 10000 },
+              );
+              await act(async () => {
+                fireEvent.click(row);
+                await stabilize();
+              });
+              await screen.findByText(
+                `Following ${OTHER_NAME} is paused while you look at an earlier version.`,
+                {},
+                { timeout: 10000 },
+              );
+              // Nothing about what this page looks at, or who it follows,
+              // goes out
+              await waitFor(
+                async () => {
+                  const mine = await mineThere();
+                  assert.isNull(mine?.view ?? null);
+                  assert.isNull(mine?.followedUser ?? null);
+                },
+                { timeout: 5000 },
+              );
+
+              const pausedAt = viewCentre();
+              const latest = { x: 30600, y: 30300, zoom: 1 };
+              await theirLive({ view: latest });
+              await waitFor(
+                async () =>
+                  assert.deepEqual((await theirsHere())?.view, latest),
+                { timeout: 5000 },
+              );
+              await act(async () => {
+                await stabilize();
+              });
+              assertCentredOn(pausedAt);
+
+              // Back to now, the board catches up with them
+              await act(async () => {
+                fireEvent.click(screen.getByRole("button", { name: "Now" }));
+                await stabilize();
+              });
+              await screen.findByText(`Following ${OTHER_NAME}`);
+              await waitFor(() => assertCentredOn(latest), { timeout: 5000 });
+              await waitFor(
+                async () =>
+                  assert.equal((await mineThere())?.followedUser, theirId()),
+                { timeout: 5000 },
+              );
+            } finally {
+              subscription.stop();
+              forgetView();
+              await removeNodes([note]);
+            }
+          });
+
+          it("stops following, and says so, when they leave the board", async function () {
+            this.timeout(30000);
+            const subscription = other.subscribe(whiteboardPresence.name, {
+              boardId,
+            });
+            try {
+              await openBoard();
+              await follow({ x: 29800, y: 29800, zoom: 1 });
+              subscription.stop();
+              await screen.findByText(
+                `Stopped following ${OTHER_NAME}: they left the board.`,
+                {},
+                { timeout: 5000 },
+              );
+              assert.isNull(screen.queryByText(`Following ${OTHER_NAME}`));
+              await waitFor(() =>
+                assert.isNull(
+                  screen.queryByRole("button", {
+                    name: `${OTHER_NAME}: jump to or follow`,
+                  }),
+                ),
+              );
+            } finally {
+              subscription.stop();
+              forgetView();
+            }
+          });
+
+          it("tells you who's following you", async function () {
+            this.timeout(30000);
+            // A name i18next would otherwise show with entities in it
+            const name = "Ada O'Brien";
+            await other.callAsync(updateProfile.name, {
+              displayName: name,
+              dingwords: [],
+            });
+            try {
+              await openBoard();
+              // Following someone needs them on the board, which opening it
+              // puts this page
+              await waitFor(
+                async () => {
+                  await theirLive({ followedUser: Meteor.userId()! });
+                },
+                { timeout: 5000 },
+              );
+              const chip = await screen.findByText(
+                `${name} is following you`,
+                {},
+                { timeout: 5000 },
+              );
+              assert.isTrue(chip.closest(".jr-whos-here") !== null);
+              assert.exists(
+                screen.getByRole("button", {
+                  name: `${name}: jump to or follow`,
+                }),
+              );
+              await theirLive();
+              await waitFor(() =>
+                assert.isNull(screen.queryByText(`${name} is following you`)),
+              );
+            } finally {
+              await other.callAsync(updateProfile.name, {
+                displayName: OTHER_NAME,
+                dingwords: [],
+              });
+            }
+          });
+
+          it("follows on a phone, with finger-sized faces", async function () {
+            this.timeout(30000);
+            const phone = simulatePhone();
+            try {
+              render(<TestApp />);
+              await goTo(boardPath);
+              await screen.findByText(
+                "Editing needs a wider screen. You can still comment.",
+                {},
+                { timeout: 20000 },
+              );
+              await act(async () => {
+                await stabilize();
+              });
+              const face = await waitFor(() => theirFace(), {
+                timeout: 10000,
+              });
+              assert.equal(face.getBoundingClientRect().height, 44);
+              assert.equal(face.getBoundingClientRect().width, 44);
+              await follow({ x: 29600, y: 29700, zoom: 0.8 });
+              await theirLive({ view: { x: 29650, y: 29700, zoom: 0.8 } });
+              await waitFor(
+                () => assertCentredOn({ x: 29650, y: 29700, zoom: 0.8 }),
+                { timeout: 5000 },
+              );
+              await act(async () => {
+                fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+                await stabilize();
+              });
+              assert.isNull(screen.queryByText(`Following ${OTHER_NAME}`));
+            } finally {
+              phone.restore();
+              forgetView();
+            }
+          });
         });
 
         describe("locks", function () {

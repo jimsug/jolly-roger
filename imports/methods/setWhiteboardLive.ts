@@ -2,6 +2,7 @@ import type {
   WhiteboardColor,
   WhiteboardStrokeWidth,
 } from "../lib/models/WhiteboardNodes";
+import type { BoardView } from "../lib/whiteboard/links";
 import TypedMethod from "./TypedMethod";
 
 export type WhiteboardLiveState = {
@@ -21,6 +22,11 @@ export type WhiteboardLiveState = {
   // Refreshed every EDITING_KEEPALIVE_MS while editing is set, so the
   // presence document changes while someone types.
   editingAt?: Date | null;
+  // What the sender is looking at (the point at the centre of their canvas,
+  // and their zoom), null while their tab is hidden, and who they're
+  // following, if anyone. Optional for the same reason.
+  view?: BoardView | null;
+  followedUser?: string | null;
 };
 
 export default new TypedMethod<{ boardId: string } & WhiteboardLiveState, void>(

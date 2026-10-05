@@ -1,6 +1,7 @@
 ---
 files:
   - imports/client/chatEditorContent.ts
+  - imports/client/components/AvatarStack.tsx
   - imports/client/components/ChatMessageReactions.tsx
   - imports/client/components/HighlightsPanel.tsx
   - imports/client/components/WhiteboardPage.tsx
@@ -35,6 +36,7 @@ files:
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
   - imports/client/components/whiteboard/WhiteboardCanvas.tsx
   - imports/client/components/whiteboard/WhiteboardEdge.tsx
+  - imports/client/components/whiteboard/WhosHere.tsx
   - imports/client/components/whiteboard/boardFiles.ts
   - imports/client/components/whiteboard/boardWrites.ts
   - imports/client/hooks/useChatImageUpload.ts
@@ -67,6 +69,7 @@ files:
   - imports/lib/whiteboard/exportFiles.ts
   - imports/lib/whiteboard/feederFocus.ts
   - imports/lib/whiteboard/feeders.ts
+  - imports/lib/whiteboard/follow.ts
   - imports/lib/whiteboard/frameTools.ts
   - imports/lib/whiteboard/ink.ts
   - imports/lib/whiteboard/layout.ts
@@ -110,6 +113,7 @@ files:
   - imports/server/models/WhiteboardVersionChunks.ts
   - imports/server/publications/whiteboardContents.ts
   - imports/server/publications/whiteboardInk.ts
+  - imports/server/publications/whiteboardPresence.ts
   - imports/server/publications/whiteboardVersions.ts
   - imports/server/tagSynonyms.ts
   - imports/server/transitionGuess.ts
@@ -299,8 +303,9 @@ module, so placement in `whiteboard.ts` can use it too.
 
 ### The live channel
 
-Cursors, drags, half-drawn strokes, selections and the text being typed in
-travel through `Whiteboards.methods.setLive`
+Cursors, drags, half-drawn strokes, selections, the text being typed in,
+what each person is looking at and who they're following travel through
+`Whiteboards.methods.setLive`
 (`imports/server/whiteboardLive.ts`) several times a second per person, so
 each connection remembers what its user may do on each board instead of
 reading it on every call. That memory is dropped as
@@ -318,10 +323,13 @@ without it within Meteor's ten-second poll. The 60-second TTL is only a
 backstop. A check that was reading when its answer was dropped doesn't keep
 what it read.
 
-People who can comment but not edit still send their cursor. Their drags,
-strokes, selections and editing are stored as null rather than refused, since
-a refusal would come back every 100ms; anyone outside the hunt is refused as
-before. Someone who loses edit rights has their drags, strokes, selections
+People who can comment but not edit still send their cursor, their view and
+who they follow. Their drags, strokes, selections and editing are stored as
+null rather than refused, since a refusal would come back every 100ms; anyone
+outside the hunt is refused as before. On an archived hunt, where everyone
+can only view, the client sends nothing at all; an update that arrives anyway
+keeps only its cursor, as before, with its view and who it follows stored as
+null. Someone who loses edit rights has their drags, strokes, selections
 and editing cleared at once rather than on their next update, by
 `clearLiveEditsOfNonEditors` in `whiteboardLive.ts`, which leaves alone
 anyone who can still edit:
@@ -332,6 +340,9 @@ anyone who can still edit:
   hunt's boards;
 - each connection's user observer, seeing a role taken away or the hunt
   left, clears them on that connection's presence.
+
+Anyone who can no longer comment (the hunt archived, or the hunt left) has
+their view and who they follow cleared in the same pass.
 
 The method unblocks, so updates from one connection can run side by side.
 Each connection numbers its updates per board, and one that's overtaken
@@ -344,6 +355,83 @@ over the limit is dropped before anything else is done with it, with no
 error back, since the next one comes a moment later; the server logs that
 it's dropping updates at debug level, once a minute at most per
 connection.
+
+#### Who's here, and following someone
+
+Each update also carries `view`, what the sender is looking at: `{ x, y,
+zoom }`, the board point at the centre of their canvas and their zoom. The
+server checks it like the cursor: both coordinates within `MAX_COORDINATE`,
+and the zoom within the board's own range, `MIN_ZOOM` to `MAX_ZOOM` (0.1 to
+2, from `imports/lib/whiteboard/links.ts`). `ViewSender` (in `WhosHere.tsx`)
+works it out from React Flow's viewport with `viewAtCentre`, rounded to a
+tenth of a unit and held to those limits, and `useWhiteboardLive` sends it at
+most every 200ms and only when it changes, whatever else is going faster. It
+goes as null while the tab is hidden and while previewing a version, and
+comes back with the tab.
+
+`followedUser` is who the sender is following. It must look like a user id
+and belong to someone with a tab on this board (a presence document there),
+or the update is refused with "Followed people must be on this board"; as
+with selections, the last one found is remembered per connection so it isn't
+looked up again on every update. Both fields are optional, so an older client
+isn't refused, and both are published with the rest of the presence.
+
+Once anyone else is on the board, there's a stack of faces at the top right
+of the canvas, `WhosHere`: the viewer first, then everyone else with a tab on
+the board, each once however many tabs they have, bordered in their cursor
+colour. It shows up to five faces and then "+N", and its tooltip names
+everyone. The top-right panels (a thread, History, the Comments list, the
+Outline, Not on the board) open below the stack: `WhosHere` measures it and
+the canvas moves them down by that much. Someone's face, or their name in
+the "+N" list, opens a small popover (a dialog, named for them) with:
+
+- **Jump to their cursor**, which centres the board on where their pointer
+  was last seen, at the current zoom. It's disabled until their pointer has
+  been on the board since this viewer opened it, and says so under the
+  button.
+- **Follow** (or **Stop following**).
+
+While following, the board takes their view whenever it changes, with a
+120ms ease (`setViewport`), and a banner beside the stack, to the left of
+the faces, says "Following Ada" with Stop. The banner, the note saying why
+following stopped and the chip of who's following you all sit in the
+stack's row rather than under it, so the panels below don't jump as they
+come and go. Following stops at once, and the banner says why for a few
+seconds, when:
+
+- the viewer pans or zooms the board themselves: a drag, a pinch, the wheel,
+  the zoom buttons, the mini map, search, the Outline, a link, or jumping to
+  someone's cursor ("you moved the board"). A click or tap that doesn't move
+  the board, to deselect or close something, leaves following alone;
+- the person followed leaves the board, their last tab's presence going
+  ("they left the board");
+- the person followed hasn't moved their pointer or their view for 60
+  seconds (`FOLLOW_IDLE_MS`; "they haven't moved for a minute").
+
+React Flow reports a move with the input behind it, or none when code made
+it. A move made by code stops following as it starts, except for the moves
+the canvas starts itself to follow someone, which it counts. One with an
+input behind it stops following only once the board actually moves, since
+React Flow starts a move on any press of the board. The decisions are pure functions in
+`imports/lib/whiteboard/follow.ts` (`startFollowing`, `followPresence`,
+`followLocalMove`, `resumeFollowing`).
+
+While previewing a version, following is paused: the banner says "Following
+Ada is paused while you look at an earlier version.", nothing is applied and
+neither the view nor who's followed is sent. Going back to now moves the
+board to their current view again. Downloading a picture of the board
+leaves following alone.
+
+The follower's own `followedUser` tells the person followed: a chip beside
+their stack says "Ada is following you", or "3 people are following you"
+with the names in its title, for as long as anyone follows them.
+
+On a phone the stack sits at the bottom right instead, above React Flow's
+attribution, and under the comment sheet when one is open; each face is
+44px, and the banner's buttons are too. Phones and other viewers who can
+only comment can follow and be followed like anyone else. Viewers on an
+archived hunt send nothing, so they aren't in anyone's stack; the stack only
+shows while live updates are on.
 
 #### Selections and "is editing"
 
@@ -1536,10 +1624,11 @@ On a phone the viewer can pan and pinch, open puzzles from cards, show and
 hide resolved pins, hide ink (see Ink), open a pin's thread, place a
 comment, reply, react, resolve and reopen, delete their own thread while
 nobody else has replied (operators can always), use search, the Outline and
-the Comments list, copy a link to the view, follow "Show on board" from chat, and open a
-collapsed round for themselves ("Show (only for you)", see Collapsed
-rounds). Nothing else: no tools, no moving, no folding rounds for everyone,
-no who-can-edit button.
+the Comments list, copy a link to the view, follow "Show on board" from chat,
+open a collapsed round for themselves ("Show (only for you)", see Collapsed
+rounds), and see who's here, jump to someone's cursor and follow them (see
+Who's here, and following someone). Nothing else: no tools, no moving, no
+folding rounds for everyone, no who-can-edit button.
 
 The toolbar says "Viewing only" with "Editing needs a wider screen. You can
 still comment." under it, and its Outline, Comment, Comments, resolved and
@@ -1898,9 +1987,10 @@ had it.
   live updates do nothing. The page says the whiteboard is turned off, the
   hunt nav hides its link, and the puzzle page and list hide "Show on board".
   Ordinary chat on the hidden puzzle isn't gated.
-- `disable.whiteboard_live` turns off cursors, live drags and strokes, and
-  others' selections and "is editing" (so nothing is held back from editing):
-  the presence publication returns nothing and `setLive` does nothing.
+- `disable.whiteboard_live` turns off cursors, live drags and strokes,
+  others' selections and "is editing" (so nothing is held back from
+  editing), and the who's here stack with following: the presence
+  publication returns nothing and `setLive` does nothing.
 - `disable.whiteboard_versions` ("Whiteboard history" on the Setup page)
   stops recording versions, empties the history list (the publication returns
   nothing), refuses fetching and restoring versions, and refuses Reset layout
@@ -1931,8 +2021,9 @@ There is no flag for the edit policy: `members` is already the off position.
   was deleted.
 - `WhiteboardPresence` (`jr_whiteboard_presence`, server only): one document
   per connection per board, with the cursor, drag, stroke, `selection`,
-  `editing` and `editingAt` (all optional, null once cleared). It goes when
-  the connection closes, the presence subscription stops or its server dies.
+  `editing`, `editingAt`, `view` and `followedUser` (all optional, null once
+  cleared). It goes when the connection closes, the presence subscription
+  stops or its server dies.
 - `WhiteboardVersions` (`jr_whiteboard_versions`): one per version, with its
   `kind` (`edits`, `reset` or `restore`), the
   `users` who edited after it and when each started, `changeCount`,
@@ -2003,5 +2094,6 @@ fails it.
 Purging a hunt removes all six collections, and merging users carries
 `createdBy`, `contributors`, `lockedBy`, the `editors` list and versions'
 `users` over to the merged account and drops the source account's
-presence. User ids inside a version's payload aren't rewritten; a
-restore maps them instead.
+presence, and clears `followedUser` wherever someone was following it. User
+ids inside a version's payload aren't rewritten; a restore maps them
+instead.

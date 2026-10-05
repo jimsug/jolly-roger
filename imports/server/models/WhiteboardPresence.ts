@@ -13,8 +13,9 @@ const point = z.object({ x: z.number(), y: z.number() });
 
 // Short-lived per-tab state for a board: where someone's pointer is, what
 // they're dragging, the ink stroke they're part way through, what they have
-// selected and what they're typing in. Removed when the tab goes away, or by
-// the dead-server cleanup if its server went first.
+// selected, what they're typing in, what they're looking at and who they're
+// following. Removed when the tab goes away, or by the dead-server cleanup if
+// its server went first.
 const WhiteboardPresenceSchema = z.object({
   board: foreignKey,
   hunt: foreignKey,
@@ -50,6 +51,14 @@ const WhiteboardPresenceSchema = z.object({
   // document keeps changing while someone types and others don't take their
   // tab for a stalled one.
   editingAt: z.date().nullable().optional(),
+  // The point at the centre of their canvas, and their zoom, for anyone
+  // following them.
+  view: z
+    .object({ x: z.number(), y: z.number(), zoom: z.number() })
+    .nullable()
+    .optional(),
+  // Someone else on the board whose view they're following.
+  followedUser: foreignKey.nullable().optional(),
 });
 
 const WhiteboardPresence = new Model(

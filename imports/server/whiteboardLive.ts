@@ -16,6 +16,7 @@ import {
   MAX_LIVE_DRAG_NODES,
   MAX_LIVE_SELECTION,
 } from "../lib/whiteboard/limits";
+import { MAX_ZOOM, MIN_ZOOM } from "../lib/whiteboard/links";
 import type { WhiteboardLiveState } from "../methods/setWhiteboardLive";
 import { registerPeriodicCleanupHook } from "./garbage-collection";
 import type { WhiteboardPresenceType } from "./models/WhiteboardPresence";
@@ -35,6 +36,9 @@ interface CachedAccess {
   board: string;
   hunt: string;
   mayEdit: boolean;
+  // Everyone who may comment shows what they're looking at and who they're
+  // following; someone who can only view (on an archived hunt) doesn't.
+  mayComment: boolean;
   until: number;
 }
 type Watch = Promise<{ stop: () => void }>;
@@ -47,11 +51,13 @@ interface ConnectionState {
   // The user whose roles and hunts are being watched for this connection.
   watchedUser: string | undefined;
   userWatch: Watch | undefined;
-  // The last dragged, selected and edited sets found on their board, so an
-  // unchanged set isn't looked up again on every update.
+  // The last dragged, selected and edited sets, and the person followed,
+  // found on their board, so an unchanged one isn't looked up again on every
+  // update.
   validatedDrag: string;
   validatedSelection: string;
   validatedEditing: string;
+  validatedFollowed: string;
   // How many times each board's presence subscription has stopped, and
   // whether the connection has gone. An update that was already under way
   // when either cleanup ran takes its document back out.
@@ -94,6 +100,7 @@ function connectionState(connection: Meteor.Connection): ConnectionState {
     validatedDrag: "",
     validatedSelection: "",
     validatedEditing: "",
+    validatedFollowed: "",
     stops: new Map(),
     closed: false,
     sent: new Map(),
@@ -173,10 +180,13 @@ const NO_LIVE_EDITS = {
   editing: null,
   editingAt: null,
 };
+const NO_FOLLOWING = { view: null, followedUser: null };
 
 // Takes away what people were dragging, drawing, selecting or typing in on
-// boards they can no longer edit, rather than leaving it until they next
-// move. rows picks the presence documents looked at.
+// boards they can no longer edit, and what they were looking at and who they
+// were following on boards they can no longer comment on, rather than
+// leaving it until they next move. rows picks the presence documents looked
+// at.
 export async function clearLiveEditsOfNonEditors(
   rows: Mongo.Selector<WhiteboardPresenceType>,
 ) {
@@ -194,20 +204,32 @@ export async function clearLiveEditsOfNonEditors(
       { _id: { $in: [...userIds] } },
       { projection: { roles: 1, hunts: 1 } },
     ).fetchAsync();
-    const editors = new Set(
+    const accessOf = new Map(
       board
-        ? people
-            .filter((p) => whiteboardAccess(p, hunt, board).access === "edit")
-            .map((p) => p._id)
+        ? people.map((p) => [p._id, whiteboardAccess(p, hunt, board).access])
         : [],
     );
-    const losing = [...userIds].filter((id) => !editors.has(id));
-    if (losing.length === 0) continue;
-    await WhiteboardPresence.updateAsync(
-      { $and: [rows, { board: boardId, user: { $in: losing } }] },
-      { $set: NO_LIVE_EDITS },
-      { multi: true },
+    const losingEdits = [...userIds].filter(
+      (id) => accessOf.get(id) !== "edit",
     );
+    const losingAll = losingEdits.filter(
+      (id) => accessOf.get(id) !== "comment",
+    );
+    const editsOnly = losingEdits.filter((id) => !losingAll.includes(id));
+    if (editsOnly.length > 0) {
+      await WhiteboardPresence.updateAsync(
+        { $and: [rows, { board: boardId, user: { $in: editsOnly } }] },
+        { $set: NO_LIVE_EDITS },
+        { multi: true },
+      );
+    }
+    if (losingAll.length > 0) {
+      await WhiteboardPresence.updateAsync(
+        { $and: [rows, { board: boardId, user: { $in: losingAll } }] },
+        { $set: { ...NO_LIVE_EDITS, ...NO_FOLLOWING } },
+        { multi: true },
+      );
+    }
   }
 }
 
@@ -282,6 +304,7 @@ async function boardAccess(
     board: boardId,
     hunt: board.hunt,
     mayEdit: access === "edit",
+    mayComment: access === "edit" || access === "comment",
     until: Date.now() + MEMBERSHIP_TTL,
   };
   if (epochs[0] === boardsEpoch && epochs[1] === state.epoch) {
@@ -299,6 +322,8 @@ function validateLive({
   selection,
   editing,
   editingAt,
+  view,
+  followedUser,
 }: WhiteboardLiveState) {
   if (cursor && !(inRange(cursor.x) && inRange(cursor.y))) {
     throw invalidLiveUpdate();
@@ -327,6 +352,20 @@ function validateLive({
   }
   if (editing != null && !Id.test(editing)) throw invalidLiveUpdate();
   if (editingAt && !Number.isFinite(editingAt.getTime())) {
+    throw invalidLiveUpdate();
+  }
+  if (
+    view &&
+    !(
+      inRange(view.x) &&
+      inRange(view.y) &&
+      view.zoom >= MIN_ZOOM &&
+      view.zoom <= MAX_ZOOM
+    )
+  ) {
+    throw invalidLiveUpdate();
+  }
+  if (followedUser != null && !Id.test(followedUser)) {
     throw invalidLiveUpdate();
   }
 }
@@ -374,15 +413,22 @@ export async function setLive(
   }
   validateLive(live);
 
-  const { hunt, mayEdit } = await boardAccess(userId, boardId, state);
+  const { hunt, mayEdit, mayComment } = await boardAccess(
+    userId,
+    boardId,
+    state,
+  );
   // Someone who can't edit still shows their cursor, but nothing they drag,
-  // draw, select or type in. Dropped rather than refused, since a refusal
-  // would come back every 100ms.
+  // draw, select or type in, and someone who can only view doesn't show what
+  // they're looking at or who they follow either. Dropped rather than
+  // refused, since a refusal would come back every 100ms.
   const drag = mayEdit ? live.drag : null;
   const stroke = mayEdit ? live.stroke : null;
   const selection = mayEdit ? (live.selection ?? null) : null;
   const editing = mayEdit ? (live.editing ?? null) : null;
   const editingAt = editing ? (live.editingAt ?? null) : null;
+  const view = mayComment ? (live.view ?? null) : null;
+  const followedUser = mayComment ? (live.followedUser ?? null) : null;
 
   if (drag && drag.length > 0) {
     state.validatedDrag = await assertNodesOnBoard(
@@ -411,6 +457,20 @@ export async function setLive(
     }
     state.validatedEditing = `${boardId}:${editing}`;
   }
+  // Only someone with a tab on the board can be followed there.
+  if (
+    followedUser &&
+    `${boardId}:${followedUser}` !== state.validatedFollowed
+  ) {
+    const found = await WhiteboardPresence.find({
+      board: boardId,
+      user: followedUser,
+    }).countAsync();
+    if (found === 0) {
+      throw new Meteor.Error(400, "Followed people must be on this board");
+    }
+    state.validatedFollowed = `${boardId}:${followedUser}`;
+  }
 
   if (cleanedUp() || (state.written.get(boardId) ?? 0) > seq) return;
   state.written.set(boardId, seq);
@@ -427,6 +487,8 @@ export async function setLive(
       selection,
       editing,
       editingAt,
+      view,
+      followedUser,
     },
   });
   if (cleanedUp()) await WhiteboardPresence.removeAsync(selector);

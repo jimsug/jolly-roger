@@ -83,6 +83,90 @@ describe("useWhiteboardLive", function () {
     assert.lengthOf(sent(), 0);
   });
 
+  it("sends the view at most every 200ms, only when it changes, and none while hidden", function () {
+    const { result } = renderHook(() => useWhiteboardLive(board, true));
+    const views = () => sent().map((p) => p.view);
+    act(() => {
+      result.current.setView({ x: 1, y: 1, zoom: 1 });
+      clock.tick(250);
+    });
+    assert.deepEqual(views(), [{ x: 1, y: 1, zoom: 1 }]);
+
+    // A pan sends the view five times a second at most, ending where it
+    // stopped, however fast the cursor goes with it
+    const changedAt: number[] = [];
+    let last = JSON.stringify(views().at(-1));
+    call.callsFake((payload: { view: unknown }) => {
+      const view = JSON.stringify(payload.view);
+      if (view !== last) changedAt.push(Date.now());
+      last = view;
+    });
+    act(() => {
+      for (let i = 2; i <= 21; i++) {
+        result.current.setView({ x: i, y: 1, zoom: 1 });
+        result.current.setCursor({ x: i * 10, y: 0 });
+        clock.tick(50);
+      }
+      clock.tick(500);
+    });
+    assert.deepEqual(views().at(-1), { x: 21, y: 1, zoom: 1 });
+    assert.isAtLeast(changedAt.length, 4);
+    changedAt.slice(1).forEach((at, i) => {
+      assert.isAtLeast(at - changedAt[i]!, 200);
+    });
+
+    // The same view again sends nothing
+    const before = sent().length;
+    act(() => {
+      result.current.setView({ x: 21, y: 1, zoom: 1 });
+      clock.tick(1000);
+    });
+    assert.lengthOf(sent(), before);
+
+    // Hidden, the view and who's followed go as null, and come back after
+    const visibility = sinon
+      .stub(document, "visibilityState")
+      .get(() => "hidden");
+    try {
+      act(() => {
+        result.current.setFollowedUser("someone");
+        document.dispatchEvent(new Event("visibilitychange"));
+        clock.tick(1000);
+      });
+      assert.isNull(sent().at(-1)?.view);
+      assert.isNull(sent().at(-1)?.followedUser);
+      visibility.get(() => "visible");
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        clock.tick(1000);
+      });
+      assert.deepEqual(sent().at(-1)?.view, { x: 21, y: 1, zoom: 1 });
+      assert.equal(sent().at(-1)?.followedUser, "someone");
+    } finally {
+      visibility.restore();
+    }
+  });
+
+  it("sends a view that changes just after one went out, during a drag", function () {
+    const { result } = renderHook(() => useWhiteboardLive(board, true));
+    act(() => {
+      // A drag sends every 100ms, faster than the view may go
+      result.current.setDrag([{ node: Random.id(), x: 1, y: 1 }]);
+      clock.tick(250);
+      result.current.setView({ x: 1, y: 0, zoom: 1 });
+      clock.tick(0);
+    });
+    assert.deepEqual(sent().at(-1)?.view, { x: 1, y: 0, zoom: 1 });
+    act(() => {
+      // The next send is for the cursor, before the view is due again
+      result.current.setCursor({ x: 10, y: 10 });
+      clock.tick(20);
+      result.current.setView({ x: 2, y: 0, zoom: 1 });
+      clock.tick(1000);
+    });
+    assert.deepEqual(sent().at(-1)?.view, { x: 2, y: 0, zoom: 1 });
+  });
+
   it("stops the keep-alive when the canvas goes", function () {
     const { result, unmount } = renderHook(() =>
       useWhiteboardLive(board, true),

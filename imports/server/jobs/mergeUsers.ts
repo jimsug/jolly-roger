@@ -402,10 +402,14 @@ const ADDITIONAL_FK_UPDATES = new Map<{ name: string }, FKUpdateFn>([
     WhiteboardPresence,
     async (source) => {
       // Live cursors and drags belong to the source account's sessions,
-      // which the merge has ended, so they go like presence does.
-      await WhiteboardPresence.collection
-        .rawCollection()
-        .deleteMany({ user: source });
+      // which the merge has ended, so they go like presence does, and
+      // nobody is following them any more.
+      const raw = WhiteboardPresence.collection.rawCollection();
+      await raw.deleteMany({ user: source });
+      await raw.updateMany(
+        { followedUser: source },
+        { $set: { followedUser: null } },
+      );
     },
   ],
   [
