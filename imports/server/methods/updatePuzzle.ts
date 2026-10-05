@@ -107,6 +107,11 @@ defineMethod(updatePuzzle, {
     } else {
       unset("completedWithNoAnswer");
     }
+    // Marking a puzzle done without an answer, or taking that back, is when
+    // it was solved as far as the board's feeder order goes.
+    if (!!completedWithNoAnswer !== !!oldPuzzle.completedWithNoAnswer) {
+      update.$set = { ...update.$set, answersUpdatedAt: new Date() };
+    }
     // Omitting `locked` leaves the lock as it was, so callers that don't know
     // about locked puzzles can't unlock one by accident.
     if (locked) {

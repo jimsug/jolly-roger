@@ -147,6 +147,7 @@ import {
   MAX_BATCH,
   MAX_FRAME_DEPTH,
   MAX_LIVE_DRAG_NODES,
+  MAX_LIVE_SELECTION,
 } from "../../../lib/whiteboard/limits";
 import type { LineStyle } from "../../../lib/whiteboard/lineStyle";
 import type { BoardTarget } from "../../../lib/whiteboard/links";
@@ -192,6 +193,7 @@ import useWhiteboardComments, {
   useSeenComments,
 } from "../../hooks/useWhiteboardComments";
 import useWhiteboardLive from "../../hooks/useWhiteboardLive";
+import useWhiteboardOthersEditing from "../../hooks/useWhiteboardOthersEditing";
 import type {
   LineLabels,
   RemoteDrag,
@@ -235,6 +237,8 @@ import NodePulse from "./NodePulse";
 import PeopleContext from "./PeopleContext";
 import PointNode from "./PointNode";
 import PuzzleCardNode from "./PuzzleCardNode";
+import RemoteEditingContext from "./RemoteEditingContext";
+import RemoteSelectionLayer from "./RemoteSelectionLayer";
 import ResetLayoutModal, { ResetLayoutButton } from "./ResetLayoutModal";
 import RoundStateContext from "./RoundStateContext";
 import StickyNode from "./StickyNode";
@@ -993,6 +997,12 @@ const CanvasInner = ({
   useEffect(() => {
     if (preview) live.setCursor(null);
   }, [preview, live]);
+  // Who else is typing in what, so this viewer doesn't start typing there
+  // too.
+  const othersEditing = useWhiteboardOthersEditing(
+    boardId,
+    liveEnabled && !preview,
+  );
 
   // Cursors move constantly, but only what people are dragging matters here
   // (CursorLayer draws the rest). Reading just that means cursor moves don't
@@ -1305,8 +1315,16 @@ const CanvasInner = ({
       setBusy((current) => withIds(current, ids, isBusy)),
     [],
   );
+  // The node or line whose text is being typed in, which others are told of.
+  const [typingIn, setTypingIn] = useState<string>();
   const onEditingChange = useCallback(
-    (nodeId: string, editing: boolean) => markBusy([nodeId], editing),
+    (id: string, editing: boolean, kind: "node" | "line") => {
+      if (kind === "node") markBusy([id], editing);
+      setTypingIn((current) => {
+        if (editing) return id;
+        return current === id ? undefined : current;
+      });
+    },
     [markBusy],
   );
   const peek = useCallback(
@@ -1403,6 +1421,23 @@ const CanvasInner = ({
     () => (selectedCardKey ? selectedCardKey.split(" ") : []),
     [selectedCardKey],
   );
+  // What's selected, sent to others as it changes (nothing from a preview,
+  // whose nodes aren't the board's). Line ends are left out: they're shown
+  // by their line being selected.
+  const liveSelectionKey = preview
+    ? ""
+    : nodes
+        .filter((n) => n.selected && n.type !== "point")
+        .map((n) => n.id)
+        .toSorted()
+        .slice(0, MAX_LIVE_SELECTION)
+        .join(" ");
+  useEffect(() => {
+    live.setSelection(liveSelectionKey ? liveSelectionKey.split(" ") : null);
+  }, [liveSelectionKey, live]);
+  useEffect(() => {
+    live.setEditing(preview ? null : (typingIn ?? null));
+  }, [preview, typingIn, live]);
   const placeableCardKey = nodes
     .filter((n) => n.selected && n.type === "puzzle" && !n.data.doc.locked)
     .map((n) => n.id)
@@ -4987,190 +5022,433 @@ const CanvasInner = ({
 
   return (
     <WhiteboardContext value={actions}>
-      <PuzzlePeopleProvider huntId={huntId}>
-        <FeederFocusContext value={feederFocusIds}>
-          <RoundStateContext value={rounds}>
-            <CollapseContext value={collapseActions}>
-              <CanvasWrapper
-                ref={wrapperRef}
-                $tool={tool}
-                $readOnly={readOnly}
-                onPointerDownCapture={onPointerDownCapture}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onPointerCancel={onPointerCancel}
-                onPointerLeave={onPointerLeave}
-                onMouseDownCapture={onTapFollowUp}
-                onClickCapture={onTapFollowUp}
-              >
-                <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
-                  nodes={shownNodes}
-                  edges={shownEdges}
-                  nodeTypes={nodeTypes}
-                  edgeTypes={edgeTypes}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  onBeforeDelete={onBeforeDelete}
-                  onConnectEnd={onConnectEnd}
-                  onClickConnectStart={onClickConnectStart}
-                  onClickConnectEnd={onClickConnectEnd}
-                  onNodeDragStart={onNodeDragStart}
-                  onNodeDrag={onNodeDrag}
-                  onNodeDragStop={onNodeDragStop}
-                  onNodeMouseEnter={onNodeMouseEnter}
-                  onNodeMouseLeave={onNodeMouseLeave}
-                  onMove={onMove}
-                  onMoveEnd={onMoveEnd}
-                  connectionMode={ConnectionMode.Loose}
-                  // onConnectEnd decides where a line from a handle ends, so the
-                  // line being dragged shouldn't snap to a nearby handle either.
-                  connectionRadius={0}
-                  colorMode={theme.basicMode === "dark" ? "dark" : "light"}
-                  defaultViewport={initialViewport}
-                  fitView={!initialViewport && !openedAt}
-                  minZoom={MIN_ZOOM}
-                  maxZoom={MAX_ZOOM}
-                  nodesDraggable={!readOnly && !drawingTool}
-                  nodesConnectable={!readOnly && !drawingTool}
-                  // A preview can't be changed, but a node in it can be picked
-                  // to restore on its own.
-                  elementsSelectable={(!readOnly || !!preview) && !drawingTool}
-                  panOnDrag={!drawingTool || (compact && tool === "comment")}
-                  selectionOnDrag={false}
-                  deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
-                  onlyRenderVisibleElements
-                  ariaLabelConfig={ariaLabelConfig}
+      <RemoteEditingContext value={othersEditing}>
+        <PuzzlePeopleProvider huntId={huntId}>
+          <FeederFocusContext value={feederFocusIds}>
+            <RoundStateContext value={rounds}>
+              <CollapseContext value={collapseActions}>
+                <CanvasWrapper
+                  ref={wrapperRef}
+                  $tool={tool}
+                  $readOnly={readOnly}
+                  onPointerDownCapture={onPointerDownCapture}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={onPointerUp}
+                  onPointerCancel={onPointerCancel}
+                  onPointerLeave={onPointerLeave}
+                  onMouseDownCapture={onTapFollowUp}
+                  onClickCapture={onTapFollowUp}
                 >
-                  <Background />
-                  <Controls showInteractive={false} />
-                  {showMiniMap && (
-                    <MiniMap<WhiteboardFlowNode>
-                      pannable
-                      zoomable
-                      nodeColor={miniMapNodeColor}
+                  <ReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>
+                    nodes={shownNodes}
+                    edges={shownEdges}
+                    nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
+                    onNodesChange={onNodesChange}
+                    onEdgesChange={onEdgesChange}
+                    onBeforeDelete={onBeforeDelete}
+                    onConnectEnd={onConnectEnd}
+                    onClickConnectStart={onClickConnectStart}
+                    onClickConnectEnd={onClickConnectEnd}
+                    onNodeDragStart={onNodeDragStart}
+                    onNodeDrag={onNodeDrag}
+                    onNodeDragStop={onNodeDragStop}
+                    onNodeMouseEnter={onNodeMouseEnter}
+                    onNodeMouseLeave={onNodeMouseLeave}
+                    onMove={onMove}
+                    onMoveEnd={onMoveEnd}
+                    connectionMode={ConnectionMode.Loose}
+                    // onConnectEnd decides where a line from a handle ends, so the
+                    // line being dragged shouldn't snap to a nearby handle either.
+                    connectionRadius={0}
+                    colorMode={theme.basicMode === "dark" ? "dark" : "light"}
+                    defaultViewport={initialViewport}
+                    fitView={!initialViewport && !openedAt}
+                    minZoom={MIN_ZOOM}
+                    maxZoom={MAX_ZOOM}
+                    nodesDraggable={!readOnly && !drawingTool}
+                    nodesConnectable={!readOnly && !drawingTool}
+                    // A preview can't be changed, but a node in it can be picked
+                    // to restore on its own.
+                    elementsSelectable={
+                      (!readOnly || !!preview) && !drawingTool
+                    }
+                    panOnDrag={!drawingTool || (compact && tool === "comment")}
+                    selectionOnDrag={false}
+                    deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
+                    onlyRenderVisibleElements
+                    ariaLabelConfig={ariaLabelConfig}
+                  >
+                    <Background />
+                    <Controls showInteractive={false} />
+                    {showMiniMap && (
+                      <MiniMap<WhiteboardFlowNode>
+                        pannable
+                        zoomable
+                        nodeColor={miniMapNodeColor}
+                      />
+                    )}
+                    <FrameLabelLayer />
+                    {!preview && (
+                      <RemoteSelectionLayer
+                        boardId={boardId}
+                        liveEnabled={liveEnabled}
+                      />
+                    )}
+                    {!preview && (
+                      <CursorLayer
+                        boardId={boardId}
+                        liveEnabled={liveEnabled}
+                      />
+                    )}
+                    <CommentLayer
+                      pins={preview ? NO_PINS : commentPins}
+                      openId={openThreadId ?? (draft ? "draft" : undefined)}
+                      pulseId={pulse}
+                      onOpen={openComment}
                     />
-                  )}
-                  <FrameLabelLayer />
-                  {!preview && (
-                    <CursorLayer boardId={boardId} liveEnabled={liveEnabled} />
-                  )}
-                  <CommentLayer
-                    pins={preview ? NO_PINS : commentPins}
-                    openId={openThreadId ?? (draft ? "draft" : undefined)}
-                    pulseId={pulse}
-                    onOpen={openComment}
-                  />
-                  {nodePulse && (
-                    <NodePulse node={nodePulse.node} point={nodePulse.point} />
-                  )}
-                  {localStroke && localStroke.points.length > 0 && (
-                    <ViewportPortal>
-                      <LocalStroke>
-                        <path
-                          d={inkPath(
-                            localStroke.points,
-                            localStroke.strokeWidth,
-                            false,
+                    {nodePulse && (
+                      <NodePulse
+                        node={nodePulse.node}
+                        point={nodePulse.point}
+                      />
+                    )}
+                    {localStroke && localStroke.points.length > 0 && (
+                      <ViewportPortal>
+                        <LocalStroke>
+                          <path
+                            d={inkPath(
+                              localStroke.points,
+                              localStroke.strokeWidth,
+                              false,
+                            )}
+                            fill={
+                              colors.stroke[localStroke.color] ??
+                              theme.colors.text
+                            }
+                          />
+                        </LocalStroke>
+                      </ViewportPortal>
+                    )}
+                    {lineFrom && lineTo && (
+                      <ViewportPortal>
+                        <LocalStroke>
+                          {lineOrigin && (
+                            <AttachOutline key={lineOrigin} id={lineOrigin} />
                           )}
-                          fill={
-                            colors.stroke[localStroke.color] ??
-                            theme.colors.text
-                          }
-                        />
-                      </LocalStroke>
-                    </ViewportPortal>
-                  )}
-                  {lineFrom && lineTo && (
-                    <ViewportPortal>
-                      <LocalStroke>
-                        {lineOrigin && (
-                          <AttachOutline key={lineOrigin} id={lineOrigin} />
-                        )}
-                        {lineAttached && lineAttached !== lineOrigin && (
-                          <AttachOutline key={lineAttached} id={lineAttached} />
-                        )}
-                        <line
-                          x1={lineFrom.x}
-                          y1={lineFrom.y}
-                          x2={lineTo.x}
-                          y2={lineTo.y}
-                          stroke={theme.colors.primary}
-                          strokeWidth={2}
-                          strokeDasharray="6 4"
-                        />
-                        <circle
-                          cx={lineTo.x}
-                          cy={lineTo.y}
-                          r={4}
-                          fill={theme.colors.primary}
-                        />
-                      </LocalStroke>
-                    </ViewportPortal>
-                  )}
-                  {clickConnectStart && clickConnectOrigin && (
-                    <ViewportPortal>
-                      <LocalStroke className="jr-click-connect">
-                        <AttachOutline id={clickConnectStart.nodeId} />
-                        {clickConnectPointer && (
+                          {lineAttached && lineAttached !== lineOrigin && (
+                            <AttachOutline
+                              key={lineAttached}
+                              id={lineAttached}
+                            />
+                          )}
                           <line
-                            x1={clickConnectOrigin.x}
-                            y1={clickConnectOrigin.y}
-                            x2={clickConnectPointer.x}
-                            y2={clickConnectPointer.y}
+                            x1={lineFrom.x}
+                            y1={lineFrom.y}
+                            x2={lineTo.x}
+                            y2={lineTo.y}
                             stroke={theme.colors.primary}
                             strokeWidth={2}
                             strokeDasharray="6 4"
                           />
-                        )}
-                      </LocalStroke>
-                    </ViewportPortal>
-                  )}
-                  {!connecting && attachPreview && (
-                    <ViewportPortal>
-                      <LocalStroke>
-                        <AttachOutline id={attachPreview} />
-                      </LocalStroke>
-                    </ViewportPortal>
-                  )}
-                  {isPlaceTool(tool) && placeGhost && (
-                    <ViewportPortal>
-                      <PlaceGhost
-                        $tool={tool}
-                        style={{
-                          transform: `translate(${placeGhost.x}px, ${placeGhost.y}px)`,
-                          width: placeGhost.width,
-                          height: placeGhost.height,
-                        }}
-                      />
-                    </ViewportPortal>
-                  )}
-                  {readOnly ? (
-                    <Panel position="top-left">
-                      <ToolBox>
-                        {searchTools}
-                        <ReadOnlyNote>
-                          <span>
-                            {t(
-                              "whiteboard.toolbar.viewingOnly",
-                              "Viewing only",
-                            )}
-                          </span>
-                          {accessReason && accessReason !== "offline" && (
-                            <ReadOnlyReason>
-                              {accessReasons[accessReason]}
-                            </ReadOnlyReason>
+                          <circle
+                            cx={lineTo.x}
+                            cy={lineTo.y}
+                            r={4}
+                            fill={theme.colors.primary}
+                          />
+                        </LocalStroke>
+                      </ViewportPortal>
+                    )}
+                    {clickConnectStart && clickConnectOrigin && (
+                      <ViewportPortal>
+                        <LocalStroke className="jr-click-connect">
+                          <AttachOutline id={clickConnectStart.nodeId} />
+                          {clickConnectPointer && (
+                            <line
+                              x1={clickConnectOrigin.x}
+                              y1={clickConnectOrigin.y}
+                              x2={clickConnectPointer.x}
+                              y2={clickConnectPointer.y}
+                              stroke={theme.colors.primary}
+                              strokeWidth={2}
+                              strokeDasharray="6 4"
+                            />
                           )}
-                        </ReadOnlyNote>
-                        <ReadOnlyButtons size="sm" $compact={compact}>
-                          {canComment && (
+                        </LocalStroke>
+                      </ViewportPortal>
+                    )}
+                    {!connecting && attachPreview && (
+                      <ViewportPortal>
+                        <LocalStroke>
+                          <AttachOutline id={attachPreview} />
+                        </LocalStroke>
+                      </ViewportPortal>
+                    )}
+                    {isPlaceTool(tool) && placeGhost && (
+                      <ViewportPortal>
+                        <PlaceGhost
+                          $tool={tool}
+                          style={{
+                            transform: `translate(${placeGhost.x}px, ${placeGhost.y}px)`,
+                            width: placeGhost.width,
+                            height: placeGhost.height,
+                          }}
+                        />
+                      </ViewportPortal>
+                    )}
+                    {readOnly ? (
+                      <Panel position="top-left">
+                        <ToolBox>
+                          {searchTools}
+                          <ReadOnlyNote>
+                            <span>
+                              {t(
+                                "whiteboard.toolbar.viewingOnly",
+                                "Viewing only",
+                              )}
+                            </span>
+                            {accessReason && accessReason !== "offline" && (
+                              <ReadOnlyReason>
+                                {accessReasons[accessReason]}
+                              </ReadOnlyReason>
+                            )}
+                          </ReadOnlyNote>
+                          <ReadOnlyButtons size="sm" $compact={compact}>
+                            {canComment && (
+                              <CommentToolButton
+                                active={tool === "comment"}
+                                unread={unreadCount}
+                                onSelect={setTool}
+                              />
+                            )}
+                            {commentListButton}
+                            {resolvedCount > 0 && (
+                              <Button
+                                variant={
+                                  showResolved
+                                    ? "secondary"
+                                    : "outline-secondary"
+                                }
+                                onClick={toggleShowResolved}
+                                title={showResolvedTitle}
+                                aria-label={showResolvedLabel}
+                                aria-pressed={showResolved}
+                              >
+                                <FontAwesomeIcon icon={faCircleCheck} />{" "}
+                                {resolvedCount}
+                              </Button>
+                            )}
+                            {historyButton}
+                          </ReadOnlyButtons>
+                          {mayChangeEditPolicy && !compact && (
+                            <EditPolicyButton
+                              policy={editPolicy}
+                              onClick={openEditPolicy}
+                            />
+                          )}
+                        </ToolBox>
+                        {compact && tool === "comment" && (
+                          <CommentHint>
+                            <span>
+                              {t(
+                                "whiteboard.toolbar.commentHint",
+                                "Tap where your comment goes",
+                              )}
+                            </span>
+                            <Button
+                              variant="outline-secondary"
+                              onClick={stopCommenting}
+                            >
+                              {t("common.cancel", "Cancel")}
+                            </Button>
+                          </CommentHint>
+                        )}
+                        {offlineAlert}
+                        {accessNoticeAlert}
+                        {saveErrorAlert}
+                        {noticeAlert}
+                      </Panel>
+                    ) : (
+                      <Panel position="top-left">
+                        <ToolBox>
+                          {searchTools}
+                          <ButtonGroup size="sm">
+                            <ToolButton
+                              tool="select"
+                              active={tool === "select"}
+                              onSelect={setTool}
+                              title={t(
+                                "whiteboard.toolbar.select",
+                                "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add)",
+                              )}
+                            >
+                              <FontAwesomeIcon icon={faArrowPointer} />
+                            </ToolButton>
+                            <ToolButton
+                              tool="pen"
+                              active={tool === "pen"}
+                              onSelect={setTool}
+                              title={t(
+                                "whiteboard.toolbar.pen",
+                                "Draw (hold Space to pan)",
+                              )}
+                            >
+                              <FontAwesomeIcon icon={faPen} />
+                            </ToolButton>
+                            <ToolButton
+                              tool="eraser"
+                              active={tool === "eraser"}
+                              onSelect={setTool}
+                              title={t(
+                                "whiteboard.toolbar.eraser",
+                                "Erase strokes",
+                              )}
+                            >
+                              <FontAwesomeIcon icon={faEraser} />
+                            </ToolButton>
+                            <ToolButton
+                              tool="connector"
+                              active={tool === "connector"}
+                              onSelect={setTool}
+                              title={t(
+                                "whiteboard.toolbar.line",
+                                "Line: drag between two things to connect them, or anywhere for a free line (Shift snaps the angle)",
+                              )}
+                            >
+                              <LineStyleIcon kind="end" />
+                            </ToolButton>
+                          </ButtonGroup>
+                          {tool === "connector" && (
+                            <LineStyleControls
+                              value={lineStyle}
+                              onChange={updateLineStyle}
+                            />
+                          )}
+                          {tool === "pen" && (
+                            <>
+                              <ColorPicker
+                                value={penColor}
+                                palette={colors.stroke}
+                                onChange={setPenColor}
+                                fallback={theme.colors.text}
+                              />
+                              <PenWidthSelect
+                                size="sm"
+                                value={penWidth}
+                                onChange={onPenWidth}
+                                title={t(
+                                  "whiteboard.toolbar.penWidthKeys",
+                                  "Pen width [1, 2, 3]",
+                                )}
+                                aria-label={t(
+                                  "whiteboard.toolbar.penWidth",
+                                  "Pen width",
+                                )}
+                                aria-keyshortcuts="1 2 3"
+                              >
+                                {WhiteboardStrokeWidths.map((w) => (
+                                  <option key={w} value={w}>
+                                    {penWidthNames[w]}
+                                  </option>
+                                ))}
+                              </PenWidthSelect>
+                            </>
+                          )}
+                          <ButtonGroup size="sm">
+                            <ToolButton
+                              tool="sticky"
+                              active={tool === "sticky"}
+                              onSelect={setTool}
+                              title={t(
+                                "whiteboard.toolbar.sticky",
+                                "Sticky note: click to place, or drag to size",
+                              )}
+                            >
+                              <FontAwesomeIcon icon={faNoteSticky} />
+                            </ToolButton>
+                            <ToolButton
+                              tool="text"
+                              active={tool === "text"}
+                              onSelect={setTool}
+                              title={t(
+                                "whiteboard.toolbar.text",
+                                "Text: click to place, or drag to size",
+                              )}
+                            >
+                              <FontAwesomeIcon icon={faFont} />
+                            </ToolButton>
+                            <ToolButton
+                              tool="frame"
+                              active={tool === "frame"}
+                              onSelect={setTool}
+                              title={t(
+                                "whiteboard.toolbar.frame",
+                                "Frame: click to place, or drag to size",
+                              )}
+                            >
+                              <FontAwesomeIcon icon={faObjectGroup} />
+                            </ToolButton>
+                          </ButtonGroup>
+                          <ButtonGroup size="sm">
+                            <Button
+                              variant="outline-secondary"
+                              onClick={undo}
+                              disabled={!canUndo}
+                              title={t(
+                                "whiteboard.toolbar.undoKeys",
+                                "Undo your last change [Ctrl/⌘+Z]",
+                              )}
+                              aria-label={t("whiteboard.toolbar.undo", "Undo")}
+                              aria-keyshortcuts="Control+Z Meta+Z"
+                            >
+                              <FontAwesomeIcon icon={faRotateLeft} />
+                            </Button>
+                            <Button
+                              variant="outline-secondary"
+                              onClick={redo}
+                              disabled={!canRedo}
+                              title={t(
+                                "whiteboard.toolbar.redoKeys",
+                                "Redo what you last undid [Ctrl/⌘+Shift+Z or Ctrl+Y]",
+                              )}
+                              aria-label={t("whiteboard.toolbar.redo", "Redo")}
+                              aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
+                            >
+                              <FontAwesomeIcon icon={faRotateRight} />
+                            </Button>
+                          </ButtonGroup>
+                          {/* A disabled button gets no hover, so the reason
+                            goes on a wrapper */}
+                          <span title={lockTitle} className="d-inline-block">
+                            <Button
+                              size="sm"
+                              variant="outline-secondary"
+                              onClick={toggleLock}
+                              disabled={
+                                lockSelection.ids.length === 0 ||
+                                lockSelection.blocked
+                              }
+                              title={lockTitle}
+                              aria-label={
+                                lockSelection.lock
+                                  ? t("whiteboard.lock.lock", "Lock")
+                                  : t("whiteboard.lock.unlock", "Unlock")
+                              }
+                              aria-keyshortcuts="Control+L Meta+L"
+                            >
+                              <FontAwesomeIcon
+                                icon={lockSelection.lock ? faLock : faLockOpen}
+                              />
+                            </Button>
+                          </span>
+                          <ButtonGroup size="sm">
                             <CommentToolButton
                               active={tool === "comment"}
                               unread={unreadCount}
                               onSelect={setTool}
                             />
-                          )}
-                          {commentListButton}
-                          {resolvedCount > 0 && (
+                            {commentListButton}
                             <Button
                               variant={
                                 showResolved ? "secondary" : "outline-secondary"
@@ -5180,667 +5458,457 @@ const CanvasInner = ({
                               aria-label={showResolvedLabel}
                               aria-pressed={showResolved}
                             >
-                              <FontAwesomeIcon icon={faCircleCheck} />{" "}
-                              {resolvedCount}
+                              <FontAwesomeIcon icon={faCircleCheck} />
+                              {resolvedCount > 0 && ` ${resolvedCount}`}
                             </Button>
-                          )}
-                          {historyButton}
-                        </ReadOnlyButtons>
-                        {mayChangeEditPolicy && !compact && (
-                          <EditPolicyButton
-                            policy={editPolicy}
-                            onClick={openEditPolicy}
-                          />
-                        )}
-                      </ToolBox>
-                      {compact && tool === "comment" && (
-                        <CommentHint>
-                          <span>
-                            {t(
-                              "whiteboard.toolbar.commentHint",
-                              "Tap where your comment goes",
-                            )}
-                          </span>
-                          <Button
-                            variant="outline-secondary"
-                            onClick={stopCommenting}
-                          >
-                            {t("common.cancel", "Cancel")}
-                          </Button>
-                        </CommentHint>
-                      )}
-                      {offlineAlert}
-                      {accessNoticeAlert}
-                      {saveErrorAlert}
-                      {noticeAlert}
-                    </Panel>
-                  ) : (
-                    <Panel position="top-left">
-                      <ToolBox>
-                        {searchTools}
-                        <ButtonGroup size="sm">
-                          <ToolButton
-                            tool="select"
-                            active={tool === "select"}
-                            onSelect={setTool}
-                            title={t(
-                              "whiteboard.toolbar.select",
-                              "Select and move (Shift-drag to select an area, Ctrl/⌘-click to add)",
-                            )}
-                          >
-                            <FontAwesomeIcon icon={faArrowPointer} />
-                          </ToolButton>
-                          <ToolButton
-                            tool="pen"
-                            active={tool === "pen"}
-                            onSelect={setTool}
-                            title={t(
-                              "whiteboard.toolbar.pen",
-                              "Draw (hold Space to pan)",
-                            )}
-                          >
-                            <FontAwesomeIcon icon={faPen} />
-                          </ToolButton>
-                          <ToolButton
-                            tool="eraser"
-                            active={tool === "eraser"}
-                            onSelect={setTool}
-                            title={t(
-                              "whiteboard.toolbar.eraser",
-                              "Erase strokes",
-                            )}
-                          >
-                            <FontAwesomeIcon icon={faEraser} />
-                          </ToolButton>
-                          <ToolButton
-                            tool="connector"
-                            active={tool === "connector"}
-                            onSelect={setTool}
-                            title={t(
-                              "whiteboard.toolbar.line",
-                              "Line: drag between two things to connect them, or anywhere for a free line (Shift snaps the angle)",
-                            )}
-                          >
-                            <LineStyleIcon kind="end" />
-                          </ToolButton>
-                        </ButtonGroup>
-                        {tool === "connector" && (
-                          <LineStyleControls
-                            value={lineStyle}
-                            onChange={updateLineStyle}
-                          />
-                        )}
-                        {tool === "pen" && (
-                          <>
-                            <ColorPicker
-                              value={penColor}
-                              palette={colors.stroke}
-                              onChange={setPenColor}
-                              fallback={theme.colors.text}
-                            />
-                            <PenWidthSelect
-                              size="sm"
-                              value={penWidth}
-                              onChange={onPenWidth}
-                              title={t(
-                                "whiteboard.toolbar.penWidthKeys",
-                                "Pen width [1, 2, 3]",
-                              )}
-                              aria-label={t(
-                                "whiteboard.toolbar.penWidth",
-                                "Pen width",
-                              )}
-                              aria-keyshortcuts="1 2 3"
-                            >
-                              {WhiteboardStrokeWidths.map((w) => (
-                                <option key={w} value={w}>
-                                  {penWidthNames[w]}
-                                </option>
-                              ))}
-                            </PenWidthSelect>
-                          </>
-                        )}
-                        <ButtonGroup size="sm">
-                          <ToolButton
-                            tool="sticky"
-                            active={tool === "sticky"}
-                            onSelect={setTool}
-                            title={t(
-                              "whiteboard.toolbar.sticky",
-                              "Sticky note: click to place, or drag to size",
-                            )}
-                          >
-                            <FontAwesomeIcon icon={faNoteSticky} />
-                          </ToolButton>
-                          <ToolButton
-                            tool="text"
-                            active={tool === "text"}
-                            onSelect={setTool}
-                            title={t(
-                              "whiteboard.toolbar.text",
-                              "Text: click to place, or drag to size",
-                            )}
-                          >
-                            <FontAwesomeIcon icon={faFont} />
-                          </ToolButton>
-                          <ToolButton
-                            tool="frame"
-                            active={tool === "frame"}
-                            onSelect={setTool}
-                            title={t(
-                              "whiteboard.toolbar.frame",
-                              "Frame: click to place, or drag to size",
-                            )}
-                          >
-                            <FontAwesomeIcon icon={faObjectGroup} />
-                          </ToolButton>
-                        </ButtonGroup>
-                        <ButtonGroup size="sm">
-                          <Button
-                            variant="outline-secondary"
-                            onClick={undo}
-                            disabled={!canUndo}
-                            title={t(
-                              "whiteboard.toolbar.undoKeys",
-                              "Undo your last change [Ctrl/⌘+Z]",
-                            )}
-                            aria-label={t("whiteboard.toolbar.undo", "Undo")}
-                            aria-keyshortcuts="Control+Z Meta+Z"
-                          >
-                            <FontAwesomeIcon icon={faRotateLeft} />
-                          </Button>
-                          <Button
-                            variant="outline-secondary"
-                            onClick={redo}
-                            disabled={!canRedo}
-                            title={t(
-                              "whiteboard.toolbar.redoKeys",
-                              "Redo what you last undid [Ctrl/⌘+Shift+Z or Ctrl+Y]",
-                            )}
-                            aria-label={t("whiteboard.toolbar.redo", "Redo")}
-                            aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
-                          >
-                            <FontAwesomeIcon icon={faRotateRight} />
-                          </Button>
-                        </ButtonGroup>
-                        {/* A disabled button gets no hover, so the reason
-                            goes on a wrapper */}
-                        <span title={lockTitle} className="d-inline-block">
-                          <Button
-                            size="sm"
-                            variant="outline-secondary"
-                            onClick={toggleLock}
-                            disabled={
-                              lockSelection.ids.length === 0 ||
-                              lockSelection.blocked
-                            }
-                            title={lockTitle}
-                            aria-label={
-                              lockSelection.lock
-                                ? t("whiteboard.lock.lock", "Lock")
-                                : t("whiteboard.lock.unlock", "Unlock")
-                            }
-                            aria-keyshortcuts="Control+L Meta+L"
-                          >
-                            <FontAwesomeIcon
-                              icon={lockSelection.lock ? faLock : faLockOpen}
-                            />
-                          </Button>
-                        </span>
-                        <ButtonGroup size="sm">
-                          <CommentToolButton
-                            active={tool === "comment"}
-                            unread={unreadCount}
-                            onSelect={setTool}
-                          />
-                          {commentListButton}
-                          <Button
-                            variant={
-                              showResolved ? "secondary" : "outline-secondary"
-                            }
-                            onClick={toggleShowResolved}
-                            title={showResolvedTitle}
-                            aria-label={showResolvedLabel}
-                            aria-pressed={showResolved}
-                          >
-                            <FontAwesomeIcon icon={faCircleCheck} />
-                            {resolvedCount > 0 && ` ${resolvedCount}`}
-                          </Button>
-                        </ButtonGroup>
-                        <ButtonGroup size="sm">
-                          <Button
-                            variant={
-                              showFeederArrows
-                                ? "secondary"
-                                : "outline-secondary"
-                            }
-                            onClick={toggleFeederArrows}
-                            title={feederArrowsTitle}
-                            aria-label={feederArrowsTitle}
-                            aria-pressed={showFeederArrows}
-                          >
-                            <FontAwesomeIcon icon={faDiagramProject} />
-                          </Button>
-                          <Button
-                            variant={
-                              sidePanel === "hidden"
-                                ? "secondary"
-                                : "outline-secondary"
-                            }
-                            onClick={toggleHidden}
-                            title={notOnBoardTitle}
-                            aria-label={notOnBoardLabel}
-                            aria-pressed={sidePanel === "hidden"}
-                          >
-                            <FontAwesomeIcon icon={faEyeSlash} />
-                            {notOnBoardCount > 0 && ` ${notOnBoardCount}`}
-                          </Button>
-                          {historyButton}
-                          {historyOn && (
-                            <ResetLayoutButton onClick={openResetLayout} />
-                          )}
-                          {isOperator && (
-                            <LockLayoutButtons
-                              boardId={boardId}
-                              onRefused={reportRefusal}
-                            />
-                          )}
-                          {finishedOpen.length > 0 && (
+                          </ButtonGroup>
+                          <ButtonGroup size="sm">
                             <Button
+                              variant={
+                                showFeederArrows
+                                  ? "secondary"
+                                  : "outline-secondary"
+                              }
+                              onClick={toggleFeederArrows}
+                              title={feederArrowsTitle}
+                              aria-label={feederArrowsTitle}
+                              aria-pressed={showFeederArrows}
+                            >
+                              <FontAwesomeIcon icon={faDiagramProject} />
+                            </Button>
+                            <Button
+                              variant={
+                                sidePanel === "hidden"
+                                  ? "secondary"
+                                  : "outline-secondary"
+                              }
+                              onClick={toggleHidden}
+                              title={notOnBoardTitle}
+                              aria-label={notOnBoardLabel}
+                              aria-pressed={sidePanel === "hidden"}
+                            >
+                              <FontAwesomeIcon icon={faEyeSlash} />
+                              {notOnBoardCount > 0 && ` ${notOnBoardCount}`}
+                            </Button>
+                            {historyButton}
+                            {historyOn && (
+                              <ResetLayoutButton onClick={openResetLayout} />
+                            )}
+                            {isOperator && (
+                              <LockLayoutButtons
+                                boardId={boardId}
+                                onRefused={reportRefusal}
+                              />
+                            )}
+                            {finishedOpen.length > 0 && (
+                              <Button
+                                variant="outline-secondary"
+                                onClick={collapseFinished}
+                                title={t(
+                                  "whiteboard.toolbar.collapseFinishedTitle",
+                                  "Fold every round whose metas are solved",
+                                )}
+                                aria-label={t(
+                                  "whiteboard.toolbar.collapseFinished",
+                                  "Collapse finished rounds",
+                                )}
+                              >
+                                <FontAwesomeIcon icon={faCompress} />
+                              </Button>
+                            )}
+                          </ButtonGroup>
+                          {mayChangeEditPolicy && (
+                            <EditPolicyButton
+                              policy={editPolicy}
+                              onClick={openEditPolicy}
+                            />
+                          )}
+                        </ToolBox>
+                        {offlineAlert}
+                        {accessNoticeAlert}
+                        {saveErrorAlert}
+                        {noticeAlert}
+                      </Panel>
+                    )}
+                    {!readOnly &&
+                      tool === "select" &&
+                      placeableCards.length > 0 && (
+                        <NodeToolbar
+                          nodeId={placeableCards}
+                          isVisible
+                          position={Position.Top}
+                        >
+                          <ToolBox>
+                            <Button
+                              size="sm"
                               variant="outline-secondary"
-                              onClick={collapseFinished}
+                              onClick={placeSelectedByTags}
+                              disabled={placingByTags}
                               title={t(
-                                "whiteboard.toolbar.collapseFinishedTitle",
-                                "Fold every round whose metas are solved",
-                              )}
-                              aria-label={t(
-                                "whiteboard.toolbar.collapseFinished",
-                                "Collapse finished rounds",
+                                "whiteboard.placeByTags.title",
+                                "Move back to where its tags put it, and keep it in step from now on",
                               )}
                             >
-                              <FontAwesomeIcon icon={faCompress} />
+                              {t(
+                                "whiteboard.placeByTags.button",
+                                "Place by tags",
+                              )}
                             </Button>
-                          )}
-                        </ButtonGroup>
-                        {mayChangeEditPolicy && (
-                          <EditPolicyButton
-                            policy={editPolicy}
-                            onClick={openEditPolicy}
-                          />
-                        )}
-                      </ToolBox>
-                      {offlineAlert}
-                      {accessNoticeAlert}
-                      {saveErrorAlert}
-                      {noticeAlert}
-                    </Panel>
-                  )}
-                  {!readOnly &&
-                    tool === "select" &&
-                    placeableCards.length > 0 && (
+                          </ToolBox>
+                        </NodeToolbar>
+                      )}
+                    {preview && !compact && previewPick && (
                       <NodeToolbar
-                        nodeId={placeableCards}
+                        nodeId={previewPick.ids[0]}
                         isVisible
                         position={Position.Top}
                       >
-                        <ToolBox>
+                        <PreviewItemBox>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={!!restoreItemBlocked || restoringItem}
+                            onClick={restoreItem}
+                          >
+                            {previewPick.frame
+                              ? t(
+                                  "whiteboard.history.restoreFrame",
+                                  "Restore this frame and everything in it as it was at {{time}}",
+                                  { time: previewTime },
+                                )
+                              : t(
+                                  "whiteboard.history.restoreItem",
+                                  "Restore this item",
+                                )}
+                          </Button>
+                          {restoreItemBlocked && (
+                            <ReadOnlyReason>
+                              {restoreItemBlocked}
+                            </ReadOnlyReason>
+                          )}
+                        </PreviewItemBox>
+                      </NodeToolbar>
+                    )}
+                    {!readOnly &&
+                      tool === "select" &&
+                      selectedLines.length > 0 && (
+                        <Panel position="bottom-center">
+                          <ToolBox>
+                            <LineStyleControls
+                              value={selectedLineStyle}
+                              onChange={restyleLines}
+                            />
+                          </ToolBox>
+                        </Panel>
+                      )}
+                    {!readOnly &&
+                      tool === "select" &&
+                      selectedUnitCount >= 2 && (
+                        <Panel position="top-center">
+                          <ToolBox>
+                            <ButtonGroup
+                              size="sm"
+                              aria-label={t(
+                                "whiteboard.arrange.align",
+                                "Align",
+                              )}
+                            >
+                              {alignModes.map(([mode, title]) => (
+                                <ArrangeButton
+                                  key={mode}
+                                  kind={mode}
+                                  title={title}
+                                  label={title}
+                                  onArrange={alignBy}
+                                />
+                              ))}
+                            </ButtonGroup>
+                            <ButtonGroup
+                              size="sm"
+                              aria-label={t(
+                                "whiteboard.arrange.distribute",
+                                "Distribute",
+                              )}
+                            >
+                              {distributeAxes.map(([axis, title]) => (
+                                <ArrangeButton
+                                  key={axis}
+                                  kind={axis}
+                                  title={
+                                    selectedUnitCount < 3
+                                      ? t(
+                                          "whiteboard.arrange.needThree",
+                                          "{{action}} (select three or more)",
+                                          {
+                                            action: title,
+                                            // React escapes attributes, so i18next's
+                                            // escaping would only show entities. Goes
+                                            // once both i18n inits stop escaping.
+                                            interpolation: {
+                                              escapeValue: false,
+                                            },
+                                          },
+                                        )
+                                      : title
+                                  }
+                                  label={title}
+                                  disabled={selectedUnitCount < 3}
+                                  onArrange={distributeBy}
+                                />
+                              ))}
+                            </ButtonGroup>
+                          </ToolBox>
+                        </Panel>
+                      )}
+                    {preview && !compact && (
+                      <Panel position="top-center">
+                        <PreviewBanner>
+                          <span>
+                            {t(
+                              "whiteboard.history.previewBanner",
+                              "Viewing the board as it was at {{time}}.",
+                              { time: previewTime },
+                            )}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={!!restoreBlocked || restoring}
+                            onClick={askRestore}
+                          >
+                            {restoreLabel}
+                          </Button>
                           <Button
                             size="sm"
                             variant="outline-secondary"
-                            onClick={placeSelectedByTags}
-                            disabled={placingByTags}
-                            title={t(
-                              "whiteboard.placeByTags.title",
-                              "Move back to where its tags put it, and keep it in step from now on",
-                            )}
+                            onClick={backToNow}
                           >
-                            {t(
-                              "whiteboard.placeByTags.button",
-                              "Place by tags",
-                            )}
+                            {t("whiteboard.history.backToNow", "Back to now")}
                           </Button>
-                        </ToolBox>
-                      </NodeToolbar>
-                    )}
-                  {preview && !compact && previewPick && (
-                    <NodeToolbar
-                      nodeId={previewPick.ids[0]}
-                      isVisible
-                      position={Position.Top}
-                    >
-                      <PreviewItemBox>
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          disabled={!!restoreItemBlocked || restoringItem}
-                          onClick={restoreItem}
-                        >
-                          {previewPick.frame
-                            ? t(
-                                "whiteboard.history.restoreFrame",
-                                "Restore this frame and everything in it as it was at {{time}}",
-                                { time: previewTime },
-                              )
-                            : t(
-                                "whiteboard.history.restoreItem",
-                                "Restore this item",
-                              )}
-                        </Button>
-                        {restoreItemBlocked && (
-                          <ReadOnlyReason>{restoreItemBlocked}</ReadOnlyReason>
-                        )}
-                      </PreviewItemBox>
-                    </NodeToolbar>
-                  )}
-                  {!readOnly &&
-                    tool === "select" &&
-                    selectedLines.length > 0 && (
-                      <Panel position="bottom-center">
-                        <ToolBox>
-                          <LineStyleControls
-                            value={selectedLineStyle}
-                            onChange={restyleLines}
-                          />
-                        </ToolBox>
+                          {restoreBlocked && (
+                            <ReadOnlyReason>{restoreBlocked}</ReadOnlyReason>
+                          )}
+                        </PreviewBanner>
                       </Panel>
                     )}
-                  {!readOnly && tool === "select" && selectedUnitCount >= 2 && (
-                    <Panel position="top-center">
-                      <ToolBox>
-                        <ButtonGroup
-                          size="sm"
-                          aria-label={t("whiteboard.arrange.align", "Align")}
-                        >
-                          {alignModes.map(([mode, title]) => (
-                            <ArrangeButton
-                              key={mode}
-                              kind={mode}
-                              title={title}
-                              label={title}
-                              onArrange={alignBy}
+                    {sidePanel === "history" &&
+                      !compact &&
+                      !draft &&
+                      !openThreadData && (
+                        <Panel position="top-right">
+                          <SidePanel className="nodrag nowheel nopan">
+                            <strong>{historyTitle}</strong>
+                            <HistoryPanel
+                              boardId={boardId}
+                              previewId={preview?.version._id}
+                              loadingId={previewLoading}
+                              onPreview={showVersion}
+                              onBackToNow={backToNow}
                             />
-                          ))}
-                        </ButtonGroup>
-                        <ButtonGroup
-                          size="sm"
-                          aria-label={t(
-                            "whiteboard.arrange.distribute",
-                            "Distribute",
-                          )}
-                        >
-                          {distributeAxes.map(([axis, title]) => (
-                            <ArrangeButton
-                              key={axis}
-                              kind={axis}
-                              title={
-                                selectedUnitCount < 3
-                                  ? t(
-                                      "whiteboard.arrange.needThree",
-                                      "{{action}} (select three or more)",
-                                      {
-                                        action: title,
-                                        // React escapes attributes, so i18next's
-                                        // escaping would only show entities. Goes
-                                        // once both i18n inits stop escaping.
-                                        interpolation: { escapeValue: false },
-                                      },
-                                    )
-                                  : title
-                              }
-                              label={title}
-                              disabled={selectedUnitCount < 3}
-                              onArrange={distributeBy}
-                            />
-                          ))}
-                        </ButtonGroup>
-                      </ToolBox>
-                    </Panel>
-                  )}
-                  {preview && !compact && (
-                    <Panel position="top-center">
-                      <PreviewBanner>
-                        <span>
-                          {t(
-                            "whiteboard.history.previewBanner",
-                            "Viewing the board as it was at {{time}}.",
-                            { time: previewTime },
-                          )}
-                        </span>
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          disabled={!!restoreBlocked || restoring}
-                          onClick={askRestore}
-                        >
-                          {restoreLabel}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline-secondary"
-                          onClick={backToNow}
-                        >
-                          {t("whiteboard.history.backToNow", "Back to now")}
-                        </Button>
-                        {restoreBlocked && (
-                          <ReadOnlyReason>{restoreBlocked}</ReadOnlyReason>
-                        )}
-                      </PreviewBanner>
-                    </Panel>
-                  )}
-                  {sidePanel === "history" &&
-                    !compact &&
-                    !draft &&
-                    !openThreadData && (
+                          </SidePanel>
+                        </Panel>
+                      )}
+                    {(draft ?? openThreadData) && (
+                      <CommentPanelPlace compact={compact}>
+                        <CommentPanel
+                          key={
+                            draft
+                              ? `draft:${draft.node ?? ""}:${draft.x}:${draft.y}`
+                              : (openThreadId ?? "")
+                          }
+                          huntId={huntId}
+                          puzzleId={puzzleId}
+                          thread={openThreadData}
+                          draft={draft}
+                          targetLabel={commentTarget}
+                          canComment={canComment}
+                          compact={compact}
+                          offline={accessReason === "offline"}
+                          focusPanel={
+                            !!openThreadId && openThreadId === steppedThread
+                          }
+                          onClose={dismissComment}
+                          onDeleted={closeDeletedComment}
+                          onDraftSent={onDraftSent}
+                          onError={reportRefusal}
+                        />
+                      </CommentPanelPlace>
+                    )}
+                    {commentListShown && (
                       <Panel position="top-right">
                         <SidePanel className="nodrag nowheel nopan">
-                          <strong>{historyTitle}</strong>
-                          <HistoryPanel
-                            boardId={boardId}
-                            previewId={preview?.version._id}
-                            loadingId={previewLoading}
-                            onPreview={showVersion}
-                            onBackToNow={backToNow}
+                          <strong>{commentListTitle}</strong>
+                          <CommentList
+                            rows={threadRows}
+                            onShow={focusComment}
                           />
                         </SidePanel>
                       </Panel>
                     )}
-                  {(draft ?? openThreadData) && (
-                    <CommentPanelPlace compact={compact}>
-                      <CommentPanel
-                        key={
-                          draft
-                            ? `draft:${draft.node ?? ""}:${draft.x}:${draft.y}`
-                            : (openThreadId ?? "")
-                        }
-                        huntId={huntId}
-                        puzzleId={puzzleId}
-                        thread={openThreadData}
-                        draft={draft}
-                        targetLabel={commentTarget}
-                        canComment={canComment}
-                        compact={compact}
-                        offline={accessReason === "offline"}
-                        focusPanel={
-                          !!openThreadId && openThreadId === steppedThread
-                        }
-                        onClose={dismissComment}
-                        onDeleted={closeDeletedComment}
-                        onDraftSent={onDraftSent}
-                        onError={reportRefusal}
-                      />
-                    </CommentPanelPlace>
-                  )}
-                  {commentListShown && (
-                    <Panel position="top-right">
-                      <SidePanel className="nodrag nowheel nopan">
-                        <strong>{commentListTitle}</strong>
-                        <CommentList rows={threadRows} onShow={focusComment} />
-                      </SidePanel>
-                    </Panel>
-                  )}
-                  {sidePanel === "hidden" &&
-                    !readOnly &&
-                    !draft &&
-                    !openThreadData && (
-                      <Panel position="top-right">
-                        <SidePanel>
-                          <strong>{notOnBoardTitle}</strong>
-                          <HiddenSection>
-                            {t("whiteboard.hidden.puzzles", "Puzzles")}
-                          </HiddenSection>
-                          {hiddenCards.length === 0 && (
-                            <HiddenNone>
-                              {t(
-                                "whiteboard.hidden.none",
-                                "Every puzzle is on the board.",
-                              )}
-                            </HiddenNone>
-                          )}
-                          {hiddenCards.map((card) => (
-                            <PutBackRow
-                              key={card.puzzle}
-                              item={card}
-                              onPutBack={putBack}
-                            />
-                          ))}
-                          <HiddenSection>
-                            {t("whiteboard.hidden.frames", "Frames")}
-                          </HiddenSection>
-                          {hiddenFrames.length === 0 && (
-                            <HiddenNone>
-                              {t(
-                                "whiteboard.hidden.noFrames",
-                                "Every round's frame is on the board.",
-                              )}
-                            </HiddenNone>
-                          )}
-                          {hiddenFrames.map((frame) => (
-                            <PutBackRow
-                              key={frame.id}
-                              item={frame}
-                              onPutBack={putBackHiddenFrame}
-                            />
-                          ))}
-                          <HiddenSection>
-                            {t("whiteboard.hidden.arrows", "Feeder arrows")}
-                          </HiddenSection>
-                          {!showFeederArrows && hiddenArrows.length > 0 && (
-                            <HiddenNone>
-                              {t(
-                                "whiteboard.hidden.arrowsOff",
-                                "Feeder arrows are hidden for you; turn them on in the toolbar to see these.",
-                              )}
-                            </HiddenNone>
-                          )}
-                          {hiddenArrows.length === 0 ? (
-                            <HiddenNone>
-                              {t(
-                                "whiteboard.hidden.noArrows",
-                                "Every feeder arrow is on the board.",
-                              )}
-                            </HiddenNone>
-                          ) : (
-                            <Button
-                              size="sm"
-                              variant="outline-secondary"
-                              onClick={putBackAllArrows}
-                            >
-                              {t(
-                                "whiteboard.hidden.putBackAllArrows",
-                                "Put back all feeder arrows",
-                              )}
-                            </Button>
-                          )}
-                          {hiddenArrows.map((arrow) => (
-                            <PutBackRow
-                              key={arrow.id}
-                              item={arrow}
-                              onPutBack={putBackArrow}
-                            />
-                          ))}
-                        </SidePanel>
-                      </Panel>
-                    )}
-                </ReactFlow>
-              </CanvasWrapper>
-              {/* Outside the wrapper, whose pointer handlers would otherwise see
-            presses in the dialog through React's tree. */}
-              {resettingLayout && (
-                <ResetLayoutModal
-                  boardId={boardId}
-                  onHide={closeResetLayout}
-                  onDone={layoutReset}
-                />
-              )}
-              {editingPolicy && (
-                <EditPolicyModal
-                  boardId={boardId}
-                  huntId={huntId}
-                  initialPolicy={editPolicy}
-                  initialEditors={editors}
-                  onHide={closeEditPolicy}
-                />
-              )}
-              <Modal
-                show={confirmingRestore}
-                onHide={cancelRestore}
-                backdrop={restoring ? "static" : true}
-                keyboard={!restoring}
-              >
-                <Modal.Header closeButton={!restoring}>
-                  <Modal.Title>
-                    {t(
-                      "whiteboard.history.confirmTitle",
-                      "Restore the board to {{time}}?",
-                      { time: previewTime },
-                    )}
-                  </Modal.Title>
-                </Modal.Header>
-                <Modal.Body>
-                  {t(
-                    "whiteboard.history.confirmBody",
-                    "Changes since then, by anyone, are undone. Comments are kept. The board as it is now is saved in history, so you can come back to it.",
-                  )}
-                  {restoreError && (
-                    <Alert variant="danger" className="mt-3 mb-0">
-                      {t(
-                        "whiteboard.history.restoreFailed",
-                        "Couldn't restore the board: {{reason}}",
-                        {
-                          reason: restoreError,
-                          // React escapes text, so i18next's escaping would
-                          // only show entities. Goes once both i18n inits stop
-                          // escaping.
-                          interpolation: { escapeValue: false },
-                        },
+                    {sidePanel === "hidden" &&
+                      !readOnly &&
+                      !draft &&
+                      !openThreadData && (
+                        <Panel position="top-right">
+                          <SidePanel>
+                            <strong>{notOnBoardTitle}</strong>
+                            <HiddenSection>
+                              {t("whiteboard.hidden.puzzles", "Puzzles")}
+                            </HiddenSection>
+                            {hiddenCards.length === 0 && (
+                              <HiddenNone>
+                                {t(
+                                  "whiteboard.hidden.none",
+                                  "Every puzzle is on the board.",
+                                )}
+                              </HiddenNone>
+                            )}
+                            {hiddenCards.map((card) => (
+                              <PutBackRow
+                                key={card.puzzle}
+                                item={card}
+                                onPutBack={putBack}
+                              />
+                            ))}
+                            <HiddenSection>
+                              {t("whiteboard.hidden.frames", "Frames")}
+                            </HiddenSection>
+                            {hiddenFrames.length === 0 && (
+                              <HiddenNone>
+                                {t(
+                                  "whiteboard.hidden.noFrames",
+                                  "Every round's frame is on the board.",
+                                )}
+                              </HiddenNone>
+                            )}
+                            {hiddenFrames.map((frame) => (
+                              <PutBackRow
+                                key={frame.id}
+                                item={frame}
+                                onPutBack={putBackHiddenFrame}
+                              />
+                            ))}
+                            <HiddenSection>
+                              {t("whiteboard.hidden.arrows", "Feeder arrows")}
+                            </HiddenSection>
+                            {!showFeederArrows && hiddenArrows.length > 0 && (
+                              <HiddenNone>
+                                {t(
+                                  "whiteboard.hidden.arrowsOff",
+                                  "Feeder arrows are hidden for you; turn them on in the toolbar to see these.",
+                                )}
+                              </HiddenNone>
+                            )}
+                            {hiddenArrows.length === 0 ? (
+                              <HiddenNone>
+                                {t(
+                                  "whiteboard.hidden.noArrows",
+                                  "Every feeder arrow is on the board.",
+                                )}
+                              </HiddenNone>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline-secondary"
+                                onClick={putBackAllArrows}
+                              >
+                                {t(
+                                  "whiteboard.hidden.putBackAllArrows",
+                                  "Put back all feeder arrows",
+                                )}
+                              </Button>
+                            )}
+                            {hiddenArrows.map((arrow) => (
+                              <PutBackRow
+                                key={arrow.id}
+                                item={arrow}
+                                onPutBack={putBackArrow}
+                              />
+                            ))}
+                          </SidePanel>
+                        </Panel>
                       )}
-                    </Alert>
-                  )}
-                </Modal.Body>
-                <Modal.Footer>
-                  <Button
-                    variant="secondary"
-                    onClick={cancelRestore}
-                    disabled={restoring}
-                  >
-                    {t("common.cancel", "Cancel")}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    onClick={restore}
-                    disabled={restoring}
-                    aria-busy={restoring}
-                  >
-                    {restoring
-                      ? t("whiteboard.history.restoring", "Restoring…")
-                      : restoreLabel}
-                  </Button>
-                </Modal.Footer>
-              </Modal>
-            </CollapseContext>
-          </RoundStateContext>
-        </FeederFocusContext>
-      </PuzzlePeopleProvider>
+                  </ReactFlow>
+                </CanvasWrapper>
+                {/* Outside the wrapper, whose pointer handlers would otherwise see
+            presses in the dialog through React's tree. */}
+                {resettingLayout && (
+                  <ResetLayoutModal
+                    boardId={boardId}
+                    onHide={closeResetLayout}
+                    onDone={layoutReset}
+                  />
+                )}
+                {editingPolicy && (
+                  <EditPolicyModal
+                    boardId={boardId}
+                    huntId={huntId}
+                    initialPolicy={editPolicy}
+                    initialEditors={editors}
+                    onHide={closeEditPolicy}
+                  />
+                )}
+                <Modal
+                  show={confirmingRestore}
+                  onHide={cancelRestore}
+                  backdrop={restoring ? "static" : true}
+                  keyboard={!restoring}
+                >
+                  <Modal.Header closeButton={!restoring}>
+                    <Modal.Title>
+                      {t(
+                        "whiteboard.history.confirmTitle",
+                        "Restore the board to {{time}}?",
+                        { time: previewTime },
+                      )}
+                    </Modal.Title>
+                  </Modal.Header>
+                  <Modal.Body>
+                    {t(
+                      "whiteboard.history.confirmBody",
+                      "Changes since then, by anyone, are undone. Comments are kept. The board as it is now is saved in history, so you can come back to it.",
+                    )}
+                    {restoreError && (
+                      <Alert variant="danger" className="mt-3 mb-0">
+                        {t(
+                          "whiteboard.history.restoreFailed",
+                          "Couldn't restore the board: {{reason}}",
+                          {
+                            reason: restoreError,
+                            // React escapes text, so i18next's escaping would
+                            // only show entities. Goes once both i18n inits stop
+                            // escaping.
+                            interpolation: { escapeValue: false },
+                          },
+                        )}
+                      </Alert>
+                    )}
+                  </Modal.Body>
+                  <Modal.Footer>
+                    <Button
+                      variant="secondary"
+                      onClick={cancelRestore}
+                      disabled={restoring}
+                    >
+                      {t("common.cancel", "Cancel")}
+                    </Button>
+                    <Button
+                      variant="primary"
+                      onClick={restore}
+                      disabled={restoring}
+                      aria-busy={restoring}
+                    >
+                      {restoring
+                        ? t("whiteboard.history.restoring", "Restoring…")
+                        : restoreLabel}
+                    </Button>
+                  </Modal.Footer>
+                </Modal>
+              </CollapseContext>
+            </RoundStateContext>
+          </FeederFocusContext>
+        </PuzzlePeopleProvider>
+      </RemoteEditingContext>
     </WhiteboardContext>
   );
 };

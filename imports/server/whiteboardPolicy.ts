@@ -60,8 +60,8 @@ export async function setEditPolicy(
   });
   forgetBoardAccess(board._id);
 
-  // Whatever someone who can no longer edit was dragging or drawing goes
-  // now, rather than when they next move.
+  // Whatever someone who can no longer edit was dragging, drawing, selecting
+  // or typing in goes now, rather than when they next move.
   const updated = { ...board, editPolicy, editors: kept };
   const present = await WhiteboardPresence.find(
     { board: board._id },
@@ -75,7 +75,7 @@ export async function setEditPolicy(
     if (whiteboardAccess(person, hunt, updated).access === "edit") continue;
     await WhiteboardPresence.updateAsync(
       { board: board._id, user: person._id },
-      { $set: { drag: null, stroke: null } },
+      { $set: { drag: null, stroke: null, selection: null, editing: null } },
       { multi: true },
     );
   }

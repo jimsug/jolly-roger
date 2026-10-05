@@ -3,6 +3,7 @@ import { Accounts } from "meteor/accounts-base";
 import { check } from "meteor/check";
 import { DDP } from "meteor/ddp";
 import { Meteor } from "meteor/meteor";
+import { Mongo } from "meteor/mongo";
 import { Random } from "meteor/random";
 import { Tracker } from "meteor/tracker";
 import {
@@ -36,6 +37,7 @@ import type { WhiteboardEditPolicy } from "../../imports/lib/models/Whiteboards"
 import Whiteboards from "../../imports/lib/models/Whiteboards";
 import whiteboardContents from "../../imports/lib/publications/whiteboardContents";
 import whiteboardForHunt from "../../imports/lib/publications/whiteboardForHunt";
+import whiteboardPresence from "../../imports/lib/publications/whiteboardPresence";
 import { COLLAPSED_FRAME_HEIGHT } from "../../imports/lib/whiteboard/collapse";
 import {
   CARD_HEIGHT,
@@ -45,6 +47,7 @@ import {
   FRAME_PADDING,
   GAP,
 } from "../../imports/lib/whiteboard/layout";
+import { MAX_LIVE_SELECTION } from "../../imports/lib/whiteboard/limits";
 import addHuntUser from "../../imports/methods/addHuntUser";
 import addPuzzleTag from "../../imports/methods/addPuzzleTag";
 import createChatImageUpload from "../../imports/methods/createChatImageUpload";
@@ -256,11 +259,7 @@ if (Meteor.isClient) {
   // opening at zoom 1 and the first card well inside the canvas, so screen
   // pixels are board units.
   const sideBySideCards = async (boardId: string) => {
-    // Not typedSubscribe.async, whose handle is undefined when a page left
-    // the same subscription ready
-    const contents = typedSubscribe(whiteboardContents, { boardId });
-    subs.push(contents);
-    await waitFor(() => assert.isTrue(contents.ready()), { timeout: 10000 });
+    subs.push(await typedSubscribe.async(whiteboardContents, { boardId }));
     const nodes = await WhiteboardNodes.find({ board: boardId }).fetchAsync();
     const frames = new Map(
       nodes
@@ -2197,6 +2196,31 @@ if (Meteor.isClient) {
         document.querySelector(".react-flow__panel.top.right")?.textContent ??
         "";
 
+      it("gets a handle from typedSubscribe.async for a subscription that's already ready", async function () {
+        // A computation being rerun lets go of its subscription, which a
+        // subscribe for the same thing in the meantime picks up, already
+        // ready.
+        const rerun = new Tracker.Dependency();
+        let held: Meteor.SubscriptionHandle | undefined;
+        const computation = Tracker.autorun(() => {
+          rerun.depend();
+          held = typedSubscribe(whiteboardContents, { boardId });
+        });
+        let reused: Meteor.SubscriptionHandle | undefined;
+        try {
+          await waitFor(() => assert.isTrue(held?.ready()), {
+            timeout: 10000,
+          });
+          rerun.changed();
+          reused = await typedSubscribe.async(whiteboardContents, { boardId });
+          assert.exists(reused);
+          assert.isTrue(reused.ready());
+        } finally {
+          computation.stop();
+          reused?.stop();
+        }
+      });
+
       it("switches tools with their keys, but not while typing", async function () {
         this.timeout(30000);
         await openBoard();
@@ -3857,6 +3881,158 @@ if (Meteor.isClient) {
           }
         });
 
+        // Errors the page reports from now until stopped, such as React
+        // Flow's ResizeObserver reporting a loop.
+        const collectPageErrors = () => {
+          const errors: string[] = [];
+          const onError = (event: ErrorEvent) => {
+            errors.push(event.message);
+          };
+          window.addEventListener("error", onError);
+          return {
+            errors,
+            stop: () => window.removeEventListener("error", onError),
+          };
+        };
+        // Every value an element's style property takes from now until
+        // stopped, starting with the one it has.
+        const watchStyle = (
+          element: HTMLElement,
+          property: "width" | "transform",
+        ) => {
+          const seen = [element.style[property]];
+          const observer = new MutationObserver(() => {
+            const value = element.style[property];
+            if (value !== seen.at(-1)) seen.push(value);
+          });
+          observer.observe(element, {
+            attributes: true,
+            attributeFilter: ["style"],
+          });
+          return { seen, stop: () => observer.disconnect() };
+        };
+
+        it("snaps to a size changed elsewhere, keeping what's in it still", async function () {
+          this.timeout(30000);
+          const base = { x: 39000, y: 35000 };
+          const {
+            frame,
+            notes: [note],
+          } = await frameWith(base, { width: 400, height: 300 }, [
+            { x: 40, y: 80 },
+          ]);
+          lookAt(base);
+          const page = collectPageErrors();
+          try {
+            await openBoard();
+            const frameNode = await nodeShown(frame);
+            const noteNode = await nodeShown(note!);
+            const widths = watchStyle(frameNode, "width");
+            const notePlaces = watchStyle(noteNode, "transform");
+            // Grown from the top left, as Fit to contents might: the frame
+            // moves and its note moves the other way within it
+            await upsertWhiteboardNodes.callPromise({
+              boardId,
+              nodes: [
+                {
+                  _id: frame,
+                  position: { x: base.x - 100, y: base.y - 50 },
+                  width: 600,
+                  height: 450,
+                },
+                { _id: note!, position: { x: 140, y: 130 } },
+              ],
+            });
+            await waitFor(() => assert.equal(frameNode.style.width, "600px"), {
+              timeout: 10000,
+            });
+            // Long enough for a glide, and for React Flow to measure it
+            await new Promise((resolve) => {
+              setTimeout(resolve, 500);
+            });
+            widths.stop();
+            notePlaces.stop();
+            assert.deepEqual(widths.seen, ["400px", "600px"]);
+            assert.lengthOf(notePlaces.seen, 1);
+            assert.deepEqual(
+              page.errors.filter((e) => e.includes("ResizeObserver")),
+              [],
+            );
+          } finally {
+            page.stop();
+            forgetView();
+            await removeNodes([note!, frame]);
+          }
+        });
+
+        it("shrinks a frame back when the nudge that grew it is undone", async function () {
+          this.timeout(30000);
+          const base = { x: 40000, y: 35000 };
+          const { frame } = await frameWith(
+            base,
+            { width: 400, height: 300 },
+            [],
+          );
+          const note = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: note,
+                type: "sticky",
+                parent: frame,
+                position: { x: 280, y: 100 },
+                width: 100,
+                height: 80,
+              },
+            ],
+          });
+          lookAt(base);
+          const page = collectPageErrors();
+          try {
+            await openBoard();
+            await select(note);
+            const node = await nodeShown(note);
+            await press(node, { key: "ArrowRight", shiftKey: true });
+            await press(node, { key: "ArrowRight", shiftKey: true });
+            await waitFor(
+              async () =>
+                assert.equal(
+                  (await savedNode(frame))?.width,
+                  420 + FRAME_PADDING,
+                ),
+              { timeout: 10000 },
+            );
+            const undo = screen.getByRole<HTMLButtonElement>("button", {
+              name: "Undo",
+            });
+            await waitFor(() => assert.isFalse(undo.disabled), {
+              timeout: 10000,
+            });
+            await click(undo);
+            await waitFor(
+              async () => {
+                const moved = await savedNode(note);
+                assert.deepEqual(moved?.position, { x: 280, y: 100 });
+                assert.equal((await savedNode(frame))?.width, 400);
+                assert.equal((await nodeShown(frame)).style.width, "400px");
+              },
+              { timeout: 10000 },
+            );
+            await new Promise((resolve) => {
+              setTimeout(resolve, 500);
+            });
+            assert.deepEqual(
+              page.errors.filter((e) => e.includes("ResizeObserver")),
+              [],
+            );
+          } finally {
+            page.stop();
+            forgetView();
+            await removeNodes([note, frame]);
+          }
+        });
+
         it("doesn't grow a locked frame for a note nudged into it", async function () {
           this.timeout(30000);
           const base = { x: 39000, y: 35000 };
@@ -5003,6 +5179,14 @@ if (Meteor.isClient) {
         const OTHER_PASSWORD = "password";
         const OTHER_NAME = "Second Member";
         let other: ReturnType<typeof DDP.connect>;
+        // Presence as their connection sees it, this page's included
+        let theirPresence: Mongo.Collection<{
+          _id: string;
+          board: string;
+          user: string;
+          selection?: string[] | null;
+          editing?: string | null;
+        }>;
         let puzzleId: string;
 
         before(async function () {
@@ -5016,6 +5200,9 @@ if (Meteor.isClient) {
           await addHuntUser.callPromise({ huntId, email: OTHER_EMAIL });
           // Their own connection, as a second browser would have
           other = DDP.connect(Meteor.absoluteUrl());
+          theirPresence = new Mongo.Collection("jr_whiteboard_presence", {
+            connection: other,
+          });
           await other.callAsync("login", {
             user: { email: OTHER_EMAIL },
             password: (
@@ -5299,6 +5486,320 @@ if (Meteor.isClient) {
             });
             forgetView();
             await removeNodes([sticky]);
+          }
+        });
+
+        // Their live state, with nothing in it but what's given
+        const theirLive = (fields: Record<string, unknown> = {}) =>
+          other.callAsync(setWhiteboardLive.name, {
+            boardId,
+            cursor: null,
+            drag: null,
+            stroke: null,
+            selection: null,
+            editing: null,
+            ...fields,
+          });
+        const remoteOutline = (id: string) =>
+          document.querySelector<HTMLElement>(
+            `.jr-remote-selection[data-node="${id}"]`,
+          );
+        const remoteTag = (id: string) =>
+          document.querySelector<HTMLElement>(
+            `[data-node="${id}"] .jr-remote-tag`,
+          );
+
+        it("outlines what they select, with their name, until they let it go", async function () {
+          this.timeout(30000);
+          const sticky = Random.id();
+          const base = { x: 28500, y: 28000 };
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: sticky,
+                type: "sticky",
+                position: base,
+                width: 200,
+                height: 160,
+              },
+            ],
+          });
+          lookAt(base);
+          try {
+            await openBoard();
+            await nodeShown(sticky);
+            const cursorAt = { x: base.x + 50, y: base.y + 60 };
+            await theirLive({ cursor: cursorAt, selection: [sticky] });
+            const pill = await waitFor(
+              () => {
+                assert.exists(remoteOutline(sticky));
+                const tag = remoteTag(sticky)?.textContent ?? "";
+                assert.include(tag, OTHER_NAME);
+                assert.notInclude(tag, "is editing");
+                const cursor = [
+                  ...document.querySelectorAll<HTMLElement>(
+                    ".react-flow__viewport-portal div",
+                  ),
+                ].find((el) =>
+                  el.style.transform.startsWith(
+                    `translate(${cursorAt.x}px, ${cursorAt.y}px)`,
+                  ),
+                );
+                const namePill = cursor?.lastElementChild;
+                assert.exists(namePill);
+                return namePill;
+              },
+              { timeout: 5000 },
+            );
+            // In the colour their cursor has
+            assert.include(
+              remoteOutline(sticky)!.style.boxShadow,
+              getComputedStyle(pill).backgroundColor,
+            );
+
+            await theirLive({ cursor: cursorAt });
+            await waitFor(
+              () => {
+                assert.notExists(remoteOutline(sticky));
+                assert.notExists(remoteTag(sticky));
+              },
+              { timeout: 5000 },
+            );
+          } finally {
+            await theirLive();
+            forgetView();
+            await removeNodes([sticky]);
+          }
+        });
+
+        it("won't open a note they're typing in until they stop", async function () {
+          this.timeout(30000);
+          const sticky = Random.id();
+          const base = { x: 28500, y: 28500 };
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: sticky,
+                type: "sticky",
+                position: base,
+                width: 200,
+                height: 160,
+                text: "Theirs",
+              },
+            ],
+          });
+          lookAt(base);
+          try {
+            await openBoard();
+            const node = await nodeShown(sticky);
+            await theirLive({ selection: [sticky], editing: sticky });
+            await waitFor(
+              () =>
+                assert.include(
+                  remoteTag(sticky)?.textContent ?? "",
+                  `${OTHER_NAME} is editing`,
+                ),
+              { timeout: 5000 },
+            );
+            const shown = within(node).getByText("Theirs");
+            assert.equal(getComputedStyle(shown).cursor, "default");
+            await act(async () => {
+              fireEvent.doubleClick(shown);
+              await stabilize();
+            });
+            assert.isNull(within(node).queryByRole("textbox"));
+            await press(node, { key: "Enter" });
+            assert.isNull(within(node).queryByRole("textbox"));
+
+            await theirLive();
+            await waitFor(() => assert.notExists(remoteTag(sticky)), {
+              timeout: 5000,
+            });
+            // The Enter pressed while it was taken was dropped, not kept
+            await stabilize();
+            assert.isNull(within(node).queryByRole("textbox"));
+            await press(node, { key: "Enter" });
+            const editor = await waitFor(() =>
+              within(node).getByRole("textbox"),
+            );
+            await act(async () => {
+              fireEvent.keyDown(editor, { key: "Escape" });
+              fireEvent.blur(editor);
+              await stabilize();
+            });
+          } finally {
+            await theirLive();
+            forgetView();
+            await removeNodes([sticky]);
+          }
+        });
+
+        it("sends what's selected and typed in, and holds them back while away", async function () {
+          this.timeout(60000);
+          await clearWhiteboardVersions.callPromise({ boardId });
+          const sticky = Random.id();
+          const end = Random.id();
+          const line = Random.id();
+          const base = { x: 28500, y: 29000 };
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: sticky,
+                type: "sticky",
+                position: base,
+                width: 200,
+                height: 160,
+                text: "Mine",
+              },
+              {
+                _id: end,
+                type: "point",
+                position: { x: base.x + 400, y: base.y + 80 },
+              },
+            ],
+          });
+          await upsertWhiteboardEdges.callPromise({
+            boardId,
+            edges: [{ _id: line, source: sticky, target: end }],
+          });
+          lookAt(base);
+          const subscription = other.subscribe(whiteboardPresence.name, {
+            boardId,
+          });
+          const sent = (expected: {
+            selection?: string[] | null;
+            editing?: string | null;
+          }) =>
+            waitFor(
+              async () => {
+                const mine = await theirPresence.findOneAsync({
+                  board: boardId,
+                  user: Meteor.userId()!,
+                });
+                assert.exists(mine);
+                if ("selection" in expected) {
+                  assert.deepEqual(mine.selection, expected.selection);
+                }
+                if ("editing" in expected) {
+                  assert.equal(mine.editing, expected.editing);
+                }
+              },
+              { timeout: 5000 },
+            );
+          try {
+            await openBoard();
+            const node = await nodeShown(sticky);
+            await select(sticky);
+            await sent({ selection: [sticky], editing: null });
+
+            await press(node, { key: "Enter" });
+            const editor = await waitFor(() =>
+              within(node).getByRole("textbox"),
+            );
+            await sent({ selection: [sticky], editing: sticky });
+
+            // Nothing while the window is in the background, and both back
+            // once it isn't
+            await act(async () => {
+              window.dispatchEvent(new Event("blur"));
+              await stabilize();
+            });
+            await sent({ selection: null, editing: null });
+            await act(async () => {
+              window.dispatchEvent(new Event("focus"));
+              await stabilize();
+            });
+            await sent({ selection: [sticky], editing: sticky });
+
+            // Nor while the tab is hidden
+            Object.defineProperty(document, "visibilityState", {
+              configurable: true,
+              get: () => "hidden",
+            });
+            try {
+              await act(async () => {
+                document.dispatchEvent(new Event("visibilitychange"));
+                await stabilize();
+              });
+              await sent({ selection: null, editing: null });
+            } finally {
+              delete (document as { visibilityState?: unknown })
+                .visibilityState;
+            }
+            await act(async () => {
+              document.dispatchEvent(new Event("visibilitychange"));
+              await stabilize();
+            });
+            await sent({ selection: [sticky], editing: sticky });
+
+            await act(async () => {
+              fireEvent.keyDown(editor, { key: "Escape" });
+              fireEvent.blur(editor);
+              await stabilize();
+            });
+            await sent({ selection: [sticky], editing: null });
+
+            // Everything is selected here, the line's end included, but
+            // only nodes are sent
+            await pressBoard();
+            await press(pane(), { key: "a", ctrlKey: true });
+            await waitFor(() =>
+              assert.isTrue(nodeElement(end)?.classList.contains("selected")),
+            );
+            await waitFor(
+              async () => {
+                const selection =
+                  (
+                    await theirPresence.findOneAsync({
+                      board: boardId,
+                      user: Meteor.userId()!,
+                    })
+                  )?.selection ?? [];
+                assert.isAbove(selection.length, 1);
+                assert.isAtMost(selection.length, MAX_LIVE_SELECTION);
+                assert.notInclude(selection, end);
+              },
+              { timeout: 5000 },
+            );
+
+            // Nor anything from a preview
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: "History" }));
+              await stabilize();
+            });
+            const row = await waitFor(
+              () => {
+                const found = [
+                  ...document.querySelectorAll<HTMLElement>(
+                    ".react-flow__panel.top.right button",
+                  ),
+                ].find((b) => b.textContent?.startsWith("Before edits"));
+                assert.exists(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            await act(async () => {
+              fireEvent.click(row);
+              await stabilize();
+            });
+            await screen.findByText(
+              /^Viewing the board as it was at /,
+              {},
+              { timeout: 10000 },
+            );
+            await sent({ selection: null, editing: null });
+          } finally {
+            subscription.stop();
+            forgetView();
+            await deleteWhiteboardEdges.callPromise({
+              boardId,
+              edgeIds: [line],
+            });
+            await removeNodes([sticky, end]);
           }
         });
 

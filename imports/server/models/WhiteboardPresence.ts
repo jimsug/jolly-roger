@@ -12,8 +12,9 @@ import { Id } from "../../lib/typedModel/regexes";
 const point = z.object({ x: z.number(), y: z.number() });
 
 // Short-lived per-tab state for a board: where someone's pointer is, what
-// they're dragging and the ink stroke they're part way through. Removed when
-// the tab goes away, or by the dead-server cleanup if its server went first.
+// they're dragging, the ink stroke they're part way through, what they have
+// selected and what they're typing in. Removed when the tab goes away, or by
+// the dead-server cleanup if its server went first.
 const WhiteboardPresenceSchema = z.object({
   board: foreignKey,
   hunt: foreignKey,
@@ -42,6 +43,9 @@ const WhiteboardPresenceSchema = z.object({
     })
     .nullable()
     .optional(),
+  selection: foreignKey.array().nullable().optional(),
+  // A node, or a line whose label is being typed in.
+  editing: foreignKey.nullable().optional(),
 });
 
 const WhiteboardPresence = new Model(

@@ -34,6 +34,7 @@ import {
 import {
   MAX_BATCH,
   MAX_FRAME_DEPTH,
+  MAX_LIVE_SELECTION,
   MAX_NODES_PER_BOARD,
   MAX_WHITEBOARD_EDITORS,
 } from "../../../../imports/lib/whiteboard/limits";
@@ -79,6 +80,7 @@ import {
   restoreVersion,
 } from "../../../../imports/server/whiteboardVersions";
 import asUser from "../../../lib/asUser";
+import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 import runJob from "../../../lib/runJob";
 import StubSubscription, {
@@ -1896,6 +1898,206 @@ describe("whiteboard", function () {
         }),
       );
     });
+
+    describe("selection and editing", function () {
+      const nodeIds = async (count: number) =>
+        (
+          await WhiteboardNodes.find(
+            { board: boardId },
+            { limit: count, projection: { _id: 1 } },
+          ).fetchAsync()
+        ).map((n) => n._id);
+      // Enough notes for a selection of `count` nodes on this board
+      const boardNodes = async (count: number) => {
+        const have = await WhiteboardNodes.find({
+          board: boardId,
+        }).countAsync();
+        if (have < count) {
+          const notes = Array.from({ length: count - have }, (_, i) => ({
+            _id: Random.id(),
+            type: "sticky" as const,
+            position: { x: i * 10, y: 0 },
+          }));
+          for (let i = 0; i < notes.length; i += 100) {
+            await upsertNodes(member, boardId, notes.slice(i, i + 100));
+          }
+        }
+        return nodeIds(count);
+      };
+
+      it("keeps a selection of up to 50 of the board's nodes, and what's being typed in", async function () {
+        const { connection, close } = fakeConnection();
+        try {
+          const ids = await boardNodes(MAX_LIVE_SELECTION);
+          await setLive(member, connection, boardId, {
+            ...state,
+            selection: ids,
+            editing: ids[0],
+          });
+          const doc = await WhiteboardPresence.findOneAsync({
+            connection: connection.id,
+          });
+          assert.deepEqual(doc?.selection, ids);
+          assert.equal(doc?.editing, ids[0]);
+
+          // A line's label is typed in too
+          const line = Random.id();
+          await upsertEdges(member, boardId, [
+            { _id: line, source: ids[0]!, target: ids[1]! },
+          ]);
+          await setLive(member, connection, boardId, {
+            ...state,
+            selection: null,
+            editing: line,
+          });
+          const after = await WhiteboardPresence.findOneAsync({
+            connection: connection.id,
+          });
+          assert.isNull(after?.selection);
+          assert.equal(after?.editing, line);
+
+          // An update from a client that doesn't send them clears them
+          await setLive(member, connection, boardId, state);
+          const cleared = await WhiteboardPresence.findOneAsync({
+            connection: connection.id,
+          });
+          assert.isNull(cleared?.selection);
+          assert.isNull(cleared?.editing);
+        } finally {
+          close();
+        }
+      });
+
+      it("refuses too big a selection, bad ids and things not on the board", async function () {
+        const { connection, close } = fakeConnection();
+        try {
+          const ids = await boardNodes(MAX_LIVE_SELECTION + 1);
+          await assert.isRejected(
+            setLive(member, connection, boardId, { ...state, selection: ids }),
+            /Invalid live update/,
+          );
+          await assert.isRejected(
+            setLive(member, connection, boardId, {
+              ...state,
+              selection: [ids[0]!, Random.id()],
+            }),
+            /Selected nodes must be on this board/,
+          );
+          await assert.isRejected(
+            setLive(member, connection, boardId, {
+              ...state,
+              selection: ["not an id!"],
+            }),
+            /Invalid live update/,
+          );
+          await assert.isRejected(
+            setLive(member, connection, boardId, {
+              ...state,
+              editing: Random.id(),
+            }),
+            /Edited items must be on this board/,
+          );
+          await assert.isRejected(
+            setLive(member, connection, boardId, {
+              ...state,
+              editing: "not an id!",
+            }),
+            /Invalid live update/,
+          );
+          await assert.isRejected(
+            setLive(member, connection, boardId, { ...state, editing: "" }),
+            /Invalid live update/,
+          );
+          // A node on another board is as good as none
+          const otherHunt = await createTestHunt(operator);
+          await MeteorUsers.updateAsync(operator, {
+            $addToSet: { hunts: otherHunt },
+            $set: { [`roles.${otherHunt}`]: ["operator"] },
+          });
+          const otherBoard = await ensureWhiteboard(operator, otherHunt);
+          const elsewhere = Random.id();
+          await upsertNodes(operator, otherBoard, [
+            { _id: elsewhere, type: "sticky", position: { x: 0, y: 0 } },
+          ]);
+          await assert.isRejected(
+            setLive(member, connection, boardId, {
+              ...state,
+              selection: [elsewhere],
+            }),
+            /on this board/,
+          );
+          await assert.isRejected(
+            setLive(member, connection, boardId, {
+              ...state,
+              editing: elsewhere,
+            }),
+            /on this board/,
+          );
+          assert.equal(
+            await WhiteboardPresence.find({
+              connection: connection.id,
+            }).countAsync(),
+            0,
+          );
+        } finally {
+          close();
+        }
+      });
+
+      it("doesn't write an update over a newer one that overtook it", async function () {
+        const { connection, close } = fakeConnection();
+        try {
+          const ids = await boardNodes(1);
+          await setLive(member, connection, boardId, state);
+          // The first looks up its selection; the second, sent after it,
+          // has nothing to look up and is written first.
+          await Promise.all([
+            setLive(member, connection, boardId, {
+              ...state,
+              selection: ids,
+              editing: ids[0],
+            }),
+            setLive(member, connection, boardId, {
+              ...state,
+              cursor: { x: 5, y: 6 },
+            }),
+          ]);
+          const presence = await WhiteboardPresence.findOneAsync({
+            connection: connection.id,
+          });
+          assert.deepEqual(presence?.cursor, { x: 5, y: 6 });
+          assert.isNull(presence?.selection);
+          assert.isNull(presence?.editing);
+        } finally {
+          close();
+        }
+      });
+
+      it("publishes what others have selected and are typing in", async function () {
+        const mine = new StubSubscription(member);
+        Object.assign(mine, { connection: fakeConnection().connection });
+        const theirs = fakeConnection();
+        try {
+          const ids = await boardNodes(2);
+          await setLive(operator, theirs.connection, boardId, {
+            ...state,
+            selection: ids,
+            editing: ids[1],
+          });
+          const cursor = await publishHandler(whiteboardPresence.name).call(
+            mine,
+            { boardId },
+          );
+          const published = await cursor.fetchAsync();
+          assert.lengthOf(published, 1);
+          assert.deepEqual(published[0].selection, ids);
+          assert.equal(published[0].editing, ids[1]);
+        } finally {
+          mine.stop();
+          theirs.close();
+        }
+      });
+    });
   });
 
   describe("comments", function () {
@@ -2605,7 +2807,8 @@ describe("whiteboard", function () {
       WhiteboardPresence.findOneAsync({ connection: connection.id });
     const card = async () =>
       (await WhiteboardNodes.findOneAsync({ board: boardId, type: "puzzle" }))!;
-    // A cursor, a drag and a stroke all at once
+    // A cursor, a drag, a stroke, a selection and text being typed in all
+    // at once
     const busy = async () => {
       const node = await card();
       return {
@@ -2616,6 +2819,8 @@ describe("whiteboard", function () {
           strokeWidth: "thin" as const,
           points: [[0, 0, 0.5] as [number, number, number]],
         },
+        selection: [node._id],
+        editing: node._id,
       };
     };
 
@@ -2746,7 +2951,7 @@ describe("whiteboard", function () {
       );
     });
 
-    it("drops live drags and strokes from non-editors but keeps the cursor", async function () {
+    it("drops live drags, strokes, selections and editing from non-editors but keeps the cursor", async function () {
       await setPolicy(operator, "operators");
       const live = await busy();
       const theirs = fakeConnection();
@@ -2758,12 +2963,19 @@ describe("whiteboard", function () {
         assert.deepEqual(doc?.cursor, live.cursor);
         assert.isNull(doc?.drag);
         assert.isNull(doc?.stroke);
-        assert.deepEqual((await presenceOf(ours.connection))?.drag, live.drag);
-        // Not even checked: a drag of something on another board is dropped
-        // rather than refused.
+        assert.isNull(doc?.selection);
+        assert.isNull(doc?.editing);
+        const mine = await presenceOf(ours.connection);
+        assert.deepEqual(mine?.drag, live.drag);
+        assert.deepEqual(mine?.selection, live.selection);
+        assert.equal(mine?.editing, live.editing);
+        // Not even checked: a drag, selection or edit of something on
+        // another board is dropped rather than refused.
         await setLive(member, theirs.connection, boardId, {
           ...live,
           drag: [{ node: Random.id(), x: 0, y: 0 }],
+          selection: [Random.id()],
+          editing: Random.id(),
         });
       } finally {
         theirs.close();
@@ -2803,6 +3015,8 @@ describe("whiteboard", function () {
         assert.deepEqual(doc?.cursor, live.cursor);
         assert.isNull(doc?.drag);
         assert.isNull(doc?.stroke);
+        assert.isNull(doc?.selection);
+        assert.isNull(doc?.editing);
         assert.deepEqual((await presenceOf(ours.connection))?.drag, live.drag);
 
         // and their next update keeps it that way

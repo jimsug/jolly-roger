@@ -8,6 +8,8 @@ import {
 import { assert } from "chai";
 import sinon from "sinon";
 import EditableText from "../../../../imports/client/components/whiteboard/EditableText";
+import RemoteEditingContext from "../../../../imports/client/components/whiteboard/RemoteEditingContext";
+import type { RemoteEditor } from "../../../../imports/client/hooks/useWhiteboardOthersEditing";
 
 describe("whiteboard editable text", function () {
   afterEach(function () {
@@ -120,5 +122,49 @@ describe("whiteboard editable text", function () {
     fireEvent.blur(screen.getByRole("textbox"));
     assert.exists(screen.getByText("before"));
     assert.isNull(screen.queryByRole("button", { name: "Retry" }));
+  });
+
+  it("won't open while someone else is typing in it, and opens once they stop", function () {
+    const ada = new Map<string, RemoteEditor>([
+      ["line", { user: "ada", name: "Ada" }],
+    ]);
+    const onStartedEditing = sinon.fake();
+    const label = (
+      editing: ReadonlyMap<string, RemoteEditor>,
+      startEditing = false,
+    ) => (
+      <RemoteEditingContext value={editing}>
+        <EditableText
+          value="before"
+          onCommit={sinon.fake()}
+          readOnly={false}
+          multiline={false}
+          maxLength={100}
+          placeholder="Label"
+          lineId="line"
+          startEditing={startEditing}
+          onStartedEditing={onStartedEditing}
+        />
+      </RemoteEditingContext>
+    );
+    const { rerender } = render(label(ada));
+    const shown = screen.getByText("before");
+    assert.equal(shown.getAttribute("title"), "Ada is editing this");
+    assert.equal(getComputedStyle(shown).cursor, "default");
+    fireEvent.doubleClick(shown);
+    assert.isNull(screen.queryByRole("textbox"));
+
+    // Asked to open (Enter on it, say), it says it has, and doesn't
+    rerender(label(ada, true));
+    assert.isTrue(onStartedEditing.calledOnce);
+    assert.isNull(screen.queryByRole("textbox"));
+
+    rerender(label(new Map()));
+    assert.equal(
+      screen.getByText("before").getAttribute("title"),
+      "Double-click to edit",
+    );
+    fireEvent.doubleClick(screen.getByText("before"));
+    assert.exists(screen.getByRole("textbox"));
   });
 });

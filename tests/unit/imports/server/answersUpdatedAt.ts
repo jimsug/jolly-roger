@@ -7,6 +7,7 @@ import addPuzzleAnswer from "../../../../imports/methods/addPuzzleAnswer";
 import addPuzzleTag from "../../../../imports/methods/addPuzzleTag";
 import removePuzzleAnswer from "../../../../imports/methods/removePuzzleAnswer";
 import setGuessState from "../../../../imports/methods/setGuessState";
+import updatePuzzle from "../../../../imports/methods/updatePuzzle";
 import asUser from "../../../lib/asUser";
 import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
@@ -80,6 +81,34 @@ describe("answersUpdatedAt", function () {
       removePuzzleAnswer.callPromise({ puzzleId, guessId: guess._id }),
     );
     assert.deepEqual((await Puzzles.findOneAsync(puzzleId))?.answers, []);
+    await assertMoved(puzzleId);
+  });
+
+  it("is set by marking a puzzle complete with no answer and by taking that back", async function () {
+    const { puzzleId } = await huntWithPuzzle(false);
+    // The title stays put, so no document is renamed
+    const update = (completedWithNoAnswer: boolean, expectedAnswerCount = 1) =>
+      asUser(userId, () =>
+        updatePuzzle.callPromise({
+          puzzleId,
+          title: "Answered",
+          tags: [],
+          expectedAnswerCount,
+          completedWithNoAnswer,
+        }),
+      );
+
+    await update(false, 2);
+    assert.isUndefined(await answersUpdatedAt(puzzleId));
+
+    await update(true);
+    assert.instanceOf(await answersUpdatedAt(puzzleId), Date);
+
+    await backdate(puzzleId);
+    await update(true, 2);
+    await assertKept(puzzleId);
+
+    await update(false);
     await assertMoved(puzzleId);
   });
 

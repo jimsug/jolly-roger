@@ -27,11 +27,13 @@ defineMethod(setWhiteboardLive, {
         strokeWidth: Match.OneOf(...WhiteboardStrokeWidths),
         points: [InkPointPattern],
       }),
+      selection: Match.Optional(Match.OneOf(null, [String])),
+      editing: Match.Optional(Match.OneOf(null, String)),
     });
     return arg;
   },
 
-  async run({ boardId, cursor, drag, stroke }) {
+  async run({ boardId, cursor, drag, stroke, selection, editing }) {
     check(this.userId, String);
     if (!this.connection) {
       throw new Meteor.Error(400, "Live updates need a connection");
@@ -42,6 +44,8 @@ defineMethod(setWhiteboardLive, {
       cursor,
       drag,
       stroke,
+      selection,
+      editing,
     });
   },
 });

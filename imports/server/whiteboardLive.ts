@@ -3,11 +3,16 @@ import Flags from "../Flags";
 import Logger from "../Logger";
 import Hunts from "../lib/models/Hunts";
 import MeteorUsers from "../lib/models/MeteorUsers";
+import WhiteboardEdges from "../lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../lib/models/WhiteboardNodes";
 import Whiteboards from "../lib/models/Whiteboards";
 import { whiteboardAccess } from "../lib/permission_stubs";
 import { Id } from "../lib/typedModel/regexes";
-import { MAX_INK_POINTS, MAX_LIVE_DRAG_NODES } from "../lib/whiteboard/limits";
+import {
+  MAX_INK_POINTS,
+  MAX_LIVE_DRAG_NODES,
+  MAX_LIVE_SELECTION,
+} from "../lib/whiteboard/limits";
 import type { WhiteboardLiveState } from "../methods/setWhiteboardLive";
 import { registerPeriodicCleanupHook } from "./garbage-collection";
 import WhiteboardPresence from "./models/WhiteboardPresence";
@@ -37,12 +42,21 @@ interface ConnectionState {
   // The user whose roles and hunts are being watched for this connection.
   watchedUser: string | undefined;
   userWatch: Watch | undefined;
+  // The last dragged, selected and edited sets found on their board, so an
+  // unchanged set isn't looked up again on every update.
   validatedDrag: string;
+  validatedSelection: string;
+  validatedEditing: string;
   // How many times each board's presence subscription has stopped, and
   // whether the connection has gone. An update that was already under way
   // when either cleanup ran takes its document back out.
   stops: Map<string, number>;
   closed: boolean;
+  // Updates run side by side (the method unblocks), so each board counts
+  // the updates it's been sent and the latest one written. An update that's
+  // overtaken while it looks things up isn't written over the newer one.
+  sent: Map<string, number>;
+  written: Map<string, number>;
 }
 const connections = new Map<string, ConnectionState>();
 // As ConnectionState.epoch, for changes to boards and hunts.
@@ -65,8 +79,12 @@ function connectionState(connection: Meteor.Connection): ConnectionState {
     watchedUser: undefined,
     userWatch: undefined,
     validatedDrag: "",
+    validatedSelection: "",
+    validatedEditing: "",
     stops: new Map(),
     closed: false,
+    sent: new Map(),
+    written: new Map(),
   };
   connections.set(connection.id, state);
   connection.onClose(() => {
@@ -175,7 +193,13 @@ async function boardAccess(
 
 const invalidLiveUpdate = () => new Meteor.Error(400, "Invalid live update");
 
-function validateLive({ cursor, drag, stroke }: WhiteboardLiveState) {
+function validateLive({
+  cursor,
+  drag,
+  stroke,
+  selection,
+  editing,
+}: WhiteboardLiveState) {
   if (cursor && !(inRange(cursor.x) && inRange(cursor.y))) {
     throw invalidLiveUpdate();
   }
@@ -194,6 +218,33 @@ function validateLive({ cursor, drag, stroke }: WhiteboardLiveState) {
   ) {
     throw invalidLiveUpdate();
   }
+  if (
+    selection &&
+    (selection.length > MAX_LIVE_SELECTION ||
+      !selection.every((id) => Id.test(id)))
+  ) {
+    throw invalidLiveUpdate();
+  }
+  if (editing != null && !Id.test(editing)) throw invalidLiveUpdate();
+}
+
+// Checks that every node in `ids` is on the board, unless the same set was
+// found there last time.
+async function assertNodesOnBoard(
+  boardId: string,
+  ids: string[],
+  validated: string,
+  message: string,
+) {
+  const unique = [...new Set(ids)];
+  const key = `${boardId}:${unique.toSorted().join(",")}`;
+  if (key === validated) return key;
+  const found = await WhiteboardNodes.find({
+    _id: { $in: unique },
+    board: boardId,
+  }).countAsync();
+  if (found !== unique.length) throw new Meteor.Error(400, message);
+  return key;
 }
 
 export async function setLive(
@@ -208,6 +259,8 @@ export async function setLive(
   const stops = state.stops.get(boardId) ?? 0;
   const cleanedUp = () =>
     state.closed || (state.stops.get(boardId) ?? 0) !== stops;
+  const seq = (state.sent.get(boardId) ?? 0) + 1;
+  state.sent.set(boardId, seq);
 
   if (
     (await Flags.activeAsync("disable.whiteboard")) ||
@@ -218,27 +271,44 @@ export async function setLive(
   validateLive(live);
 
   const { hunt, mayEdit } = await boardAccess(userId, boardId, state);
-  // Someone who can't edit still shows their cursor, but nothing they drag
-  // or draw. Dropped rather than refused, since a refusal would come back
-  // every 100ms.
+  // Someone who can't edit still shows their cursor, but nothing they drag,
+  // draw, select or type in. Dropped rather than refused, since a refusal
+  // would come back every 100ms.
   const drag = mayEdit ? live.drag : null;
   const stroke = mayEdit ? live.stroke : null;
+  const selection = mayEdit ? (live.selection ?? null) : null;
+  const editing = mayEdit ? (live.editing ?? null) : null;
 
   if (drag && drag.length > 0) {
-    const ids = `${boardId}:${[...new Set(drag.map((d) => d.node))].toSorted().join(",")}`;
-    if (ids !== state.validatedDrag) {
-      const found = await WhiteboardNodes.find({
-        _id: { $in: drag.map((d) => d.node) },
-        board: boardId,
-      }).countAsync();
-      if (found !== new Set(drag.map((d) => d.node)).size) {
-        throw new Meteor.Error(400, "Dragged nodes must be on this board");
-      }
-      state.validatedDrag = ids;
+    state.validatedDrag = await assertNodesOnBoard(
+      boardId,
+      drag.map((d) => d.node),
+      state.validatedDrag,
+      "Dragged nodes must be on this board",
+    );
+  }
+  if (selection && selection.length > 0) {
+    state.validatedSelection = await assertNodesOnBoard(
+      boardId,
+      selection,
+      state.validatedSelection,
+      "Selected nodes must be on this board",
+    );
+  }
+  // A line's label is typed in too, so a line will do as well as a node.
+  if (editing && `${boardId}:${editing}` !== state.validatedEditing) {
+    const selector = { _id: editing, board: boardId };
+    const found =
+      (await WhiteboardNodes.find(selector).countAsync()) +
+      (await WhiteboardEdges.find(selector).countAsync());
+    if (found === 0) {
+      throw new Meteor.Error(400, "Edited items must be on this board");
     }
+    state.validatedEditing = `${boardId}:${editing}`;
   }
 
-  if (cleanedUp()) return;
+  if (cleanedUp() || (state.written.get(boardId) ?? 0) > seq) return;
+  state.written.set(boardId, seq);
   // Only the caller's own connection's document is ever written.
   const selector = { board: boardId, connection: connection.id };
   await WhiteboardPresence.upsertAsync(selector, {
@@ -249,6 +319,8 @@ export async function setLive(
       cursor: live.cursor,
       drag,
       stroke,
+      selection,
+      editing,
     },
   });
   if (cleanedUp()) await WhiteboardPresence.removeAsync(selector);

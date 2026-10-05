@@ -1,12 +1,11 @@
 import { useTracker } from "meteor/react-meteor-data";
 import { ViewportPortal } from "@xyflow/react";
 import React, { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
 import styled, { useTheme } from "styled-components";
-import MeteorUsers from "../../../lib/models/MeteorUsers";
 import { inkPath } from "../../../lib/whiteboard/ink";
 import useDocumentVisible from "../../hooks/useDocumentVisible";
 import { useWhiteboardZoom } from "../../hooks/useWhiteboardDetail";
+import useWhiteboardNames from "../../hooks/useWhiteboardNames";
 import WhiteboardPresence from "../../WhiteboardPresence";
 import { userColors } from "../Avatar";
 import colors from "./colors";
@@ -69,7 +68,6 @@ const CursorLayer = ({
   );
   const zoom = useWhiteboardZoom();
   const theme = useTheme();
-  const { t } = useTranslation();
   const visible = useDocumentVisible();
   const [now, setNow] = useState(Date.now());
   // When each tab's pointer last moved, so idle ones can fade out. Tabs that
@@ -98,21 +96,7 @@ const CursorLayer = ({
     return () => window.clearInterval(interval);
   }, [anyCursors, visible]);
 
-  // Names only change as people come and go, not as their pointers move.
-  const userIds = [...new Set(presence.map((doc) => doc.user))]
-    .toSorted()
-    .join(",");
-  const names = useTracker(
-    () =>
-      new Map(
-        (userIds ? userIds.split(",") : []).map((user) => [
-          user,
-          MeteorUsers.findOne(user)?.displayName ??
-            t("whiteboard.cursor.someone", "Someone"),
-        ]),
-      ),
-    [userIds, t],
-  );
+  const names = useWhiteboardNames(presence.map((doc) => doc.user));
 
   return (
     <ViewportPortal>

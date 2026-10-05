@@ -25,6 +25,8 @@ files:
   - imports/client/components/whiteboard/NodeHandles.tsx
   - imports/client/components/whiteboard/PeopleContext.ts
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
+  - imports/client/components/whiteboard/RemoteEditingContext.ts
+  - imports/client/components/whiteboard/RemoteSelectionLayer.tsx
   - imports/client/components/whiteboard/ResetLayoutModal.tsx
   - imports/client/components/whiteboard/RoundStateContext.ts
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
@@ -37,6 +39,9 @@ files:
   - imports/client/hooks/usePuzzleViewerUsers.ts
   - imports/client/hooks/useRoundStates.ts
   - imports/client/hooks/useTagSynonyms.ts
+  - imports/client/hooks/useWhiteboardLive.ts
+  - imports/client/hooks/useWhiteboardNames.ts
+  - imports/client/hooks/useWhiteboardOthersEditing.ts
   - imports/client/hooks/useWhiteboardSync.ts
   - imports/client/hooks/useWhiteboardUndo.ts
   - imports/lib/chatMessagePath.ts
@@ -58,6 +63,7 @@ files:
   - imports/lib/whiteboard/limits.ts
   - imports/lib/whiteboard/links.ts
   - imports/lib/whiteboard/minimap.ts
+  - imports/lib/whiteboard/remoteActivity.ts
   - imports/lib/whiteboard/reset.ts
   - imports/lib/whiteboard/rounds.ts
   - imports/lib/whiteboard/search.ts
@@ -70,6 +76,7 @@ files:
   - imports/methods/restoreWhiteboardVersion.ts
   - imports/methods/setWhiteboardEditPolicy.ts
   - imports/methods/setWhiteboardLayoutLocked.ts
+  - imports/methods/setWhiteboardLive.ts
   - imports/methods/upsertWhiteboardEdges.ts
   - imports/methods/upsertWhiteboardNodes.ts
   - imports/server/daemons/whiteboardVersions.ts
@@ -81,6 +88,7 @@ files:
   - imports/server/methods/restoreWhiteboardVersion.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
   - imports/server/methods/setWhiteboardLayoutLocked.ts
+  - imports/server/methods/updatePuzzle.ts
   - imports/server/models/WhiteboardPresence.ts
   - imports/server/models/WhiteboardVersionChunks.ts
   - imports/server/publications/whiteboardVersions.ts
@@ -200,10 +208,11 @@ needs, such as the coordinate checks and `detachComments`.
 
 ### The live channel
 
-Cursors, drags and half-drawn strokes travel through
-`Whiteboards.methods.setLive` (`imports/server/whiteboardLive.ts`) several
-times a second per person, so each connection remembers what its user may do
-on each board instead of reading it on every call. That memory is dropped as
+Cursors, drags, half-drawn strokes, selections and the text being typed in
+travel through `Whiteboards.methods.setLive`
+(`imports/server/whiteboardLive.ts`) several times a second per person, so
+each connection remembers what its user may do on each board instead of
+reading it on every call. That memory is dropped as
 soon as anything that would change the answer changes:
 
 - each server process observes every board's `editPolicy` and `editors`, and
@@ -218,11 +227,56 @@ without it within Meteor's ten-second poll. The 60-second TTL is only a
 backstop. A check that was reading when its answer was dropped doesn't keep
 what it read.
 
-People who can comment but not edit still send their cursor. Their drags and
-strokes are stored as null rather than refused, since a refusal would come back
-every 100ms; anyone outside the hunt is refused as before. When a policy change
-takes edit rights away, `setEditPolicy` clears the drags and strokes of anyone
-on the board who lost them.
+People who can comment but not edit still send their cursor. Their drags,
+strokes, selections and editing are stored as null rather than refused, since
+a refusal would come back every 100ms; anyone outside the hunt is refused as
+before. When a policy change takes edit rights away, `setEditPolicy` clears
+the drags, strokes, selections and editing of anyone on the board who lost
+them. Losing edit rights another way (the hunt being archived, or a role
+taken away under a policy that goes by role) clears them on that person's
+next update, so a selection someone leaves alone stays drawn until then.
+
+The method unblocks, so updates from one connection can run side by side.
+Each connection numbers its updates per board, and one that's overtaken
+while it looks things up isn't written over the newer one.
+
+#### Selections and "is editing"
+
+Each update also carries `selection`, the ids of the nodes selected (at most
+`MAX_LIVE_SELECTION`, 50, line ends left out), and `editing`, the node whose
+text or label is being typed in, or the line whose label is. Both are checked
+like a drag: ids must look like ids, and must be on this board (`editing` may
+name a node or a line), the last set found there being remembered per
+connection so an unchanged one isn't looked up again. A client that leaves
+them out has them stored as null. `useWhiteboardLive` sends them at the cursor's
+pace, only when they change, and null for both while the window is in the
+background, while the tab is hidden and while previewing a version.
+`EditableText` tells the canvas when typing starts and stops, as it already did
+to keep collapsed frames open around it.
+
+Everyone else on the board (anyone who can see it, viewers included) sees a
+2px outline round each node someone else has selected, in that person's
+cursor colour, with their name in a tag above its top left corner; several
+people on one node get a ring each and one tag naming them all. The outline
+and tag keep their size on screen at any zoom (`RemoteSelectionLayer`, beside
+`CursorLayer`, which reads presence for selections alone, so cursor moves
+don't re-render it). Nothing is drawn for the viewer's own selection in
+another tab, for a node folded into a collapsed frame, or in a preview.
+
+While someone is typing in a sticky, text box, frame label or line label,
+its tag says "Ada is editing" with a pencil, and `EditableText` won't open
+it here: double-click and Enter do nothing, the pointer stays an arrow, and
+the title says "Ada is editing this". It opens again once their editing
+clears, or once their presence has gone 30 seconds
+(`REMOTE_EDITING_TIMEOUT_MS`) without changing at all, in case their tab has
+stalled. A cursor move counts as a change, but typing alone doesn't, so
+someone who types for more than 30 seconds without moving the pointer loses
+the cue until they next move it.
+`useWhiteboardOthersEditing` works this out from the presence documents with
+`othersEditing` in `imports/lib/whiteboard/remoteActivity.ts`. It's a soft
+lock, kept by the clients only: the server takes either person's save, two
+people who start within one round trip both carry on as before, and the last
+to save wins.
 
 ### On the client
 
@@ -421,7 +475,7 @@ tooltip shows its key.
 | Delete or Backspace | Delete the selection, leaving out anything locked (see Locks) | edit |
 | Ctrl+L (Cmd+L) | Lock the selection, or unlock it if it's all locked (see Locks), only with the Select tool; with nothing selected or another tool it's the browser's own | edit |
 | Arrow keys | Move the selection 5 units, 20 with Shift; it joins or leaves a frame as a drop would | edit |
-| Enter | Start editing a focused sticky note or text box | edit |
+| Enter | Start editing a focused sticky note or text box, unless someone else is typing in it | edit |
 | Ctrl+Z (Cmd+Z) | Undo your own last edit from this visit (see Undo and redo) | edit |
 | Ctrl+Shift+Z (Cmd+Shift+Z) or Ctrl+Y | Redo the last edit undone | edit |
 | Space (held) | Pan while a drawing tool is picked | |
@@ -1152,10 +1206,11 @@ answered first, then the rest in board order. It goes by the puzzle's
 `answersUpdatedAt`, which the server sets whenever an answer is added or
 removed (`addPuzzleAnswer`, and a guess becoming correct or stopping being
 correct in `transitionGuess`, which `removePuzzleAnswer` goes through), and
-nothing else touches. A puzzle answered before that was recorded, or marked
-complete with no answer, goes by when it last changed at all, so a retag,
-an unlock or a note from its sheet moves one of those up. The choice is
-each viewer's own, kept in local storage (`whiteboard:feederOrder`) and read
+when a puzzle is marked complete with no answer or that's taken back
+(`updatePuzzle`), and nothing else touches. A puzzle answered, or marked
+complete with no answer, before that was recorded goes by when it last
+changed at all, so a retag, an unlock or a note from its sheet moves one of
+those up. The choice is each viewer's own, kept in local storage (`whiteboard:feederOrder`) and read
 each time a popover opens.
 "Copy answers" copies a line per feeder in the order shown, its answers
 joined by commas, or a blank line for one without an answer, ready to paste
@@ -1340,7 +1395,10 @@ placed notes and frames, and new ink land around it, as if it weren't there.
 Moving the frame moves what's in it (positions inside are relative to the
 frame) and the free ends of lines attached to it. Align and distribute treat
 it as the header it is. A collapse or expand snaps rather than gliding as
-other changes do.
+other changes do, as does any size change from elsewhere (someone else's
+resize, Fit to contents, a frame growing, or undoing one of those), along with
+the frame's contents: a size that changes on every animation frame has React
+Flow's ResizeObserver report a loop. Moves from elsewhere still glide.
 
 The folding is worked out on the client: `foldedInto` in
 `imports/lib/whiteboard/collapse.ts` maps each hidden node to the outermost
@@ -1381,8 +1439,9 @@ had it.
   live updates do nothing. The page says the whiteboard is turned off, the
   hunt nav hides its link, and the puzzle page and list hide "Show on board".
   Ordinary chat on the hidden puzzle isn't gated.
-- `disable.whiteboard_live` turns off cursors, live drags and strokes: the
-  presence publication returns nothing and `setLive` does nothing.
+- `disable.whiteboard_live` turns off cursors, live drags and strokes, and
+  others' selections and "is editing" (so nothing is held back from editing):
+  the presence publication returns nothing and `setLive` does nothing.
 - `disable.whiteboard_versions` ("Whiteboard history" on the Setup page)
   stops recording versions, empties the history list (the publication returns
   nothing), refuses fetching and restoring versions, and refuses Reset layout
@@ -1409,8 +1468,9 @@ There is no flag for the edit policy: `members` is already the off position.
   are `auto`, with `feeder` and `meta` puzzle ids, and follow the puzzles'
   tags.
 - `WhiteboardPresence` (`jr_whiteboard_presence`, server only): one document
-  per connection per board, with the cursor, drag and stroke. It goes when the
-  connection closes, the presence subscription stops or its server dies.
+  per connection per board, with the cursor, drag, stroke, `selection` and
+  `editing` (all optional, null once cleared). It goes when the connection
+  closes, the presence subscription stops or its server dies.
 - `WhiteboardVersions` (`jr_whiteboard_versions`): one per version, with its
   `kind` (`edits`, `reset` or `restore`), the
   `users` who edited after it and when each started, `changeCount`,

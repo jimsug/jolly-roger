@@ -86,14 +86,9 @@ export interface RemoteDrag {
 // place. Positions glide, not just the node on screen, so lines go with them.
 const GLIDE_MS = 120;
 
-interface GlideBox extends XYPosition {
-  width?: number;
-  height?: number;
-}
-
 interface Glide {
-  from: GlideBox;
-  to: GlideBox;
+  from: XYPosition;
+  to: XYPosition;
   // When it started moving on screen: its first animation frame, since on a
   // busy board that can come well after the change arrived.
   start?: number;
@@ -106,6 +101,19 @@ const samePosition = (a: XYPosition, b: XYPosition) =>
 
 const near = (a: number | undefined, b: number | undefined) =>
   a !== undefined && b !== undefined && Math.abs(a - b) < 0.01;
+
+// Whether a node shown at one size is now to be another.
+const resizedFrom = (
+  prev: { width?: number; height?: number },
+  width: number | undefined,
+  height: number | undefined,
+) =>
+  (prev.width !== undefined &&
+    width !== undefined &&
+    !near(prev.width, width)) ||
+  (prev.height !== undefined &&
+    height !== undefined &&
+    !near(prev.height, height));
 
 // Unset, false and empty all mean "not set" for a line's fields.
 const plain = (value: unknown) =>
@@ -440,6 +448,8 @@ export default function useWhiteboardSync({
         previous.filter((n) => n.resizing).map((n) => n.id),
       );
 
+      // Nodes that have just snapped to a size from elsewhere.
+      const snapped = new Set<string>();
       const built = visible.map((doc): WhiteboardFlowNode => {
         const change = pending.current.get(doc._id);
         const prev = prevById.get(doc._id);
@@ -486,10 +496,12 @@ export default function useWhiteboardSync({
         } else if (
           !change &&
           prev &&
-          // Folding or opening a frame snaps: its height gliding while its
-          // contents come and go has React Flow's ResizeObserver report a
-          // loop.
+          // Folding or opening a frame, and a size change from elsewhere
+          // (someone else's resize, Fit to contents, a frame growing, or
+          // undoing one of those), snap: a size that changes on every
+          // animation frame has React Flow's ResizeObserver report a loop.
           !!prev.data.collapsed === collapsed &&
+          !resizedFrom(prev, width, height) &&
           (sameParent || !parentId || prevById.has(parentId))
         ) {
           // A change from elsewhere glides from where the node is now, in
@@ -504,38 +516,24 @@ export default function useWhiteboardSync({
                   y: old.y + prev.position.y - here.y,
                 };
               })();
-          const resized =
-            (prev.width !== undefined &&
-              width !== undefined &&
-              !near(prev.width, width)) ||
-            (prev.height !== undefined &&
-              height !== undefined &&
-              !near(prev.height, height));
-          if (samePosition(from, position) && !resized) {
+          if (samePosition(from, position)) {
             glides.current.delete(doc._id);
           } else {
             const glide = glides.current.get(doc._id);
             if (
               !glide ||
               glide.parentId !== parentId ||
-              !samePosition(glide.to, position) ||
-              glide.to.width !== width ||
-              glide.to.height !== height
+              !samePosition(glide.to, position)
             ) {
-              glides.current.set(doc._id, {
-                from: { ...from, width: prev.width, height: prev.height },
-                to: { ...position, width, height },
-                parentId,
-              });
+              glides.current.set(doc._id, { from, to: position, parentId });
             }
             position = from;
-            if (resized) {
-              width = prev.width;
-              height = prev.height;
-            }
           }
         } else {
           glides.current.delete(doc._id);
+          if (!change && prev && resizedFrom(prev, width, height)) {
+            snapped.add(doc._id);
+          }
         }
 
         const erasing = !!doc.stroke && erasingStrokes.has(doc.stroke);
@@ -577,6 +575,21 @@ export default function useWhiteboardSync({
           style: doc.type === "ink" ? INK_STYLE : undefined,
         };
       });
+      // What's directly in a frame that has snapped to a new size snaps with
+      // it, so contents kept still by a resize from the top or left don't
+      // jump and glide back. A node with a glide was built afresh above, so
+      // it can be changed in place.
+      if (snapped.size > 0) {
+        built.forEach((n) => {
+          const glide =
+            n.parentId && snapped.has(n.parentId)
+              ? glides.current.get(n.id)
+              : undefined;
+          if (!glide) return;
+          glides.current.delete(n.id);
+          n.position = glide.to;
+        });
+      }
       const next = withStacking(sortParentsFirst(withoutParentLoops(built)));
       return sameItems(next, previous) ? previous : next;
     });
@@ -596,7 +609,7 @@ export default function useWhiteboardSync({
     glideFrame.current = undefined;
     const now = performance.now();
     const current = new Map(nodesRef.current.map((n) => [n.id, n]));
-    const steps = new Map<string, GlideBox & { glide: Glide }>();
+    const steps = new Map<string, XYPosition & { glide: Glide }>();
     glides.current.forEach((glide, id) => {
       const node = current.get(id);
       if (
@@ -612,13 +625,9 @@ export default function useWhiteboardSync({
       // Starting a frame back means the first frame already moves.
       glide.start ??= now - 1000 / 60;
       const t = Math.min(1, (now - glide.start) / GLIDE_MS);
-      const between = (a: number | undefined, b: number | undefined) =>
-        a !== undefined && b !== undefined ? a + (b - a) * t : b;
       steps.set(id, {
-        x: between(glide.from.x, glide.to.x)!,
-        y: between(glide.from.y, glide.to.y)!,
-        width: between(glide.from.width, glide.to.width),
-        height: between(glide.from.height, glide.to.height),
+        x: glide.from.x + (glide.to.x - glide.from.x) * t,
+        y: glide.from.y + (glide.to.y - glide.from.y) * t,
         glide,
       });
       if (t >= 1) glides.current.delete(id);
@@ -640,12 +649,7 @@ export default function useWhiteboardSync({
           ) {
             return n;
           }
-          return {
-            ...n,
-            position: { x: step.x, y: step.y },
-            ...(step.width !== undefined ? { width: step.width } : {}),
-            ...(step.height !== undefined ? { height: step.height } : {}),
-          };
+          return { ...n, position: { x: step.x, y: step.y } };
         }),
       );
     }

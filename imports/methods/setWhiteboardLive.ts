@@ -14,6 +14,10 @@ export type WhiteboardLiveState = {
     strokeWidth: WhiteboardStrokeWidth;
     points: [number, number, number][];
   } | null;
+  // The nodes selected, and the node or line whose text is being typed in.
+  // Optional so a tab still running an older client isn't refused.
+  selection?: string[] | null;
+  editing?: string | null;
 };
 
 export default new TypedMethod<{ boardId: string } & WhiteboardLiveState, void>(

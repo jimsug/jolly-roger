@@ -11,6 +11,8 @@ export const MAX_COORDINATE = 1_000_000;
 export const MAX_DIMENSION = 100_000;
 export const MAX_CONTRIBUTORS = 50;
 export const MAX_LIVE_DRAG_NODES = 50;
+// How many selected nodes a live update can show to others.
+export const MAX_LIVE_SELECTION = 50;
 // How deep frames can nest. A longer chain of parents is taken to be a loop
 // (which frames moved into each other at the same time can briefly make), so
 // nothing that walks up one can hang.

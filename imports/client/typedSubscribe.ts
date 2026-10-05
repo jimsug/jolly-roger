@@ -20,6 +20,9 @@ typedSubscribe.async = <T, Args extends TypedPublicationArgs>(
   ...args: TypedMethodSubscribeArgs<T, Args>
 ) => {
   return new Promise<Meteor.SubscriptionHandle>((resolve, reject) => {
+    // Meteor calls onReady before subscribe returns when it reuses a
+    // subscription that's already ready, so resolving waits until the
+    // handle has been assigned.
     const handle = Meteor.subscribe(publication.name, ...args, {
       onStop: (reason?: Meteor.Error) => {
         if (reason) {
@@ -27,7 +30,7 @@ typedSubscribe.async = <T, Args extends TypedPublicationArgs>(
         }
       },
       onReady: () => {
-        resolve(handle);
+        queueMicrotask(() => resolve(handle));
       },
     });
   });

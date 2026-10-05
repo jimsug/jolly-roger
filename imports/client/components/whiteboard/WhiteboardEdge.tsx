@@ -24,6 +24,8 @@ import EditableText from "./EditableText";
 import FeederFocusContext from "./FeederFocusContext";
 import floatingEdgeParams from "./floatingEdgeParams";
 import NodeContributors from "./NodeContributors";
+import RemoteEditingContext from "./RemoteEditingContext";
+import { RemoteTag } from "./RemoteSelectionLayer";
 import { useWhiteboard } from "./WhiteboardContext";
 
 const LabelBox = styled.div`
@@ -41,6 +43,14 @@ const LabelBox = styled.div`
 const Attribution = styled.div`
   position: absolute;
   pointer-events: all;
+`;
+
+const TakenTag = styled.div`
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
 `;
 
 const Grip = styled.div`
@@ -115,9 +125,14 @@ const WhiteboardEdge = ({
   // A line drawn to a collapsed frame in place of something inside it has
   // no grips, so its real end can't be dragged off by mistake.
   const showGrips = !auto && !!selected && !readOnly && !data?.folded;
-  // Grips stay the same size on screen whatever the zoom. Only a line showing
-  // them follows the zoom, so zooming doesn't redraw every line.
-  const gripScale = 1 / useStore((s) => (showGrips ? s.transform[2] : 1));
+  // Someone else typing in the label, who's named centred above it.
+  const takenBy = useContext(RemoteEditingContext).get(id);
+  const showTaken = !auto && !!takenBy && detail !== "far";
+  // Grips and that name stay the same size on screen whatever the zoom. Only
+  // a line showing them follows the zoom, so zooming doesn't redraw every
+  // line.
+  const gripScale =
+    1 / useStore((s) => (showGrips || showTaken ? s.transform[2] : 1));
 
   const onLabel = useCallback(
     (text: string, onSaved: (refused: boolean) => void) =>
@@ -169,8 +184,22 @@ const WhiteboardEdge = ({
           opacity: look.opacity,
         }}
       />
-      {(showLabel || showGrips || showAttribution) && (
+      {(showLabel || showGrips || showAttribution || showTaken) && (
         <EdgeLabelRenderer>
+          {showTaken && (
+            <TakenTag
+              style={{
+                transform: `translate(${labelX}px, ${labelY - 12}px) scale(${gripScale})`,
+              }}
+            >
+              <RemoteTag
+                centred
+                people={[
+                  { user: takenBy.user, name: takenBy.name, editing: true },
+                ]}
+              />
+            </TakenTag>
+          )}
           {showLabel && (
             <LabelBox
               className="nodrag nopan"
@@ -186,6 +215,7 @@ const WhiteboardEdge = ({
                 multiline={false}
                 maxLength={MAX_LABEL_LENGTH}
                 placeholder={t("whiteboard.line.labelPlaceholder", "Label")}
+                lineId={id}
               />
             </LabelBox>
           )}

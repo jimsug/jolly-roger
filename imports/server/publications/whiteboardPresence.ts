@@ -8,9 +8,10 @@ import WhiteboardPresence from "../models/WhiteboardPresence";
 import { removePresence } from "../whiteboardLive";
 import definePublication from "./definePublication";
 
-// Everyone else's cursors, drags and strokes on a board. The subscriber's own
-// connection is left out, and its document goes when the subscription stops.
-// Server and connection ids stay on the server, as for user statuses.
+// Everyone else's cursors, drags, strokes, selections and what they're
+// typing in on a board. The subscriber's own connection is left out, and its
+// document goes when the subscription stops. Server and connection ids stay
+// on the server, as for user statuses.
 definePublication(whiteboardPresence, {
   validate(arg) {
     check(arg, { boardId: String });

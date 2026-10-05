@@ -10,6 +10,7 @@ import Button from "react-bootstrap/Button";
 import { useTranslation } from "react-i18next";
 import styled, { css } from "styled-components";
 import ChatMarkdown from "../ChatMarkdown";
+import RemoteEditingContext from "./RemoteEditingContext";
 import WhiteboardContext from "./WhiteboardContext";
 
 const editorStyles = css`
@@ -32,11 +33,20 @@ const Input = styled.input`
   ${editorStyles}
 `;
 
-const Display = styled.div<{ $multiline: boolean; $empty: boolean }>`
+const Display = styled.div<{
+  $multiline: boolean;
+  $empty: boolean;
+  $taken: boolean;
+}>`
   position: relative;
   width: 100%;
   overflow: hidden;
   overflow-wrap: anywhere;
+  ${({ $taken }) =>
+    $taken &&
+    css`
+      cursor: default;
+    `}
   ${({ $multiline }) =>
     $multiline &&
     css`
@@ -118,7 +128,10 @@ interface Pending {
 // still on the raw text. Double-click to edit; blur or Enter (single line)
 // saves, Escape cancels. Keeps showing what was typed until the server catches
 // up, so the old text doesn't flash back, and keeps showing it with a Retry
-// button if the server refuses it.
+// button if the server refuses it. Text someone else is typing in doesn't
+// open until they stop (see RemoteEditingContext); that's only a courtesy
+// here, and two people who start at once both carry on, the last to save
+// winning.
 const EditableText = ({
   value,
   onCommit,
@@ -130,6 +143,7 @@ const EditableText = ({
   startEditing,
   onStartedEditing,
   saveOnReadOnly = false,
+  lineId,
 }: {
   value: string | undefined;
   // Saves the text, then says whether the server refused it.
@@ -144,18 +158,23 @@ const EditableText = ({
   // Whether text being typed when readOnly turns on is saved rather than
   // kept unsaved.
   saveOnReadOnly?: boolean;
+  // The line this is the label of, outside a node.
+  lineId?: string;
 }) => {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
-  // The node this text belongs to (none for a line's label), which counts
-  // as busy while it's being typed in.
+  // The node this text belongs to, or the line for a line's label, which
+  // the canvas hears is being typed in.
   const nodeId = useNodeId();
+  const id = nodeId ?? lineId;
   const onEditingChange = useContext(WhiteboardContext)?.onEditingChange;
   useEffect(() => {
-    if (!editing || !nodeId || !onEditingChange) return undefined;
-    onEditingChange(nodeId, true);
-    return () => onEditingChange(nodeId, false);
-  }, [editing, nodeId, onEditingChange]);
+    if (!editing || !id || !onEditingChange) return undefined;
+    const kind = nodeId ? "node" : "line";
+    onEditingChange(id, true, kind);
+    return () => onEditingChange(id, false, kind);
+  }, [editing, id, nodeId, onEditingChange]);
+  const takenBy = useContext(RemoteEditingContext).get(id ?? "");
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<Pending | undefined>(undefined);
   const cancelled = useRef(false);
@@ -163,11 +182,11 @@ const EditableText = ({
   const saves = useRef(0);
 
   const begin = useCallback(() => {
-    if (readOnly) return;
+    if (readOnly || takenBy) return;
     cancelled.current = false;
     setDraft(pending?.text ?? value ?? "");
     setEditing(true);
-  }, [readOnly, pending, value]);
+  }, [readOnly, takenBy, pending, value]);
 
   const save = useCallback(
     (text: string) => {
@@ -188,7 +207,8 @@ const EditableText = ({
 
   // An edit the canvas asks for (a note just placed, or one someone pressed
   // Enter on) starts in an effect: telling the canvas it has started updates
-  // the canvas, which can't happen while this renders.
+  // the canvas, which can't happen while this renders. One asked for while
+  // someone else is typing here is dropped, not saved for later.
   useEffect(() => {
     if (startEditing && !readOnly) {
       begin();
@@ -321,11 +341,19 @@ const EditableText = ({
     <Display
       $multiline={multiline}
       $empty={!shown}
+      $taken={!readOnly && !!takenBy}
       onDoubleClick={begin}
       title={
         readOnly
           ? undefined
-          : t("whiteboard.text.doubleClickToEdit", "Double-click to edit")
+          : takenBy
+            ? t("whiteboard.live.editingTitle", "{{name}} is editing this", {
+                name: takenBy.name,
+                // React escapes attributes, so i18next's escaping would only
+                // show entities. Goes once both i18n inits stop escaping.
+                interpolation: { escapeValue: false },
+              })
+            : t("whiteboard.text.doubleClickToEdit", "Double-click to edit")
       }
     >
       {body}

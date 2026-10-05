@@ -32,7 +32,8 @@ const Puzzle = withCommon(
     // is never shown as solved until the count is corrected.
     expectedAnswerCount: z.int32().min(-1),
     completedWithNoAnswer: z.boolean().optional(),
-    // When answers last changed, set by whatever adds or removes one. Unset
+    // When answers last changed, set by whatever adds or removes one, and by
+    // marking the puzzle complete with no answer or taking that back. Unset
     // on puzzles answered before it was recorded.
     answersUpdatedAt: z.date().optional(),
     replacedBy: foreignKey.optional(),
