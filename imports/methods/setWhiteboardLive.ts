@@ -18,6 +18,9 @@ export type WhiteboardLiveState = {
   // Optional so a tab still running an older client isn't refused.
   selection?: string[] | null;
   editing?: string | null;
+  // Refreshed every EDITING_KEEPALIVE_MS while editing is set, so the
+  // presence document changes while someone types.
+  editingAt?: Date | null;
 };
 
 export default new TypedMethod<{ boardId: string } & WhiteboardLiveState, void>(

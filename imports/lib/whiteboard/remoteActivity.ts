@@ -1,7 +1,13 @@
 // How long someone else's "is editing" holds after their presence last
-// changed. Their client clears it when they stop typing, so one that has
-// sat this long is taken to be from a tab that has stalled.
+// changed. Their client clears it when they stop typing and refreshes it
+// while they type, so one that has sat this long is taken to be from a tab
+// that has stalled.
 export const REMOTE_EDITING_TIMEOUT_MS = 30_000;
+
+// How often a client typing in something refreshes editingAt in its live
+// updates, well inside REMOTE_EDITING_TIMEOUT_MS, so its presence keeps
+// changing however long the edit goes on.
+export const EDITING_KEEPALIVE_MS = 10_000;
 
 // One tab's presence on the board, as far as selection and editing go.
 export interface PresenceActivity {

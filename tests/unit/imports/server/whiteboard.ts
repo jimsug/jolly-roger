@@ -41,6 +41,7 @@ import {
 import addPuzzleTag from "../../../../imports/methods/addPuzzleTag";
 import createWhiteboard from "../../../../imports/methods/createWhiteboard";
 import deleteWhiteboardComment from "../../../../imports/methods/deleteWhiteboardComment";
+import destroyPuzzle from "../../../../imports/methods/destroyPuzzle";
 import placeWhiteboardCardsByTags from "../../../../imports/methods/placeWhiteboardCardsByTags";
 import removePuzzleTag from "../../../../imports/methods/removePuzzleTag";
 import renameTag from "../../../../imports/methods/renameTag";
@@ -50,6 +51,7 @@ import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import setWhiteboardCommentResolved from "../../../../imports/methods/setWhiteboardCommentResolved";
 import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEditPolicy";
 import setWhiteboardLive from "../../../../imports/methods/setWhiteboardLive";
+import undestroyPuzzle from "../../../../imports/methods/undestroyPuzzle";
 import updatePuzzle from "../../../../imports/methods/updatePuzzle";
 import upsertWhiteboardEdges from "../../../../imports/methods/upsertWhiteboardEdges";
 import upsertWhiteboardNodes from "../../../../imports/methods/upsertWhiteboardNodes";
@@ -63,6 +65,7 @@ import WhiteboardVersionChunks from "../../../../imports/server/models/Whiteboar
 import {
   deferSyncPuzzlesOnBoard,
   ensureWhiteboard,
+  syncAutoEdges,
   syncPuzzlesOnBoard,
 } from "../../../../imports/server/whiteboard";
 import {
@@ -801,6 +804,329 @@ describe("whiteboard", function () {
       assert.deepEqual((await cardFor(second)).position, cardSlot(1));
       const frame = await frameFor(round);
       assert.equal((await cardFor(second)).parent, frame._id);
+    });
+  });
+
+  describe("deleted and replaced puzzles", function () {
+    let boardId: string;
+    let backingId: string;
+
+    beforeEach(async function () {
+      boardId = await ensureWhiteboard(operator, huntId);
+      backingId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+    });
+
+    const cardFor = (puzzleId: string) =>
+      WhiteboardNodes.findOneAsync({ board: boardId, puzzle: puzzleId });
+    // A feeder with an arrow to its meta, and its card
+    const feederWithArrow = async () => {
+      const arrow = (await WhiteboardEdges.findOneAsync({
+        board: boardId,
+        auto: true,
+      }))!;
+      const puzzle = (await Puzzles.findOneAsync(arrow.feeder))!;
+      const card = (await cardFor(puzzle._id))!;
+      return { arrow, puzzle, card };
+    };
+    const newPuzzle = (title: string, tags: string[]) =>
+      Puzzles.insertAsync({
+        hunt: huntId,
+        title,
+        tags,
+        answers: [],
+        expectedAnswerCount: 1,
+        createdBy: operator,
+      });
+    const destroy = (puzzleId: string, replacedBy?: string) =>
+      asUser(operator, () =>
+        destroyPuzzle.callPromise({
+          puzzleId,
+          ...(replacedBy ? { replacedBy } : {}),
+          copySheetsToReplacement: false,
+        }),
+      );
+    const undestroy = (puzzleId: string) =>
+      asUser(operator, () => undestroyPuzzle.callPromise({ puzzleId }));
+    // A comment pinned to a node, 3 across and 4 down from its corner
+    const pin = async (node: string, text: string) => {
+      await asUser(member, () =>
+        sendChatMessage.callPromise({
+          puzzleId: backingId,
+          content: JSON.stringify(contentFromMessage(text)),
+          comment: { node, x: 3, y: 4 },
+        }),
+      );
+      return (await ChatMessages.findOneAsync({
+        puzzle: backingId,
+        "content.children.text": text,
+      }))!._id;
+    };
+    const anchorOf = async (messageId: string) =>
+      (await ChatMessages.findOneAsync(messageId))?.comment;
+
+    it("hands a replaced puzzle's card to its replacement, as it was", async function () {
+      const { arrow, puzzle, card } = await feederWithArrow();
+      await WhiteboardNodes.updateAsync(card._id, {
+        $set: {
+          manual: true,
+          locked: true,
+          lockedBy: operator,
+          position: { x: card.position.x + 7, y: card.position.y + 9 },
+        },
+      });
+      const before = (await WhiteboardNodes.findOneAsync(card._id))!;
+      const comment = await pin(card._id, "on the old card");
+
+      // The replacement already has a card, with a comment and a line
+      const replacement = await newPuzzle("Replacement", puzzle.tags);
+      await syncPuzzlesOnBoard(huntId, [replacement]);
+      const theirs = (await cardFor(replacement))!;
+      const theirComment = await pin(theirs._id, "on the new card");
+      // and a free pin that came off it
+      const freePin = await pin(theirs._id, "off the new card");
+      await ChatMessages.updateAsync(freePin, {
+        $set: { "comment.detachedFrom": theirs._id },
+        $unset: { "comment.node": 1 },
+      });
+      const note = Random.id();
+      const line = Random.id();
+      await upsertNodes(member, boardId, [
+        { _id: note, type: "sticky", position: { x: -900, y: -900 } },
+      ]);
+      await upsertEdges(member, boardId, [
+        { _id: line, source: note, target: theirs._id },
+      ]);
+
+      await destroy(puzzle._id, replacement);
+      await waitForAssertion(async () => {
+        const cards = await WhiteboardNodes.find({
+          board: boardId,
+          puzzle: replacement,
+        }).fetchAsync();
+        assert.deepEqual(
+          cards.map((c) => c._id),
+          [card._id],
+        );
+        const arrows = await WhiteboardEdges.find({
+          board: boardId,
+          auto: true,
+          $or: [{ feeder: puzzle._id }, { feeder: replacement }],
+        }).fetchAsync();
+        assert.deepEqual(
+          arrows.map((a) => [a.feeder, a.meta, a.source, a.target, a.hidden]),
+          [[replacement, arrow.meta, card._id, arrow.target, undefined]],
+        );
+      }, 5000);
+
+      const after = (await WhiteboardNodes.findOneAsync(card._id))!;
+      for (const field of [
+        "position",
+        "parent",
+        "width",
+        "height",
+        "manual",
+        "locked",
+        "lockedBy",
+        "hidden",
+      ] as const) {
+        assert.deepEqual(after[field], before[field], field);
+      }
+      assert.isUndefined(await cardFor(puzzle._id));
+      assert.isUndefined(await WhiteboardNodes.findOneAsync(theirs._id));
+      assert.equal((await anchorOf(comment))?.node, card._id);
+      assert.equal((await anchorOf(theirComment))?.node, card._id);
+      assert.equal((await anchorOf(freePin))?.detachedFrom, card._id);
+      assert.equal(
+        (await WhiteboardEdges.findOneAsync(line))?.target,
+        card._id,
+      );
+    });
+
+    it("gives a replacement placed at the same moment no card of its own", async function () {
+      const { puzzle, card } = await feederWithArrow();
+      const replacement = await newPuzzle("Racing replacement", puzzle.tags);
+      await Promise.all([
+        syncPuzzlesOnBoard(huntId, [replacement]),
+        destroy(puzzle._id, replacement),
+        syncPuzzlesOnBoard(huntId, [replacement]),
+      ]);
+      await waitForAssertion(async () => {
+        const cards = await WhiteboardNodes.find({
+          board: boardId,
+          puzzle: replacement,
+        }).fetchAsync();
+        assert.deepEqual(
+          cards.map((c) => [c._id, c.position, c.parent]),
+          [[card._id, card.position, card.parent]],
+        );
+        assert.isUndefined(await cardFor(puzzle._id));
+      }, 5000);
+    });
+
+    it("hides a deleted puzzle's card and arrows, and brings them back where they were", async function () {
+      const { arrow, puzzle, card } = await feederWithArrow();
+      const comment = await pin(card._id, "on the doomed card");
+
+      await destroy(puzzle._id);
+      await waitForAssertion(async () => {
+        const hidden = await WhiteboardNodes.findOneAsync(card._id);
+        assert.isTrue(hidden?.hidden);
+        assert.isTrue(hidden?.hiddenWithPuzzle);
+        assert.isTrue((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+        const anchor = await anchorOf(comment);
+        assert.isUndefined(anchor?.node);
+        assert.equal(anchor?.detachedFrom, card._id);
+      }, 5000);
+      assert.deepEqual(
+        (await WhiteboardNodes.findOneAsync(card._id))?.position,
+        card.position,
+      );
+
+      // Nobody can put them back while the puzzle is deleted
+      await assert.isRejected(
+        upsertNodes(member, boardId, [{ _id: card._id, hidden: false }]),
+        /deleted/,
+      );
+      await assert.isRejected(
+        upsertEdges(member, boardId, [{ _id: arrow._id, hidden: false }]),
+        /deleted/,
+      );
+      // and placing the meta leaves the arrow hidden rather than removing it
+      await syncPuzzlesOnBoard(huntId, [arrow.meta!]);
+      assert.isTrue((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+
+      await undestroy(puzzle._id);
+      await waitForAssertion(async () => {
+        const back = (await WhiteboardNodes.findOneAsync(card._id))!;
+        assert.isUndefined(back.hidden);
+        assert.isUndefined(back.hiddenWithPuzzle);
+        assert.deepEqual(back.position, card.position);
+        assert.equal(back.parent, card.parent);
+        const shown = await WhiteboardEdges.findOneAsync(arrow._id);
+        assert.exists(shown);
+        assert.isUndefined(shown.hidden);
+        assert.isUndefined(shown.hiddenWithPuzzle);
+        assert.deepEqual(await anchorOf(comment), {
+          node: card._id,
+          x: 3,
+          y: 4,
+        });
+      }, 5000);
+    });
+
+    it("leaves a card someone took off the board off it when its puzzle comes back", async function () {
+      const { arrow, puzzle, card } = await feederWithArrow();
+      await deleteNodes(member, boardId, [card._id]);
+      await deleteEdges(member, boardId, [arrow._id]);
+      await destroy(puzzle._id);
+      // As the deferred sync does, but known to have finished
+      await syncPuzzlesOnBoard(huntId, [puzzle._id]);
+      assert.isNotOk(
+        (await WhiteboardNodes.findOneAsync(card._id))?.hiddenWithPuzzle,
+      );
+      await undestroy(puzzle._id);
+      await syncPuzzlesOnBoard(huntId, [puzzle._id]);
+      const after = (await WhiteboardNodes.findOneAsync(card._id))!;
+      assert.isTrue(after.hidden);
+      assert.isTrue((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+    });
+
+    it("leaves what someone put back and took off again off when its puzzle comes back", async function () {
+      const { arrow, puzzle, card } = await feederWithArrow();
+      await Puzzles.destroyAsync(puzzle._id);
+      await syncPuzzlesOnBoard(huntId, [puzzle._id]);
+      assert.isTrue(
+        (await WhiteboardEdges.findOneAsync(arrow._id))?.hiddenWithPuzzle,
+      );
+      // Back, but before the sync that would show them again
+      await Puzzles.undestroyAsync(puzzle._id);
+      await upsertNodes(member, boardId, [{ _id: card._id, hidden: false }]);
+      await upsertEdges(member, boardId, [{ _id: arrow._id, hidden: false }]);
+      const shownArrow = await WhiteboardEdges.findOneAsync(arrow._id);
+      assert.isUndefined(shownArrow?.hidden);
+      assert.isUndefined(shownArrow?.hiddenWithPuzzle);
+      await deleteNodes(member, boardId, [card._id]);
+      await deleteEdges(member, boardId, [arrow._id]);
+      await syncPuzzlesOnBoard(huntId, [puzzle._id]);
+
+      for (const doc of [
+        await WhiteboardNodes.findOneAsync(card._id),
+        await WhiteboardEdges.findOneAsync(arrow._id),
+      ]) {
+        assert.isTrue(doc?.hidden);
+        assert.isUndefined(doc?.hiddenWithPuzzle);
+      }
+    });
+
+    it("leaves the arrows of a puzzle that's back before a sync of its delete gets to them", async function () {
+      const { arrow, puzzle } = await feederWithArrow();
+      await deleteEdges(member, boardId, [arrow._id]);
+      const board = (await Whiteboards.findOneAsync(boardId))!;
+      const tags = await Tags.find({ hunt: huntId }).fetchAsync();
+      // As a sync that read the puzzle as deleted just before it came back
+      await syncAutoEdges(board, [], tags, [puzzle._id]);
+      const after = await WhiteboardEdges.findOneAsync(arrow._id);
+      assert.isTrue(after?.hidden);
+      assert.isUndefined(after?.hiddenWithPuzzle);
+    });
+
+    it("keeps a deleted puzzle's arrows off through a reset that puts things back", async function () {
+      const arrows = await WhiteboardEdges.find({
+        board: boardId,
+        auto: true,
+      }).fetchAsync();
+      const metas = new Map<string, typeof arrows>();
+      arrows.forEach((a) =>
+        metas.set(a.meta!, [...(metas.get(a.meta!) ?? []), a]),
+      );
+      const [meta, [byHand, withPuzzle] = []] =
+        [...metas].find(([, feeding]) => feeding.length >= 2) ?? [];
+      assert.exists(meta, "a meta with two feeders");
+      assert.exists(byHand);
+      assert.exists(withPuzzle);
+      // One is taken off by hand, and a card for a live puzzle too, which
+      // put-back should bring back
+      await deleteEdges(member, boardId, [byHand._id]);
+      const other = (await WhiteboardNodes.findOneAsync({
+        board: boardId,
+        type: "puzzle",
+        puzzle: { $nin: [meta, byHand.feeder!, withPuzzle.feeder!] },
+      }))!;
+      await deleteNodes(member, boardId, [other._id]);
+      await Puzzles.destroyAsync(meta);
+      await syncPuzzlesOnBoard(huntId, [meta]);
+      assert.isTrue(
+        (await WhiteboardEdges.findOneAsync(withPuzzle._id))?.hiddenWithPuzzle,
+      );
+
+      await asUser(operator, () =>
+        resetWhiteboardLayout.callPromise({ boardId, putBack: true }),
+      );
+
+      assert.isTrue((await WhiteboardEdges.findOneAsync(byHand._id))?.hidden);
+      assert.isTrue(
+        (await WhiteboardEdges.findOneAsync(withPuzzle._id))?.hidden,
+      );
+      assert.isUndefined(
+        (await WhiteboardNodes.findOneAsync(other._id))?.hidden,
+      );
+    });
+
+    it("gives a puzzle that comes back after being replaced a card of its own", async function () {
+      const { puzzle, card } = await feederWithArrow();
+      const replacement = await newPuzzle("Stand-in", puzzle.tags);
+      await destroy(puzzle._id, replacement);
+      await waitForAssertion(async () => {
+        assert.equal((await cardFor(replacement))?._id, card._id);
+      }, 5000);
+      await undestroy(puzzle._id);
+      await waitForAssertion(async () => {
+        const own = await cardFor(puzzle._id);
+        assert.exists(own);
+        assert.notEqual(own._id, card._id);
+        assert.isNotOk(own.hidden);
+        assert.equal((await cardFor(replacement))?._id, card._id);
+      }, 5000);
     });
   });
 
@@ -2073,16 +2399,70 @@ describe("whiteboard", function () {
         }
       });
 
+      it("keeps when someone typing last said so, only while they're typing", async function () {
+        const { connection, close } = fakeConnection();
+        try {
+          const [id] = await boardNodes(1);
+          const at = new Date(Date.now() - 5000);
+          await setLive(member, connection, boardId, {
+            ...state,
+            editing: id,
+            editingAt: at,
+          });
+          const presence = () =>
+            WhiteboardPresence.findOneAsync({ connection: connection.id });
+          assert.deepEqual((await presence())?.editingAt, at);
+
+          // Nothing being typed in has no time
+          await setLive(member, connection, boardId, {
+            ...state,
+            editing: null,
+            editingAt: at,
+          });
+          assert.isNull((await presence())?.editingAt);
+          // nor does a client that doesn't send one
+          await setLive(member, connection, boardId, { ...state, editing: id });
+          assert.isNull((await presence())?.editingAt);
+
+          await assert.isRejected(
+            setLive(member, connection, boardId, {
+              ...state,
+              editing: id,
+              editingAt: new Date(Number.NaN),
+            }),
+            /Invalid live update/,
+          );
+          await assert.isRejected(
+            asUser(
+              member,
+              () =>
+                setWhiteboardLive.callPromise({
+                  boardId,
+                  ...state,
+                  editing: id,
+                  editingAt: "now" as unknown as Date,
+                }),
+              connection,
+            ),
+            /Match/,
+          );
+        } finally {
+          close();
+        }
+      });
+
       it("publishes what others have selected and are typing in", async function () {
         const mine = new StubSubscription(member);
         Object.assign(mine, { connection: fakeConnection().connection });
         const theirs = fakeConnection();
         try {
           const ids = await boardNodes(2);
+          const editingAt = new Date();
           await setLive(operator, theirs.connection, boardId, {
             ...state,
             selection: ids,
             editing: ids[1],
+            editingAt,
           });
           const cursor = await publishHandler(whiteboardPresence.name).call(
             mine,
@@ -2092,6 +2472,7 @@ describe("whiteboard", function () {
           assert.lengthOf(published, 1);
           assert.deepEqual(published[0].selection, ids);
           assert.equal(published[0].editing, ids[1]);
+          assert.deepEqual(published[0].editingAt, editingAt);
         } finally {
           mine.stop();
           theirs.close();
@@ -2821,6 +3202,7 @@ describe("whiteboard", function () {
         },
         selection: [node._id],
         editing: node._id,
+        editingAt: new Date(),
       };
     };
 
@@ -3182,6 +3564,147 @@ describe("whiteboard", function () {
           });
           await setLive(operator, connection, boardId, live);
           assert.isNull((await presenceOf(connection))?.drag);
+        } finally {
+          close();
+        }
+      });
+
+      it("clears the live edits of someone demoted, before they next move", async function () {
+        await setPolicy(operator, "operators");
+        const live = await busy();
+        const { connection, close } = fakeConnection();
+        try {
+          await setLive(operator, connection, boardId, live);
+          assert.equal((await presenceOf(connection))?.editing, live.editing);
+          await MeteorUsers.updateAsync(operator, {
+            $set: { [`roles.${huntId}`]: [] },
+          });
+          await waitForAssertion(async () => {
+            const doc = await presenceOf(connection);
+            assert.deepEqual(doc?.cursor, live.cursor);
+            assert.isNull(doc?.drag);
+            assert.isNull(doc?.stroke);
+            assert.isNull(doc?.selection);
+            assert.isNull(doc?.editing);
+            assert.isNull(doc?.editingAt);
+          }, 12000);
+        } finally {
+          close();
+        }
+      });
+
+      it("clears everyone's live edits on a hunt that's archived, before they next move", async function () {
+        const live = await busy();
+        const theirs = fakeConnection();
+        const ours = fakeConnection();
+        try {
+          await setLive(member, theirs.connection, boardId, live);
+          await setLive(operator, ours.connection, boardId, live);
+          await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+          await waitForAssertion(async () => {
+            for (const connection of [theirs.connection, ours.connection]) {
+              const doc = await presenceOf(connection);
+              assert.deepEqual(doc?.cursor, live.cursor);
+              assert.isNull(doc?.drag);
+              assert.isNull(doc?.stroke);
+              assert.isNull(doc?.selection);
+              assert.isNull(doc?.editing);
+              assert.isNull(doc?.editingAt);
+            }
+          }, 12000);
+        } finally {
+          theirs.close();
+          ours.close();
+        }
+      });
+
+      it("clears live edits only of those a hunt's default roles stop making operators", async function () {
+        await setPolicy(operator, "operators");
+        await Hunts.updateAsync(huntId, {
+          $set: { defaultRoles: ["operator"] },
+        });
+        const live = await busy();
+        // An operator only by the hunt's default, and one in their own right
+        const theirs = fakeConnection();
+        const ours = fakeConnection();
+        try {
+          await setLive(member, theirs.connection, boardId, live);
+          await setLive(operator, ours.connection, boardId, live);
+          assert.equal(
+            (await presenceOf(theirs.connection))?.editing,
+            live.editing,
+          );
+          await Hunts.updateAsync(huntId, { $set: { defaultRoles: [] } });
+          await waitForAssertion(async () => {
+            const doc = await presenceOf(theirs.connection);
+            assert.deepEqual(doc?.cursor, live.cursor);
+            assert.isNull(doc?.drag);
+            assert.isNull(doc?.stroke);
+            assert.isNull(doc?.selection);
+            assert.isNull(doc?.editing);
+            assert.isNull(doc?.editingAt);
+          }, 12000);
+          // Cleared in the same pass, so the operator's would be gone by now
+          const kept = await presenceOf(ours.connection);
+          assert.deepEqual(kept?.drag, live.drag);
+          assert.deepEqual(kept?.stroke, live.stroke);
+          assert.deepEqual(kept?.selection, live.selection);
+          assert.equal(kept?.editing, live.editing);
+          assert.deepEqual(kept?.editingAt, live.editingAt);
+        } finally {
+          theirs.close();
+          ours.close();
+        }
+      });
+
+      it("clears a demoted user's live edits only on boards they can no longer edit", async function () {
+        const otherHunt = await createTestHunt(operator);
+        await MeteorUsers.updateAsync(operator, {
+          $addToSet: { hunts: otherHunt },
+          $set: { [`roles.${otherHunt}`]: ["operator"] },
+        });
+        const otherBoard = await ensureWhiteboard(operator, otherHunt);
+        await setPolicy(operator, "operators");
+        await asUser(operator, () =>
+          setWhiteboardEditPolicy.callPromise({
+            boardId: otherBoard,
+            editPolicy: "operators",
+            editors: [],
+          }),
+        );
+        const note = Random.id();
+        await upsertNodes(operator, otherBoard, [
+          { _id: note, type: "sticky", position: { x: 0, y: 0 } },
+        ]);
+        const here = await busy();
+        const there = {
+          ...here,
+          drag: [{ node: note, x: 5, y: 6, parent: null }],
+          selection: [note],
+          editing: note,
+        };
+        const { connection, close } = fakeConnection();
+        const rowOn = (board: string) =>
+          WhiteboardPresence.findOneAsync({ connection: connection.id, board });
+        try {
+          await setLive(operator, connection, boardId, here);
+          await setLive(operator, connection, otherBoard, there);
+          await MeteorUsers.updateAsync(operator, {
+            $set: { [`roles.${huntId}`]: [] },
+          });
+          await waitForAssertion(async () => {
+            const doc = await rowOn(boardId);
+            assert.isNull(doc?.drag);
+            assert.isNull(doc?.editing);
+            assert.isNull(doc?.editingAt);
+          }, 12000);
+          // Cleared in the same pass, so the other board's would be gone by
+          // now
+          const kept = await rowOn(otherBoard);
+          assert.deepEqual(kept?.drag, there.drag);
+          assert.deepEqual(kept?.selection, there.selection);
+          assert.equal(kept?.editing, there.editing);
+          assert.deepEqual(kept?.editingAt, there.editingAt);
         } finally {
           close();
         }

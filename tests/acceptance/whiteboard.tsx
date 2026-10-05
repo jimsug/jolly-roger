@@ -52,10 +52,12 @@ import addHuntUser from "../../imports/methods/addHuntUser";
 import addPuzzleTag from "../../imports/methods/addPuzzleTag";
 import createChatImageUpload from "../../imports/methods/createChatImageUpload";
 import createFixtureHunt from "../../imports/methods/createFixtureHunt";
+import createPuzzle from "../../imports/methods/createPuzzle";
 import createWhiteboard from "../../imports/methods/createWhiteboard";
 import deleteWhiteboardComment from "../../imports/methods/deleteWhiteboardComment";
 import deleteWhiteboardEdges from "../../imports/methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../imports/methods/deleteWhiteboardNodes";
+import destroyPuzzle from "../../imports/methods/destroyPuzzle";
 import promoteOperator from "../../imports/methods/promoteOperator";
 import provisionFirstUser from "../../imports/methods/provisionFirstUser";
 import removePuzzleTag from "../../imports/methods/removePuzzleTag";
@@ -66,6 +68,7 @@ import setWhiteboardEditPolicy from "../../imports/methods/setWhiteboardEditPoli
 import setWhiteboardLayoutLocked from "../../imports/methods/setWhiteboardLayoutLocked";
 import setWhiteboardLive from "../../imports/methods/setWhiteboardLive";
 import TypedMethod from "../../imports/methods/TypedMethod";
+import undestroyPuzzle from "../../imports/methods/undestroyPuzzle";
 import upsertWhiteboardEdges from "../../imports/methods/upsertWhiteboardEdges";
 import upsertWhiteboardNodes from "../../imports/methods/upsertWhiteboardNodes";
 import resetDatabase from "../lib/resetDatabase";
@@ -78,6 +81,12 @@ const setHuntArchived = new TypedMethod<
   { huntId: string; isArchived: boolean },
   void
 >("test.methods.whiteboard.setHuntArchived");
+
+// Marks a puzzle deleted without syncing the board, leaving its card as it
+// was.
+const markPuzzleDeleted = new TypedMethod<{ puzzleId: string }, void>(
+  "test.methods.whiteboard.markPuzzleDeleted",
+);
 
 // Starts a board's history afresh, so a test knows which versions it made.
 const clearWhiteboardVersions = new TypedMethod<{ boardId: string }, void>(
@@ -189,6 +198,20 @@ if (Meteor.isServer) {
       }
       await WhiteboardVersions.removeAsync({ board: boardId });
       await WhiteboardVersionChunks.removeAsync({ board: boardId });
+    },
+  });
+
+  defineMethod(markPuzzleDeleted, {
+    validate(arg: unknown) {
+      check(arg, { puzzleId: String });
+      return arg;
+    },
+
+    async run({ puzzleId }) {
+      if (!Meteor.isAppTest) {
+        throw new Meteor.Error(500, "This code must not run in production");
+      }
+      await Puzzles.updateAsync(puzzleId, { $set: { deleted: true } });
     },
   });
 
@@ -1188,6 +1211,200 @@ if (Meteor.isClient) {
         await goTo(`${boardPath}?comment=${commentId}`);
         await screen.findByText(
           "That comment is gone.",
+          {},
+          { timeout: 20000 },
+        );
+        await waitFor(() => assert.equal(location.current?.search, ""));
+      });
+    });
+
+    describe("deleted and replaced puzzles", function () {
+      let boardId: string;
+
+      before(async function () {
+        this.timeout(10000);
+        boardId = (await ensureBoard())._id;
+      });
+
+      // A new puzzle in a round of its own, once its card is on the board
+      const puzzleOnBoard = async (title: string) => {
+        subs.push(await typedSubscribe.async(whiteboardContents, { boardId }));
+        const puzzleId = await createPuzzle.callPromise({
+          huntId,
+          title,
+          tags: ["group:stand-ins"],
+          expectedAnswerCount: 1,
+          docType: "spreadsheet",
+        });
+        const card = await waitFor(
+          async () => {
+            const found = await WhiteboardNodes.findOneAsync({
+              board: boardId,
+              puzzle: puzzleId,
+            });
+            assert.ok(found);
+            return found;
+          },
+          { timeout: 10000 },
+        );
+        return { puzzleId, card };
+      };
+
+      // The puzzle list's delete button on the row with this title
+      const deleteButtonFor = (title: string) =>
+        screen.queryAllByTitle("Delete puzzle...").find((button) => {
+          for (
+            let row = button.parentElement;
+            row?.querySelectorAll('[title="Delete puzzle..."]').length === 1;
+            row = row.parentElement
+          ) {
+            if (row.textContent?.includes(title)) return true;
+          }
+          return false;
+        });
+
+      it("keeps a replaced puzzle's card where it was, for its replacement", async function () {
+        this.timeout(60000);
+        const { card } = await puzzleOnBoard("Withdrawn puzzle");
+        // Moved by hand, so placement wouldn't put anything here
+        const position = { x: card.position.x + 13, y: card.position.y + 17 };
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [{ _id: card._id, position }],
+        });
+        const { puzzleId: replacement } =
+          await puzzleOnBoard("Stand-in puzzle");
+
+        render(<TestApp />);
+        await goTo(`/hunts/${huntId}/puzzles`);
+        const remove = await waitFor(
+          () => {
+            const found = deleteButtonFor("Withdrawn puzzle");
+            assert.exists(found);
+            return found;
+          },
+          { timeout: 20000 },
+        );
+        await act(async () => {
+          fireEvent.click(remove);
+          await stabilize();
+        });
+        const dialog = await screen.findByRole(
+          "dialog",
+          {},
+          { timeout: 10000 },
+        );
+        const choose = await within(dialog).findByRole(
+          "combobox",
+          {},
+          { timeout: 10000 },
+        );
+        await act(async () => {
+          fireEvent.focus(choose);
+          fireEvent.change(choose, { target: { value: "Stand-in puzzle" } });
+          await stabilize();
+        });
+        const option = await within(dialog).findByText("Stand-in puzzle");
+        await act(async () => {
+          fireEvent.click(option);
+          await stabilize();
+        });
+        await act(async () => {
+          fireEvent.click(
+            within(dialog).getByRole("button", { name: "Delete" }),
+          );
+          await stabilize();
+        });
+
+        await waitFor(
+          async () => {
+            const cards = await WhiteboardNodes.find({
+              board: boardId,
+              puzzle: replacement,
+            }).fetchAsync();
+            assert.deepEqual(
+              cards.map((c) => [c._id, c.position, c.parent]),
+              [[card._id, position, card.parent]],
+            );
+          },
+          { timeout: 20000 },
+        );
+        await goTo(`${boardPath}?node=${card._id}`);
+        await waitFor(
+          () => {
+            const shown = nodeElement(card._id);
+            assert.include(shown?.textContent ?? "", "Stand-in puzzle");
+            assert.notInclude(shown?.textContent ?? "", "Withdrawn puzzle");
+          },
+          { timeout: 20000 },
+        );
+      });
+
+      it("takes a deleted puzzle's card off the board and puts it back where it was", async function () {
+        this.timeout(60000);
+        const { puzzleId, card } = await puzzleOnBoard("Wavering puzzle");
+        render(<TestApp />);
+        await goTo(`${boardPath}?node=${card._id}`);
+        await waitFor(() => assert.isNotNull(nodeElement(card._id)), {
+          timeout: 20000,
+        });
+
+        await destroyPuzzle.callPromise({
+          puzzleId,
+          copySheetsToReplacement: false,
+        });
+        await waitFor(
+          async () => {
+            assert.isNull(nodeElement(card._id));
+            assert.isTrue(
+              (await WhiteboardNodes.findOneAsync(card._id))?.hidden,
+            );
+          },
+          { timeout: 10000 },
+        );
+
+        await undestroyPuzzle.callPromise({ puzzleId });
+        await waitFor(
+          async () => {
+            assert.isNotNull(nodeElement(card._id));
+            const back = await WhiteboardNodes.findOneAsync(card._id);
+            assert.ok(back);
+            assert.isUndefined(back.hidden);
+            assert.deepEqual(back.position, card.position);
+            assert.equal(back.parent, card.parent);
+          },
+          { timeout: 10000 },
+        );
+      });
+
+      it("says so when a ?comment= link's card has gone with its puzzle", async function () {
+        this.timeout(60000);
+        const { puzzleId, card } = await puzzleOnBoard("Vanishing puzzle");
+        const board = await ensureBoard();
+        await sendChatMessage.callPromise({
+          puzzleId: board.puzzle,
+          content: JSON.stringify({
+            type: "message",
+            children: [{ text: "On the vanishing card" }],
+          }),
+          comment: { node: card._id, x: 5, y: 5 },
+        });
+        render(<TestApp />);
+        await goTo(boardPath);
+        const commentId = await waitFor(
+          async () => {
+            const found = await ChatMessages.findOneAsync({
+              "comment.node": card._id,
+            });
+            assert.ok(found);
+            return found._id;
+          },
+          { timeout: 20000 },
+        );
+        await markPuzzleDeleted.callPromise({ puzzleId });
+        await goTo(`${boardPath}?comment=${commentId}`);
+        await screen.findByText(
+          "That isn't on the board any more.",
           {},
           { timeout: 20000 },
         );

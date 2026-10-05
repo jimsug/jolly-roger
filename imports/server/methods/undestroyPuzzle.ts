@@ -9,6 +9,7 @@ import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import undestroyPuzzle from "../../methods/undestroyPuzzle";
 import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import { makeReadWrite } from "../gdrive";
+import { deferSyncPuzzlesOnBoard } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(undestroyPuzzle, {
@@ -47,6 +48,8 @@ defineMethod(undestroyPuzzle, {
         replacedBy: 1,
       },
     });
+    // A card hidden with the puzzle comes back, with its feeder arrows.
+    deferSyncPuzzlesOnBoard(puzzle.hunt, [puzzleId]);
 
     if (await Flags.activeAsync("disable.google")) {
       return;

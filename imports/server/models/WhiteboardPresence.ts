@@ -46,6 +46,10 @@ const WhiteboardPresenceSchema = z.object({
   selection: foreignKey.array().nullable().optional(),
   // A node, or a line whose label is being typed in.
   editing: foreignKey.nullable().optional(),
+  // Refreshed by the client every few seconds while editing is set, so the
+  // document keeps changing while someone types and others don't take their
+  // tab for a stalled one.
+  editingAt: z.date().nullable().optional(),
 });
 
 const WhiteboardPresence = new Model(

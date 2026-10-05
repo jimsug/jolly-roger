@@ -29,6 +29,9 @@ const WhiteboardEdge = withCommon(
     target: foreignKey,
     label: nonEmptyString.optional(),
     hidden: z.boolean().optional(),
+    // A feeder arrow hidden because a puzzle at one end was deleted rather
+    // than by a person, which comes back once both puzzles are live.
+    hiddenWithPuzzle: z.boolean().optional(),
     // Drawing style. Unset means a curved line with an arrow at the target end.
     pathStyle: z.enum(WhiteboardPathStyles).optional(),
     arrowHead: z.enum(WhiteboardArrowHeads).optional(),

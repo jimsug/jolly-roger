@@ -29,11 +29,12 @@ defineMethod(setWhiteboardLive, {
       }),
       selection: Match.Optional(Match.OneOf(null, [String])),
       editing: Match.Optional(Match.OneOf(null, String)),
+      editingAt: Match.Optional(Match.OneOf(null, Date)),
     });
     return arg;
   },
 
-  async run({ boardId, cursor, drag, stroke, selection, editing }) {
+  async run({ boardId, cursor, drag, stroke, selection, editing, editingAt }) {
     check(this.userId, String);
     if (!this.connection) {
       throw new Meteor.Error(400, "Live updates need a connection");
@@ -46,6 +47,7 @@ defineMethod(setWhiteboardLive, {
       stroke,
       selection,
       editing,
+      editingAt,
     });
   },
 });

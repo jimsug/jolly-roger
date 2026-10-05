@@ -63,6 +63,7 @@ files:
   - imports/lib/whiteboard/limits.ts
   - imports/lib/whiteboard/links.ts
   - imports/lib/whiteboard/minimap.ts
+  - imports/lib/whiteboard/notOnBoard.ts
   - imports/lib/whiteboard/remoteActivity.ts
   - imports/lib/whiteboard/reset.ts
   - imports/lib/whiteboard/rounds.ts
@@ -81,6 +82,7 @@ files:
   - imports/methods/upsertWhiteboardNodes.ts
   - imports/server/daemons/whiteboardVersions.ts
   - imports/server/methods/addPuzzleAnswer.ts
+  - imports/server/methods/destroyPuzzle.ts
   - imports/server/methods/fetchWhiteboardVersion.ts
   - imports/server/methods/placeWhiteboardCardsByTags.ts
   - imports/server/methods/resetWhiteboardLayout.ts
@@ -88,6 +90,7 @@ files:
   - imports/server/methods/restoreWhiteboardVersion.ts
   - imports/server/methods/setWhiteboardEditPolicy.ts
   - imports/server/methods/setWhiteboardLayoutLocked.ts
+  - imports/server/methods/undestroyPuzzle.ts
   - imports/server/methods/updatePuzzle.ts
   - imports/server/models/WhiteboardPresence.ts
   - imports/server/models/WhiteboardVersionChunks.ts
@@ -95,6 +98,7 @@ files:
   - imports/server/tagSynonyms.ts
   - imports/server/transitionGuess.ts
   - imports/server/whiteboard.ts
+  - imports/server/whiteboardComments.ts
   - imports/server/whiteboardEdits.ts
   - imports/server/whiteboardLive.ts
   - imports/server/whiteboardPolicy.ts
@@ -120,6 +124,74 @@ puzzle, and move a card when its tags change, unless someone has moved that
 card by hand (Place by tags and Reset layout hand it back to placement).
 Placement takes the `whiteboard:<boardId>` lock, so a burst of new puzzles
 can't land in the same slot.
+
+### Deleted, replaced and restored puzzles
+
+Deleting a puzzle (`destroyPuzzle`) and bringing it back (`undestroyPuzzle`)
+each queue a placement sync of that puzzle, as adding one does. The sync
+goes by the puzzle as it is when it runs, under the board's lock, so a
+delete and an undo in quick succession end up right whichever runs first.
+
+- **Replaced.** When the delete names a replacement that's still live, the
+  deleted puzzle's card becomes the replacement's: only its `puzzle` changes,
+  so it keeps its id, place, frame, size, `manual`, lock and comment pins.
+  If the replacement already had a card of its own, that card goes, and the
+  lines and comment pins on it, and free pins that came off it, move onto
+  the card that stays (a line between the two goes). The deleted puzzle's
+  feeder arrows go and the replacement's are drawn. The replacement is synced
+  in the same batch, after the hand-over, so its own placement finds the card
+  rather than making another; one placed separately at the same moment
+  either finds it too or has its card merged as above, since both take the
+  lock. Someone putting the replacement on the board by hand doesn't take
+  the lock, and if their card lands first the hand-over can't happen: the
+  deleted puzzle's card is then hidden as below, and the lines and pins of
+  any card the replacement had move onto theirs. After that the card is
+  placed like any other: one nobody has moved goes to the replacement's
+  round if that's a different one. If someone had already taken the deleted
+  puzzle's card off the board, it stays off and the replacement keeps or
+  gets a card of its own.
+- **Deleted.** With no replacement, the card is hidden rather than removed,
+  marked `hiddenWithPuzzle`, and its comment pins become free pins where they
+  were, as when someone takes a card off the board. Feeder arrows to or from
+  the deleted puzzle are hidden the same way, and later syncs leave them
+  hidden rather than removing them. The "Not on the board" panel and the
+  search only list live puzzles, so neither offers the card or its arrows,
+  and putting either back is refused ("That puzzle has been deleted"). Reset
+  layout's "put back" leaves them off too, as it does any arrow to or from
+  the puzzle that someone took off by hand. Taking a card or arrow off by
+  hand, or putting one back, clears `hiddenWithPuzzle`, so a person's choice
+  isn't undone when the puzzle comes back.
+- **Brought back.** The card comes back where it was, with the pins that
+  came off it, and its feeder arrows are shown again (or drawn, if a sync
+  removed them meanwhile). A card that has never been moved by hand then
+  goes wherever its tags say, as usual. A card someone had taken off the
+  board before the delete stays off. A puzzle that comes back after being
+  replaced gets a card of its own, since its old one is the replacement's.
+
+The client also leaves out any card whose puzzle isn't live (a puzzle
+marked deleted without a board sync, as on older boards), so a `?comment=`
+link or "Show on board" for a comment pinned to one says "That isn't on the
+board any more."
+
+Restoring a version (see History) is told which of the hunt's puzzles are
+live, and treats a version's card for a deleted puzzle by what the board
+has now:
+
+- If the board's card with the same id was handed over to a replacement
+  (and the version has no card of its own for the replacement), the
+  version's card is that card, so it goes back to the version's place with
+  the version's lines. The deleted puzzle's feeder arrows aren't drawn.
+- If the board still has a card for the deleted puzzle, hidden with it,
+  that card takes the version's place and lines but stays hidden, as do its
+  feeder arrows, so they're all there if the puzzle comes back. A card the
+  version had taken off by hand stays off that way.
+- Otherwise the card isn't put back, nor are the lines to it.
+
+A deleted puzzle's hidden card the version has no card for is left where
+it is (moved out only of a frame the restore removes). A card or feeder
+arrow that a version has hidden with a puzzle that has come back since is
+restored as shown. Restoring single items from a preview follows the same
+rules.
 
 The board's chat and call belong to a hidden puzzle (`kind: "whiteboard"`)
 created with the board. Comment threads are chat messages on that puzzle, so
@@ -202,9 +274,12 @@ policy, the hunt or someone's roles applies from the next call. A call that
 was already past the gate finishes.
 
 Of the other whiteboard modules it imports only `whiteboard.ts`, which
-imports none of them, and the rest import it, so there's no import cycle
-among them. It also holds the helpers more than one of them
-needs, such as the coordinate checks and `detachComments`.
+imports only `whiteboardComments.ts`, and the rest import it, so there's no
+import cycle among them. It also holds the helpers more than one of them
+needs, such as the coordinate checks. Taking comment pins off nodes and
+putting them back (`detachComments`, `reattachComments`) lives in
+`whiteboardComments.ts`, a leaf that imports no other whiteboard server
+module, so placement in `whiteboard.ts` can use it too.
 
 ### The live channel
 
@@ -230,11 +305,17 @@ what it read.
 People who can comment but not edit still send their cursor. Their drags,
 strokes, selections and editing are stored as null rather than refused, since
 a refusal would come back every 100ms; anyone outside the hunt is refused as
-before. When a policy change takes edit rights away, `setEditPolicy` clears
-the drags, strokes, selections and editing of anyone on the board who lost
-them. Losing edit rights another way (the hunt being archived, or a role
-taken away under a policy that goes by role) clears them on that person's
-next update, so a selection someone leaves alone stays drawn until then.
+before. Someone who loses edit rights has their drags, strokes, selections
+and editing cleared at once rather than on their next update, by
+`clearLiveEditsOfNonEditors` in `whiteboardLive.ts`, which leaves alone
+anyone who can still edit:
+
+- `setEditPolicy` clears them for everyone on the board who lost them;
+- each process's hunt observer, seeing a hunt archived (or its default
+  roles change), clears them on its own connections' presence on that
+  hunt's boards;
+- each connection's user observer, seeing a role taken away or the hunt
+  left, clears them on that connection's presence.
 
 The method unblocks, so updates from one connection can run side by side.
 Each connection numbers its updates per board, and one that's overtaken
@@ -269,9 +350,11 @@ it here: double-click and Enter do nothing, the pointer stays an arrow, and
 the title says "Ada is editing this". It opens again once their editing
 clears, or once their presence has gone 30 seconds
 (`REMOTE_EDITING_TIMEOUT_MS`) without changing at all, in case their tab has
-stalled. A cursor move counts as a change, but typing alone doesn't, so
-someone who types for more than 30 seconds without moving the pointer loses
-the cue until they next move it.
+stalled. While something is being typed in, `useWhiteboardLive` sends a fresh
+`editingAt` every 10 seconds (`EDITING_KEEPALIVE_MS`), so the presence keeps
+changing through a long edit with the pointer still, and only a tab that has
+really stalled loses the cue. The server keeps `editingAt` only alongside
+`editing`, after checking it's a real date, and publishes it with the rest.
 `useWhiteboardOthersEditing` works this out from the presence documents with
 `othersEditing` in `imports/lib/whiteboard/remoteActivity.ts`. It's a soft
 lock, kept by the clients only: the server takes either person's save, two
@@ -516,7 +599,10 @@ The toolbar's "Not on the board" button (with a count of everything in it)
 opens a panel in three parts, for anyone who can edit:
 
 - **Puzzles**: cards someone deleted, which only hides them, and live puzzles
-  with no card. "Put back" puts the card at the middle of the screen.
+  with no card. "Put back" puts the card at the middle of the screen. A
+  deleted puzzle's card isn't listed (see Deleted, replaced and restored
+  puzzles). `missingCards` and `hiddenFeederArrows` in
+  `imports/lib/whiteboard/notOnBoard.ts` build the puzzle and arrow lists.
 - **Frames**: rounds' frames (seeded frames and Ungrouped) someone deleted,
   which only hides them. Their contents moved out to the frame around them
   when they went, so a frame comes back at the top level, centred on the
@@ -876,8 +962,9 @@ feeder arrow by its feeder and meta, and anything else by id. Where the
 version and the board have the same thing under different ids, the board's id
 wins and the version's references are remapped to it. Parents that are
 missing or would make a loop are dropped (the node goes to the top level), as
-are lines with a missing end and free ends no line uses. A restore that would
-take the board past its node or line limit is refused.
+are lines with a missing end and free ends no line uses. Cards for deleted
+puzzles aren't put back (see Deleted, replaced and restored puzzles). A
+restore that would take the board past its node or line limit is refused.
 
 Only after that does it record the board as it is (a version of kind
 `restore`), so a refused restore records nothing. Then:
@@ -938,7 +1025,8 @@ documents outside the set stay as they are, including things added to a
 restored frame since the version. A node whose frame isn't on the board (and
 isn't being restored with it), or that would make a loop, goes to the top
 level where the version had it on screen. A line whose other end isn't on the
-board isn't restored, nor is its free end. Putting things back that would
+board isn't restored, nor is its free end, and neither is a card for a
+deleted puzzle or a line to one. Putting things back that would
 take the board past its node or line limit is refused with "This board is
 full".
 
@@ -1032,7 +1120,8 @@ that fails, nothing on the board changes. It then lays the hunt out with
   were. The layout leaves them out, so their puzzles go where placement
   would put them today: another of their rounds, or Ungrouped. With the
   checkbox ticked (`putBack`) they're laid out with everything else and come
-  back, and so do feeder arrows someone took off. With Ungrouped taken off
+  back, and so do feeder arrows someone took off (not those hidden with a
+  deleted puzzle). With Ungrouped taken off
   and the box not ticked, the cards it would hold go where it would have
   been, at the top level.
 - Cards for deleted puzzles are left alone.
@@ -1459,18 +1548,20 @@ There is no flag for the edit policy: `members` is already the off position.
 - `WhiteboardNodes` (`jr_whiteboard_nodes`): cards, frames, sticky notes, text,
   ink segments and the free ends of lines. A node inside a frame has `parent`
   set and a position relative to it. `hidden` marks a card or seeded frame
-  someone removed, so placement doesn't put it back; `manual` marks a node
+  someone removed, so placement doesn't put it back, and `hiddenWithPuzzle`
+  one hidden because its puzzle was deleted; `manual` marks a node
   someone has moved, so placement leaves it alone until Place by tags or a
   reset clears it. `collapsed` marks a frame folded for everyone (see
   Collapsed rounds). `locked` and `lockedBy` mark a node locked and who
   locked it (see Locks). `contributors` records who wrote or restyled it.
 - `WhiteboardEdges` (`jr_whiteboard_edges`): lines between nodes. Feeder arrows
   are `auto`, with `feeder` and `meta` puzzle ids, and follow the puzzles'
-  tags.
+  tags; `hiddenWithPuzzle` marks one hidden because a puzzle at either end
+  was deleted.
 - `WhiteboardPresence` (`jr_whiteboard_presence`, server only): one document
-  per connection per board, with the cursor, drag, stroke, `selection` and
-  `editing` (all optional, null once cleared). It goes when the connection
-  closes, the presence subscription stops or its server dies.
+  per connection per board, with the cursor, drag, stroke, `selection`,
+  `editing` and `editingAt` (all optional, null once cleared). It goes when
+  the connection closes, the presence subscription stops or its server dies.
 - `WhiteboardVersions` (`jr_whiteboard_versions`): one per version, with its
   `kind` (`edits`, `reset` or `restore`), the
   `users` who edited after it and when each started, `changeCount`,

@@ -160,6 +160,11 @@ import {
 import type { SeenDrag } from "../../../lib/whiteboard/liveDrags";
 import { liveDrags, seeDrags } from "../../../lib/whiteboard/liveDrags";
 import { miniMapColor } from "../../../lib/whiteboard/minimap";
+import type { MissingCard } from "../../../lib/whiteboard/notOnBoard";
+import {
+  hiddenFeederArrows,
+  missingCards,
+} from "../../../lib/whiteboard/notOnBoard";
 import { finishedFrames } from "../../../lib/whiteboard/rounds";
 import type { BoardSearchHit } from "../../../lib/whiteboard/search";
 import {
@@ -807,13 +812,6 @@ const ArrangeButton = <Kind extends AlignMode | DistributeAxis>({
     </Button>
   );
 };
-
-// A puzzle that isn't on the board, with a way to put it back.
-interface MissingCard {
-  id: string | undefined;
-  puzzle: string;
-  title: string;
-}
 
 // A seeded frame someone removed.
 interface HiddenFrame {
@@ -2702,22 +2700,10 @@ const CanvasInner = ({
     ],
   );
 
-  const hiddenCards = useMemo((): MissingCard[] => {
-    const titles = new Map(livePuzzles.map((p) => [p._id, p.title]));
-    const onBoard = new Set(nodeDocs.map((d) => d.puzzle).filter(Boolean));
-    const hidden = nodeDocs.flatMap((d) => {
-      const title = d.puzzle && titles.get(d.puzzle);
-      return d.type === "puzzle" && d.hidden && d.puzzle && title
-        ? [{ id: d._id, puzzle: d.puzzle, title }]
-        : [];
-    });
-    const missing = livePuzzles
-      .filter((p) => !onBoard.has(p._id))
-      .map((p) => ({ id: undefined, puzzle: p._id, title: p.title }));
-    return [...hidden, ...missing].toSorted((a, b) =>
-      a.title.localeCompare(b.title),
-    );
-  }, [livePuzzles, nodeDocs]);
+  const hiddenCards = useMemo(
+    () => missingCards(livePuzzles, nodeDocs),
+    [livePuzzles, nodeDocs],
+  );
 
   // Frames for rounds that someone removed. Only seeded frames are kept when
   // they're removed; anything made on the board is deleted outright.
@@ -2754,28 +2740,22 @@ const CanvasInner = ({
       ).fetch(),
     [boardId],
   );
-  const hiddenArrows = useMemo((): HiddenArrow[] => {
-    const titles = new Map(livePuzzles.map((p) => [p._id, p.title]));
-    return hiddenArrowDocs
-      .flatMap((e) => {
-        const feeder = e.feeder && titles.get(e.feeder);
-        const meta = e.meta && titles.get(e.meta);
-        if (!feeder || !meta) return [];
-        return [
-          {
-            id: e._id,
-            title: t("whiteboard.hidden.arrow", "{{feeder}} → {{meta}}", {
-              feeder,
-              meta,
-              // React escapes text, so i18next's escaping would only show
-              // entities. Goes once both i18n inits stop escaping.
-              interpolation: { escapeValue: false },
-            }),
-          },
-        ];
-      })
-      .toSorted((a, b) => a.title.localeCompare(b.title));
-  }, [hiddenArrowDocs, livePuzzles, t]);
+  const hiddenArrows = useMemo(
+    (): HiddenArrow[] =>
+      hiddenFeederArrows(livePuzzles, hiddenArrowDocs)
+        .map(({ id, feeder, meta }) => ({
+          id,
+          title: t("whiteboard.hidden.arrow", "{{feeder}} → {{meta}}", {
+            feeder,
+            meta,
+            // React escapes text, so i18next's escaping would only show
+            // entities. Goes once both i18n inits stop escaping.
+            interpolation: { escapeValue: false },
+          }),
+        }))
+        .toSorted((a, b) => a.title.localeCompare(b.title)),
+    [hiddenArrowDocs, livePuzzles, t],
+  );
   const notOnBoardCount =
     hiddenCards.length + hiddenFrames.length + hiddenArrows.length;
 

@@ -4,7 +4,10 @@ import { assert } from "chai";
 import sinon from "sinon";
 import useWhiteboardOthersEditing from "../../../../imports/client/hooks/useWhiteboardOthersEditing";
 import WhiteboardPresence from "../../../../imports/client/WhiteboardPresence";
-import { REMOTE_EDITING_TIMEOUT_MS } from "../../../../imports/lib/whiteboard/remoteActivity";
+import {
+  EDITING_KEEPALIVE_MS,
+  REMOTE_EDITING_TIMEOUT_MS,
+} from "../../../../imports/lib/whiteboard/remoteActivity";
 
 // The client's own copy of the collection, written to directly as the
 // presence publication would.
@@ -72,6 +75,34 @@ describe("useWhiteboardOthersEditing", function () {
       local.update(doc, { $set: { cursor: { x: 3, y: 4 } } });
     });
     assert.isTrue(result.current.has(note));
+  });
+
+  it("holds through a long edit while their client keeps refreshing it", function () {
+    const note = Random.id();
+    const doc = local.insert({
+      _id: Random.id(),
+      board,
+      user: ada,
+      editing: note,
+      editingAt: new Date(),
+    });
+    const { result } = renderHook(() =>
+      useWhiteboardOthersEditing(board, true),
+    );
+    const keepAlive = () =>
+      act(() => {
+        clock.tick(EDITING_KEEPALIVE_MS);
+        local.update(doc, { $set: { editingAt: new Date() } });
+      });
+    // 40 seconds of typing with the pointer still
+    for (let at = 0; at < 40_000; at += EDITING_KEEPALIVE_MS) {
+      keepAlive();
+      assert.isTrue(result.current.has(note));
+    }
+    act(() => {
+      clock.tick(REMOTE_EDITING_TIMEOUT_MS);
+    });
+    assert.isFalse(result.current.has(note));
   });
 
   it("clears when they stop typing or leave", function () {

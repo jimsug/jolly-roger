@@ -57,6 +57,9 @@ const WhiteboardNode = withCommon(
     // Removed from the board by a person. Kept rather than deleted so that
     // placement doesn't put it back.
     hidden: z.boolean().optional(),
+    // A card hidden because its puzzle was deleted rather than by a person,
+    // which comes back if the puzzle does.
+    hiddenWithPuzzle: z.boolean().optional(),
     // Set once a person has moved or reparented the node. Placement only ever
     // moves nodes that haven't been touched by hand.
     manual: z.boolean().optional(),

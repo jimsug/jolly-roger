@@ -42,13 +42,12 @@ import {
 } from "../lib/whiteboard/versions";
 import WhiteboardVersionChunks from "./models/WhiteboardVersionChunks";
 import { deferSyncPuzzlesOnBoard } from "./whiteboard";
+import { detachComments, reattachComments } from "./whiteboardComments";
 import {
   assertMayEditBoard,
-  detachComments,
   LOCKED_FIELDS,
   loadBoardAccess,
   lockedError,
-  reattachComments,
 } from "./whiteboardShared";
 import withLock, { LockPreemptedError } from "./withLock";
 
@@ -661,6 +660,16 @@ async function readVersionLocked(
   return target;
 }
 
+// The hunt's puzzles that aren't deleted, whose cards a restore may put back.
+async function livePuzzleIds(huntId: string) {
+  return new Set(
+    await Puzzles.find(
+      { hunt: huntId, kind: { $ne: "whiteboard" } },
+      { projection: { _id: 1 } },
+    ).mapAsync((p) => p._id),
+  );
+}
+
 async function readBoard(boardId: string) {
   return {
     nodes: await WhiteboardNodes.find({ board: boardId }).fetchAsync(),
@@ -772,6 +781,7 @@ export async function restoreVersion(
     await renew();
     const result = planRestore(live, target, {
       keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
+      livePuzzles: await livePuzzleIds(hunt._id),
     });
     if (!result.ok) {
       throw new Meteor.Error(
@@ -797,14 +807,7 @@ export async function restoreVersion(
 
   // Puts cards the version didn't have into their rounds, and redraws feeder
   // arrows. It takes the board's lock, so it can't run inside it.
-  const puzzles = await Puzzles.find(
-    { hunt: board.hunt, kind: { $ne: "whiteboard" } },
-    { projection: { _id: 1 } },
-  ).fetchAsync();
-  deferSyncPuzzlesOnBoard(
-    board.hunt,
-    puzzles.map((p) => p._id),
-  );
+  deferSyncPuzzlesOnBoard(board.hunt, [...(await livePuzzleIds(board.hunt))]);
 }
 
 // Puts some of a version's nodes back as the version has them, with what
@@ -852,6 +855,7 @@ export async function restoreItems(
     // restore.
     const result = planItemRestore(live, target, items, {
       keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
+      livePuzzles: await livePuzzleIds(hunt._id),
     });
     if (!result.ok) throw new Meteor.Error(400, "This board is full");
     const { plan } = result;

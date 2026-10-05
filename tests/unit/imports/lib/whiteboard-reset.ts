@@ -228,7 +228,10 @@ describe("whiteboard planReset", function () {
       placementFor(putBack, `puzzle:${inHiddenRound._id}`)?.parentKey,
       `frame:${off._id}`,
     );
-    putBack.place.forEach((p) => assert.equal(p.$unset.hidden, ""));
+    putBack.place.forEach((p) => {
+      assert.equal(p.$unset.hidden, "");
+      assert.equal(p.$unset.hiddenWithPuzzle, "");
+    });
   });
 
   it("doesn't treat hidden frames as stale", function () {

@@ -188,10 +188,22 @@ export async function resetLayout(
     await renew();
 
     await syncAutoEdges(board, puzzles, tags);
+    // Arrows to or from a deleted puzzle stay hidden, whether the delete
+    // or a person hid them, until it comes back.
     if (putBack) {
+      const deleted = await Puzzles.findDeleted(
+        { hunt: board.hunt },
+        { projection: { _id: 1 } },
+      ).mapAsync((p) => p._id);
       await WhiteboardEdges.updateAsync(
-        { board: boardId, auto: true, hidden: true },
-        { $unset: { hidden: "" } },
+        {
+          board: boardId,
+          auto: true,
+          hidden: true,
+          feeder: { $nin: deleted },
+          meta: { $nin: deleted },
+        },
+        { $unset: { hidden: "", hiddenWithPuzzle: "" } },
         { multi: true },
       );
     }

@@ -457,6 +457,248 @@ describe("whiteboard versions", function () {
       assert.sameMembers(result.detach, ["round", "added-sticky"]);
     });
 
+    describe("with deleted puzzles", function () {
+      const both = {
+        nodes: [
+          frame("round", { tag: "t", position: { x: 100, y: 200 } }),
+          card("keptCard", "live", "round"),
+          card("goneCard", "deleted", "round"),
+          node("note"),
+        ],
+        edges: [
+          edge("arrow", "goneCard", "keptCard", {
+            auto: true,
+            feeder: "deleted",
+            meta: "live",
+          }),
+          edge("line", "note", "goneCard"),
+        ],
+      };
+      const restore = (
+        current: { nodes: WhiteboardNodeType[]; edges?: WhiteboardEdgeType[] },
+        target: { nodes: WhiteboardNodeType[]; edges?: WhiteboardEdgeType[] },
+      ) => {
+        const result = planRestore(
+          { nodes: current.nodes, edges: current.edges ?? [] },
+          { nodes: target.nodes, edges: target.edges ?? [] },
+          { livePuzzles: new Set(["live"]) },
+        );
+        assert.isTrue(result.ok);
+        if (!result.ok) throw new Error("refused");
+        return result.plan;
+      };
+
+      it("restores every card when it isn't told which puzzles are live", function () {
+        const result = plan({ nodes: [] }, both);
+        assert.include(insertedIds(result), "goneCard");
+        assert.sameMembers(
+          result.edges.insert.map((e) => e._id),
+          ["arrow", "line"],
+        );
+      });
+
+      it("doesn't put back a card for a deleted puzzle, or its lines", function () {
+        const result = restore({ nodes: [] }, both);
+        assert.sameMembers(insertedIds(result), ["round", "keptCard", "note"]);
+        assert.deepEqual(result.edges.insert, []);
+      });
+
+      it("leaves a deleted puzzle's hidden card where it is if the version has no card for it", function () {
+        const hidden = card("goneCard", "deleted", "round");
+        hidden.hidden = true;
+        hidden.hiddenWithPuzzle = true;
+        hidden.manual = true;
+        const result = restore(
+          { nodes: [both.nodes[0]!, hidden] },
+          { nodes: [both.nodes[0]!] },
+        );
+        assert.deepEqual(result.nodes.change, []);
+        assert.deepEqual(result.nodes.remove, []);
+        assert.deepEqual(result.nodes.insert, []);
+      });
+
+      it("keeps a deleted puzzle's card hidden, where the version had it and with its lines", function () {
+        const hidden = card("goneCard", "deleted", "round");
+        hidden.hidden = true;
+        hidden.hiddenWithPuzzle = true;
+        hidden.manual = true;
+        hidden.position = { x: 10, y: 20 };
+        const line = edge("line", "note", "goneCard");
+        const result = restore(
+          {
+            nodes: [both.nodes[0]!, both.nodes[1]!, hidden, both.nodes[3]!],
+            edges: [line],
+          },
+          both,
+        );
+        assert.deepEqual(insertedIds(result), []);
+        assert.deepEqual(result.nodes.remove, []);
+        assert.deepEqual(result.nodes.change, [
+          {
+            _id: "goneCard",
+            $set: { position: { x: 0, y: 0 } },
+            $unset: { manual: "" },
+          },
+        ]);
+        assert.deepEqual(result.edges.remove, []);
+        assert.deepEqual(result.edges.change, []);
+        // Its feeder arrow comes back hidden with it
+        assert.deepEqual(
+          result.edges.insert.map((e) => [e._id, e.hidden, e.hiddenWithPuzzle]),
+          [["arrow", true, true]],
+        );
+        assert.deepEqual(result.detach, []);
+        assert.deepEqual(result.reattach, []);
+      });
+
+      it("keeps a card the version hid by hand hidden that way", function () {
+        const hidden = card("goneCard", "deleted");
+        hidden.hidden = true;
+        hidden.hiddenWithPuzzle = true;
+        const byHand = card("goneCard", "deleted");
+        byHand.hidden = true;
+        const result = restore({ nodes: [hidden] }, { nodes: [byHand] });
+        assert.deepEqual(result.nodes.change, [
+          { _id: "goneCard", $set: {}, $unset: { hiddenWithPuzzle: "" } },
+        ]);
+      });
+
+      describe("after a replacement", function () {
+        // The version has goneCard for the deleted puzzle, which has since
+        // been handed over to its replacement, "new".
+        const versioned = {
+          nodes: [
+            frame("round", { tag: "t", position: { x: 100, y: 200 } }),
+            {
+              ...card("goneCard", "deleted", "round"),
+              position: { x: 30, y: 40 },
+              manual: true,
+            },
+            card("keptCard", "live"),
+            node("note"),
+          ],
+          edges: [
+            edge("arrow", "goneCard", "keptCard", {
+              auto: true,
+              feeder: "deleted",
+              meta: "live",
+            }),
+            edge("line", "note", "goneCard"),
+          ],
+        };
+        const handedOver = {
+          ...card("goneCard", "new"),
+          position: { x: 500, y: 600 },
+        };
+        const live = {
+          nodes: [handedOver, card("keptCard", "live"), node("note")],
+          edges: [
+            edge("newArrow", "goneCard", "keptCard", {
+              auto: true,
+              feeder: "new",
+              meta: "live",
+            }),
+            edge("line", "note", "goneCard"),
+          ],
+        };
+        const restoreReplaced = (target: typeof versioned) => {
+          const result = planRestore(live, target, {
+            livePuzzles: new Set(["live", "new"]),
+          });
+          assert.isTrue(result.ok);
+          if (!result.ok) throw new Error("refused");
+          return result.plan;
+        };
+
+        it("puts the handed-over card where the version had it, with its lines", function () {
+          const result = restoreReplaced(versioned);
+          assert.sameMembers(insertedIds(result), ["round"]);
+          assert.deepEqual(result.nodes.remove, []);
+          assert.deepEqual(
+            result.nodes.change.filter((c) => c._id === "goneCard"),
+            [
+              {
+                _id: "goneCard",
+                $set: {
+                  position: { x: 30, y: 40 },
+                  parent: "round",
+                  manual: true,
+                },
+                $unset: {},
+              },
+            ],
+          );
+          // The line stays; the deleted puzzle's arrow isn't drawn, and the
+          // replacement's is left to the sync that follows a restore
+          assert.notInclude(result.edges.remove, "line");
+          assert.deepEqual(result.edges.insert, []);
+          assert.deepEqual(result.edges.remove, ["newArrow"]);
+        });
+
+        it("uses the version's own card for the replacement if it has one", function () {
+          const result = restoreReplaced({
+            nodes: [
+              ...versioned.nodes,
+              { ...card("theirCard", "new"), position: { x: 1, y: 2 } },
+            ],
+            edges: versioned.edges,
+          });
+          assert.sameMembers(insertedIds(result), ["round"]);
+          assert.deepEqual(result.nodes.remove, []);
+          const change = result.nodes.change.find((c) => c._id === "goneCard");
+          assert.deepEqual(change?.$set.position, { x: 1, y: 2 });
+          assert.include(result.edges.remove, "line");
+        });
+      });
+
+      it("moves a deleted puzzle's card out of a frame that goes, keeping it hidden", function () {
+        const hidden = card("goneCard", "deleted", "round");
+        hidden.hidden = true;
+        hidden.manual = true;
+        hidden.position = { x: 10, y: 20 };
+        const result = restore(
+          { nodes: [both.nodes[0]!, hidden] },
+          { nodes: [] },
+        );
+        assert.deepEqual(result.nodes.change, [
+          {
+            _id: "goneCard",
+            $set: { position: { x: 110, y: 220 } },
+            $unset: { parent: "" },
+          },
+        ]);
+        assert.deepEqual(result.nodes.remove, ["round"]);
+      });
+
+      it("shows a card and arrow the version hid with a puzzle that's back", function () {
+        const meta = card("metaCard", "live");
+        const back = card("backCard", "back");
+        back.hidden = true;
+        back.hiddenWithPuzzle = true;
+        const arrow = edge("arrow", "backCard", "metaCard", {
+          auto: true,
+          feeder: "back",
+          meta: "live",
+          hidden: true,
+          hiddenWithPuzzle: true,
+        });
+        const result = planRestore(
+          { nodes: [meta], edges: [] },
+          { nodes: [meta, back], edges: [arrow] },
+          { livePuzzles: new Set(["live", "back"]) },
+        );
+        assert.isTrue(result.ok);
+        if (!result.ok) return;
+        const inserted = result.plan.nodes.insert.find(
+          (n) => n._id === "backCard",
+        );
+        assert.isUndefined(inserted?.hidden);
+        assert.isUndefined(inserted?.hiddenWithPuzzle);
+        assert.isUndefined(result.plan.edges.insert[0]?.hidden);
+        assert.isUndefined(result.plan.edges.insert[0]?.hiddenWithPuzzle);
+      });
+    });
+
     it("leaves unchanged documents alone", function () {
       const live = [
         node("same", { updatedAt: new Date(5), text: "hi" }),
@@ -707,6 +949,84 @@ describe("whiteboard versions", function () {
         result.plan.edges.insert.map((e) => e._id),
         ["toEnd"],
       );
+    });
+
+    describe("with deleted puzzles", function () {
+      const target = {
+        nodes: [
+          node("note"),
+          { ...card("goneCard", "deleted"), position: { x: 30, y: 40 } },
+          card("keptCard", "live"),
+        ],
+        edges: [
+          edge("toGone", "note", "goneCard"),
+          edge("toKept", "note", "keptCard"),
+        ],
+      };
+      const restoreAll = (current: WhiteboardNodeType[], live: string[]) => {
+        const items = restoreItemSet(target, ["note", "goneCard", "keptCard"]);
+        if (!items) throw new Error("not in the version");
+        const result = planItemRestore(
+          { nodes: current, edges: [] },
+          target,
+          items,
+          { livePuzzles: new Set(live) },
+        );
+        assert.isTrue(result.ok);
+        if (!result.ok) throw new Error("refused");
+        return result;
+      };
+
+      it("doesn't put back a card for a deleted puzzle, or a line to it", function () {
+        const { plan: result, puzzles } = restoreAll([], ["live"]);
+        assert.sameMembers(
+          result.nodes.insert.map((n) => n._id),
+          ["note", "keptCard"],
+        );
+        assert.deepEqual(result.nodes.change, []);
+        assert.deepEqual(
+          result.edges.insert.map((e) => e._id),
+          ["toKept"],
+        );
+        assert.deepEqual(puzzles, ["live"]);
+      });
+
+      it("moves a deleted puzzle's card still on the board, keeping it hidden", function () {
+        const hidden = card("goneCard", "deleted");
+        hidden.hidden = true;
+        hidden.hiddenWithPuzzle = true;
+        const { plan: result } = restoreAll([hidden], ["live"]);
+        assert.sameMembers(
+          result.nodes.insert.map((n) => n._id),
+          ["note", "keptCard"],
+        );
+        assert.deepEqual(result.nodes.change, [
+          { _id: "goneCard", $set: { position: { x: 30, y: 40 } }, $unset: {} },
+        ]);
+        assert.sameMembers(
+          result.edges.insert.map((e) => e._id),
+          ["toGone", "toKept"],
+        );
+        assert.sameMembers(
+          result.reattach.map((r) => r.node),
+          ["keptCard", "note"],
+        );
+      });
+
+      it("moves a card handed over to the deleted puzzle's replacement", function () {
+        const { plan: result, puzzles } = restoreAll(
+          [card("goneCard", "new")],
+          ["live", "new"],
+        );
+        assert.deepEqual(result.nodes.change, [
+          { _id: "goneCard", $set: { position: { x: 30, y: 40 } }, $unset: {} },
+        ]);
+        assert.sameMembers(
+          result.edges.insert.map((e) => e._id),
+          ["toGone", "toKept"],
+        );
+        assert.sameMembers(puzzles, ["live", "new"]);
+      });
     });
 
     it("refuses past the node cap", function () {

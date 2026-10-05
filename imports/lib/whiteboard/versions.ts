@@ -389,21 +389,107 @@ function withLiveLock(
   };
 }
 
+// A document as it is once nothing hides it.
+function shown<T extends { hidden?: boolean; hiddenWithPuzzle?: boolean }>(
+  doc: T,
+): Omit<T, "hidden" | "hiddenWithPuzzle"> {
+  const { hidden: _hidden, hiddenWithPuzzle: _with, ...rest } = doc;
+  return rest;
+}
+
+// A version's nodes and lines as a restore puts them back with only the
+// puzzles in livePuzzles live. A version card for any other puzzle becomes:
+// - the card it was handed over to, when the board's card with its id now
+//   holds a live puzzle the version has no card for (the puzzle was
+//   replaced). The deleted puzzle's feeder arrows are left out.
+// - a card hidden as the board's card for that puzzle is, when the board
+//   still has one, so the version's place and lines for it are there if the
+//   puzzle comes back. One the version had hidden by hand stays so.
+// - nothing, otherwise, and nor are lines to or from it.
+// A feeder arrow to or from a deleted puzzle is hidden with it. Cards and
+// feeder arrows the version has hidden only because a puzzle was deleted are
+// shown again once their puzzles are live. Unchanged when livePuzzles isn't
+// given.
+function forLivePuzzles(
+  stored: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
+  current: { nodes: WhiteboardNodeType[] },
+  livePuzzles: ReadonlySet<string> | undefined,
+) {
+  if (!livePuzzles) return stored;
+  const isLive = (puzzle: string | undefined): puzzle is string =>
+    !!puzzle && livePuzzles.has(puzzle);
+  const liveById = new Map(current.nodes.map((n) => [n._id, n]));
+  const liveCards = new Map(
+    current.nodes.flatMap((n) =>
+      n.type === "puzzle" && n.puzzle ? [[n.puzzle, n] as const] : [],
+    ),
+  );
+  const storedPuzzles = new Set(
+    stored.nodes.flatMap((n) =>
+      n.type === "puzzle" && n.puzzle ? [n.puzzle] : [],
+    ),
+  );
+  const dropped = new Set<string>();
+  const handedOver = new Set<string>();
+  const nodes = stored.nodes.flatMap((n): WhiteboardNodeType[] => {
+    if (n.type !== "puzzle" || isLive(n.puzzle)) {
+      return [n.hiddenWithPuzzle ? shown(n) : n];
+    }
+    const sameId = liveById.get(n._id)?.puzzle;
+    if (isLive(sameId) && !storedPuzzles.has(sameId)) {
+      if (n.puzzle) handedOver.add(n.puzzle);
+      const card = { ...n, puzzle: sameId };
+      return [card.hiddenWithPuzzle ? shown(card) : card];
+    }
+    const onBoard = n.puzzle ? liveCards.get(n.puzzle) : undefined;
+    if (onBoard) {
+      if (n.hidden && !n.hiddenWithPuzzle) return [n];
+      return [
+        {
+          ...shown(n),
+          ...(onBoard.hidden ? { hidden: true } : {}),
+          ...(onBoard.hiddenWithPuzzle ? { hiddenWithPuzzle: true } : {}),
+        },
+      ];
+    }
+    dropped.add(n._id);
+    return [];
+  });
+  const edges = stored.edges.flatMap((e): WhiteboardEdgeType[] => {
+    if (dropped.has(e.source) || dropped.has(e.target)) return [];
+    if (!e.auto || !e.feeder || !e.meta) return [e];
+    if (handedOver.has(e.feeder) || handedOver.has(e.meta)) return [];
+    if (isLive(e.feeder) && isLive(e.meta)) {
+      return [e.hiddenWithPuzzle ? shown(e) : e];
+    }
+    return [e.hidden ? e : { ...e, hidden: true, hiddenWithPuzzle: true }];
+  });
+  return { nodes, edges };
+}
+
 // How to turn the live board (current) into the one a version holds
-// (target). Documents are matched by what they are rather than by id, and a
-// target document that matches a live one takes the live one's id, with the
-// target's references remapped to it, so nothing is inserted twice. Parents
+// (stored). Documents are matched by what they are rather than by id, and a
+// stored document that matches a live one takes the live one's id, with the
+// version's references remapped to it, so nothing is inserted twice. Parents
 // that are missing or would make a loop are dropped (the node goes to the top
 // level), as are lines with a missing end and free ends no line uses. Cards
 // for puzzles the version doesn't have stay, moved to the top level and no
 // longer manual, so placement can put them back in their rounds. With
 // keepLocks, every node keeps the lock it has on the board, and nodes the
-// restore inserts come back unlocked.
+// restore inserts come back unlocked. Given livePuzzles, the puzzles that
+// aren't deleted, a deleted puzzle's card is restored only as forLivePuzzles
+// says, and one on the board the version has no card for is left where it
+// is (moved out only of a frame that goes), so it's there if the puzzle
+// comes back.
 export function planRestore(
   current: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
-  target: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
-  { keepLocks = false }: { keepLocks?: boolean } = {},
+  stored: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
+  {
+    keepLocks = false,
+    livePuzzles,
+  }: { keepLocks?: boolean; livePuzzles?: ReadonlySet<string> } = {},
 ): RestoreResult {
+  const target = forLivePuzzles(stored, current, livePuzzles);
   const liveNodes = new Map(current.nodes.map((n) => [n._id, n]));
   const { idOf, targetIds } = renaming(
     target.nodes,
@@ -482,7 +568,18 @@ export function planRestore(
     }
     return { x, y };
   };
+  const deletedPuzzle = (card: WhiteboardNodeType) =>
+    !!livePuzzles && !livePuzzles.has(card.puzzle ?? "");
   keptCards.forEach((card) => {
+    if (deletedPuzzle(card)) {
+      if (!card.parent || wanted.has(card.parent)) return;
+      plan.nodes.change.push({
+        _id: card._id,
+        $set: { position: absolute(card) },
+        $unset: { parent: "" },
+      });
+      return;
+    }
     if (!card.parent && !card.manual) return;
     plan.nodes.change.push({
       _id: card._id,
@@ -573,21 +670,26 @@ export type ItemRestoreResult =
   | { ok: false; reason: "tooBig" };
 
 // How to put the nodes and lines in items (from restoreItemSet) back as the
-// version (target) has them, leaving everything else on the live board
+// version (stored) has them, leaving everything else on the live board
 // (current) alone. Documents are matched as planRestore matches them, so a
 // version card for a puzzle that now has another card updates that card.
 // Nothing live is removed. A node whose frame isn't on the board, or would
 // make a loop, goes to the top level where the version had it on the board.
 // Lines need both ends on the board afterwards, and free ends need a line.
 // With keepLocks, as for planRestore, a node keeps the lock it has on the
-// board and one the board no longer has comes back unlocked. Also returns
-// the puzzles of the cards it touches.
+// board and one the board no longer has comes back unlocked. Given
+// livePuzzles, a deleted puzzle's card and its lines are put back only as
+// forLivePuzzles says. Also returns the puzzles of the cards it touches.
 export function planItemRestore(
   current: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
-  target: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
+  stored: { nodes: WhiteboardNodeType[]; edges: WhiteboardEdgeType[] },
   items: { nodes: Set<string>; edges: Set<string> },
-  { keepLocks = false }: { keepLocks?: boolean } = {},
+  {
+    keepLocks = false,
+    livePuzzles,
+  }: { keepLocks?: boolean; livePuzzles?: ReadonlySet<string> } = {},
 ): ItemRestoreResult {
+  const target = forLivePuzzles(stored, current, livePuzzles);
   const liveNodes = new Map(current.nodes.map((n) => [n._id, n]));
   const targetNodes = new Map(target.nodes.map((n) => [n._id, n]));
   const { idOf, targetIds } = renaming(

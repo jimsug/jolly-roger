@@ -10,6 +10,7 @@ import isWhiteboardPuzzle from "../../lib/whiteboard/isWhiteboardPuzzle";
 import destroyPuzzle from "../../methods/destroyPuzzle";
 import assertNotWhiteboardPuzzle from "../assertNotWhiteboardPuzzle";
 import { copySheets, makeReadOnly } from "../gdrive";
+import { deferSyncPuzzlesOnBoard } from "../whiteboard";
 import defineMethod from "./defineMethod";
 
 defineMethod(destroyPuzzle, {
@@ -91,6 +92,9 @@ defineMethod(destroyPuzzle, {
         title: puzzle.title,
       },
     });
+    // The card goes to the replacement, or is hidden until the puzzle comes
+    // back.
+    deferSyncPuzzlesOnBoard(puzzle.hunt, [puzzleId]);
 
     if (await Flags.activeAsync("disable.google")) {
       return;

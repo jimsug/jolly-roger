@@ -12,6 +12,7 @@ import FeatureFlags from "../../../../imports/lib/models/FeatureFlags";
 import Hunts from "../../../../imports/lib/models/Hunts";
 import MergeOperations from "../../../../imports/lib/models/MergeOperations";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
+import Puzzles from "../../../../imports/lib/models/Puzzles";
 import WhiteboardEdges from "../../../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../../../imports/lib/models/WhiteboardNodes";
 import Whiteboards from "../../../../imports/lib/models/Whiteboards";
@@ -32,7 +33,10 @@ import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEd
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
 import Locks from "../../../../imports/server/models/Locks";
 import WhiteboardVersionChunks from "../../../../imports/server/models/WhiteboardVersionChunks";
-import { ensureWhiteboard } from "../../../../imports/server/whiteboard";
+import {
+  ensureWhiteboard,
+  syncPuzzlesOnBoard,
+} from "../../../../imports/server/whiteboard";
 import {
   deleteNodes,
   upsertEdges,
@@ -334,6 +338,29 @@ describe("whiteboard versions", function () {
     });
   });
 
+  // A puzzle's card, and the puzzle deleted (and replaced by replacedBy, if
+  // given) with the board synced, as destroyPuzzle's deferred sync does.
+  const firstCard = async () =>
+    (await WhiteboardNodes.findOneAsync({ board: boardId, type: "puzzle" }))!;
+  const deletePuzzle = async (puzzleId: string, replacedBy?: string) => {
+    await Puzzles.updateAsync(puzzleId, {
+      $set: { deleted: true, ...(replacedBy ? { replacedBy } : {}) },
+    });
+    await syncPuzzlesOnBoard(huntId, [puzzleId]);
+  };
+  const newPuzzle = async (tags: string[]) => {
+    const puzzleId = await Puzzles.insertAsync({
+      hunt: huntId,
+      title: "Replacement",
+      tags,
+      answers: [],
+      expectedAnswerCount: 1,
+      createdBy: operator,
+    });
+    await syncPuzzlesOnBoard(huntId, [puzzleId]);
+    return puzzleId;
+  };
+
   describe("restoring", function () {
     it("restores moved, deleted and hidden nodes", async function () {
       const moved = await sticky(member, { x: 0, y: 0 });
@@ -364,6 +391,82 @@ describe("whiteboard versions", function () {
       assert.ok(await WhiteboardNodes.findOneAsync(deleted));
       assert.notOk((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
       assert.ok((await Whiteboards.findOneAsync(boardId))?.lastRewrittenAt);
+    });
+
+    it("doesn't put back a deleted puzzle's card, but moves it with the version", async function () {
+      const card = await firstCard();
+      const note = await sticky(member, { x: 6000, y: 6000 });
+      const line = Random.id();
+      await upsertEdges(member, boardId, [
+        { _id: line, source: note, target: card._id },
+      ]);
+      await nextWindow();
+      await sticky(member);
+      const version = await newest();
+      await upsertNodes(member, boardId, [
+        { _id: card._id, position: { x: 7000, y: 7000 } },
+      ]);
+      await deletePuzzle(card.puzzle!);
+      assert.isTrue((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
+
+      await restoreVersion(member, boardId, version._id);
+
+      const after = (await WhiteboardNodes.findOneAsync(card._id))!;
+      assert.isTrue(after.hidden);
+      assert.isTrue(after.hiddenWithPuzzle);
+      assert.deepEqual(after.position, card.position);
+      assert.equal(after.parent, card.parent);
+      assert.equal(
+        (await WhiteboardEdges.findOneAsync(line))?.target,
+        card._id,
+      );
+      assert.equal(
+        await WhiteboardNodes.find({
+          board: boardId,
+          puzzle: card.puzzle,
+          hidden: { $ne: true },
+        }).countAsync(),
+        0,
+      );
+    });
+
+    it("keeps a card handed over to a replacement, where the version had it", async function () {
+      const card = await firstCard();
+      const note = await sticky(member, { x: 6000, y: 6000 });
+      const line = Random.id();
+      await upsertEdges(member, boardId, [
+        { _id: line, source: note, target: card._id },
+      ]);
+      await nextWindow();
+      await sticky(member);
+      const version = await newest();
+      const old = (await Puzzles.findOneAsync(card.puzzle))!;
+      const replacement = await newPuzzle(old.tags);
+      await deletePuzzle(old._id, replacement);
+      assert.equal(
+        (await WhiteboardNodes.findOneAsync(card._id))?.puzzle,
+        replacement,
+      );
+      await upsertNodes(member, boardId, [
+        { _id: card._id, position: { x: 7000, y: 7000 } },
+      ]);
+
+      await restoreVersion(member, boardId, version._id);
+
+      const cards = await WhiteboardNodes.find({
+        board: boardId,
+        puzzle: { $in: [old._id, replacement] },
+      }).fetchAsync();
+      assert.deepEqual(
+        cards.map((c) => [c._id, c.puzzle, c.hidden]),
+        [[card._id, replacement, undefined]],
+      );
+      assert.deepEqual(cards[0]!.position, card.position);
+      assert.equal(cards[0]!.parent, card.parent);
+      assert.equal(
+        (await WhiteboardEdges.findOneAsync(line))?.target,
+        card._id,
+      );
     });
 
     it("restores whether a frame is collapsed", async function () {
@@ -1024,6 +1127,27 @@ describe("whiteboard versions", function () {
       assert.deepEqual(cards[0]!.position, card.position);
       assert.equal(cards[0]!.parent, card.parent);
       assert.isUndefined(cards[0]!.manual);
+    });
+
+    it("doesn't put back a deleted puzzle's card", async function () {
+      const card = await firstCard();
+      await nextWindow();
+      await sticky(member);
+      const version = await newest();
+      await deletePuzzle(card.puzzle!);
+
+      await restoreItems(member, boardId, version._id, [card._id]);
+
+      const after = (await WhiteboardNodes.findOneAsync(card._id))!;
+      assert.isTrue(after.hidden);
+      assert.isTrue(after.hiddenWithPuzzle);
+      assert.equal(
+        await WhiteboardNodes.find({
+          board: boardId,
+          puzzle: card.puzzle,
+        }).countAsync(),
+        1,
+      );
     });
 
     it("refuses without edit access, on an archived hunt and with history off", async function () {

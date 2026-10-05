@@ -33,10 +33,10 @@ import type { CommentAnchorInput } from "../methods/sendChatMessage";
 import type { WhiteboardEdgeInput } from "../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../methods/upsertWhiteboardNodes";
 import { deferSyncRoundsOnBoard } from "./whiteboard";
+import { detachComments } from "./whiteboardComments";
 import {
   assertMayCommentOnBoard,
   assertMayEditBoard,
-  detachComments,
   inRange,
   isInkPoint,
   LOCKED_FIELDS,
@@ -155,6 +155,18 @@ async function assertValidParent(
   }
 }
 
+async function assertPuzzlesLive(huntId: string, puzzleIds: string[]) {
+  const ids = [...new Set(puzzleIds)];
+  if (ids.length === 0) return;
+  const live = await Puzzles.find({
+    hunt: huntId,
+    _id: { $in: ids },
+  }).countAsync();
+  if (live !== ids.length) {
+    throw badRequest("That puzzle has been deleted");
+  }
+}
+
 function appendContributor(
   existing: WhiteboardContributorType[] | undefined,
   userId: string,
@@ -217,7 +229,10 @@ async function updateNode(
     if (input.width !== undefined) $set.width = input.width;
     if (input.height !== undefined) $set.height = input.height;
   }
-  if (input.hidden === false) $unset.hidden = "";
+  if (input.hidden === false) {
+    $unset.hidden = "";
+    $unset.hiddenWithPuzzle = "";
+  }
   // Folding is a view of the frame, not an edit to it: it doesn't make the
   // frame manual or name anyone as a contributor.
   if (input.collapsed !== undefined) {
@@ -491,6 +506,14 @@ export async function upsertNodes(
     userId,
     operator: userMayWritePuzzlesForHunt(user, hunt),
   });
+  // A deleted puzzle's card stays off the board until the puzzle is back.
+  const puttingBack = inputs.flatMap((input) => {
+    const existing = existingById.get(input._id);
+    return input.hidden === false && existing?.hidden && existing.puzzle
+      ? [existing.puzzle]
+      : [];
+  });
+  await assertPuzzlesLive(board.hunt, puttingBack);
   if (inserts.length > 0) {
     const count = await WhiteboardNodes.find({ board: boardId }).countAsync();
     if (count + inserts.length > MAX_NODES_PER_BOARD) {
@@ -616,10 +639,15 @@ export async function deleteNodes(
       (node.type === "frame" &&
         (node.tag !== undefined || node.frameKind === "ungrouped"));
     if (keep) {
-      // A seeded frame that's put back comes back open.
+      // A seeded frame that's put back comes back open. Taken off by a
+      // person, it isn't hidden with its puzzle any more, so the puzzle
+      // coming back doesn't put it back.
       await WhiteboardNodes.updateAsync(node._id, {
         $set: { hidden: true },
-        ...(node.type === "frame" ? { $unset: { collapsed: "" } } : {}),
+        $unset: {
+          hiddenWithPuzzle: "",
+          ...(node.type === "frame" ? { collapsed: "" } : {}),
+        },
       });
     } else {
       await WhiteboardNodes.removeAsync(node._id);
@@ -679,6 +707,17 @@ export async function upsertEdges(
   ) {
     throw badRequest("Only a feeder arrow can be put back");
   }
+
+  // So does a deleted puzzle's feeder arrow.
+  await assertPuzzlesLive(
+    board.hunt,
+    inputs.flatMap((input) => {
+      const existing = existingById.get(input._id);
+      return input.hidden === false && existing?.hidden
+        ? [existing.feeder, existing.meta].filter((id): id is string => !!id)
+        : [];
+    }),
+  );
 
   const inserts = inputs.filter((e) => !existingById.has(e._id));
   if (inserts.length > 0) {
@@ -763,7 +802,10 @@ export async function upsertEdges(
         $unset.label = "";
         contentChanged = true;
       }
-      if (input.hidden === false && existing.hidden) $unset.hidden = "";
+      if (input.hidden === false && existing.hidden) {
+        $unset.hidden = "";
+        $unset.hiddenWithPuzzle = "";
+      }
       if (contentChanged && !existing.auto) {
         $set.contributors = appendContributor(existing.contributors, userId);
       }
@@ -812,9 +854,11 @@ export async function deleteEdges(
   if (edgeIds.length > MAX_BATCH) throw badRequest("Too many edges at once");
   await recordVersionBeforeEdit(board, userId);
 
+  // Taken off by a person, an arrow isn't hidden with a puzzle any more, so
+  // the puzzle coming back doesn't put it back.
   await WhiteboardEdges.updateAsync(
     { _id: { $in: edgeIds }, board: boardId, auto: true },
-    { $set: { hidden: true } },
+    { $set: { hidden: true }, $unset: { hiddenWithPuzzle: "" } },
     { multi: true },
   );
   const doomed = await WhiteboardEdges.find({

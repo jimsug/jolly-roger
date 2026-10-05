@@ -1,4 +1,5 @@
 import { Meteor } from "meteor/meteor";
+import type { Mongo } from "meteor/mongo";
 import Flags from "../Flags";
 import Logger from "../Logger";
 import Hunts from "../lib/models/Hunts";
@@ -15,6 +16,7 @@ import {
 } from "../lib/whiteboard/limits";
 import type { WhiteboardLiveState } from "../methods/setWhiteboardLive";
 import { registerPeriodicCleanupHook } from "./garbage-collection";
+import type { WhiteboardPresenceType } from "./models/WhiteboardPresence";
 import WhiteboardPresence from "./models/WhiteboardPresence";
 import onExit from "./onExit";
 import serverId from "./serverId";
@@ -35,6 +37,7 @@ interface CachedAccess {
 }
 type Watch = Promise<{ stop: () => void }>;
 interface ConnectionState {
+  connection: string;
   boards: Map<string, CachedAccess>;
   // Bumped whenever this connection's answers are dropped, so a check that
   // was reading at the time doesn't remember what it read.
@@ -74,6 +77,7 @@ function connectionState(connection: Meteor.Connection): ConnectionState {
   const existing = connections.get(connection.id);
   if (existing) return existing;
   const state: ConnectionState = {
+    connection: connection.id,
     boards: new Map(),
     epoch: 0,
     watchedUser: undefined,
@@ -124,6 +128,57 @@ function forgetConnectionAccess(state: ConnectionState) {
   state.boards.clear();
 }
 
+const NO_LIVE_EDITS = {
+  drag: null,
+  stroke: null,
+  selection: null,
+  editing: null,
+  editingAt: null,
+};
+
+// Takes away what people were dragging, drawing, selecting or typing in on
+// boards they can no longer edit, rather than leaving it until they next
+// move. rows picks the presence documents looked at.
+export async function clearLiveEditsOfNonEditors(
+  rows: Mongo.Selector<WhiteboardPresenceType>,
+) {
+  const present = await WhiteboardPresence.find(rows, {
+    projection: { board: 1, user: 1 },
+  }).fetchAsync();
+  const usersByBoard = new Map<string, Set<string>>();
+  present.forEach(({ board, user }) => {
+    usersByBoard.set(board, (usersByBoard.get(board) ?? new Set()).add(user));
+  });
+  for (const [boardId, userIds] of usersByBoard) {
+    const board = await Whiteboards.findOneAsync(boardId);
+    const hunt = board ? await Hunts.findOneAsync(board.hunt) : undefined;
+    const people = await MeteorUsers.find(
+      { _id: { $in: [...userIds] } },
+      { projection: { roles: 1, hunts: 1 } },
+    ).fetchAsync();
+    const editors = new Set(
+      board
+        ? people
+            .filter((p) => whiteboardAccess(p, hunt, board).access === "edit")
+            .map((p) => p._id)
+        : [],
+    );
+    const losing = [...userIds].filter((id) => !editors.has(id));
+    if (losing.length === 0) continue;
+    await WhiteboardPresence.updateAsync(
+      { $and: [rows, { board: boardId, user: { $in: losing } }] },
+      { $set: NO_LIVE_EDITS },
+      { multi: true },
+    );
+  }
+}
+
+function clearLiveEditsLogged(rows: Mongo.Selector<WhiteboardPresenceType>) {
+  clearLiveEditsOfNonEditors(rows).catch((error: unknown) => {
+    Logger.warn("Failed to clear live edits on the whiteboard", { error });
+  });
+}
+
 // Watches the user's roles and hunts for as long as the connection is open,
 // so a promotion, demotion or leaving the hunt takes effect at once.
 async function watchUser(state: ConnectionState, userId: string) {
@@ -136,8 +191,14 @@ async function watchUser(state: ConnectionState, userId: string) {
     const watch: Watch = MeteorUsers.find(userId, {
       projection: { roles: 1, hunts: 1 },
     }).observeAsync({
-      changed: () => forgetConnectionAccess(state),
-      removed: () => forgetConnectionAccess(state),
+      changed: () => {
+        forgetConnectionAccess(state);
+        clearLiveEditsLogged({ connection: state.connection });
+      },
+      removed: () => {
+        forgetConnectionAccess(state);
+        clearLiveEditsLogged({ connection: state.connection });
+      },
     });
     state.watchedUser = userId;
     state.userWatch = watch;
@@ -199,6 +260,7 @@ function validateLive({
   stroke,
   selection,
   editing,
+  editingAt,
 }: WhiteboardLiveState) {
   if (cursor && !(inRange(cursor.x) && inRange(cursor.y))) {
     throw invalidLiveUpdate();
@@ -226,6 +288,9 @@ function validateLive({
     throw invalidLiveUpdate();
   }
   if (editing != null && !Id.test(editing)) throw invalidLiveUpdate();
+  if (editingAt && !Number.isFinite(editingAt.getTime())) {
+    throw invalidLiveUpdate();
+  }
 }
 
 // Checks that every node in `ids` is on the board, unless the same set was
@@ -278,6 +343,7 @@ export async function setLive(
   const stroke = mayEdit ? live.stroke : null;
   const selection = mayEdit ? (live.selection ?? null) : null;
   const editing = mayEdit ? (live.editing ?? null) : null;
+  const editingAt = editing ? (live.editingAt ?? null) : null;
 
   if (drag && drag.length > 0) {
     state.validatedDrag = await assertNodesOnBoard(
@@ -321,6 +387,7 @@ export async function setLive(
       stroke,
       selection,
       editing,
+      editingAt,
     },
   });
   if (cleanedUp()) await WhiteboardPresence.removeAsync(selector);
@@ -341,7 +408,9 @@ registerPeriodicCleanupHook(async (deadServer) => {
 });
 
 // Every process watches boards and hunts for changes that alter who may edit,
-// and drops what it remembers about them.
+// and drops what it remembers about them. Archiving a hunt, or changing who
+// its default roles make an operator, also clears the live edits of anyone
+// on its boards through this process who can no longer edit.
 Meteor.startup(async () => {
   const boards = await Whiteboards.find(
     {},
@@ -353,7 +422,10 @@ Meteor.startup(async () => {
     {},
     { projection: { isArchived: 1, defaultRoles: 1 } },
   ).observeChangesAsync({
-    changed: (huntId) => forgetAccess((entry) => entry.hunt === huntId),
+    changed: (huntId) => {
+      forgetAccess((entry) => entry.hunt === huntId);
+      clearLiveEditsLogged({ hunt: huntId, server: serverId });
+    },
   });
   onExit(() => {
     boards.stop();

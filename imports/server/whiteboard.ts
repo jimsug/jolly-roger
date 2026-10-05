@@ -3,6 +3,7 @@ import { Random } from "meteor/random";
 import i18n from "i18next";
 import Flags from "../Flags";
 import Logger from "../Logger";
+import ChatMessages from "../lib/models/ChatMessages";
 import Hunts from "../lib/models/Hunts";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import type { PuzzleType } from "../lib/models/Puzzles";
@@ -38,6 +39,7 @@ import ignoringDuplicateKeyErrors, {
 } from "./ignoringDuplicateKeyErrors";
 import { serverLanguage } from "./lang";
 import currentTagSynonyms from "./tagSynonyms";
+import { detachComments, reattachComments } from "./whiteboardComments";
 import withLock from "./withLock";
 
 export async function assertWhiteboardEnabled() {
@@ -263,14 +265,17 @@ async function placePuzzle(
   if (placedCard) nodesById.set(placedCard._id, placedCard);
 }
 
-// Redraws the feeder arrows to and from a batch of puzzles. Only for callers
-// holding the board's lock.
+// Redraws the feeder arrows to and from a batch of puzzles. Arrows to or
+// from deleted puzzles in the batch (deleted), or any other deleted puzzle,
+// are hidden rather than removed, and come back once both ends are live
+// again. Only for callers holding the board's lock.
 export async function syncAutoEdges(
   board: WhiteboardType,
   batch: PuzzleType[],
   tags: TagType[],
+  deleted: string[] = [],
 ) {
-  if (batch.length === 0) return;
+  if (batch.length === 0 && deleted.length === 0) return;
   const batchById = new Map(batch.map((p) => [p._id, p]));
   const cards = await WhiteboardNodes.find(
     { board: board._id, type: "puzzle" },
@@ -289,7 +294,7 @@ export async function syncAutoEdges(
     (p) => batchById.has(p.feeder) || batchById.has(p.meta),
   );
   const wantedKeys = new Set(wanted.map((p) => `${p.feeder}:${p.meta}`));
-  const batchIds = [...batchById.keys()];
+  const batchIds = [...batchById.keys(), ...deleted];
   const existing = await WhiteboardEdges.find({
     board: board._id,
     auto: true,
@@ -297,8 +302,54 @@ export async function syncAutoEdges(
   }).fetchAsync();
   const existingKeys = new Set(existing.map((e) => `${e.feeder}:${e.meta}`));
 
+  const live = new Set(puzzles.map((p) => p._id));
+  const notLive = [
+    ...new Set(
+      existing.flatMap((e) =>
+        [e.feeder, e.meta].filter((id): id is string => !!id && !live.has(id)),
+      ),
+    ),
+  ];
+  const deletedEnds = new Set(
+    notLive.length > 0
+      ? await Puzzles.findDeleted(
+          { hunt: board.hunt, _id: { $in: notLive } },
+          { projection: { _id: 1 } },
+        ).mapAsync((p) => p._id)
+      : [],
+  );
+  const toDeleted = (e: (typeof existing)[number]) =>
+    deletedEnds.has(e.feeder ?? "") || deletedEnds.has(e.meta ?? "");
+
+  const hide = existing.filter((e) => toDeleted(e) && !e.hidden);
+  if (hide.length > 0) {
+    await WhiteboardEdges.updateAsync(
+      { _id: { $in: hide.map((e) => e._id) } },
+      { $set: { hidden: true, hiddenWithPuzzle: true } },
+      { multi: true },
+    );
+  }
+  const show = existing.filter(
+    (e) =>
+      !toDeleted(e) &&
+      e.hiddenWithPuzzle &&
+      wantedKeys.has(`${e.feeder}:${e.meta}`),
+  );
+  if (show.length > 0) {
+    await WhiteboardEdges.updateAsync(
+      { _id: { $in: show.map((e) => e._id) } },
+      { $unset: { hidden: "", hiddenWithPuzzle: "" } },
+      { multi: true },
+    );
+  }
+  // Only an arrow to or from a live puzzle in the batch can be stale. One
+  // found only through deleted may be to a puzzle brought back since this
+  // sync read it, which the sync the undelete queues sees to.
   const stale = existing.filter(
-    (e) => !wantedKeys.has(`${e.feeder}:${e.meta}`),
+    (e) =>
+      !toDeleted(e) &&
+      (batchById.has(e.feeder ?? "") || batchById.has(e.meta ?? "")) &&
+      !wantedKeys.has(`${e.feeder}:${e.meta}`),
   );
   if (stale.length > 0) {
     await WhiteboardEdges.removeAsync({
@@ -328,9 +379,149 @@ export async function syncAutoEdges(
   }
 }
 
+const cardOf = (nodesById: Map<string, WhiteboardNodeType>, puzzle: string) =>
+  [...nodesById.values()].find((n) => n.puzzle === puzzle);
+
+// Moves the lines, comment pins and free pins that came off one card (from)
+// onto another (to).
+async function moveOntoCard(board: WhiteboardType, from: string, to: string) {
+  await WhiteboardEdges.updateAsync(
+    { board: board._id, source: from },
+    { $set: { source: to } },
+    { multi: true },
+  );
+  await WhiteboardEdges.updateAsync(
+    { board: board._id, target: from },
+    { $set: { target: to } },
+    { multi: true },
+  );
+  // The comment predicate lets Mongo use the partial {puzzle, comment.node}
+  // index.
+  await ChatMessages.updateAsync(
+    { puzzle: board.puzzle, comment: { $exists: true }, "comment.node": from },
+    { $set: { "comment.node": to } },
+    { multi: true },
+  );
+  await ChatMessages.updateAsync(
+    {
+      puzzle: board.puzzle,
+      comment: { $exists: true },
+      "comment.detachedFrom": from,
+    },
+    { $set: { "comment.detachedFrom": to } },
+    { multi: true },
+  );
+}
+
+// Gives a deleted puzzle's card to its replacement, keeping its place, frame,
+// size, lock and comments. A card the replacement already had goes, with its
+// lines and comments moving onto this one. The deleted puzzle's feeder arrows
+// go too; the sync this is part of draws the replacement's. Says whether the
+// card was handed over, which it isn't if someone has just put the
+// replacement on the board by hand. The lines and comments of a card the
+// replacement already had then go to that new card instead.
+async function handOverCard(
+  board: WhiteboardType,
+  card: WhiteboardNodeType,
+  puzzle: PuzzleType,
+  replacement: PuzzleType,
+  nodesById: Map<string, WhiteboardNodeType>,
+) {
+  const theirs = cardOf(nodesById, replacement._id);
+  if (theirs) {
+    await WhiteboardEdges.removeAsync({
+      board: board._id,
+      $or: [
+        { source: theirs._id, target: card._id },
+        { source: card._id, target: theirs._id },
+      ],
+    });
+    await WhiteboardNodes.removeAsync(theirs._id);
+    nodesById.delete(theirs._id);
+  }
+  let handedOver = true;
+  try {
+    await WhiteboardNodes.updateAsync(
+      { _id: card._id, puzzle: puzzle._id },
+      { $set: { puzzle: replacement._id } },
+    );
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) throw error;
+    handedOver = false;
+  }
+  if (theirs) {
+    const placed = handedOver
+      ? undefined
+      : await WhiteboardNodes.findOneAsync(
+          { board: board._id, puzzle: replacement._id },
+          { projection: { _id: 1 } },
+        );
+    await moveOntoCard(board, theirs._id, placed?._id ?? card._id);
+  }
+  if (!handedOver) return false;
+  await WhiteboardEdges.removeAsync({
+    board: board._id,
+    auto: true,
+    $or: [{ feeder: puzzle._id }, { meta: puzzle._id }],
+  });
+  nodesById.set(card._id, { ...card, puzzle: replacement._id });
+  return true;
+}
+
+// A deleted puzzle's card goes to its replacement, if it has a live one, or
+// is hidden, its comments left where they were on the board as when someone
+// takes a card off it. A card someone had already taken off is left alone.
+async function retireCard(
+  board: WhiteboardType,
+  puzzle: PuzzleType,
+  replacement: PuzzleType | undefined,
+  nodesById: Map<string, WhiteboardNodeType>,
+) {
+  const card = cardOf(nodesById, puzzle._id);
+  if (!card || card.hidden) return;
+  if (
+    replacement &&
+    (await handOverCard(board, card, puzzle, replacement, nodesById))
+  ) {
+    return;
+  }
+  await detachComments(board.puzzle, card);
+  await WhiteboardNodes.updateAsync(
+    { _id: card._id, puzzle: puzzle._id },
+    { $set: { hidden: true, hiddenWithPuzzle: true } },
+  );
+  nodesById.set(card._id, { ...card, hidden: true, hiddenWithPuzzle: true });
+}
+
+// A card hidden because its puzzle was deleted comes back where it was, with
+// the comments that came off it, once the puzzle is live again.
+async function showCardAgain(
+  board: WhiteboardType,
+  puzzle: PuzzleType,
+  nodesById: Map<string, WhiteboardNodeType>,
+) {
+  const card = cardOf(nodesById, puzzle._id);
+  if (!card?.hiddenWithPuzzle) return;
+  await WhiteboardNodes.updateAsync(
+    { _id: card._id, hiddenWithPuzzle: true },
+    { $unset: { hidden: "", hiddenWithPuzzle: "" } },
+  );
+  const shown = await WhiteboardNodes.findOneAsync(card._id, {
+    projection: PLACEMENT_PROJECTION,
+  });
+  if (!shown) {
+    nodesById.delete(card._id);
+    return;
+  }
+  nodesById.set(shown._id, shown);
+  if (!shown.hidden) await reattachComments(board.puzzle, shown, [shown._id]);
+}
+
 // Brings the board up to date with a set of puzzles: places any that aren't
 // on it yet, moves untouched cards whose groups changed, and redraws their
-// feeder arrows. Safe to call as often as you like.
+// feeder arrows. A deleted puzzle's card goes to its replacement or is
+// hidden, and comes back if the puzzle does. Safe to call as often as you
+// like.
 export async function syncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
   if (puzzleIds.length === 0) return;
   const board = await Whiteboards.findOneAsync({ hunt: huntId });
@@ -344,13 +535,34 @@ export async function syncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
     // Everything is read once for the batch, so a batch costs one read of
     // the board rather than one per puzzle
     const tags = await Tags.find({ hunt: huntId }).fetchAsync();
+    const asked = await Puzzles.findAllowingDeleted({
+      hunt: huntId,
+      _id: { $in: puzzleIds },
+    }).fetchAsync();
+    const deleted = asked.filter((p) => p.deleted);
+    // A deleted puzzle's replacement is synced with it, so it's placed into
+    // the card it takes over rather than getting one of its own.
+    const replacementIds = [
+      ...new Set(
+        deleted.flatMap((p) =>
+          p.replacedBy && !puzzleIds.includes(p.replacedBy)
+            ? [p.replacedBy]
+            : [],
+        ),
+      ),
+    ];
+    const replacements =
+      replacementIds.length > 0
+        ? await Puzzles.find({
+            hunt: huntId,
+            _id: { $in: replacementIds },
+          }).fetchAsync()
+        : [];
     const puzzlesById = new Map(
-      (
-        await Puzzles.find({
-          hunt: huntId,
-          _id: { $in: puzzleIds },
-        }).fetchAsync()
-      ).map((p) => [p._id, p]),
+      [...asked.filter((p) => !p.deleted), ...replacements].map((p) => [
+        p._id,
+        p,
+      ]),
     );
     const nodesById = new Map(
       (
@@ -369,17 +581,32 @@ export async function syncPuzzlesOnBoard(huntId: string, puzzleIds: string[]) {
             { projection: { tags: 1 } },
           ).fetchAsync()
         : [];
+    for (const puzzle of deleted) {
+      await retireCard(
+        board,
+        puzzle,
+        puzzle.replacedBy ? puzzlesById.get(puzzle.replacedBy) : undefined,
+        nodesById,
+      );
+      await renew();
+    }
     const batch: PuzzleType[] = [];
-    for (const puzzleId of puzzleIds) {
+    for (const puzzleId of [...puzzleIds, ...replacementIds]) {
       const puzzle = puzzlesById.get(puzzleId);
       if (!puzzle) continue;
       batch.push(puzzle);
+      await showCardAgain(board, puzzle, nodesById);
       await placePuzzle(board, puzzle, tags, nodesById, metaPuzzles);
       // A long batch (a renamed round) would otherwise outlast the lock and
       // let another sync place cards in the same slots.
       await renew();
     }
-    await syncAutoEdges(board, batch, tags);
+    await syncAutoEdges(
+      board,
+      batch,
+      tags,
+      deleted.map((p) => p._id),
+    );
   });
 }
 

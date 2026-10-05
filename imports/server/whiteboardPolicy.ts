@@ -3,14 +3,13 @@ import Logger from "../Logger";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import type { WhiteboardEditPolicy } from "../lib/models/Whiteboards";
 import Whiteboards from "../lib/models/Whiteboards";
-import {
-  userMayMakeOperatorForHunt,
-  whiteboardAccess,
-} from "../lib/permission_stubs";
+import { userMayMakeOperatorForHunt } from "../lib/permission_stubs";
 import { Id } from "../lib/typedModel/regexes";
 import { MAX_WHITEBOARD_EDITORS } from "../lib/whiteboard/limits";
-import WhiteboardPresence from "./models/WhiteboardPresence";
-import { forgetBoardAccess } from "./whiteboardLive";
+import {
+  clearLiveEditsOfNonEditors,
+  forgetBoardAccess,
+} from "./whiteboardLive";
 import { loadBoardAccess } from "./whiteboardShared";
 
 // Sets who may edit a board. Only the hunt's assigned operators and admins
@@ -62,21 +61,5 @@ export async function setEditPolicy(
 
   // Whatever someone who can no longer edit was dragging, drawing, selecting
   // or typing in goes now, rather than when they next move.
-  const updated = { ...board, editPolicy, editors: kept };
-  const present = await WhiteboardPresence.find(
-    { board: board._id },
-    { projection: { user: 1 } },
-  ).mapAsync((p) => p.user);
-  const people = await MeteorUsers.find(
-    { _id: { $in: [...new Set(present)] } },
-    { projection: { roles: 1, hunts: 1 } },
-  ).fetchAsync();
-  for (const person of people) {
-    if (whiteboardAccess(person, hunt, updated).access === "edit") continue;
-    await WhiteboardPresence.updateAsync(
-      { board: board._id, user: person._id },
-      { $set: { drag: null, stroke: null, selection: null, editing: null } },
-      { multi: true },
-    );
-  }
+  await clearLiveEditsOfNonEditors({ board: board._id });
 }
