@@ -123,8 +123,8 @@ describe("whiteboard boardLinkQuery", function () {
     );
   });
 
-  it("links frames, notes, text and images by their node", function () {
-    (["frame", "sticky", "text", "image"] as const).forEach((type) => {
+  it("links frames, notes, text, images and shapes by their node", function () {
+    (["frame", "sticky", "text", "image", "shape"] as const).forEach((type) => {
       assert.equal(boardLinkQuery({ _id: "n", type }, view), "node=n", type);
     });
   });

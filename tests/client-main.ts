@@ -79,7 +79,11 @@ import "./unit/imports/client/useWhiteboardLive";
 import "./unit/imports/client/useWhiteboardOthersEditing";
 import "./unit/imports/client/whiteboardBoardFiles";
 import "./unit/imports/client/whiteboardBoardWrites";
+import "./unit/imports/client/whiteboardColorPicker";
+import "./unit/imports/client/whiteboardFloatingEdgeParams";
 import "./unit/imports/client/whiteboardImageNode";
+import "./unit/imports/client/whiteboardInkNode";
+import "./unit/imports/client/whiteboardShapeNode";
 import "./unit/imports/client/whiteboardSearch";
 import "./unit/imports/client/whiteboardTouch";
 

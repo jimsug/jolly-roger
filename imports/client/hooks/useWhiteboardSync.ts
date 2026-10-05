@@ -227,13 +227,18 @@ const parentsOf = (nodes: Node[]) =>
   new Map(nodes.map((n) => [n.id, { parent: n.parentId }]));
 
 // React Flow lifts a child to at least its parent's z + 1, so frames are pushed
-// well below everything else (nested ones a step above their parent), cards
-// sit above any frame, and annotations sit above cards.
+// well below everything else (nested ones a step above their parent), shapes
+// sit above any frame, cards above shapes, and annotations above cards. A
+// filled shape can then mark out a group of cards without covering them, and
+// the cards inside an outline still take clicks and line ends.
 const FRAME_Z = -1000;
+const SHAPE_Z = -1;
 const ANNOTATION_Z = 1;
 // A line's free ends stack with cards, so lines ending in them don't draw over
 // stickies and text. Their grips are drawn above everything anyway.
 const POINT_Z = 0;
+// How far React Flow lifts a selected node above where it would stack.
+const SELECTED_NODE_Z = 1000;
 
 function withStacking(nodes: WhiteboardFlowNode[]): WhiteboardFlowNode[] {
   const parents = parentsOf(nodes);
@@ -242,12 +247,28 @@ function withStacking(nodes: WhiteboardFlowNode[]): WhiteboardFlowNode[] {
       return FRAME_Z + ancestorsOf(parents, node.id).length;
     }
     if (node.type === "point") return POINT_Z;
+    if (node.type === "shape") return SHAPE_Z;
     return node.type === "puzzle" ? undefined : ANNOTATION_Z;
   };
   return nodes.map((node) => {
     const zIndex = zIndexOf(node);
     return node.zIndex === zIndex ? node : { ...node, zIndex };
   });
+}
+
+// React Flow's lift would put a selected shape over the cards it sits under,
+// so a selected shape is passed to it that much lower, to land where it was.
+// Each copy is kept while its node is unchanged, so React Flow sees the same
+// object.
+const keptDown = new WeakMap<WhiteboardFlowNode, WhiteboardFlowNode>();
+export function keepSelectedShapeDown(node: WhiteboardFlowNode) {
+  if (node.type !== "shape" || !node.selected) return node;
+  let copy = keptDown.get(node);
+  if (!copy) {
+    copy = { ...node, zIndex: SHAPE_Z - SELECTED_NODE_Z };
+    keptDown.set(node, copy);
+  }
+  return copy;
 }
 
 // The selection as units that align and distribute as one (see

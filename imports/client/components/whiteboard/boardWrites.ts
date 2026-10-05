@@ -105,6 +105,7 @@ function reinsertNode(doc: WhiteboardNodeType): WhiteboardNodeInput {
     const { url, width, height } = doc.image;
     input.image = { url, width, height };
   }
+  if (doc.shape !== undefined) input.shape = doc.shape;
   if (doc.type === "frame" && doc.collapsed) input.collapsed = true;
   return input;
 }

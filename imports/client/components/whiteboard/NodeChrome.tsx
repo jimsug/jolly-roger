@@ -16,6 +16,7 @@ export const MIN_SIZES = {
   // would jump a long, thin one (placed at no more than 480 wide) to many
   // times its size on the first drag.
   image: { width: 8, height: 8 },
+  shape: { width: 40, height: 40 },
 };
 
 const ToolbarRow = styled.div`
@@ -24,10 +25,11 @@ const ToolbarRow = styled.div`
   gap: 6px;
 `;
 
-// What stickies, text boxes, frames and images all have: handles for lines
-// and, while the board can be edited and the node isn't locked, resize
-// handles and a colour picker (for those given a palette), with anything else
-// the node offers beside it.
+// What stickies, text boxes, frames, images and shapes all have: handles for
+// lines and, while the board can be edited and the node isn't locked, resize
+// handles and a colour picker (for those given a palette, with a No fill
+// swatch for those that can be clear), with anything else the node offers
+// beside it.
 const NodeChrome = ({
   id,
   kind,
@@ -38,6 +40,7 @@ const NodeChrome = ({
   resizable = true,
   keepAspectRatio = false,
   locked = false,
+  clearable = false,
   tools,
 }: {
   id: string;
@@ -52,11 +55,17 @@ const NodeChrome = ({
   // Resizing keeps the node's shape, as an image's does.
   keepAspectRatio?: boolean;
   locked?: boolean;
+  // The picker offers No fill too, which takes the node's colour away.
+  clearable?: boolean;
   tools?: React.ReactNode;
 }) => {
   const { readOnly, updateNodes, persistResize } = useWhiteboard();
   const onColor = useCallback(
     (color: WhiteboardColor) => updateNodes([{ _id: id, color }]),
+    [id, updateNodes],
+  );
+  const onClear = useCallback(
+    () => updateNodes([{ _id: id, color: null }]),
     [id, updateNodes],
   );
   const onResizeEnd = useCallback(() => persistResize(id), [id, persistResize]);
@@ -82,6 +91,7 @@ const NodeChrome = ({
                     value={color}
                     palette={palette}
                     onChange={onColor}
+                    onClear={clearable ? onClear : undefined}
                     fallback={fallback}
                   />
                 )}

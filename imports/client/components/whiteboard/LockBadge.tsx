@@ -68,9 +68,9 @@ const LockBadge = ({
 
 const MemoLockBadge = React.memo(LockBadge);
 
-// On the top-right corner of a card, note, text box or ink stroke, sitting
-// over its edge so it can't be taken for a locked puzzle's padlock inside a
-// card.
+// On the top-right corner of a card, note, text box, image, shape or ink
+// stroke, sitting over its edge so it can't be taken for a locked puzzle's
+// padlock inside a card.
 export const CornerLockBadge = styled(MemoLockBadge)`
   position: absolute;
   top: -10px;

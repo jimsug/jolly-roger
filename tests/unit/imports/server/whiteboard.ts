@@ -1736,6 +1736,32 @@ describe("whiteboard", function () {
           /as much drawing as it can hold/,
         );
       });
+
+      it("stores a highlighter stroke and counts it like any other", async function () {
+        await fillInk(15);
+        const marker = { ...zigzag(20), strokeWidth: "marker" as const };
+        await assert.isRejected(
+          asUser(member, () =>
+            upsertWhiteboardNodes.callPromise({ boardId, nodes: [marker] }),
+          ),
+          /as much drawing as it can hold/,
+        );
+        assert.notOk(await WhiteboardNodes.findOneAsync(marker._id));
+
+        const fits = { ...zigzag(10), strokeWidth: "marker" as const };
+        await asUser(member, () =>
+          upsertWhiteboardNodes.callPromise({ boardId, nodes: [fits] }),
+        );
+        const stored = (await WhiteboardNodes.findOneAsync(fits._id))!;
+        assert.equal(stored.strokeWidth, "marker");
+        assert.deepEqual(stored.points, fits.points);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [
+            { ...zigzag(6), strokeWidth: "marker" },
+          ]),
+          /as much drawing as it can hold/,
+        );
+      });
     });
 
     describe("ink publication", function () {
@@ -2078,6 +2104,150 @@ describe("whiteboard", function () {
 
       it("locks, and deletes without touching the upload", async function () {
         const input = imageInput(stored());
+        await upsertNodes(member, boardId, [input]);
+        await upsertNodes(member, boardId, [{ _id: input._id, locked: true }]);
+        await assert.isRejected(
+          upsertNodes(operator, boardId, [
+            { _id: input._id, position: { x: 0, y: 0 } },
+          ]),
+          /locked/,
+        );
+        await upsertNodes(member, boardId, [{ _id: input._id, locked: false }]);
+        await deleteNodes(member, boardId, [input._id]);
+        assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
+      });
+    });
+
+    describe("shapes", function () {
+      const shapeInput = (shape: "rect" | "ellipse" = "rect") => ({
+        _id: Random.id(),
+        type: "shape" as const,
+        position: { x: 10, y: 20 },
+        width: 160,
+        height: 120,
+        shape,
+      });
+
+      it("takes a rectangle or an ellipse, with its size and colour", async function () {
+        const rect = { ...shapeInput("rect"), color: "blue" as const };
+        const ellipse = shapeInput("ellipse");
+        await asUser(member, () =>
+          upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [rect, ellipse],
+          }),
+        );
+        const stored = (await WhiteboardNodes.findOneAsync(rect._id))!;
+        assert.equal(stored.type, "shape");
+        assert.equal(stored.shape, "rect");
+        assert.equal(stored.color, "blue");
+        assert.equal(stored.width, 160);
+        assert.equal(stored.height, 120);
+        assert.deepEqual(
+          stored.contributors.map((c) => c.user),
+          [member],
+        );
+        const clear = (await WhiteboardNodes.findOneAsync(ellipse._id))!;
+        assert.equal(clear.shape, "ellipse");
+        assert.isUndefined(clear.color);
+      });
+
+      it("refuses a shape it doesn't know, writing nothing", async function () {
+        const note = {
+          _id: Random.id(),
+          type: "sticky" as const,
+          position: { x: 0, y: 0 },
+        };
+        const star = { ...shapeInput(), shape: "star" as "rect" };
+        await assert.isRejected(
+          asUser(member, () =>
+            upsertWhiteboardNodes.callPromise({ boardId, nodes: [note, star] }),
+          ),
+          /Match error/,
+        );
+        await assert.isRejected(
+          upsertNodes(member, boardId, [note, star]),
+          /Unknown shape/,
+        );
+        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
+        assert.notOk(await WhiteboardNodes.findOneAsync(star._id));
+      });
+
+      it("needs a shape and a size on a shape node, and no shape on anything else", async function () {
+        const { shape: _shape, ...bare } = shapeInput();
+        await assert.isRejected(
+          upsertNodes(member, boardId, [bare]),
+          /need a shape and a size/,
+        );
+        const { height: _height, ...unsized } = shapeInput();
+        await assert.isRejected(
+          upsertNodes(member, boardId, [unsized]),
+          /need a shape and a size/,
+        );
+        await assert.isRejected(
+          upsertNodes(member, boardId, [{ ...shapeInput(), type: "sticky" }]),
+          /Only shape nodes have a shape/,
+        );
+      });
+
+      it("never changes a shape once it's on the board", async function () {
+        const input = shapeInput("rect");
+        await upsertNodes(member, boardId, [input]);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [{ _id: input._id, shape: "ellipse" }]),
+          /A shape can't be changed/,
+        );
+        // The same shape alongside a resize and a new colour is fine
+        await upsertNodes(member, boardId, [
+          {
+            _id: input._id,
+            shape: "rect",
+            width: 300,
+            height: 40,
+            color: "green",
+          },
+        ]);
+        const node = (await WhiteboardNodes.findOneAsync(input._id))!;
+        assert.equal(node.shape, "rect");
+        assert.equal(node.width, 300);
+        assert.equal(node.color, "green");
+
+        const sticky = Random.id();
+        await upsertNodes(member, boardId, [
+          { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
+        ]);
+        await assert.isRejected(
+          upsertNodes(member, boardId, [{ _id: sticky, shape: "rect" }]),
+          /Only shape nodes have a shape/,
+        );
+      });
+
+      it("counts shapes within the node cap", async function () {
+        await WhiteboardNodes.insertManyAsync(
+          Array.from(
+            {
+              length:
+                MAX_NODES_PER_BOARD -
+                (await WhiteboardNodes.find({ board: boardId }).countAsync()),
+            },
+            () => ({
+              hunt: huntId,
+              board: boardId,
+              type: "sticky" as const,
+              position: { x: 0, y: 0 },
+              contributors: [],
+              createdBy: member,
+            }),
+          ),
+        );
+        await assert.isRejected(
+          upsertNodes(member, boardId, [shapeInput()]),
+          /This board is full/,
+        );
+      });
+
+      it("locks, and is deleted outright", async function () {
+        const input = shapeInput();
         await upsertNodes(member, boardId, [input]);
         await upsertNodes(member, boardId, [{ _id: input._id, locked: true }]);
         await assert.isRejected(

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useEventListener, useLocalStorage } from "usehooks-ts";
 import type {
   WhiteboardColor,
+  WhiteboardShape,
   WhiteboardStrokeWidth,
 } from "../../lib/models/WhiteboardNodes";
 import type { FeederOrder } from "../../lib/whiteboard/feeders";
@@ -351,6 +352,16 @@ export const useWhiteboardPenWidth = () => {
     "whiteboard:penWidth",
     "medium",
   );
+};
+
+// Which shape the Shape tool draws. Anything saved that isn't one reads as a
+// rectangle.
+export const useWhiteboardShapeKind = () => {
+  const [shape, setShape] = useBestEffortLocalStorage<WhiteboardShape>(
+    "whiteboard:shapeKind",
+    "rect",
+  );
+  return [shape === "ellipse" ? "ellipse" : "rect", setShape] as const;
 };
 
 export const useWhiteboardShowResolvedComments = () => {

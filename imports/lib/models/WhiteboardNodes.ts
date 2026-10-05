@@ -13,6 +13,7 @@ export const WhiteboardNodeKinds = [
   // The free end of a line that isn't attached to anything.
   "point",
   "image",
+  "shape",
 ] as const;
 export type WhiteboardNodeKind = (typeof WhiteboardNodeKinds)[number];
 
@@ -29,8 +30,17 @@ export const WhiteboardColors = [
 ] as const;
 export type WhiteboardColor = (typeof WhiteboardColors)[number];
 
-export const WhiteboardStrokeWidths = ["thin", "medium", "thick"] as const;
+// "marker" is the highlighter: wide and translucent.
+export const WhiteboardStrokeWidths = [
+  "thin",
+  "medium",
+  "thick",
+  "marker",
+] as const;
 export type WhiteboardStrokeWidth = (typeof WhiteboardStrokeWidths)[number];
+
+export const WhiteboardShapes = ["rect", "ellipse"] as const;
+export type WhiteboardShape = (typeof WhiteboardShapes)[number];
 
 // An ink sample: [x, y, pressure].
 export const WhiteboardInkPoint = z.tuple([z.number(), z.number(), z.number()]);
@@ -84,6 +94,7 @@ const WhiteboardNode = withCommon(
 
     // type: "sticky" | "text"
     text: nonEmptyString.optional(),
+    // A shape's fill, which is clear with no colour.
     color: z.enum(WhiteboardColors).optional(),
 
     // type: "ink". Points are [x, y, pressure], relative to position. A long
@@ -102,6 +113,10 @@ const WhiteboardNode = withCommon(
         height: z.number().positive(),
       })
       .optional(),
+
+    // type: "shape". Which shape it is, which never changes once the node
+    // is made. Its size is the node's width and height.
+    shape: z.enum(WhiteboardShapes).optional(),
 
     // Who created and edited a board-native node, oldest first. Written only
     // by the server.

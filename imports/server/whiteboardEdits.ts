@@ -12,7 +12,9 @@ import type {
   WhiteboardContributorType,
   WhiteboardNodeType,
 } from "../lib/models/WhiteboardNodes";
-import WhiteboardNodes from "../lib/models/WhiteboardNodes";
+import WhiteboardNodes, {
+  WhiteboardShapes,
+} from "../lib/models/WhiteboardNodes";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import { Id } from "../lib/typedModel/regexes";
 import type { InkPoint } from "../lib/whiteboard/ink";
@@ -55,7 +57,14 @@ import {
 } from "./whiteboardVersions";
 
 // Types whose content belongs to whoever wrote it.
-const NATIVE_TYPES = new Set(["frame", "sticky", "text", "ink", "image"]);
+const NATIVE_TYPES = new Set([
+  "frame",
+  "sticky",
+  "text",
+  "ink",
+  "image",
+  "shape",
+]);
 
 // Ink is split into segments and points are a line's loose end, so neither is
 // something a comment can sensibly hang off.
@@ -313,6 +322,44 @@ async function assertImagesAllowed(
   });
   await assertStoredImages(board.hunt, added);
   return added.length;
+}
+
+// Shape nodes come with a shape and a size, nothing else has a shape, and a
+// shape never changes once it's on the board: a rectangle stays one.
+function assertShapesAllowed(
+  inputs: WhiteboardNodeInput[],
+  existingById: Map<string, WhiteboardNodeType>,
+) {
+  inputs.forEach((input) => {
+    if (
+      input.shape !== undefined &&
+      !WhiteboardShapes.some((s) => s === input.shape)
+    ) {
+      throw badRequest("Unknown shape");
+    }
+    const existing = existingById.get(input._id);
+    if (existing) {
+      if (input.shape === undefined) return;
+      if (existing.type !== "shape") {
+        throw badRequest("Only shape nodes have a shape");
+      }
+      if (input.shape !== existing.shape) {
+        throw badRequest("A shape can't be changed");
+      }
+      return;
+    }
+    if (input.type === "shape") {
+      if (
+        !input.shape ||
+        input.width === undefined ||
+        input.height === undefined
+      ) {
+        throw badRequest("Shape nodes need a shape and a size");
+      }
+    } else if (input.shape !== undefined) {
+      throw badRequest("Only shape nodes have a shape");
+    }
+  });
 }
 
 // A change to a node already on the board, with that node as it was read.
@@ -580,6 +627,7 @@ async function insertNode(
     strokeWidth: input.type === "ink" ? input.strokeWidth : undefined,
     stroke: input.type === "ink" ? input.stroke : undefined,
     image: input.type === "image" ? input.image : undefined,
+    shape: input.type === "shape" ? input.shape : undefined,
     contributors: NATIVE_TYPES.has(input.type)
       ? appendContributor([], userId)
       : [],
@@ -721,6 +769,7 @@ export async function upsertNodes(
       : [];
   });
   await assertPuzzlesLive(board.hunt, puttingBack);
+  assertShapesAllowed(inputs, existingById);
   const newImages = await assertImagesAllowed(board, inputs, existingById);
   await assertNodesValid(board, inserts, updates);
 

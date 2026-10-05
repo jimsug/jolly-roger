@@ -50,6 +50,62 @@ function nearestBorderPoint(box: Rect, inside: XYPosition): XYPosition {
   return distances.reduce((best, c) => (c.d < best.d ? c : best)).p;
 }
 
+// Where a ray from the centre of the ellipse filling the box towards
+// `toward` crosses its outline.
+function ellipseExitPoint(box: Rect, toward: XYPosition): XYPosition {
+  const a = box.width / 2;
+  const b = box.height / 2;
+  const c = centerOf(box);
+  if (a === 0 || b === 0) return c;
+  const dx = toward.x - c.x;
+  const dy = toward.y - c.y;
+  const reach = Math.hypot(dx / a, dy / b);
+  if (reach === 0) return c;
+  return { x: c.x + dx / reach, y: c.y + dy / reach };
+}
+
+// The point on the outline of the ellipse filling the box nearest a point.
+// It's worked out in the top-right quarter (the others mirror it) by a few
+// rounds of stepping along the outline towards the point, each step going
+// through where the outline's nearby normals meet.
+function nearestEllipsePoint(box: Rect, point: XYPosition): XYPosition {
+  const a = box.width / 2;
+  const b = box.height / 2;
+  const c = centerOf(box);
+  if (a === 0 || b === 0) return c;
+  const px = Math.abs(point.x - c.x);
+  const py = Math.abs(point.y - c.y);
+  let tx = Math.SQRT1_2;
+  let ty = Math.SQRT1_2;
+  for (let i = 0; i < 4; i++) {
+    const ex = ((a * a - b * b) * tx ** 3) / a;
+    const ey = ((b * b - a * a) * ty ** 3) / b;
+    const r = Math.hypot(a * tx - ex, b * ty - ey);
+    const q = Math.hypot(px - ex, py - ey);
+    if (q === 0) break;
+    tx = Math.min(1, Math.max(0, (((px - ex) * r) / q + ex) / a));
+    ty = Math.min(1, Math.max(0, (((py - ey) * r) / q + ey) / b));
+    const t = Math.hypot(tx, ty);
+    tx /= t;
+    ty /= t;
+  }
+  return {
+    x: c.x + (point.x < c.x ? -1 : 1) * a * tx,
+    y: c.y + (point.y < c.y ? -1 : 1) * b * ty,
+  };
+}
+
+const isEllipse = (node: InternalNode) => {
+  if (node.type !== "shape") return false;
+  const { doc } = node.data;
+  return (
+    typeof doc === "object" &&
+    doc !== null &&
+    "shape" in doc &&
+    doc.shape === "ellipse"
+  );
+};
+
 function sideOf(box: Rect, point: XYPosition, other: XYPosition): Position {
   if (box.width === 0 || box.height === 0 || strictlyInside(box, point)) {
     // A free end (or a point inside its node): face the other end.
@@ -83,6 +139,15 @@ export default function floatingEdgeParams(
   const targetCenter = centerOf(targetRect);
   const sourceFree = source.type === "point";
   const targetFree = target.type === "point";
+  // An ellipse's line ends meet its outline, not the box around it.
+  const sourceExit = isEllipse(source) ? ellipseExitPoint : exitPoint;
+  const targetExit = isEllipse(target) ? ellipseExitPoint : exitPoint;
+  const sourceNearest = isEllipse(source)
+    ? nearestEllipsePoint
+    : nearestBorderPoint;
+  const targetNearest = isEllipse(target)
+    ? nearestEllipsePoint
+    : nearestBorderPoint;
 
   // When each box covers the other's centre, the bigger one is the outer.
   const sourceOuter = !sourceFree && strictlyInside(sourceRect, targetCenter);
@@ -91,22 +156,22 @@ export default function floatingEdgeParams(
   let sourcePoint: XYPosition;
   let targetPoint: XYPosition;
   if (sourceOuter && (!targetOuter || area(sourceRect) >= area(targetRect))) {
-    sourcePoint = nearestBorderPoint(sourceRect, targetCenter);
+    sourcePoint = sourceNearest(sourceRect, targetCenter);
     targetPoint = targetFree
       ? targetCenter
-      : exitPoint(targetRect, sourcePoint);
+      : targetExit(targetRect, sourcePoint);
   } else if (targetOuter) {
-    targetPoint = nearestBorderPoint(targetRect, sourceCenter);
+    targetPoint = targetNearest(targetRect, sourceCenter);
     sourcePoint = sourceFree
       ? sourceCenter
-      : exitPoint(sourceRect, targetPoint);
+      : sourceExit(sourceRect, targetPoint);
   } else {
     sourcePoint = sourceFree
       ? sourceCenter
-      : exitPoint(sourceRect, targetCenter);
+      : sourceExit(sourceRect, targetCenter);
     targetPoint = targetFree
       ? targetCenter
-      : exitPoint(targetRect, sourceCenter);
+      : targetExit(targetRect, sourceCenter);
   }
 
   return {

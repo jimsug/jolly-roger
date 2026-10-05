@@ -7,6 +7,7 @@ import { inkPath } from "../../../lib/whiteboard/ink";
 import useHoverIntent from "../../hooks/useHoverIntent";
 import colors from "./colors";
 import { CornerLockBadge } from "./LockBadge";
+import { MARKER_CLASS, strokeOpacity } from "./marker";
 import NodeContributors from "./NodeContributors";
 
 type InkNodeType = Node<{ doc: WhiteboardNodeType; erasing?: boolean }, "ink">;
@@ -74,10 +75,12 @@ const InkNode = ({
     [doc.points, doc.strokeWidth],
   );
   const color = (doc.color && colors.stroke[doc.color]) ?? theme.colors.text;
+  const strokeWidth = doc.strokeWidth ?? "medium";
 
   return (
     <>
       <InkSvg
+        className={strokeWidth === "marker" ? MARKER_CLASS : undefined}
         width={width}
         height={height}
         $selected={selected}
@@ -86,6 +89,7 @@ const InkNode = ({
         <path
           d={path}
           fill={color}
+          fillOpacity={strokeOpacity(strokeWidth)}
           onMouseEnter={hover.onMouseEnter}
           onMouseLeave={hover.onMouseLeave}
         />

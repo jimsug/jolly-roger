@@ -36,6 +36,7 @@ type Node = Pick<
   | "stroke"
   | "collapsed"
   | "image"
+  | "shape"
 >;
 type Edge = Pick<
   WhiteboardEdgeType,
@@ -313,6 +314,64 @@ describe("whiteboard clipboard", function () {
           image,
         },
       ]);
+    });
+
+    it("copies a shape with its kind, size and colour, and pastes it as it was", function () {
+      const nodes = [
+        node("r", "shape", 40, 60, {
+          width: 160,
+          height: 120,
+          shape: "rect",
+          color: "blue",
+        }),
+        node("e", "shape", 300, 60, {
+          width: 80,
+          height: 40,
+          shape: "ellipse",
+        }),
+        node("t", "text", 50, 70, { text: "On top" }),
+      ];
+      const edges = [line("l", "r", "e")];
+      const { clip } = copySelection(nodes, edges, select(["r", "e", "t"]));
+      assert.deepEqual(byId(clip.nodes).get("r"), {
+        id: "r",
+        type: "shape",
+        x: 40,
+        y: 60,
+        width: 160,
+        height: 120,
+        color: "blue",
+        shape: "rect",
+      });
+      assert.deepEqual(byId(clip.nodes).get("e"), {
+        id: "e",
+        type: "shape",
+        x: 300,
+        y: 60,
+        width: 80,
+        height: 40,
+        shape: "ellipse",
+      });
+      assert.deepEqual(clip.edges, [{ source: "r", target: "e" }]);
+      assert.deepEqual(readClip(clipText(clip)), clip);
+
+      const pasted = pasteClip(clip, { x: 10, y: 0 }, topLevel, counter());
+      const rect = pasted.nodes.find((n) => n.shape === "rect");
+      assert.deepEqual(rect, {
+        _id: rect!._id,
+        type: "shape",
+        position: { x: 50, y: 60 },
+        parent: null,
+        width: 160,
+        height: 120,
+        color: "blue",
+        shape: "rect",
+      });
+      assert.equal(
+        pasted.nodes.find((n) => n.type === "text")?.shape,
+        undefined,
+      );
+      assert.lengthOf(pasted.edges, 1);
     });
 
     it("labels a frame as it's shown", function () {
@@ -685,6 +744,16 @@ describe("whiteboard clipboard", function () {
         edges: [],
       });
       bad({ nodes: [{ ...clip.nodes[0], image }], edges: [] });
+      // A shape with no kind, an unknown one or no size, and a kind on
+      // something else
+      const shape = { id: "s", type: "shape", x: 0, y: 0, width: 4, height: 3 };
+      bad({ nodes: [shape], edges: [] });
+      bad({ nodes: [{ ...shape, shape: "star" }], edges: [] });
+      bad({
+        nodes: [{ id: "s", type: "shape", x: 0, y: 0, shape: "rect" }],
+        edges: [],
+      });
+      bad({ nodes: [{ ...clip.nodes[0], shape: "rect" }], edges: [] });
       bad({
         nodes: [
           {

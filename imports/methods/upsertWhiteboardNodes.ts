@@ -1,6 +1,7 @@
 import type {
   WhiteboardColor,
   WhiteboardNodeKind,
+  WhiteboardShape,
   WhiteboardStrokeWidth,
 } from "../lib/models/WhiteboardNodes";
 import TypedMethod from "./TypedMethod";
@@ -31,6 +32,8 @@ export type WhiteboardNodeInput = {
   // New image nodes only: an upload to the image bucket and its size in
   // pixels.
   image?: { url: string; width: number; height: number };
+  // New shape nodes only: which shape.
+  shape?: WhiteboardShape;
 };
 
 export default new TypedMethod<

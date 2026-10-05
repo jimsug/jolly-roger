@@ -9,6 +9,7 @@ import {
   WhiteboardColors,
   WhiteboardInkPoint,
   WhiteboardNodeKinds,
+  WhiteboardShapes,
   WhiteboardStrokeWidths,
 } from "../models/WhiteboardNodes";
 import { centerOf } from "./connectors";
@@ -64,6 +65,7 @@ const ClipNode = z.object({
       height: dimension,
     })
     .optional(),
+  shape: z.enum(WhiteboardShapes).optional(),
 });
 type ClipNode = z.infer<typeof ClipNode>;
 
@@ -94,6 +96,7 @@ const NODE_FIELDS = [
   "points",
   "strokeWidth",
   "image",
+  "shape",
 ] as const;
 const EDGE_FIELDS = [
   "label",
@@ -140,6 +143,7 @@ type SourceNode = Pick<
   | "stroke"
   | "collapsed"
   | "image"
+  | "shape"
 >;
 type SourceEdge = Pick<
   WhiteboardEdgeType,
@@ -259,6 +263,7 @@ export function copySelection<N extends SourceNode>(
       const { url, width, height } = node.image;
       copy.image = { url, width, height };
     }
+    if (node.shape !== undefined) copy.shape = node.shape;
     return [copy];
   });
 
@@ -293,6 +298,13 @@ function holdsTogether(clip: BoardClip): boolean {
       node.type === "image"
         ? !node.image || node.width === undefined || node.height === undefined
         : node.image !== undefined
+    ) {
+      return false;
+    }
+    if (
+      node.type === "shape"
+        ? !node.shape || node.width === undefined || node.height === undefined
+        : node.shape !== undefined
     ) {
       return false;
     }
@@ -457,6 +469,7 @@ interface PastedNode {
   stroke?: string;
   collapsed?: boolean;
   image?: ClipNode["image"];
+  shape?: ClipNode["shape"];
 }
 interface PastedEdge extends ClipEdge {
   _id: string;

@@ -700,6 +700,52 @@ describe("whiteboard versions", function () {
       assert.equal(restored.height, 240);
     });
 
+    it("keeps a shape and a highlighter stroke in a version and puts them back", async function () {
+      const shape = Random.id();
+      const marker = Random.id();
+      await upsertNodes(member, boardId, [
+        {
+          _id: shape,
+          type: "shape",
+          position: { x: 40, y: 60 },
+          width: 160,
+          height: 120,
+          shape: "ellipse",
+          color: "pink",
+        },
+        {
+          _id: marker,
+          type: "ink",
+          position: { x: 0, y: 0 },
+          strokeWidth: "marker",
+          stroke: Random.id(),
+          points: [
+            [0, 0, 0.5],
+            [100, 0, 0.5],
+          ],
+        },
+      ]);
+      await nextWindow();
+      await deleteNodes(member, boardId, [shape, marker]);
+      const version = await newest();
+
+      await asUser(member, () =>
+        restoreWhiteboardVersion.callPromise({
+          boardId,
+          versionId: version._id,
+        }),
+      );
+      const restored = (await WhiteboardNodes.findOneAsync(shape))!;
+      assert.equal(restored.type, "shape");
+      assert.equal(restored.shape, "ellipse");
+      assert.equal(restored.color, "pink");
+      assert.equal(restored.width, 160);
+      assert.equal(
+        (await WhiteboardNodes.findOneAsync(marker))?.strokeWidth,
+        "marker",
+      );
+    });
+
     it("doesn't put back a deleted puzzle's card, but moves it with the version", async function () {
       const card = await firstCard();
       const note = await sticky(member, { x: 6000, y: 6000 });

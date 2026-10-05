@@ -8,9 +8,11 @@ import {
   inkBounds,
   inkPath,
   inkPointCount,
+  MARKER_OPACITY,
   MAX_FILLED_POINTS,
   relativeTo,
   SEGMENT_OVERLAP,
+  STROKE_SIZES,
   simplifyInk,
   simulatedPressure,
 } from "../../../../imports/lib/whiteboard/ink";
@@ -141,6 +143,39 @@ describe("whiteboard ink geometry", function () {
     const xs = [...path.matchAll(/(-?\d+\.\d+),/g)].map((m) => Number(m[1]));
     assert.isAbove(Math.max(...xs), 195);
     assert.isBelow(Math.min(...xs), 5);
+  });
+
+  it("draws a highlighter 24 wide, whatever the pressure", function () {
+    const at = (pressure: number): InkPoint[] =>
+      Array.from({ length: 40 }, (_, i): InkPoint => [i * 5, 0, pressure]);
+    const ys = (path: string) =>
+      [...path.matchAll(/-?\d+\.\d+,(-?\d+\.\d+)/g)].map((m) => Number(m[1]));
+    const light = inkPath(at(0.1), "marker", true);
+    const heavy = inkPath(at(1), "marker", true);
+    assert.match(light, /^M.*Z$/);
+    assert.equal(light, heavy);
+    assert.closeTo(Math.max(...ys(light)), 12, 0.5);
+    assert.closeTo(Math.min(...ys(light)), -12, 0.5);
+    // An ordinary pen thins with less pressure
+    assert.notEqual(
+      inkPath(at(0.1), "medium", true),
+      inkPath(at(1), "medium", true),
+    );
+    assert.isAbove(MARKER_OPACITY, 0);
+    assert.isBelow(MARKER_OPACITY, 1);
+  });
+
+  it("pads a highlighter's bounds by its width", function () {
+    assert.deepEqual(
+      inkBounds(
+        [
+          [100, 100, 0.5],
+          [200, 100, 0.5],
+        ],
+        STROKE_SIZES.marker,
+      ),
+      { x: 76, y: 76, width: 148, height: 48 },
+    );
   });
 
   it("fills in gaps every few units", function () {

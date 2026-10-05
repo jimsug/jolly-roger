@@ -67,6 +67,10 @@ export default function describeCommentTarget(
       );
     case "image":
       return t("whiteboard.commentTarget.image", "an image");
+    case "shape":
+      return node.shape === "ellipse"
+        ? t("whiteboard.commentTarget.ellipse", "an ellipse")
+        : t("whiteboard.commentTarget.rect", "a rectangle");
     case "ink":
     case "point":
       // The server doesn't let comments go on these.

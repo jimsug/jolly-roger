@@ -13,7 +13,11 @@ export const STROKE_SIZES: Record<WhiteboardStrokeWidth, number> = {
   thin: 3,
   medium: 6,
   thick: 12,
+  marker: 24,
 };
+
+// How opaque a highlighter stroke is drawn, so what's under it shows.
+export const MARKER_OPACITY = 0.4;
 
 // Samples closer than this to the last kept point add nothing visible.
 const MIN_POINT_DISTANCE = 0.5;
@@ -233,7 +237,9 @@ export function inkPath(
   if (points.length === 0) return "";
   const outline = getStroke(filledIn(points), {
     size: STROKE_SIZES[strokeWidth],
-    thinning: 0.5,
+    // A highlighter is the same width all the way along, whatever the
+    // pressure.
+    thinning: strokeWidth === "marker" ? 0 : 0.5,
     smoothing: 0.5,
     streamline: 0.4,
     simulatePressure: false,

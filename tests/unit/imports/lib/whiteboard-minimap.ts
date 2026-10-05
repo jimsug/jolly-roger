@@ -45,6 +45,15 @@ describe("whiteboard miniMapColor", function () {
     assert.match(colorOf({ type: "frame" }), /^rgb\(128 128 128 \/ \d+%\)$/);
   });
 
+  it("shows a shape as faintly as a frame, clear or coloured", function () {
+    assert.equal(
+      colorOf({ type: "shape", color: "green" }),
+      colorOf({ type: "frame", color: "green" }),
+    );
+    assert.equal(colorOf({ type: "shape" }), colorOf({ type: "frame" }));
+    assert.notEqual(colorOf({ type: "shape" }), colorOf({ type: "sticky" }));
+  });
+
   it("hides free line ends and greys everything else", function () {
     assert.equal(colorOf({ type: "point" }), "transparent");
     assert.equal(colorOf({ type: "ink" }), colorOf({ type: "text" }));

@@ -7248,6 +7248,516 @@ if (Meteor.isClient) {
         });
       });
 
+      describe("highlighter and shapes", function () {
+        it("draws a highlighter stroke over a card, see-through, and erases it", async function () {
+          this.timeout(30000);
+          const { a } = await sideBySideCards(boardId);
+          let before = new Set<string>();
+          const drawn = async () =>
+            (
+              await WhiteboardNodes.find({
+                board: boardId,
+                type: "ink",
+              }).fetchAsync()
+            ).filter((n) => !before.has(n._id));
+          try {
+            await openBoard();
+            before = new Set(
+              (
+                await WhiteboardNodes.find({
+                  board: boardId,
+                  type: "ink",
+                }).fetchAsync()
+              ).map((n) => n._id),
+            );
+            await pressBoard();
+            await press(pane(), { key: "p" });
+            await press(pane(), { key: "4" });
+            assert.equal(
+              screen.getByRole<HTMLSelectElement>("combobox", {
+                name: "Pen width",
+              }).value,
+              "marker",
+            );
+            assert.include(
+              screen.getByRole("combobox", { name: "Pen width" }).textContent,
+              "Highlighter",
+            );
+            // Across the middle of the card
+            const card = (await nodeShown(a._id)).getBoundingClientRect();
+            const y = card.top + card.height / 2;
+            const point = (x: number) => ({
+              button: 0,
+              buttons: 1,
+              pointerId: 1,
+              clientX: x,
+              clientY: y,
+            });
+            const xs = [20, 60, 100, 140, 180].map((dx) => card.left + dx);
+            await act(async () => {
+              fireEvent.pointerDown(pane(), point(xs[0]!));
+              await stabilize();
+            });
+            // Translucent while it's drawn, too
+            const live = document.querySelector(
+              ".react-flow__viewport-portal svg path",
+            );
+            assert.equal(live?.getAttribute("fill-opacity"), "0.4");
+            for (const x of xs.slice(1)) {
+              await act(async () => {
+                fireEvent.pointerMove(pane(), point(x));
+                await stabilize();
+              });
+            }
+            await act(async () => {
+              fireEvent.pointerUp(pane(), { ...point(xs.at(-1)!), buttons: 0 });
+              await stabilize();
+            });
+            const [segment] = await waitFor(
+              async () => {
+                const segments = await drawn();
+                assert.lengthOf(segments, 1);
+                return segments;
+              },
+              { timeout: 10000 },
+            );
+            assert.equal(segment!.strokeWidth, "marker");
+
+            const node = await nodeShown(segment!._id);
+            const path = await waitFor(() => {
+              const found = node.querySelector("svg.jr-ink-marker path");
+              assert.isNotNull(found);
+              return found;
+            });
+            assert.equal(path.getAttribute("fill-opacity"), "0.4");
+            // The whole node blends with the card under it
+            assert.equal(
+              window.getComputedStyle(node).mixBlendMode,
+              "multiply",
+            );
+            // On top of the card, which still shows through it
+            const stack = document.elementsFromPoint(xs[2]!, y);
+            const strokeAt = stack.findIndex((el) => node.contains(el));
+            const cardAt = stack.findIndex((el) =>
+              nodeElement(a._id)!.contains(el),
+            );
+            assert.isAtLeast(strokeAt, 0);
+            assert.isAbove(cardAt, strokeAt);
+
+            await act(async () => {
+              fireEvent.click(
+                screen.getByRole("button", { name: "Erase strokes" }),
+              );
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerDown(pane(), point(xs[2]!));
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerUp(pane(), { ...point(xs[2]!), buttons: 0 });
+              await stabilize();
+            });
+            await waitFor(async () => assert.isEmpty(await drawn()), {
+              timeout: 10000,
+            });
+            assert.exists(await savedNode(a._id));
+          } finally {
+            forgetView();
+            localStorage.removeItem("whiteboard:penWidth");
+            const left = (await drawn()).map((n) => n._id);
+            if (left.length > 0) await removeNodes(left);
+          }
+        });
+
+        it("places, recolours, joins, locks and duplicates shapes, and undoes", async function () {
+          this.timeout(60000);
+          const base = { x: 34000, y: 34000 };
+          const screenAt = lookAt(base);
+          const shapes = () =>
+            WhiteboardNodes.find({
+              board: boardId,
+              type: "shape",
+              "position.x": { $gte: base.x - 500, $lte: base.x + 1500 },
+              "position.y": { $gte: base.y - 500, $lte: base.y + 1500 },
+            }).fetchAsync();
+          const at = (x: number, y: number) => ({
+            button: 0,
+            buttons: 1,
+            pointerId: 1,
+            ...screenAt(x, y),
+          });
+          const pickShape = async () => {
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: /^Shape:/ }));
+              await stabilize();
+            });
+          };
+          let rect: string | undefined;
+          try {
+            await openBoard();
+            await pickShape();
+            const kind = screen.getByRole<HTMLSelectElement>("combobox", {
+              name: "Shape",
+            });
+            assert.equal(kind.value, "rect");
+            // A click places a rectangle of the default size, centred on it
+            await act(async () => {
+              fireEvent.pointerDown(pane(), at(base.x + 100, base.y + 100));
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerUp(pane(), {
+                ...at(base.x + 100, base.y + 100),
+                buttons: 0,
+              });
+              await stabilize();
+            });
+            const placed = await waitFor(
+              async () => {
+                const [found, ...more] = await shapes();
+                assert.ok(found);
+                assert.isEmpty(more);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            rect = placed._id;
+            assert.equal(placed.shape, "rect");
+            assert.deepEqual(placed.position, {
+              x: base.x + 20,
+              y: base.y + 40,
+            });
+            assert.equal(placed.width, 160);
+            assert.equal(placed.height, 120);
+            assert.isUndefined(placed.color);
+            assert.equal(pressed(/^Select and move/), "true");
+            const rectSvg = (await nodeShown(rect)).querySelector(
+              "svg.jr-shape rect",
+            );
+            assert.equal(rectSvg?.getAttribute("fill"), "none");
+
+            // A drag makes an ellipse its size
+            await pickShape();
+            await act(async () => {
+              fireEvent.change(
+                screen.getByRole("combobox", { name: "Shape" }),
+                { target: { value: "ellipse" } },
+              );
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerDown(pane(), at(base.x + 400, base.y));
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerMove(pane(), at(base.x + 600, base.y + 100));
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerUp(pane(), {
+                ...at(base.x + 600, base.y + 100),
+                buttons: 0,
+              });
+              await stabilize();
+            });
+            const ellipse = await waitFor(
+              async () => {
+                const found = (await shapes()).find((n) => n._id !== rect);
+                assert.ok(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            assert.equal(ellipse.shape, "ellipse");
+            assert.deepEqual(ellipse.position, { x: base.x + 400, y: base.y });
+            assert.equal(ellipse.width, 200);
+            assert.equal(ellipse.height, 100);
+            await nodeShown(ellipse._id);
+
+            // Recoloured, it's filled in the pastel
+            await select(ellipse._id);
+            const toolbar = await waitFor(() => {
+              const found = document.querySelector<HTMLElement>(
+                '.react-flow__node-toolbar:has([aria-label="Blue"])',
+              );
+              assert.exists(found);
+              return found;
+            });
+            await act(async () => {
+              fireEvent.click(
+                within(toolbar).getByRole("button", { name: "Blue" }),
+              );
+              await stabilize();
+            });
+            await waitFor(
+              async () =>
+                assert.equal((await savedNode(ellipse._id))?.color, "blue"),
+              { timeout: 10000 },
+            );
+            await waitFor(() =>
+              assert.equal(
+                nodeElement(ellipse._id)
+                  ?.querySelector("svg.jr-shape ellipse")
+                  ?.getAttribute("fill"),
+                "#d0ebff",
+              ),
+            );
+
+            // No fill takes the colour away again
+            const shapeFill = () =>
+              nodeElement(ellipse._id)
+                ?.querySelector("svg.jr-shape ellipse")
+                ?.getAttribute("fill");
+            const swatch = (name: string) =>
+              within(
+                document.querySelector<HTMLElement>(
+                  '.react-flow__node-toolbar:has([aria-label="Blue"])',
+                )!,
+              ).getByRole("button", { name });
+            assert.equal(
+              swatch("No fill").getAttribute("aria-pressed"),
+              "false",
+            );
+            await act(async () => {
+              fireEvent.click(swatch("No fill"));
+              await stabilize();
+            });
+            await waitFor(
+              async () =>
+                assert.isUndefined((await savedNode(ellipse._id))?.color),
+              { timeout: 10000 },
+            );
+            await waitFor(() => assert.equal(shapeFill(), "none"));
+            assert.equal(
+              swatch("No fill").getAttribute("aria-pressed"),
+              "true",
+            );
+            await act(async () => {
+              fireEvent.click(swatch("Blue"));
+              await stabilize();
+            });
+            await waitFor(
+              async () =>
+                assert.equal((await savedNode(ellipse._id))?.color, "blue"),
+              { timeout: 10000 },
+            );
+
+            // The line tool joins them
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: /^Line:/ }));
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerDown(pane(), at(base.x + 100, base.y + 100));
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerMove(pane(), at(base.x + 500, base.y + 50));
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerUp(pane(), {
+                ...at(base.x + 500, base.y + 50),
+                buttons: 0,
+              });
+              await stabilize();
+            });
+            await waitFor(
+              async () =>
+                assert.equal(
+                  await linesBetween(boardId, rect!, ellipse._id),
+                  1,
+                ),
+              { timeout: 10000 },
+            );
+            await press(pane(), { key: "v" });
+
+            // Locked, it shows the padlock
+            const rectNode = await nodeShown(rect);
+            await select(rect);
+            await act(async () => {
+              rectNode.focus();
+              await stabilize();
+            });
+            await press(rectNode, { key: "l", ctrlKey: true });
+            await waitFor(
+              async () => assert.isTrue((await savedNode(rect!))?.locked),
+              { timeout: 10000 },
+            );
+            await waitFor(() =>
+              assert.exists(
+                nodeElement(rect!)?.querySelector(".jr-lock-badge"),
+              ),
+            );
+
+            // Duplicated, then undone
+            await select(ellipse._id);
+            await press(pane(), { key: "d", ctrlKey: true });
+            const copy = await waitFor(
+              async () => {
+                const found = (await shapes()).find(
+                  (n) => n._id !== rect && n._id !== ellipse._id,
+                );
+                assert.ok(found);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            assert.equal(copy.shape, "ellipse");
+            assert.equal(copy.color, "blue");
+            assert.deepEqual(copy.position, {
+              x: ellipse.position.x + 24,
+              y: ellipse.position.y + 24,
+            });
+            await waitFor(
+              () =>
+                assert.isFalse(
+                  screen.getByRole<HTMLButtonElement>("button", {
+                    name: "Undo",
+                  }).disabled,
+                ),
+              { timeout: 10000 },
+            );
+            // The duplicate's save is back, so it's the edit Undo takes
+            await nodeShown(copy._id);
+            await clearPuzzleSubscribers.callPromise({ userIds: [] });
+            await press(pane(), { key: "z", ctrlKey: true });
+            await waitFor(async () => assert.notOk(await savedNode(copy._id)), {
+              timeout: 10000,
+            });
+            assert.lengthOf(await shapes(), 2);
+          } finally {
+            forgetView();
+            localStorage.removeItem("whiteboard:shapeKind");
+            if (rect) {
+              await upsertWhiteboardNodes.callPromise({
+                boardId,
+                nodes: [{ _id: rect, locked: false }],
+              });
+            }
+            await removeNodes((await shapes()).map((n) => n._id));
+          }
+        });
+
+        it("keeps a filled shape under the cards in it, selected or not", async function () {
+          this.timeout(30000);
+          const { a, b, frame } = await sideBySideCards(boardId);
+          const shape = Random.id();
+          await upsertWhiteboardNodes.callPromise({
+            boardId,
+            nodes: [
+              {
+                _id: shape,
+                type: "shape",
+                shape: "rect",
+                parent: frame._id,
+                position: { x: a.position.x - 20, y: a.position.y - 20 },
+                width: CARD_WIDTH + 40,
+                height: CARD_HEIGHT + 40,
+                color: "blue",
+              },
+            ],
+          });
+          const linesFromB = async () =>
+            (
+              await WhiteboardEdges.find({
+                board: boardId,
+                source: b._id,
+                auto: { $ne: true },
+              }).fetchAsync()
+            ).map((e) => e._id);
+          const before = new Set(await linesFromB());
+          const middleOf = (id: string) => {
+            const box = nodeElement(id)!.getBoundingClientRect();
+            return {
+              clientX: box.left + box.width / 2,
+              clientY: box.top + box.height / 2,
+            };
+          };
+          // The card is on top at its middle, so it takes clicks there.
+          const cardOnTop = () => {
+            const { clientX, clientY } = middleOf(a._id);
+            const stack = document.elementsFromPoint(clientX, clientY);
+            const cardAt = stack.findIndex((el) =>
+              nodeElement(a._id)!.contains(el),
+            );
+            const shapeAt = stack.findIndex((el) =>
+              nodeElement(shape)!.contains(el),
+            );
+            assert.isAtLeast(cardAt, 0);
+            assert.isAtLeast(shapeAt, 0);
+            assert.isBelow(cardAt, shapeAt);
+          };
+          try {
+            await openBoard();
+            await nodeShown(a._id);
+            await nodeShown(shape);
+            cardOnTop();
+
+            await select(shape);
+            await waitFor(() =>
+              assert.isTrue(nodeElement(shape)!.classList.contains("selected")),
+            );
+            cardOnTop();
+            // Line ends go to the topmost thing under them by this
+            assert.isBelow(
+              Number((nodeElement(shape) as HTMLElement).style.zIndex),
+              Number((nodeElement(a._id) as HTMLElement).style.zIndex),
+            );
+
+            // A line end let go over the card attaches to the card
+            await act(async () => {
+              fireEvent.click(screen.getByRole("button", { name: /^Line:/ }));
+              await stabilize();
+            });
+            const from = middleOf(b._id);
+            const to = middleOf(a._id);
+            const pointer = { button: 0, pointerId: 1 };
+            await act(async () => {
+              fireEvent.pointerDown(pane(), {
+                ...pointer,
+                buttons: 1,
+                ...from,
+              });
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerMove(pane(), { ...pointer, buttons: 1, ...to });
+              await stabilize();
+            });
+            await act(async () => {
+              fireEvent.pointerUp(pane(), { ...pointer, buttons: 0, ...to });
+              await stabilize();
+            });
+            const [line] = await waitFor(
+              async () => {
+                const made = (await linesFromB()).filter(
+                  (id) => !before.has(id),
+                );
+                assert.lengthOf(made, 1);
+                return made;
+              },
+              { timeout: 10000 },
+            );
+            assert.equal(
+              (await WhiteboardEdges.findOneAsync(line))?.target,
+              a._id,
+            );
+          } finally {
+            forgetView();
+            const made = (await linesFromB()).filter((id) => !before.has(id));
+            if (made.length > 0) {
+              await deleteWhiteboardEdges.callPromise({
+                boardId,
+                edgeIds: made,
+              });
+            }
+            await removeNodes([shape]);
+          }
+        });
+      });
+
       it("switches between the board and chat on a narrow screen", async function () {
         this.timeout(30000);
         const phone = simulatePhone();
@@ -8572,6 +9082,52 @@ if (Meteor.isClient) {
                 (n) => n._id,
               ),
             );
+          }
+        });
+
+        it("places a shape with a tap, with nothing to type in", async function () {
+          this.timeout(30000);
+          const base = { x: 23000, y: 28000 };
+          const screenAt = lookAt(base);
+          const made = () =>
+            WhiteboardNodes.find({
+              board: boardId,
+              type: "shape",
+              "position.x": { $gte: base.x - 300, $lte: base.x + 300 },
+              "position.y": { $gte: base.y - 300, $lte: base.y + 300 },
+            }).fetchAsync();
+          try {
+            await openBoard();
+            await pick(/^Shape:/);
+            assert.equal(pressed(/^Shape:/), "true");
+            const at = screenAt(base.x + 100, base.y + 80);
+            await act(async () => {
+              fireEvent.pointerDown(pane(), finger(at));
+              fireEvent.pointerUp(pane(), lift(at));
+              fireEvent.click(pane(), { button: 0, ...at });
+              await stabilize();
+            });
+            const [shape] = await waitFor(
+              async () => {
+                const found = await made();
+                assert.lengthOf(found, 1);
+                return found;
+              },
+              { timeout: 10000 },
+            );
+            assert.equal(shape!.shape, "rect");
+            assert.deepEqual(shape!.position, {
+              x: base.x + 20,
+              y: base.y + 20,
+            });
+            assert.equal(shape!.width, 160);
+            assert.equal(shape!.height, 120);
+            await nodeShown(shape!._id);
+            assert.equal(pressed(/^Select and move/), "true");
+            assert.notEqual(document.activeElement?.tagName, "INPUT");
+          } finally {
+            forgetView();
+            await removeNodes((await made()).map((n) => n._id));
           }
         });
 
@@ -11210,6 +11766,64 @@ if (Meteor.isClient) {
         } finally {
           forgetView();
           await removeNodes(Object.values(ids));
+        }
+      });
+
+      it("folds a shape away with its frame", async function () {
+        this.timeout(30000);
+        const base = { x: 41000, y: 40000 };
+        const frame = Random.id();
+        const shape = Random.id();
+        await upsertWhiteboardNodes.callPromise({
+          boardId,
+          nodes: [
+            {
+              _id: frame,
+              type: "frame",
+              position: base,
+              width: 600,
+              height: 400,
+              label: "Shaped round",
+            },
+            {
+              _id: shape,
+              type: "shape",
+              shape: "ellipse",
+              parent: frame,
+              position: { x: 40, y: 100 },
+              width: 160,
+              height: 120,
+              color: "green",
+            },
+          ],
+        });
+        lookAt(base);
+        try {
+          await openBoard();
+          await nodeShown(shape);
+          const header = await nodeShown(frame);
+          await click(
+            within(header).getByRole("button", {
+              name: "Collapse for everyone",
+            }),
+          );
+          await waitFor(
+            async () => {
+              assert.isTrue(await isCollapsed(frame));
+              assert.isNull(nodeElement(shape));
+              assert.include(header.textContent ?? "", "1 item");
+            },
+            { timeout: 10000 },
+          );
+          await click(
+            within(header).getByRole("button", { name: "Expand for everyone" }),
+          );
+          await waitFor(() => assert.isNotNull(nodeElement(shape)), {
+            timeout: 10000,
+          });
+        } finally {
+          forgetView();
+          await removeNodes([frame, shape]);
         }
       });
 

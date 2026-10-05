@@ -36,6 +36,7 @@ files:
   - imports/client/components/whiteboard/RemoteSelectionLayer.tsx
   - imports/client/components/whiteboard/ResetLayoutModal.tsx
   - imports/client/components/whiteboard/RoundStateContext.ts
+  - imports/client/components/whiteboard/ShapeNode.tsx
   - imports/client/components/whiteboard/ShowOnBoardLink.tsx
   - imports/client/components/whiteboard/TouchTargetSize.tsx
   - imports/client/components/whiteboard/WhiteboardCanvas.tsx
@@ -44,6 +45,7 @@ files:
   - imports/client/components/whiteboard/WhosHere.tsx
   - imports/client/components/whiteboard/boardFiles.ts
   - imports/client/components/whiteboard/boardWrites.ts
+  - imports/client/components/whiteboard/marker.ts
   - imports/client/components/whiteboard/touch.ts
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useChatImagesEnabled.ts
@@ -142,8 +144,9 @@ updated: 2026-10-06
 Each hunt can have one shared whiteboard, at `/hunts/:huntId/whiteboard`. It
 starts as a map of the hunt: a frame for each round, a card for each puzzle in
 its round's frame, and an arrow from each feeder to its meta. People add
-sticky notes, text, images, their own frames, lines and freehand ink on top, pin
-comment threads to anything on it, and see each other's cursors move.
+sticky notes, text, images, rectangles and ellipses, their own frames, lines,
+freehand ink and highlighter on top, pin comment threads to anything on it,
+and see each other's cursors move.
 
 An operator creates the board (`ensureWhiteboard` in
 `imports/server/whiteboard.ts`), which lays out every puzzle in the hunt. An
@@ -531,7 +534,8 @@ as "Not on the board". Picking that row does nothing; anyone who can edit gets
 a "Put back" button on it, which puts the card or frame back at the middle of
 the screen, so a search never moves anything by itself. The matching is
 `searchBoard` in `imports/lib/whiteboard/search.ts`. Hidden feeder arrows
-aren't found; the "Not on the board" panel lists them.
+aren't found; the "Not on the board" panel lists them. Images, shapes and ink
+have nothing to match, so the search passes them by.
 
 ### Outline
 
@@ -606,9 +610,9 @@ waits until all of it, ink included, has arrived, since ink comes on its
 own subscription (see Ink).
 
 The toolbar's link button, "Copy link to here", copies a link to the selected
-card (`?puzzle=`), to a selected frame, note, text box or image (`?node=`), or else
-to the current view (`?v=`), for pasting into chat (`boardLinkQuery` in
-`imports/lib/whiteboard/links.ts`). Nothing can be selected on a read-only
+card (`?puzzle=`), to a selected frame, note, text box, image or shape
+(`?node=`), or else to the current view (`?v=`), for pasting into chat
+(`boardLinkQuery` in `imports/lib/whiteboard/links.ts`). Nothing can be selected on a read-only
 board, so there it always copies the view.
 
 Elsewhere, the puzzle page has a "Show on board" link beside the bookmark,
@@ -628,11 +632,12 @@ redirect.
 
 ### The mini map
 
-Except on a phone (see Phones), the mini map shows each card in its solvedness colour and
-each frame in its colour, faintly, so solved rounds stand out. The card
-colours are the theme's `miniMapSolvedness`, stronger than the card
-backgrounds so they show at that size, and frames take the strong version of
-their colour. Free line ends are left off, and everything else is grey
+Except on a phone (see Phones), the mini map shows each card in its
+solvedness colour and each frame and shape in its colour, faintly, so solved
+rounds stand out. The card colours are the theme's `miniMapSolvedness`,
+stronger than the card backgrounds so they show at that size, and frames and
+shapes take the strong version of their colour, or a fainter grey when they
+have none. Free line ends are left off, and everything else is grey
 (`miniMapColor` in `imports/lib/whiteboard/minimap.ts`).
 
 ## Comments
@@ -736,7 +741,7 @@ notification, they aren't shown while the `disable.dingwords` flag is on.
 
 ### Keyboard
 
-The tool keys, 1 to 3, N, Ctrl+A, Ctrl+L, Ctrl+C, Ctrl+V, Ctrl+D and the
+The tool keys, 1 to 4, N, Ctrl+A, Ctrl+L, Ctrl+C, Ctrl+V, Ctrl+D and the
 undo and redo keys only work while the board has focus (the last press or
 focus was on it) and nothing is being typed: not in a text box, a note being
 edited, the comment composer or the search field, where Ctrl+Z is the
@@ -751,9 +756,10 @@ browser's own. Each tool's tooltip shows its key.
 | S | Sticky note | edit |
 | T | Text | edit |
 | F | Frame | edit |
+| R | Shape, a rectangle or an ellipse as picked beside it (see Shapes) | edit |
 | C | Comment | comment |
 | N | Go to the next comment thread with something unread (see Comments) | |
-| 1, 2, 3 | Thin, medium or thick pen | edit |
+| 1, 2, 3, 4 | Thin, medium or thick pen, or the highlighter (see Ink) | edit |
 | Ctrl+A (Cmd+A on a Mac) | Select everything but frames (a selected frame carries its contents anyway) and no lines, switching to Select | edit |
 | Escape | Close an open Feeders popover, then an open comment thread, then the Comments list, then leave a preview, then close History or the Outline; with none of those open, drop a comment being started, a line being drawn, a click-to-connect line or an erase, and go back to Select | |
 | / or Ctrl+F (Cmd+F) | Jump to the search field (see Search) | |
@@ -806,20 +812,21 @@ places a note as a mouse does.
 
 What works by touch:
 
-- **Placing.** With the sticky, text or frame tool, a tap places one at the
-  size a click gives, centred on the tap, and opens it for typing. As with
-  the Comment tool, a finger that moves more than 10px first pans the board
-  instead, and a second finger pinches; neither places anything. There's no
-  dragging out a size by touch: resize it after. A stylus places by tap
-  too, since the browser pans from its touch events whatever the canvas
-  does with its pointer events; only a mouse drags out a size. The tap puts focus in a
+- **Placing.** With the sticky, text, frame or shape tool, a tap places one
+  at the size a click gives, centred on the tap, and opens it for typing (a
+  shape has nothing to type in, so it doesn't). As with the Comment tool, a
+  finger that moves more than 10px first pans the board instead, and a
+  second finger pinches; neither places anything. There's no dragging out a
+  size by touch: resize it after. A stylus places by tap too, since the
+  browser pans from its touch events whatever the canvas does with its
+  pointer events; only a mouse drags out a size. The tap puts focus in a
   hidden input inside the board for a moment, since iOS only brings up its
   keyboard for a focus made in the tap itself, and the note's editor takes
   focus from it once the note shows. Text being typed on the board (a note,
   a text box or a label) is 16px on a touch screen, so iOS doesn't zoom in
-  on it. If the keyboard
-  (`useKeyboardInset`) would cover the note, the board pans it up to 16px
-  above the keyboard, as far as its top can go without leaving the board.
+  on it. If the keyboard (`useKeyboardInset`) would cover the note, the
+  board pans it up to 16px above the keyboard, as far as its top can go
+  without leaving the board.
 - **Selecting.** A long press on a node (an ink stroke too, which selects
   the whole stroke), 500 ms without moving more than
   10px (`LongPress` in `imports/client/components/whiteboard/touch.ts`),
@@ -881,13 +888,13 @@ tooltips) describe touch rather than keys on a touch screen, for example
 
 What stays desktop only: the tool, pen width and other keys, Space to pan,
 Shift to snap a line's angle, Ctrl-click to add to the selection (a long
-press does that), dragging out a note's size, arrow-key nudges, and pasting
-images (Image on the toolbar still picks a file).
+press does that), dragging out a note's or shape's size, arrow-key nudges,
+and pasting images (Image on the toolbar still picks a file).
 
 ### Lines from handles
 
-Each card, note, text box, frame and image has a handle on each side. Dragging from
-one draws a line to wherever it's let go. Clicking one instead starts a line
+Each card, note, text box, frame, image and shape has a handle on each side.
+Dragging from one draws a line to wherever it's let go. Clicking one instead starts a line
 that ends at the next handle clicked; until then the handle is ringed in the
 theme's primary colour and a dashed line runs from it to the pointer, so it's
 clear the next click joins something. Escape, or picking another tool, lets
@@ -902,8 +909,8 @@ same board or another one, for anyone who can edit. On a touch screen the
 edit toolbar has Copy, Paste and Duplicate buttons too (see Tablets and
 touch); its Paste takes text only and lands in the middle of the view. A copy takes:
 
-- the selected notes, text boxes, frames, images and ink, with everything
-  inside a selected frame (folded away or not) where it is in the frame, and
+- the selected notes, text boxes, frames, images, shapes and ink, with
+  everything inside a selected frame (folded away or not) where it is in the frame, and
   every segment of a selected ink stroke;
 - each hand-drawn line whose ends are both in the copy, or free, as long as
   one end is in it or the line itself is selected, with its style and label;
@@ -970,7 +977,8 @@ the copy. Nothing else goes on the clipboard, so pasting a copy into another
 app shows the JSON. A paste that starts `jolly-roger-whiteboard/` but isn't
 a version 1 copy that holds together (every parent a frame in the copy, no
 loops, every line between two nodes in it, an image node with its image and
-size and nothing else with an image, values within the server's limits) is
+size and nothing else with an image, a shape node with a known shape and a
+size and nothing else with a shape, values within the server's limits) is
 refused. `copySelection`, `readClip`, `clipFromText` and
 `pasteClip` in `imports/lib/whiteboard/clipboard.ts` do the work.
 
@@ -1039,6 +1047,53 @@ Deleting an image node leaves the file in the bucket, as deleting a chat
 message does, and purging the hunt removes it with the rest of the hunt's
 images.
 
+### Shapes
+
+The Shape tool (R, titled "Shape: click to place, or drag to size") places a
+rectangle or an ellipse, whichever the select beside it says while the tool
+is out. The choice is remembered in this browser (`whiteboard:shapeKind`)
+and starts as a rectangle. A click places one 160 by 120 centred on the
+click, a drag places one the size of the box dragged out, and on a tablet a
+tap places one as a click does (see Tablets and touch). Either way it goes
+in the frame under its middle, and the tool goes back to Select. Nothing
+opens for typing: a shape holds no text, so a text box goes on top of one
+for a label.
+
+A shape is drawn by `ShapeNode`, filling the node: in its colour's pastel,
+the same one a sticky note of that colour has, outlined 2 units thick in the
+strong version of the colour. A new shape has no colour, which leaves it
+clear with an outline in the theme's text colour, so it can ring a group of
+cards without hiding them. Picking a colour from its toolbar fills it in,
+and the toolbar's last swatch, No fill, takes the colour away again (saved
+as `color: null`, which the server unsets). Shapes sit above frames and
+below cards, notes, text, images and ink, so a filled one can mark out a
+group of cards behind them, the cards inside an outline still take clicks,
+and a line end let go over a card inside a shape attaches to the card. A
+selected shape stays there too: React Flow lifts a selected node 1,000 above
+where it stacks, so the canvas hands it a selected shape that much lower
+(`keepSelectedShapeDown` in `useWhiteboardSync`). Zoomed right out a shape
+is drawn as just its filled outline, kept 2 pixels thick, and its padlock if
+it's locked, with no names.
+
+Otherwise a shape is a node like a note: it's at least 40 by 40 and resizes
+from its corners and edges, has handles so the line tool and
+click-to-connect join it (a line end let go anywhere over it attaches to it,
+and a line to an ellipse ends on its outline rather than the box around it),
+takes comments ("a rectangle" or "an ellipse"), can be locked, lists who
+made and recoloured it, folds away inside a collapsed frame, and goes
+through copy, paste, duplicate, undo, history, restore and export. Search
+doesn't find shapes, since there's nothing in one to match, and they count
+towards the board's node cap.
+
+On the server, `upsertNodes` takes a new shape node only with a `shape` of
+`rect` or `ellipse` and a width and height ("Shape nodes need a shape and a
+size"); any other value is refused, by the method's check and again by
+`upsertNodes` ("Unknown shape"). Once the node is made its `shape` never
+changes: an update that sends a different one is refused with "A shape
+can't be changed", and one sent on any other kind of node with "Only shape
+nodes have a shape". These checks run over the whole batch before any of it
+is written.
+
 ### Ink
 
 The pen draws a stroke as the pointer moves, dropping samples within half a
@@ -1047,6 +1102,24 @@ unit of the last one kept, and saves it in segments of up to
 last two points of the one before so the joins overlap (`InkSegmenter` in
 `imports/lib/whiteboard/ink.ts`). While it's drawn the stroke goes to
 everyone else on the live channel.
+
+The pen width select beside the pen has four widths: thin, medium and thick
+(3, 6 and 12 units) and the highlighter (`marker`, 24 units), picked there
+or with 1 to 4. The width is remembered in this browser and starts at
+medium. While the highlighter is picked the pen's toolbar button shows a
+highlighter instead of a pen. A highlighter stroke is the same width all the
+way along, whatever the pressure, and is drawn at 40% opacity
+(`MARKER_OPACITY`) and blended with what's under it, multiplied on the light
+theme and screened on the dark one (`marker.ts`), so a card or note under it
+still reads. Since a node is drawn on a layer of its own, the blend goes on
+the whole node that holds a highlighter stroke (the canvas's
+`.react-flow__node-ink:has(.jr-ink-marker)` rule), so its padlock, names and
+selection outline are blended with it too; a stroke being drawn, here or by
+someone else, blends itself. Where a long stroke's segments overlap at a
+join, the overlap is a little darker. Otherwise a highlighter stroke is ink
+like any other: simplified the same way, counted in the same budget, erased,
+undone, copied and kept in versions the same, and only its `strokeWidth`
+says what it is.
 
 `upsertNodes` simplifies each new segment before storing it, with
 Ramer-Douglas-Peucker (`simplifyInk` in `ink.ts`): between any two points it
@@ -1168,10 +1241,11 @@ It covers the viewer's own edits this visit, up to the last 100:
   where it was and leaves it marked as moved by hand, as any move does;
 - text, frame labels, line labels and colours, which go back to what they
   were, or to none;
-- creating something (a note, text, frame, image, line or ink stroke), which
-  undo deletes, and a paste or duplicate, which undo deletes as a whole;
-- deleting something made on the board (a note, text, frame, image, ink
-  stroke, line or a line's free end), which undo puts back with the same id and
+- creating something (a note, text, frame, image, shape, line or ink
+  stroke), which undo deletes, and a paste or duplicate, which undo deletes
+  as a whole;
+- deleting something made on the board (a note, text, frame, image, shape,
+  ink stroke, line or a line's free end), which undo puts back with the same id and
   fields, along with the lines that went with it and whatever was in a
   deleted frame, back in it;
 - deleting a card, a round's frame or a feeder arrow, which only hid it, so
@@ -1235,7 +1309,8 @@ sends the steps. So that a colour can go back to none, `upsertNodes` and
 A lock stops a node being moved, resized, edited or deleted by anyone,
 including whoever locked it, until it's unlocked. It's for the common
 accident on a busy board: a frame dragged by someone trying to pan. Cards,
-frames, notes, text and ink can be locked; a line's free end can't.
+frames, notes, text, images, shapes and ink can be locked; a line's free end
+can't.
 
 The edit toolbar has a Lock button beside Undo and Redo, and Ctrl+L (Cmd+L)
 does the same while the board has focus. With anything unlocked in the
@@ -1250,8 +1325,8 @@ a notice. A disabled button gets no hover in Bootstrap, so the title sits
 on a wrapper around it as well.
 
 A locked node shows a padlock: on the top-right corner of a card, note, text
-box or image, sitting over its edge so it isn't confused with a locked puzzle's
-padlock inside a card, and in the header of a frame. A locked ink stroke
+box, image or shape, sitting over its edge so it isn't confused with a locked
+puzzle's padlock inside a card, and in the header of a frame. A locked ink stroke
 shows one, on the corner of whichever of its segments reaches furthest
 right (`InkNode`). Zoomed right out, a locked frame's label carries a small
 padlock. The padlock's title says who locked it ("Locked by Carol"), or just
@@ -1715,8 +1790,8 @@ that fails, nothing on the board changes. It then lays the hunt out with
   been, at the top level.
 - Cards for deleted puzzles are left alone.
 
-Sticky notes, text, ink, people's own frames, lines and their free ends, and
-comments aren't touched; anything inside a round's frame keeps its place in
+Sticky notes, text, images, shapes, ink, people's own frames, lines and their
+free ends, and comments aren't touched; anything inside a round's frame keeps its place in
 the frame and moves with it. Since ids are kept, comment pins and lines stay
 on what they were attached to. Feeder arrows are redrawn to match the
 puzzles' tags (ones someone took off stay off unless putting back), and the
@@ -1974,8 +2049,9 @@ above it, beside "Collapse for everyone", for anyone who can edit:
   (`meta-for:X` for a frame tagged `group:X`, from `roundMetas`) on their own
   row or rows at the top, then the other cards, each in the order their
   puzzles were created, four to a row, through `placeIntoFrame`. Notes, text,
-  ink, line ends and frames inside it stay where they are, and the cards go
-  round them; so do locked cards, which stay put. The frame and the frames
+  images, shapes, ink, line ends and frames inside it stay where they are,
+  and the cards go round them (so a shape ringing some cards pushes them out
+  from under it); so do locked cards, which stay put. The frame and the frames
   around it grow to take the cards, but nothing shrinks. Moved cards are
   marked as moved by hand, as any move does, so placement leaves them be
   until Place by tags or Reset layout.
@@ -2151,9 +2227,14 @@ There is no flag for the edit policy: `members` is already the off position.
   the hidden puzzle in `puzzle`, the optional `editPolicy` and `editors`, and
   the optional `versionsPrunedBefore` and `lastRewrittenAt` from history.
 - `WhiteboardNodes` (`jr_whiteboard_nodes`): cards, frames, sticky notes, text,
-  ink segments, images and the free ends of lines. An image node has `image`
-  (`url`, and `width` and `height` in pixels), which never changes. A node inside a frame has `parent`
-  set and a position relative to it. `hidden` marks a card or seeded frame
+  ink segments, images, shapes and the free ends of lines (`type` is
+  `puzzle`, `frame`, `sticky`, `text`, `ink`, `image`, `shape` or `point`).
+  An image node has `image` (`url`, and `width` and `height` in pixels),
+  which never changes. A shape node has `shape` (`rect` or `ellipse`), which
+  never changes either, and its `color` is its fill. An ink segment's
+  `strokeWidth` is `thin`, `medium`, `thick` or `marker` (the
+  highlighter). A node inside a frame has `parent` set and a position
+  relative to it. `hidden` marks a card or seeded frame
   someone removed, so placement doesn't put it back, and `hiddenWithPuzzle`
   one hidden because its puzzle was deleted; `manual` marks a node
   someone has moved, so placement leaves it alone until Place by tags or a
@@ -2205,7 +2286,7 @@ was busy; try again", with nothing written.
 | Limit | Value | What it caps |
 |---|---|---|
 | `MAX_BATCH` | 100 | nodes or lines in one write, or one restore of an item |
-| `MAX_NODES_PER_BOARD` | 5,000 | nodes on a board, images included |
+| `MAX_NODES_PER_BOARD` | 5,000 | nodes on a board, images and shapes included |
 | `MAX_IMAGES_PER_BOARD` | 100 | images on a board |
 | `MAX_EDGES_PER_BOARD` | 3,000 | lines on a board, feeder arrows included |
 | `MAX_TEXT_LENGTH` | 2,000 | a note's or text box's text |

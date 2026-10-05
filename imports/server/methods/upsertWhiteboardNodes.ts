@@ -2,6 +2,7 @@ import { check, Match } from "meteor/check";
 import {
   WhiteboardColors,
   WhiteboardNodeKinds,
+  WhiteboardShapes,
   WhiteboardStrokeWidths,
 } from "../../lib/models/WhiteboardNodes";
 import upsertWhiteboardNodes from "../../methods/upsertWhiteboardNodes";
@@ -26,6 +27,7 @@ const NodeInputPattern = {
   strokeWidth: Match.Optional(Match.OneOf(...WhiteboardStrokeWidths)),
   stroke: Match.Optional(String),
   image: Match.Optional({ url: String, width: Number, height: Number }),
+  shape: Match.Optional(Match.OneOf(...WhiteboardShapes)),
 };
 
 defineMethod(upsertWhiteboardNodes, {

@@ -52,15 +52,30 @@ const ColorSwatch = ({
   );
 };
 
+// An empty circle with a line through it, for taking the colour away.
+const NoFillSwatch = styled(Swatch)`
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 1px),
+    ${({ theme }) => theme.colors.textSecondary} calc(50% - 1px),
+    ${({ theme }) => theme.colors.textSecondary} calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+`;
+
 const ColorPicker = ({
   value,
   palette,
   onChange,
+  onClear,
   fallback,
 }: {
   value: WhiteboardColor | undefined;
   palette: Record<WhiteboardColor, string | undefined>;
   onChange: (color: WhiteboardColor) => void;
+  // Given, the picker ends with a No fill swatch, picked while there's no
+  // colour, which calls this.
+  onClear?: () => void;
   // For a palette with gaps
   fallback?: string;
 }) => {
@@ -88,6 +103,17 @@ const ColorPicker = ({
           onChange={onChange}
         />
       ))}
+      {onClear && (
+        <NoFillSwatch
+          type="button"
+          title={t("whiteboard.color.none", "No fill")}
+          aria-label={t("whiteboard.color.none", "No fill")}
+          aria-pressed={value === undefined}
+          $color={undefined}
+          $active={value === undefined}
+          onClick={onClear}
+        />
+      )}
     </Swatches>
   );
 };

@@ -13,6 +13,7 @@ import { faDiagramProject } from "@fortawesome/free-solid-svg-icons/faDiagramPro
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faEyeSlash } from "@fortawesome/free-solid-svg-icons/faEyeSlash";
 import { faFont } from "@fortawesome/free-solid-svg-icons/faFont";
+import { faHighlighter } from "@fortawesome/free-solid-svg-icons/faHighlighter";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
@@ -23,6 +24,7 @@ import { faPaste } from "@fortawesome/free-solid-svg-icons/faPaste";
 import { faPen } from "@fortawesome/free-solid-svg-icons/faPen";
 import { faRotateLeft } from "@fortawesome/free-solid-svg-icons/faRotateLeft";
 import { faRotateRight } from "@fortawesome/free-solid-svg-icons/faRotateRight";
+import { faShapes } from "@fortawesome/free-solid-svg-icons/faShapes";
 import { faSignature } from "@fortawesome/free-solid-svg-icons/faSignature";
 import { faSitemap } from "@fortawesome/free-solid-svg-icons/faSitemap";
 import { faTrashCan } from "@fortawesome/free-solid-svg-icons/faTrashCan";
@@ -86,9 +88,11 @@ import Tags from "../../../lib/models/Tags";
 import WhiteboardEdges from "../../../lib/models/WhiteboardEdges";
 import type {
   WhiteboardColor,
+  WhiteboardShape,
   WhiteboardStrokeWidth,
 } from "../../../lib/models/WhiteboardNodes";
 import WhiteboardNodes, {
+  WhiteboardShapes,
   WhiteboardStrokeWidths,
 } from "../../../lib/models/WhiteboardNodes";
 import type { WhiteboardEditPolicy } from "../../../lib/models/Whiteboards";
@@ -216,6 +220,7 @@ import {
   useWhiteboardLineStyle,
   useWhiteboardPenColor,
   useWhiteboardPenWidth,
+  useWhiteboardShapeKind,
   useWhiteboardShowResolvedComments,
   useWhiteboardViewport,
 } from "../../hooks/persisted-state";
@@ -236,6 +241,7 @@ import type {
   WhiteboardFlowNode,
 } from "../../hooks/useWhiteboardSync";
 import useWhiteboardSync, {
+  keepSelectedShapeDown,
   selectionUnits,
 } from "../../hooks/useWhiteboardSync";
 import useWhiteboardUndo from "../../hooks/useWhiteboardUndo";
@@ -278,6 +284,7 @@ import KeepAboveKeyboard from "./KeepAboveKeyboard";
 import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
 import LineStyleIcon from "./LineStyleIcon";
 import LockLayoutButtons from "./LockLayoutButtons";
+import { MARKER_CLASS, markerBlend, strokeOpacity } from "./marker";
 import { MIN_SIZES } from "./NodeChrome";
 import NodePulse from "./NodePulse";
 import OutlinePanel, { OUTLINE_WIDTH } from "./OutlinePanel";
@@ -288,6 +295,7 @@ import RemoteEditingContext from "./RemoteEditingContext";
 import RemoteSelectionLayer from "./RemoteSelectionLayer";
 import ResetLayoutModal, { ResetLayoutButton } from "./ResetLayoutModal";
 import RoundStateContext from "./RoundStateContext";
+import ShapeNode from "./ShapeNode";
 import StickyNode from "./StickyNode";
 import TextNode from "./TextNode";
 import TouchTargetSize from "./TouchTargetSize";
@@ -306,10 +314,11 @@ const nodeTypes = {
   ink: InkNode,
   point: PointNode,
   image: ImageNode,
+  shape: ShapeNode,
 };
 const edgeTypes = { whiteboard: WhiteboardEdge };
 
-type PlaceTool = "sticky" | "text" | "frame";
+type PlaceTool = "sticky" | "text" | "frame" | "shape";
 type Tool = "select" | "pen" | "eraser" | "connector" | "comment" | PlaceTool;
 
 // The key that picks each tool, and the pen widths' keys.
@@ -321,6 +330,7 @@ const TOOL_KEYS: Record<Tool, string> = {
   sticky: "S",
   text: "T",
   frame: "F",
+  shape: "R",
   comment: "C",
 };
 const TOOLS_BY_KEY = new Map(
@@ -333,6 +343,7 @@ const PEN_WIDTH_KEYS = new Map<string, WhiteboardStrokeWidth>([
   ["1", "thin"],
   ["2", "medium"],
   ["3", "thick"],
+  ["4", "marker"],
 ]);
 
 // One end of a line: attached to a node, or free at a point (inside a frame,
@@ -352,9 +363,9 @@ interface Connecting {
   pressedAt?: { x: number; y: number };
 }
 
-// A press with the Comment tool, or a finger with a sticky, text or frame
-// tool, which places one if it's let go without moving. A touch press leaves
-// the board free to pan and pinch.
+// A press with the Comment tool, or a finger with a sticky, text, frame or
+// shape tool, which places one if it's let go without moving. A touch press
+// leaves the board free to pan and pinch.
 interface TapPress {
   point: XYPosition;
   clientX: number;
@@ -399,13 +410,14 @@ function mergeInputs(inputs: WhiteboardNodeInput[]): WhiteboardNodeInput[] {
 }
 
 const isPlaceTool = (tool: Tool): tool is PlaceTool =>
-  tool === "sticky" || tool === "text" || tool === "frame";
+  tool === "sticky" || tool === "text" || tool === "frame" || tool === "shape";
 
 // Size when placed with a click; dragging out a box sets the size instead.
 const DEFAULT_SIZES: Record<PlaceTool, { width: number; height: number }> = {
   sticky: { width: 200, height: 160 },
   text: { width: 240, height: 48 },
   frame: { width: 2 * CARD_WIDTH + 64, height: 2 * CARD_HEIGHT + 104 },
+  shape: { width: 160, height: 120 },
 };
 // The parts of the canvas that sit over the board, where presses are the
 // controls' own rather than a tool's.
@@ -540,6 +552,11 @@ const CanvasWrapper = styled.div<{
         pointer-events: auto;
       }
     `}
+
+  /* A highlighter stroke blends with what's under it (see marker.ts). */
+  .react-flow__node-ink:has(.${MARKER_CLASS}) {
+    mix-blend-mode: ${({ theme }) => markerBlend(theme)};
+  }
 
   /* In a preview, what the version has differently from the board. */
   .react-flow__node.${CHANGED_CLASS} {
@@ -693,7 +710,8 @@ const HiddenRow = styled.div`
   }
 `;
 
-const PenWidthSelect = styled(FormSelect)`
+// The pen's width, or the Shape tool's shape, beside the tool.
+const ToolSelect = styled(FormSelect)`
   width: auto;
 `;
 
@@ -825,13 +843,16 @@ const NoticeAction = styled(Button)`
   vertical-align: baseline;
 `;
 
-const PlaceGhost = styled.div<{ $tool: PlaceTool }>`
+const PlaceGhost = styled.div<{ $tool: PlaceTool; $ellipse: boolean }>`
   position: absolute;
   left: 0;
   top: 0;
   pointer-events: none;
   border: 2px dashed ${({ theme }) => theme.colors.primary};
-  border-radius: ${({ $tool }) => ($tool === "frame" ? "10px" : "2px")};
+  border-radius: ${({ $tool, $ellipse }) => {
+    if ($ellipse) return "50%";
+    return $tool === "frame" ? "10px" : "2px";
+  }};
   background: ${({ $tool }) =>
     $tool === "sticky" ? `${colors.fill.yellow}99` : "transparent"};
 `;
@@ -849,12 +870,17 @@ const UploadPlaceholder = styled.output`
   color: ${({ theme }) => theme.colors.textSecondary};
 `;
 
-const LocalStroke = styled.svg`
+const LocalStroke = styled.svg<{ $marker?: boolean }>`
   position: absolute;
   left: 0;
   top: 0;
   overflow: visible;
   pointer-events: none;
+  ${({ $marker, theme }) =>
+    $marker &&
+    css`
+      mix-blend-mode: ${markerBlend(theme)};
+    `}
 `;
 
 // Takes focus for a moment when a tap places a note (see keyboardCatcher):
@@ -1433,6 +1459,7 @@ const CanvasInner = ({
   const closeEditPolicy = useCallback(() => setEditingPolicy(false), []);
   const [penColor, setPenColor] = useWhiteboardPenColor();
   const [penWidth, setPenWidth] = useWhiteboardPenWidth();
+  const [shapeKind, setShapeKind] = useWhiteboardShapeKind();
   // The panel at the top right, under any open thread: what isn't on the
   // board, the list of comments, History or the Outline. Only one shows at a
   // time.
@@ -2843,8 +2870,8 @@ const CanvasInner = ({
     });
   }, [flow]);
 
-  // Places a sticky, text box or frame. If it lands inside a frame it goes
-  // into that frame.
+  // Places a sticky, text box, frame or shape. If it lands inside a frame it
+  // goes into that frame. Anything but a shape opens for typing in.
   const placeNode = useCallback(
     (
       type: PlaceTool,
@@ -2861,8 +2888,13 @@ const CanvasInner = ({
           height: Math.round(rect.height),
           parent: parent ?? null,
           color: type === "sticky" ? "yellow" : undefined,
+          ...(type === "shape" ? { shape: shapeKind } : {}),
         },
       ]);
+      if (type === "shape") {
+        setTool("select");
+        return;
+      }
       setEditOnAppear(_id);
       // If the new node can't open for editing (e.g. a frame placed while
       // zoomed right out shows no label), don't let it grab focus later, nor
@@ -2875,7 +2907,7 @@ const CanvasInner = ({
       }, 3000);
       setTool("select");
     },
-    [placementFor, updateNodes, tidyLater],
+    [placementFor, updateNodes, tidyLater, shapeKind],
   );
 
   const placementRect = useCallback(
@@ -4485,7 +4517,10 @@ const CanvasInner = ({
           tapped.current = true;
         }
         if (isPlaceTool(tool)) {
-          keyboardCatcher.current?.focus({ preventScroll: true });
+          // Shapes have nothing to type in
+          if (tool !== "shape") {
+            keyboardCatcher.current?.focus({ preventScroll: true });
+          }
           placeNode(tool, placementRect(tool, press.point, press.point));
           return;
         }
@@ -5396,7 +5431,7 @@ const CanvasInner = ({
         cancelTool();
         return;
       }
-      // A tool's key picks it, and 1, 2 and 3 set the pen's width, while the
+      // A tool's key picks it, and 1 to 4 set the pen's width, while the
       // board has focus and nothing is being typed.
       if (
         !modified &&
@@ -5794,12 +5829,13 @@ const CanvasInner = ({
     if (capturing) {
       return nodes.map((n) => (n.selected ? { ...n, selected: false } : n));
     }
-    const shown =
+    const shown = (
       changed.size === 0
         ? nodes
         : nodes.map((n) =>
             changed.has(n.id) ? { ...n, className: CHANGED_CLASS } : n,
-          );
+          )
+    ).map(keepSelectedShapeDown);
     return coarse ? shown.map(dragOnlySelected) : shown;
   }, [nodes, changed, capturing, coarse]);
   const shownEdges = useMemo(() => {
@@ -5923,6 +5959,13 @@ const CanvasInner = ({
       if (width) setPenWidth(width);
     },
     [setPenWidth],
+  );
+  const onShapeKind = useCallback(
+    (event: React.ChangeEvent<HTMLSelectElement>) => {
+      const shape = WhiteboardShapes.find((k) => k === event.target.value);
+      if (shape) setShapeKind(shape);
+    },
+    [setShapeKind],
   );
   const alignBy = useCallback(
     (mode: AlignMode) => arrange({ kind: "align", mode }),
@@ -6089,6 +6132,11 @@ const CanvasInner = ({
     thin: t("whiteboard.toolbar.penWidthThin", "Thin"),
     medium: t("whiteboard.toolbar.penWidthMedium", "Medium"),
     thick: t("whiteboard.toolbar.penWidthThick", "Thick"),
+    marker: t("whiteboard.toolbar.penWidthMarker", "Highlighter"),
+  };
+  const shapeNames: Record<WhiteboardShape, string> = {
+    rect: t("whiteboard.shape.rect", "Rectangle"),
+    ellipse: t("whiteboard.shape.ellipse", "Ellipse"),
   };
   const feederArrowsTitle = t(
     "whiteboard.toolbar.feederArrows",
@@ -6504,7 +6552,9 @@ const CanvasInner = ({
                       localStroke &&
                       localStroke.points.length > 0 && (
                         <ViewportPortal>
-                          <LocalStroke>
+                          <LocalStroke
+                            $marker={localStroke.strokeWidth === "marker"}
+                          >
                             <path
                               d={inkPath(
                                 localStroke.points,
@@ -6515,6 +6565,9 @@ const CanvasInner = ({
                                 colors.stroke[localStroke.color] ??
                                 theme.colors.text
                               }
+                              fillOpacity={strokeOpacity(
+                                localStroke.strokeWidth,
+                              )}
                             />
                           </LocalStroke>
                         </ViewportPortal>
@@ -6599,6 +6652,7 @@ const CanvasInner = ({
                       <ViewportPortal>
                         <PlaceGhost
                           $tool={tool}
+                          $ellipse={tool === "shape" && shapeKind === "ellipse"}
                           style={{
                             transform: `translate(${placeGhost.x}px, ${placeGhost.y}px)`,
                             width: placeGhost.width,
@@ -6720,7 +6774,11 @@ const CanvasInner = ({
                                     )
                               }
                             >
-                              <FontAwesomeIcon icon={faPen} />
+                              <FontAwesomeIcon
+                                icon={
+                                  penWidth === "marker" ? faHighlighter : faPen
+                                }
+                              />
                             </ToolButton>
                             <ToolButton
                               tool="eraser"
@@ -6780,26 +6838,26 @@ const CanvasInner = ({
                                 onChange={setPenColor}
                                 fallback={theme.colors.text}
                               />
-                              <PenWidthSelect
+                              <ToolSelect
                                 size="sm"
                                 value={penWidth}
                                 onChange={onPenWidth}
                                 title={t(
                                   "whiteboard.toolbar.penWidthKeys",
-                                  "Pen width [1, 2, 3]",
+                                  "Pen width [1, 2, 3, 4]",
                                 )}
                                 aria-label={t(
                                   "whiteboard.toolbar.penWidth",
                                   "Pen width",
                                 )}
-                                aria-keyshortcuts="1 2 3"
+                                aria-keyshortcuts="1 2 3 4"
                               >
                                 {WhiteboardStrokeWidths.map((w) => (
                                   <option key={w} value={w}>
                                     {penWidthNames[w]}
                                   </option>
                                 ))}
-                              </PenWidthSelect>
+                              </ToolSelect>
                             </>
                           )}
                           <ButtonGroup size="sm">
@@ -6857,7 +6915,42 @@ const CanvasInner = ({
                             >
                               <FontAwesomeIcon icon={faObjectGroup} />
                             </ToolButton>
+                            <ToolButton
+                              tool="shape"
+                              active={tool === "shape"}
+                              onSelect={pickTool}
+                              title={
+                                coarse
+                                  ? t(
+                                      "whiteboard.toolbar.shapeTouch",
+                                      "Shape: tap to place",
+                                    )
+                                  : t(
+                                      "whiteboard.toolbar.shape",
+                                      "Shape: click to place, or drag to size",
+                                    )
+                              }
+                            >
+                              <FontAwesomeIcon icon={faShapes} />
+                            </ToolButton>
                           </ButtonGroup>
+                          {tool === "shape" && (
+                            <ToolSelect
+                              size="sm"
+                              value={shapeKind}
+                              onChange={onShapeKind}
+                              aria-label={t(
+                                "whiteboard.toolbar.shapeKind",
+                                "Shape",
+                              )}
+                            >
+                              {WhiteboardShapes.map((k) => (
+                                <option key={k} value={k}>
+                                  {shapeNames[k]}
+                                </option>
+                              ))}
+                            </ToolSelect>
+                          )}
                           {/* A disabled button gets no hover, so the reason
                             goes on a wrapper */}
                           <span

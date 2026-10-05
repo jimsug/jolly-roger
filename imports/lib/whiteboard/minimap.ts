@@ -17,8 +17,9 @@ const PLAIN_FRAME = "rgb(128 128 128 / 15%)";
 const OTHER = "rgb(128 128 128 / 45%)";
 
 // How a node shows on the mini map: a card in its solvedness colour, a frame
-// in its own colour, free line ends not at all (they're too small to see) and
-// everything else in grey.
+// or a shape in its own colour (both mark out regions, so they're faint),
+// free line ends not at all (they're too small to see) and everything else
+// in grey.
 export function miniMapColor(
   doc: Pick<WhiteboardNodeType, "type" | "puzzle" | "color">,
   palette: MiniMapPalette,
@@ -32,6 +33,7 @@ export function miniMapColor(
       return solvedness ? palette.solvedness[solvedness] : OTHER;
     }
     case "frame":
+    case "shape":
       return doc.color
         ? `${palette.frames[doc.color]}${FRAME_ALPHA}`
         : PLAIN_FRAME;

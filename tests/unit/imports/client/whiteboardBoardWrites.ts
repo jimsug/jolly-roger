@@ -205,6 +205,32 @@ describe("whiteboard undo inverses", function () {
     });
   });
 
+  it("puts a deleted shape back as the same shape, size and colour", function () {
+    const docs = docsOf([
+      node("box", {
+        type: "shape",
+        width: 160,
+        height: 120,
+        shape: "ellipse",
+        color: "green",
+      }),
+    ]);
+    assert.deepEqual(inverseOf({ deleteNodes: ["box"] }, docs), {
+      upsertNodes: [
+        {
+          _id: "box",
+          type: "shape",
+          position: { x: 10, y: 20 },
+          parent: null,
+          width: 160,
+          height: 120,
+          color: "green",
+          shape: "ellipse",
+        },
+      ],
+    });
+  });
+
   it("brings back a whole ink stroke from one segment", function () {
     const docs = docsOf([
       node("one", { type: "ink", stroke: "s", points: [[0, 0, 0.5]] }),

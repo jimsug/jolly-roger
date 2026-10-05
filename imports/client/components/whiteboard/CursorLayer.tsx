@@ -1,7 +1,7 @@
 import { useTracker } from "meteor/react-meteor-data";
 import { ViewportPortal } from "@xyflow/react";
 import React, { useEffect, useState } from "react";
-import styled, { useTheme } from "styled-components";
+import styled, { css, useTheme } from "styled-components";
 import { inkPath } from "../../../lib/whiteboard/ink";
 import useDocumentVisible from "../../hooks/useDocumentVisible";
 import { useWhiteboardZoom } from "../../hooks/useWhiteboardDetail";
@@ -9,6 +9,7 @@ import useWhiteboardNames from "../../hooks/useWhiteboardNames";
 import WhiteboardPresence from "../../WhiteboardPresence";
 import { userColors } from "../Avatar";
 import colors from "./colors";
+import { markerBlend, strokeOpacity } from "./marker";
 
 const IDLE_AFTER = 10_000;
 
@@ -36,13 +37,18 @@ const NamePill = styled.div<{ $background: string; $text: string }>`
   color: ${({ $text }) => $text};
 `;
 
-const StrokeSvg = styled.svg`
+const StrokeSvg = styled.svg<{ $marker: boolean }>`
   position: absolute;
   left: 0;
   top: 0;
   overflow: visible;
   pointer-events: none;
   opacity: 0.6;
+  ${({ $marker, theme }) =>
+    $marker &&
+    css`
+      mix-blend-mode: ${markerBlend(theme)};
+    `}
 `;
 
 // Where a tab's pointer was, and when it got there.
@@ -103,10 +109,14 @@ const CursorLayer = ({
       {presence.map((doc) => {
         const [background, text] = userColors(doc.user);
         const stroke = doc.stroke ? (
-          <StrokeSvg key={`${doc._id}-stroke`}>
+          <StrokeSvg
+            key={`${doc._id}-stroke`}
+            $marker={doc.stroke.strokeWidth === "marker"}
+          >
             <path
               d={inkPath(doc.stroke.points, doc.stroke.strokeWidth, false)}
               fill={colors.stroke[doc.stroke.color] ?? theme.colors.text}
+              fillOpacity={strokeOpacity(doc.stroke.strokeWidth)}
             />
           </StrokeSvg>
         ) : null;
