@@ -9,6 +9,7 @@ import type {
 } from "../../lib/models/WhiteboardNodes";
 import type { FeederOrder } from "../../lib/whiteboard/feeders";
 import type { LineStyle } from "../../lib/whiteboard/lineStyle";
+import { lineStyleFrom } from "../../lib/whiteboard/lineStyle";
 
 export type AppThemeState = "dark" | "light" | "auto";
 export const useAppThemeState = () => {
@@ -401,9 +402,29 @@ export const useWhiteboardShowResolvedComments = () => {
   return useBestEffortLocalStorage("whiteboard:showResolvedComments", false);
 };
 
-// The line tool's style
+// The line tool's style. What's saved may be from another build of the
+// board, so it's read as a style (see lineStyleFrom), and an update starts
+// from that rather than from what's saved as it is.
 export const useWhiteboardLineStyle = (defaultStyle: LineStyle) => {
-  return useBestEffortLocalStorage("whiteboard:lineStyle", defaultStyle);
+  const [saved, setSaved] = useBestEffortLocalStorage<unknown>(
+    "whiteboard:lineStyle",
+    defaultStyle,
+  );
+  const style = useMemo(
+    () => lineStyleFrom(saved, defaultStyle),
+    [saved, defaultStyle],
+  );
+  const setStyle = useCallback(
+    (update: SetStateAction<LineStyle>) => {
+      setSaved((previous: unknown) =>
+        isUpdate(update)
+          ? update(lineStyleFrom(previous, defaultStyle))
+          : update,
+      );
+    },
+    [setSaved, defaultStyle],
+  );
+  return [style, setStyle] as const;
 };
 
 const NOTHING_SEEN: Record<string /* thread ID */, number> = {};

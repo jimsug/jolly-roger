@@ -1249,7 +1249,12 @@ shape, line style, feeder arrows, showing resolved comments), it follows a
 change made elsewhere in the same tab as well as in other tabs. With storage
 blocked or full, a change still holds for the rest of the visit, including
 in parts of the page opened after it, and is saved by the next change once
-storage takes it again. Ink comes on its own publication,
+storage takes it again. The line style is read as a style rather than taken
+as saved (`lineStyleFrom` in `imports/lib/whiteboard/lineStyle.ts`), since
+another build of the board may have saved it: a field that's missing or
+holds a value the style can't take comes from the default, anything else
+saved with it is dropped, and the fork's `colour` is read as `color`. Ink
+comes on its own publication,
 `Whiteboards.publications.inkForBoard`
 (`imports/server/publications/whiteboardInk.ts`), and `contentsForBoard`
 sends everything else and no ink. Both publish to members of the hunt, and
