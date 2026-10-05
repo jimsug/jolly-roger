@@ -1,6 +1,6 @@
 import type { Viewport } from "@xyflow/react";
 import type { SetStateAction } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEventListener, useLocalStorage } from "usehooks-ts";
 import type {
   WhiteboardColor,
@@ -269,6 +269,20 @@ function readStored<T>(key: string, fallback: T): T {
   }
 }
 
+// Tells the other hooks in this tab using a key about a new value, which
+// "storage" events only do for other tabs. The value travels with the event
+// so that it arrives even when storage wouldn't take it. The event's type is
+// declared in types/window-events.d.ts.
+const SAME_TAB_CHANGE = "jr:bestEffortStorage";
+
+// Values this visit couldn't save, so that a hook mounted later starts from
+// them rather than from what storage still has.
+const unsaved = new Map<string, unknown>();
+
+function readSetting<T>(key: string, fallback: T): T {
+  return unsaved.has(key) ? (unsaved.get(key) as T) : readStored(key, fallback);
+}
+
 // Like useLocalStorage, but React state holds the value and saving it is best
 // effort. useLocalStorage only takes a new value once it has written it, so
 // with storage blocked or full a setting couldn't change at all; here it still
@@ -276,13 +290,13 @@ function readStored<T>(key: string, fallback: T): T {
 function useBestEffortLocalStorage<T>(key: string, initialValue: T) {
   const [setting, setSetting] = useState(() => ({
     key,
-    value: readStored(key, initialValue),
+    value: readSetting(key, initialValue),
     changed: false,
   }));
   let current = setting;
   if (setting.key !== key) {
     // Another key (another board's, say) starts from what's saved under it.
-    current = { key, value: readStored(key, initialValue), changed: false };
+    current = { key, value: readSetting(key, initialValue), changed: false };
     setSetting(current);
   }
 
@@ -290,13 +304,32 @@ function useBestEffortLocalStorage<T>(key: string, initialValue: T) {
     if (!setting.changed) return;
     try {
       window.localStorage.setItem(setting.key, JSON.stringify(setting.value));
+      unsaved.delete(setting.key);
     } catch {
-      // Kept for this visit only.
+      unsaved.set(setting.key, setting.value);
     }
+    window.dispatchEvent(
+      new CustomEvent(SAME_TAB_CHANGE, {
+        detail: { key: setting.key, value: setting.value },
+      }),
+    );
   }, [setting]);
+
+  useEventListener(SAME_TAB_CHANGE, (event) => {
+    const change = event.detail;
+    if (change.key !== key) return;
+    // The hook that made the change already has it, so it doesn't render
+    // again.
+    setSetting((previous) =>
+      previous.key === key && previous.value === change.value
+        ? previous
+        : { key, value: change.value as T, changed: false },
+    );
+  });
 
   useEventListener("storage", (event) => {
     if (event.key === key) {
+      unsaved.delete(key);
       setSetting({ key, value: readStored(key, initialValue), changed: false });
     }
   });
@@ -381,4 +414,45 @@ export const useWhiteboardCommentsSeen = (boardId: string) => {
     `whiteboard:commentsSeen:${boardId}`,
     NOTHING_SEEN,
   );
+};
+
+const ADD_PUZZLE_RECENT_TAGS_LIMIT = 10;
+
+const NO_RECENT_TAGS: Record<string /* huntId */, string[]> = {};
+
+const savedHuntTags = (saved: unknown): string[] =>
+  Array.isArray(saved)
+    ? saved.filter((name): name is string => typeof name === "string")
+    : [];
+
+// The tags this browser last used on puzzles in each hunt, newest first, for
+// the puzzle form to offer again. Adding tags moves them to the front.
+export const useAddPuzzleHuntRecentTags = (huntId?: string) => {
+  const [allRecentTags, setAllRecentTags] = useBestEffortLocalStorage<
+    Record<string /* huntId */, string[]>
+  >("huntRecentTags", NO_RECENT_TAGS);
+
+  const savedForHunt = huntId ? allRecentTags?.[huntId] : undefined;
+  const recentTags = useMemo(() => savedHuntTags(savedForHunt), [savedForHunt]);
+
+  const addPuzzleHuntRecentTags = useCallback(
+    (newTags: string[]) => {
+      if (!huntId || newTags.length === 0) return;
+      setAllRecentTags((prev) => {
+        const tags = [...new Set(newTags)];
+        const prevHuntTags = savedHuntTags(prev?.[huntId]);
+        const combined = [
+          ...tags,
+          ...prevHuntTags.filter((t) => !tags.includes(t)),
+        ].slice(0, ADD_PUZZLE_RECENT_TAGS_LIMIT);
+        return {
+          ...prev,
+          [huntId]: combined,
+        };
+      });
+    },
+    [setAllRecentTags, huntId],
+  );
+
+  return [recentTags, addPuzzleHuntRecentTags] as const;
 };

@@ -11,6 +11,7 @@ import React, {
   useState,
 } from "react";
 import Alert from "react-bootstrap/Alert";
+import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import FormCheck from "react-bootstrap/FormCheck";
 import type { FormControlProps } from "react-bootstrap/FormControl";
@@ -27,7 +28,9 @@ import guessTitleFromUrl from "../../lib/guessTitleFromUrl";
 import Hunts from "../../lib/models/Hunts";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
+import { recentTagName, recentTagsToOffer } from "../../lib/recentTags";
 import { compareTagNames, isFunctionalTag } from "../../lib/tagNames";
+import { useAddPuzzleHuntRecentTags } from "../hooks/persisted-state";
 import useTagSynonyms from "../hooks/useTagSynonyms";
 import LabelledRadioGroup from "./LabelledRadioGroup";
 import Loading from "./Loading";
@@ -145,6 +148,9 @@ const PuzzleModalForm = ({
   ] = useState(false);
   const [lockedDirty, setLockedDirty] = useState(false);
   const [lockedSummaryDirty, setLockedSummaryDirty] = useState(false);
+  const tagSynonyms = useTagSynonyms();
+  const [recentTags, addPuzzleHuntRecentTags] =
+    useAddPuzzleHuntRecentTags(huntId);
   // The title last guessed from the URL, so a later URL can replace it but a
   // title someone typed is left alone. Editing a puzzle never replaces a
   // title, so this only follows guesses made in this form.
@@ -246,6 +252,31 @@ const PuzzleModalForm = ({
     }
   }, [lockedSummaryDirty, puzzle, lockedSummary]);
 
+  // The tags a save adds to the recent list: every tag of a new puzzle, and
+  // the ones an edit adds, so that editing a puzzle's title doesn't bring up
+  // the tags it already had. An edit that leaves the tags alone adds none,
+  // even if someone else has changed them since the form opened.
+  const tagsToRemember = useCallback(
+    (submitted: string[]) => {
+      if (puzzle && !tagsDirty) {
+        return [];
+      }
+      const remembered = submitted.map((name) =>
+        recentTagName(name, propsTags, tagSynonyms),
+      );
+      if (!puzzle) {
+        return remembered;
+      }
+      const before = new Set(
+        tagNamesForIds(puzzle.tags).map((name) =>
+          recentTagName(name, propsTags, tagSynonyms).toLowerCase(),
+        ),
+      );
+      return remembered.filter((name) => !before.has(name.toLowerCase()));
+    },
+    [puzzle, tagsDirty, propsTags, tagSynonyms, tagNamesForIds],
+  );
+
   const onFormSubmit = useCallback(
     (callback: () => void) => {
       setSubmitState(PuzzleModalFormSubmitState.SUBMITTING);
@@ -303,6 +334,7 @@ const PuzzleModalForm = ({
           setLockedSummaryDirty(false);
           setConfirmingDuplicateUrl(false);
           setAllowDuplicateUrls(false);
+          addPuzzleHuntRecentTags(tagsToRemember(tags));
           callback();
         }
       });
@@ -320,6 +352,8 @@ const PuzzleModalForm = ({
       allowLocked,
       currentLocked,
       currentLockedSummary,
+      tagsToRemember,
+      addPuzzleHuntRecentTags,
       t,
     ],
   );
@@ -420,7 +454,6 @@ const PuzzleModalForm = ({
       return tags;
     }
   }, [tagsDirty, puzzle, tagNamesForIds, tags]);
-  const tagSynonyms = useTagSynonyms();
   const currentFunctionalTags = useMemo(
     () => currentTags.filter((name) => isFunctionalTag(name, tagSynonyms)),
     [currentTags, tagSynonyms],
@@ -452,6 +485,22 @@ const PuzzleModalForm = ({
       }
     },
     [],
+  );
+
+  const offeredRecentTags = useMemo(
+    () => recentTagsToOffer(recentTags, propsTags, currentTags, tagSynonyms),
+    [recentTags, propsTags, currentTags, tagSynonyms],
+  );
+
+  const onRecentTagClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      const name = event.currentTarget.dataset.tag;
+      if (name) {
+        setTags([...currentTags, name]);
+        setTagsDirty(true);
+      }
+    },
+    [currentTags],
   );
 
   const onFunctionalTagsChange = useCallback(
@@ -696,6 +745,37 @@ const PuzzleModalForm = ({
             </FormText>
           </Col>
         </FormGroup>
+
+        {offeredRecentTags.length > 0 && (
+          <Row className="mb-3">
+            <Col xs={{ span: 9, offset: 3 }}>
+              <fieldset
+                aria-labelledby={`${idPrefix}-recent-tags`}
+                className="d-flex flex-wrap gap-1 align-items-center"
+              >
+                <small
+                  id={`${idPrefix}-recent-tags`}
+                  className="text-muted me-1"
+                >
+                  {t("puzzle.edit.recentTags", "Recent:")}
+                </small>
+                {offeredRecentTags.map(({ label, value }) => (
+                  <Button
+                    key={value}
+                    variant="outline-secondary"
+                    size="sm"
+                    className="py-0 px-1"
+                    disabled={disableForm}
+                    data-tag={value}
+                    onClick={onRecentTagClick}
+                  >
+                    +{label}
+                  </Button>
+                ))}
+              </fieldset>
+            </Col>
+          </Row>
+        )}
 
         <hr />
 

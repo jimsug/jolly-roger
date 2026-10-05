@@ -1177,7 +1177,12 @@ Hide ink (a toggle on both toolbars, titled "Hide ink", pressed while ink
 is hidden) takes ink off the board for this viewer, for a board where it's
 in the way. It's remembered in this browser for every board
 (`whiteboard:hideInk`, beside the feeder arrows toggle), and starts off
-shown. Ink comes on its own publication,
+shown. Like the other settings kept in this browser (pen colour and width,
+shape, line style, feeder arrows, showing resolved comments), it follows a
+change made elsewhere in the same tab as well as in other tabs. With storage
+blocked or full, a change still holds for the rest of the visit, including
+in parts of the page opened after it, and is saved by the next change once
+storage takes it again. Ink comes on its own publication,
 `Whiteboards.publications.inkForBoard`
 (`imports/server/publications/whiteboardInk.ts`), and `contentsForBoard`
 sends everything else and no ink. Both publish to members of the hunt, and
@@ -1994,8 +1999,9 @@ when a puzzle is marked complete with no answer or that's taken back
 (`updatePuzzle`), and nothing else touches. A puzzle answered, or marked
 complete with no answer, before that was recorded goes by when it last
 changed at all, so a retag, an unlock or a note from its sheet moves one of
-those up. The choice is each viewer's own, kept in local storage (`whiteboard:feederOrder`) and read
-each time a popover opens.
+those up. The choice is each viewer's own, kept in local storage
+(`whiteboard:feederOrder`) and read each time a popover opens; an open
+popover also follows a change made in another one, in this tab or another.
 "Copy answers" copies a line per feeder in the order shown, its answers
 joined by commas, or a blank line for one without an answer, ready to paste
 into a sheet.

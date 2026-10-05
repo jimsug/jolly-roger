@@ -22,6 +22,7 @@ import "./unit/imports/lib/puzzle-sort-and-group";
 import "./unit/imports/lib/puzzleTagStatus";
 import "./unit/imports/lib/puzzleUrl";
 import "./unit/imports/lib/puzzleViewers";
+import "./unit/imports/lib/recentTags";
 import "./unit/imports/lib/relativeTimeFormat";
 import "./unit/imports/lib/safeHref";
 import "./unit/imports/lib/scrubTelemetry";

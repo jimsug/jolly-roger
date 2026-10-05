@@ -1,11 +1,20 @@
 import { promisify } from "node:util";
 import { Meteor } from "meteor/meteor";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { assert } from "chai";
 import { MemoryRouter } from "react-router";
 import type { EditableHuntType } from "../../imports/lib/models/Hunts";
 import PuzzleInterests from "../../imports/lib/models/PuzzleInterests";
 import Puzzles from "../../imports/lib/models/Puzzles";
+import Tags from "../../imports/lib/models/Tags";
 import puzzleInterestsForHunt from "../../imports/lib/publications/puzzleInterestsForHunt";
 import puzzlesForPuzzleList from "../../imports/lib/publications/puzzlesForPuzzleList";
 import { computeSolvedness } from "../../imports/lib/solvedness";
@@ -401,6 +410,104 @@ if (Meteor.isClient) {
           await Puzzles.findOneAllowingDeletedAsync(deletedId),
           "The operator isn't sent the deleted puzzle, even when asking",
         );
+      });
+
+      describe("recent tags in the add puzzle form", function () {
+        afterEach(function () {
+          localStorage.removeItem("huntRecentTags");
+        });
+
+        it("offers the tags last added with, newest first and by canonical name", async function () {
+          this.timeout(20000);
+          const huntId = await setUpHunt("puzzle list recent tags");
+          render(
+            <MemoryRouter initialEntries={[`/hunts/${huntId}/puzzles`]}>
+              <Routes />
+            </MemoryRouter>,
+          );
+          await act(async () => {
+            await stabilize();
+          });
+
+          const openForm = async () => {
+            fireEvent.click(
+              await screen.findByRole(
+                "button",
+                { name: "Add a puzzle" },
+                { timeout: 5000 },
+              ),
+            );
+            return within(
+              await screen.findByRole("dialog", {}, { timeout: 5000 }),
+            );
+          };
+          const addTag = (
+            form: ReturnType<typeof within>,
+            label: string,
+            name: string,
+          ) => {
+            const input = form.getByLabelText(label);
+            fireEvent.change(input, { target: { value: name } });
+            fireEvent.keyDown(input, {
+              key: "Enter",
+              code: "Enter",
+              keyCode: 13,
+            });
+          };
+          const save = async (
+            form: ReturnType<typeof within>,
+            title: string,
+          ) => {
+            fireEvent.change(form.getByLabelText("Title"), {
+              target: { value: title },
+            });
+            fireEvent.click(form.getByRole("button", { name: "Save" }));
+            await waitFor(
+              () => {
+                assert.isNull(screen.queryByRole("dialog"));
+              },
+              { timeout: 10000 },
+            );
+          };
+          const offered = async (form: ReturnType<typeof within>) =>
+            within(
+              await form.findByRole(
+                "group",
+                { name: "Recent:" },
+                { timeout: 5000 },
+              ),
+            )
+              .getAllByRole("button")
+              .map((button) => button.textContent);
+
+          let form = await openForm();
+          assert.isNull(form.queryByRole("group", { name: "Recent:" }));
+          // A synonym, which the hunt gets as where:atrium
+          addTag(form, "Functional tags", "loc:atrium");
+          addTag(form, "Content tags", "cryptic");
+          await save(form, "First");
+          assert.sameMembers(
+            (await Tags.find({ hunt: huntId }).fetchAsync()).map(
+              (tag) => tag.name,
+            ),
+            ["where:atrium", "cryptic"],
+          );
+
+          form = await openForm();
+          assert.deepEqual(await offered(form), ["+where:atrium", "+cryptic"]);
+          fireEvent.click(form.getByRole("button", { name: "+cryptic" }));
+          assert.deepEqual(await offered(form), ["+where:atrium"]);
+          await save(form, "Second");
+          const second = await Puzzles.findOneAsync({ title: "Second" });
+          const cryptic = await Tags.findOneAsync({
+            hunt: huntId,
+            name: "cryptic",
+          });
+          assert.deepEqual(second?.tags, [cryptic?._id]);
+
+          form = await openForm();
+          assert.deepEqual(await offered(form), ["+cryptic", "+where:atrium"]);
+        });
       });
     });
   });
