@@ -10,13 +10,10 @@ import { Id } from "../lib/typedModel/regexes";
 import { MAX_COORDINATE } from "../lib/whiteboard/limits";
 import { assertWhiteboardEnabled } from "./whiteboard";
 
-// The permission gates and helpers the other whiteboard modules use. Of
-// those modules it imports only whiteboard.ts, which imports only
-// whiteboardComments.ts, a leaf that imports no other whiteboard server
-// module, so there's no cycle.
+// Permission gates and helpers for the other whiteboard modules. Of those it
+// imports only whiteboard.ts, which imports only whiteboardComments.ts, a
+// leaf, so there's no cycle.
 
-// A document id for check(), so a caller can't send anything else where a
-// board or node id goes.
 export const IdPattern = Match.Where(
   (id: unknown): id is string => typeof id === "string" && Id.test(id),
 );
@@ -37,6 +34,18 @@ export function isInkPoint(point: number[]) {
 }
 
 export const lockedError = () => new Meteor.Error(403, "That's locked");
+
+// A modifier of whichever of $set and $unset has anything in it, or
+// undefined when neither does and there's nothing to write.
+export function modifier(
+  $set: Record<string, unknown>,
+  $unset: Record<string, "">,
+) {
+  const sets = Object.keys($set).length > 0;
+  const unsets = Object.keys($unset).length > 0;
+  if (!sets && !unsets) return undefined;
+  return { ...(sets ? { $set } : {}), ...(unsets ? { $unset } : {}) };
+}
 
 export const tooMuchInkError = () =>
   new Meteor.Error(400, "This board has as much drawing as it can hold");

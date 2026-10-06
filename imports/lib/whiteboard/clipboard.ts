@@ -94,7 +94,6 @@ const BoardClip = z.object({
 });
 export type BoardClip = z.infer<typeof BoardClip>;
 
-// What's copied as it is, from a node or a line.
 const NODE_FIELDS = [
   "width",
   "height",
@@ -114,7 +113,6 @@ const EDGE_FIELDS = [
   "dashed",
 ] as const;
 
-// Copies each of keys from `from` to `to`, skipping any that are undefined.
 function setFields<T extends object>(
   to: Partial<T>,
   from: Partial<T>,

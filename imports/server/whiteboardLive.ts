@@ -25,7 +25,7 @@ import type { WhiteboardPresenceType } from "./models/WhiteboardPresence";
 import WhiteboardPresence from "./models/WhiteboardPresence";
 import onExit from "./onExit";
 import type { Bucket } from "./rateLimits";
-import { refill, remember } from "./rateLimits";
+import { bucketFor, refill, remember } from "./rateLimits";
 import serverId from "./serverId";
 import { inRange, isInkPoint } from "./whiteboardShared";
 
@@ -161,11 +161,12 @@ function dropFullUserBuckets() {
 function takeLiveToken(state: ConnectionState, userId: string) {
   const now = Date.now();
   refill(state.bucket, now, LIVE_UPDATE_BURST, LIVE_UPDATES_PER_SECOND);
-  const userBucket = userBuckets.get(userId) ?? {
-    tokens: LIVE_USER_UPDATE_BURST,
-    refilledAt: now,
-  };
-  userBuckets.set(userId, userBucket);
+  const userBucket = bucketFor(
+    userBuckets,
+    userId,
+    now,
+    LIVE_USER_UPDATE_BURST,
+  );
   refill(userBucket, now, LIVE_USER_UPDATE_BURST, LIVE_USER_UPDATES_PER_SECOND);
   if (state.bucket.tokens >= 1 && userBucket.tokens >= 1) {
     state.bucket.tokens -= 1;

@@ -18,6 +18,18 @@ export function refill(
   bucket.refilledAt = now;
 }
 
+// The bucket map keeps for key, made full if it has none yet.
+export function bucketFor(
+  map: Map<string, Bucket>,
+  key: string,
+  now: number,
+  burst: number,
+) {
+  const bucket = map.get(key) ?? { tokens: burst, refilledAt: now };
+  map.set(key, bucket);
+  return bucket;
+}
+
 // Refills the bucket, then takes a token from it if it has one. Returns
 // whether it did.
 export function take(bucket: Bucket, now: number, burst: number, rate: number) {

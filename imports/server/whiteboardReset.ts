@@ -13,6 +13,7 @@ import ignoringDuplicateKeyErrors from "./ignoringDuplicateKeyErrors";
 import currentTagSynonyms from "./tagSynonyms";
 import {
   PLACEMENT_PROJECTION,
+  seedNodeDoc,
   syncAutoEdges,
   syncPuzzlesOnBoard,
   ungroupedLabel,
@@ -24,6 +25,7 @@ import {
   WRITES_PER_RENEWAL,
   withBoardLock,
 } from "./whiteboardVersions";
+import { renewEvery } from "./withLock";
 
 // Hands cards back to placement: each is no longer marked as moved by hand,
 // and goes into the frame its tags choose, unless it's in it already.
@@ -83,7 +85,7 @@ async function assertResetAllowed(userId: string, boardId: string) {
   return loaded;
 }
 
-const modifierFor = (
+const placementModifier = (
   placement: ResetPlacement,
   parent: string | undefined,
 ) => ({
@@ -93,9 +95,9 @@ const modifierFor = (
 
 // Lays the board's cards and round frames out again as a new board's would
 // be, opening any round frame that was collapsed, and keeping everything else
-// (notes, text, ink, user frames, lines, comments) where it is. The board as it was is recorded first, so History can undo it.
-// With putBack, cards, round frames and feeder arrows someone took off the
-// board come back too.
+// (notes, text, ink, user frames, lines, comments) where it is. The board as
+// it was is recorded first, so History can undo it. With putBack, cards,
+// round frames and feeder arrows someone took off the board come back too.
 export async function resetLayout(
   userId: string,
   boardId: string,
@@ -127,18 +129,14 @@ export async function resetLayout(
     const plan = planReset(seed.nodes, nodes, { putBack });
     await renew();
 
-    let writes = 0;
-    const wrote = async () => {
-      writes += 1;
-      if (writes % WRITES_PER_RENEWAL === 0) await renew();
-    };
+    const wrote = renewEvery(renew, WRITES_PER_RENEWAL);
 
     const ids = new Map<string, string>();
     for (const placement of plan.place) {
       const parent = placement.parentKey
         ? ids.get(placement.parentKey)
         : undefined;
-      const modifier = modifierFor(placement, parent);
+      const modifier = placementModifier(placement, parent);
       let id = placement.node;
       if (!id) {
         const { seed: s } = placement;
@@ -147,18 +145,8 @@ export async function resetLayout(
         // is the one placed.
         id = await ignoringDuplicateKeyErrors(() =>
           WhiteboardNodes.insertAsync({
-            hunt: board.hunt,
-            board: boardId,
-            type: s.type,
-            parent,
+            ...seedNodeDoc(board, s, parent, userId),
             position: modifier.$set.position,
-            width: s.width,
-            height: s.height,
-            puzzle: s.puzzle,
-            tag: s.tag,
-            label: s.label,
-            frameKind: s.frameKind,
-            createdBy: userId,
           }),
         );
         if (!id && (s.puzzle || s.tag)) {

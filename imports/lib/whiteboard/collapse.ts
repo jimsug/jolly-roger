@@ -1,7 +1,6 @@
 import { ancestorsOf } from "./arrange";
 import { FRAME_HEADER } from "./layout";
 
-// How tall a collapsed frame is drawn: its header and nothing else.
 export const COLLAPSED_FRAME_HEIGHT = FRAME_HEADER;
 
 // What folding needs to know about a node: where it is and, for a frame,

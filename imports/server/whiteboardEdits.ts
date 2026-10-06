@@ -5,6 +5,7 @@ import isReaction from "../lib/isReaction";
 import ChatMessages from "../lib/models/ChatMessages";
 import ChatNotifications from "../lib/models/ChatNotifications";
 import Puzzles from "../lib/models/Puzzles";
+import type { WhiteboardEdgeType } from "../lib/models/WhiteboardEdges";
 import WhiteboardEdges, {
   LINE_STYLE_FIELDS,
 } from "../lib/models/WhiteboardEdges";
@@ -48,6 +49,7 @@ import {
   isInkPoint,
   LOCKED_FIELDS,
   lockedError,
+  modifier,
   tooMuchInkError,
 } from "./whiteboardShared";
 import {
@@ -82,7 +84,6 @@ export const InkPointPattern = Match.Where(
     point.every((n) => typeof n === "number"),
 );
 
-// Blank text counts as none.
 const nonBlank = (text: string | null | undefined) =>
   text?.trim() ? text : undefined;
 
@@ -170,14 +171,6 @@ async function depthInside(
     current = current.parent ? await nodes.get(current.parent) : undefined;
   }
   return depth;
-}
-
-async function wouldContainItself(
-  nodeId: string,
-  parent: ParentLink | undefined,
-  nodes: PlannedParents,
-) {
-  return (await depthInside(nodeId, parent, nodes)) === Infinity;
 }
 
 // How many levels of nodes sit inside a frame (0 for an empty one), counted
@@ -340,7 +333,6 @@ function assertShapesAllowed(
   });
 }
 
-// A change to a node already on the board, with that node as it was read.
 interface NodeUpdate {
   existing: WhiteboardNodeType;
   input: WhiteboardNodeInput;
@@ -431,7 +423,6 @@ async function assertNodesValid(
   }
 }
 
-// Writes one change checked by assertNodesValid.
 async function updateNode(
   userId: string,
   existing: WhiteboardNodeType,
@@ -516,9 +507,8 @@ async function updateNode(
     $set.contributors = appendContributor(existing.contributors, userId);
   }
 
-  if (Object.keys($set).length === 0 && Object.keys($unset).length === 0) {
-    return;
-  }
+  const update = modifier($set, $unset);
+  if (!update) return;
   // The lock checks read the node before this write, so a write they let
   // through on the strength of the lock only lands if the lock is still as
   // it was then: a node locked in the meantime keeps its locker and isn't
@@ -534,10 +524,7 @@ async function updateNode(
   } else if (!existing.locked && (touchesLocked || input.locked === true)) {
     selector = { _id: existing._id, locked: { $ne: true } };
   }
-  const updated = await WhiteboardNodes.updateAsync(selector, {
-    ...(Object.keys($set).length > 0 ? { $set } : {}),
-    ...(Object.keys($unset).length > 0 ? { $unset } : {}),
-  });
+  const updated = await WhiteboardNodes.updateAsync(selector, update);
   if (updated === 0) {
     if (touchesLocked && (await WhiteboardNodes.findOneAsync(existing._id))) {
       throw lockedError();
@@ -554,11 +541,11 @@ async function updateNode(
     existing.type === "frame" &&
     typeof parent === "string" &&
     parent !== existing.parent &&
-    (await wouldContainItself(
+    (await depthInside(
       existing._id,
       await WhiteboardNodes.findOneAsync(parent),
       new PlannedParents(existing.board),
-    ))
+    )) === Infinity
   ) {
     await WhiteboardNodes.updateAsync(
       { _id: existing._id, parent },
@@ -576,7 +563,6 @@ type NewNodeInput = WhiteboardNodeInput &
 const isNewNodeInput = (input: WhiteboardNodeInput): input is NewNodeInput =>
   !!input.type && !!input.position;
 
-// Writes one new node checked by assertNodesValid.
 async function insertNode(
   userId: string,
   board: { _id: string; hunt: string },
@@ -708,6 +694,23 @@ function assertLocksAllow(
   });
 }
 
+// The nodes or lines among ids that are on the board already, by id. One on
+// another board refuses the batch.
+async function loadExisting<T extends { _id: string; board: string }>(
+  model: {
+    find(selector: { _id: { $in: string[] } }): { fetchAsync(): Promise<T[]> };
+  },
+  boardId: string,
+  ids: string[],
+  what: string,
+) {
+  const existing = await model.find({ _id: { $in: ids } }).fetchAsync();
+  if (existing.some((doc) => doc.board !== boardId)) {
+    throw new Meteor.Error(403, `${what} belongs to another board`);
+  }
+  return new Map(existing.map((doc) => [doc._id, doc]));
+}
+
 export async function upsertNodes(
   userId: string,
   boardId: string,
@@ -717,13 +720,12 @@ export async function upsertNodes(
   if (sent.length > MAX_BATCH) throw badRequest("Too many nodes at once");
   sent.forEach(validateCommonFields);
 
-  const existingNodes = await WhiteboardNodes.find({
-    _id: { $in: sent.map((n) => n._id) },
-  }).fetchAsync();
-  const existingById = new Map(existingNodes.map((n) => [n._id, n]));
-  if (existingNodes.some((n) => n.board !== boardId)) {
-    throw new Meteor.Error(403, "Node belongs to another board");
-  }
+  const existingById = await loadExisting(
+    WhiteboardNodes,
+    boardId,
+    sent.map((n) => n._id),
+    "Node",
+  );
   // New ink is stored simplified (a saved stroke's points never change), and
   // counts towards the board's ink budget as stored.
   const inputs = sent.map((input) =>
@@ -733,7 +735,6 @@ export async function upsertNodes(
   );
 
   const fresh = inputs.filter((n) => !existingById.has(n._id));
-  // Several changes to one node are fine, but it can only be made once.
   if (new Set(fresh.map((n) => n._id)).size !== fresh.length) {
     throw badRequest("A new node can only be in a batch once");
   }
@@ -745,8 +746,6 @@ export async function upsertNodes(
   if (inserts.length !== fresh.length) {
     throw badRequest("New nodes need a type and a position");
   }
-  // Only frames fold: an existing node by its saved type, a new one by the
-  // type it's given.
   if (
     inputs.some(
       (n) =>
@@ -878,6 +877,23 @@ async function removeOrphanPoints(boardId: string, candidates: string[]) {
   });
 }
 
+// Removes the lines selector picks out on the board, and the free ends that
+// leaves unused.
+async function removeEdgesAndOrphans(
+  boardId: string,
+  selector: Mongo.Selector<WhiteboardEdgeType>,
+) {
+  const doomed = await WhiteboardEdges.find(selector).fetchAsync();
+  await WhiteboardEdges.removeAsync(selector);
+  await removeOrphanPoints(
+    boardId,
+    doomed.flatMap((e) => [e.source, e.target]),
+  );
+}
+
+// Puzzle cards and seeded frames are hidden rather than removed, so placement
+// doesn't put them back. Deleting one segment of an ink stroke deletes the
+// whole stroke.
 export async function deleteNodes(
   userId: string,
   boardId: string,
@@ -959,18 +975,10 @@ export async function deleteNodes(
   }
 
   if (removed.length > 0) {
-    const doomed = await WhiteboardEdges.find({
-      board: boardId,
-      $or: [{ source: { $in: removed } }, { target: { $in: removed } }],
-    }).fetchAsync();
-    await WhiteboardEdges.removeAsync({
+    await removeEdgesAndOrphans(boardId, {
       board: boardId,
       $or: [{ source: { $in: removed } }, { target: { $in: removed } }],
     });
-    await removeOrphanPoints(
-      boardId,
-      doomed.flatMap((e) => [e.source, e.target]),
-    );
   }
 }
 
@@ -992,13 +1000,12 @@ export async function upsertEdges(
   const { board } = await assertMayEditBoard(userId, boardId);
   if (inputs.length > MAX_BATCH) throw badRequest("Too many edges at once");
 
-  const existingEdges = await WhiteboardEdges.find({
-    _id: { $in: inputs.map((e) => e._id) },
-  }).fetchAsync();
-  const existingById = new Map(existingEdges.map((e) => [e._id, e]));
-  if (existingEdges.some((e) => e.board !== boardId)) {
-    throw new Meteor.Error(403, "Edge belongs to another board");
-  }
+  const existingById = await loadExisting(
+    WhiteboardEdges,
+    boardId,
+    inputs.map((e) => e._id),
+    "Edge",
+  );
   const newIds = inputs.flatMap((e) =>
     existingById.has(e._id) ? [] : [e._id],
   );
@@ -1028,7 +1035,6 @@ export async function upsertEdges(
     }),
   );
 
-  // Every line is checked before any is written.
   inputs.forEach((input) => {
     assertId(input._id, "edge");
     if (typeof input.label === "string") {
@@ -1159,13 +1165,9 @@ export async function upsertEdges(
     if (contentChanged && !existing.auto) {
       $set.contributors = appendContributor(existing.contributors, userId);
     }
-    if (Object.keys($set).length === 0 && Object.keys($unset).length === 0) {
-      continue;
-    }
-    await WhiteboardEdges.updateAsync(existing._id, {
-      ...(Object.keys($set).length > 0 ? { $set } : {}),
-      ...(Object.keys($unset).length > 0 ? { $unset } : {}),
-    });
+    const update = modifier($set, $unset);
+    if (!update) continue;
+    await WhiteboardEdges.updateAsync(existing._id, update);
     // An end that moved off a free point leaves that point unused.
     await removeOrphanPoints(
       boardId,
@@ -1192,20 +1194,11 @@ export async function deleteEdges(
     { $set: { hidden: true }, $unset: { hiddenWithPuzzle: "" } },
     { multi: true },
   );
-  const doomed = await WhiteboardEdges.find({
-    _id: { $in: edgeIds },
-    board: boardId,
-    auto: { $ne: true },
-  }).fetchAsync();
-  await WhiteboardEdges.removeAsync({
+  await removeEdgesAndOrphans(boardId, {
     _id: { $in: edgeIds },
     board: boardId,
     auto: { $ne: true },
   });
-  await removeOrphanPoints(
-    boardId,
-    doomed.flatMap((e) => [e.source, e.target]),
-  );
 }
 
 // Locks or unlocks every frame on the board at once, seeded and hand-made,

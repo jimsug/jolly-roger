@@ -2,6 +2,8 @@ import type { PuzzleType } from "../models/Puzzles";
 import type { TagType } from "../models/Tags";
 import type { WhiteboardNodeType } from "../models/WhiteboardNodes";
 import { computeSolvedness } from "../solvedness";
+import { GROUP_TAG_PREFIX } from "../tagNames";
+import { roundMetaTags } from "./layout";
 import { MAX_FRAME_DEPTH } from "./limits";
 
 type RoundNode = Pick<
@@ -40,14 +42,10 @@ export interface RoundState {
   readyToMeta: boolean;
 }
 
-const GROUP_PREFIX = "group:";
-const META_FOR_PREFIX = "meta-for:";
-
 interface RoundIndex {
   children: Map<string, RoundNode[]>;
   puzzles: Map<string, RoundPuzzle>;
-  tags: Map<string, RoundTag>;
-  tagIdsByName: Map<string, string[]>;
+  tags: RoundTag[];
 }
 
 function indexRounds(
@@ -60,18 +58,10 @@ function indexRounds(
     if (node.hidden || !node.parent) return;
     children.set(node.parent, [...(children.get(node.parent) ?? []), node]);
   });
-  const tagIdsByName = new Map<string, string[]>();
-  tags.forEach((tag) => {
-    tagIdsByName.set(tag.name, [
-      ...(tagIdsByName.get(tag.name) ?? []),
-      tag._id,
-    ]);
-  });
   return {
     children,
     puzzles: new Map(puzzles.map((p) => [p._id, p])),
-    tags: new Map(tags.map((t) => [t._id, t])),
-    tagIdsByName,
+    tags,
   };
 }
 
@@ -113,14 +103,10 @@ function stateOf(
 
   const metas: SolvedCount = { solved: 0, unsolved: 0 };
   const feeders: SolvedCount = { solved: 0, unsolved: 0 };
-  const tagName = frame.tag ? index.tags.get(frame.tag)?.name : undefined;
-  if (frame.tag && tagName?.startsWith(GROUP_PREFIX)) {
+  const tagName = index.tags.find((t) => t._id === frame.tag)?.name;
+  if (frame.tag && tagName?.startsWith(GROUP_TAG_PREFIX)) {
     const groupTag = frame.tag;
-    const metaTags = new Set(
-      index.tagIdsByName.get(
-        `${META_FOR_PREFIX}${tagName.slice(GROUP_PREFIX.length)}`,
-      ),
-    );
+    const metaTags = roundMetaTags(groupTag, index.tags);
     index.puzzles.forEach((puzzle) => {
       if (puzzle.tags.some((id) => metaTags.has(id))) {
         tally(metas, puzzle);

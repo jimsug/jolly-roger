@@ -1795,9 +1795,9 @@ take the board past its node, line or image limit is refused with "This board is
 full", and past its ink budget with "This board has as much drawing as it
 can hold".
 
-It's an edit, not a rewrite: it records a version of kind `edits` through
-`recordVersionLocked`, which coalesces with the same person's other edits
-like any save, and it doesn't set `lastRewrittenAt`. When nothing in the set
+It's an edit, not a rewrite: it records a version of kind `edits` from under
+the board's lock, which coalesces with the same person's other edits like any
+save, and it doesn't set `lastRewrittenAt`. When nothing in the set
 differs from the board there's nothing to write, so it records nothing and
 returns false. Comments come off nodes it hides and go back on nodes it
 brings back, as for a whole restore. After the lock, a

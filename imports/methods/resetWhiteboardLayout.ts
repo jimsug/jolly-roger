@@ -1,10 +1,6 @@
 import TypedMethod from "./TypedMethod";
 
-// Lays the board's cards and round frames out again from the puzzle list,
-// leaving everything else where it is. The board as it was is recorded first,
-// so History can undo it. putBack also brings back cards, round frames and
-// feeder arrows someone took off the board. Needs edit access and history
-// turned on.
+// Lays the board out again as a new one's. Needs edit access and history.
 export default new TypedMethod<{ boardId: string; putBack: boolean }, void>(
   "Whiteboards.methods.resetLayout",
 );

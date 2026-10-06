@@ -20,6 +20,16 @@ async function release(lock: string) {
   await Locks.removeAsync(lock);
 }
 
+// Counts a critical section's writes, renewing its lock after every n of
+// them. Returns the counter to call after each write.
+export function renewEvery(renew: () => Promise<void>, n: number) {
+  let writes = 0;
+  return async () => {
+    writes += 1;
+    if (writes % n === 0) await renew();
+  };
+}
+
 // What renew() throws once another holder has taken the lock.
 export class LockPreemptedError extends Error {
   constructor(id: string) {

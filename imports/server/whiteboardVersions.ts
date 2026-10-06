@@ -31,7 +31,6 @@ import {
 } from "../lib/whiteboard/limits";
 import type {
   PrunableVersion,
-  RestoreChange,
   RestorePlan,
   VersionSummary,
 } from "../lib/whiteboard/versions";
@@ -46,7 +45,7 @@ import {
 } from "../lib/whiteboard/versions";
 import WhiteboardVersionChunks from "./models/WhiteboardVersionChunks";
 import type { Bucket } from "./rateLimits";
-import { remember, take } from "./rateLimits";
+import { bucketFor, remember, take } from "./rateLimits";
 import { deferSyncPuzzlesOnBoard } from "./whiteboard";
 import { detachComments, reattachComments } from "./whiteboardComments";
 import {
@@ -54,9 +53,10 @@ import {
   LOCKED_FIELDS,
   loadBoardAccess,
   lockedError,
+  modifier,
   tooMuchInkError,
 } from "./whiteboardShared";
-import withLock, { LockPreemptedError } from "./withLock";
+import withLock, { LockPreemptedError, renewEvery } from "./withLock";
 
 // How many writes a restore makes between renewals of the board's lock.
 export const WRITES_PER_RENEWAL = 200;
@@ -400,7 +400,7 @@ async function pruneOverCap(board: WhiteboardType, now: Date) {
 // for callers holding whiteboard:<boardId>, whose renew this calls between
 // the slow steps. A failure to snapshot throws; pruning afterwards never
 // does.
-export async function recordVersionLocked(
+async function recordVersionLocked(
   board: WhiteboardType,
   userId: string,
   kind: WhiteboardVersionKind,
@@ -630,11 +630,7 @@ function takeBigRead(userId: string) {
   bigReads.forEach(({ refilledAt }, user) => {
     if (now - refilledAt >= BIG_READ_REFILL_MS) bigReads.delete(user);
   });
-  const bucket = bigReads.get(userId) ?? {
-    tokens: BIG_READS_PER_MINUTE,
-    refilledAt: now,
-  };
-  bigReads.set(userId, bucket);
+  const bucket = bucketFor(bigReads, userId, now, BIG_READS_PER_MINUTE);
   if (!take(bucket, now, BIG_READS_PER_MINUTE, BIG_READS_PER_SECOND)) {
     throw new Meteor.Error(
       429,
@@ -772,11 +768,6 @@ function withMergedAccounts<
     })),
   };
 }
-
-const modifierFor = ({ $set, $unset }: RestoreChange) => ({
-  ...(Object.keys($set).length > 0 ? { $set } : {}),
-  ...(Object.keys($unset).length > 0 ? { $unset } : {}),
-});
 
 // A version's nodes and lines as they'd be restored, with merged-away
 // accounts mapped to where they went. Only for callers holding the board's
@@ -946,11 +937,7 @@ async function writeRestorePlan(
   plan: RestorePlan,
   renew: () => Promise<void>,
 ) {
-  let writes = 0;
-  const wrote = async () => {
-    writes += 1;
-    if (writes % WRITES_PER_RENEWAL === 0) await renew();
-  };
+  const wrote = renewEvery(renew, WRITES_PER_RENEWAL);
 
   // Before anything moves, since a pin's place on the board is worked out
   // from its node's frames.
@@ -974,12 +961,14 @@ async function writeRestorePlan(
     });
   }
   await renew();
-  for (const change of plan.nodes.change) {
-    await WhiteboardNodes.updateAsync(change._id, modifierFor(change));
+  for (const { _id, $set, $unset } of plan.nodes.change) {
+    const update = modifier($set, $unset);
+    if (update) await WhiteboardNodes.updateAsync(_id, update);
     await wrote();
   }
-  for (const change of plan.edges.change) {
-    await WhiteboardEdges.updateAsync(change._id, modifierFor(change));
+  for (const { _id, $set, $unset } of plan.edges.change) {
+    const update = modifier($set, $unset);
+    if (update) await WhiteboardEdges.updateAsync(_id, update);
     await wrote();
   }
   // What comes back is new on the board as it is now, so it draws on top

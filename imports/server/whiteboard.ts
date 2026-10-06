@@ -17,7 +17,7 @@ import type { WhiteboardType } from "../lib/models/Whiteboards";
 import Whiteboards from "../lib/models/Whiteboards";
 import { userMayWritePuzzlesForHunt } from "../lib/permission_stubs";
 import { ancestorsOf } from "../lib/whiteboard/arrange";
-import type { Rect, Size } from "../lib/whiteboard/layout";
+import type { Rect, SeedNode, Size } from "../lib/whiteboard/layout";
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
@@ -46,7 +46,7 @@ import ignoringDuplicateKeyErrors, {
 import { serverLanguage } from "./lang";
 import currentTagSynonyms from "./tagSynonyms";
 import { detachComments, reattachComments } from "./whiteboardComments";
-import withLock from "./withLock";
+import withLock, { renewEvery } from "./withLock";
 
 export async function assertWhiteboardEnabled() {
   if (await Flags.activeAsync("disable.whiteboard")) {
@@ -394,7 +394,7 @@ export async function syncAutoEdges(
   let room =
     MAX_EDGES_PER_BOARD -
     (await WhiteboardEdges.find({ board: board._id }).countAsync());
-  let drawn = 0;
+  const drew = renewEvery(renew, ARROWS_PER_RENEWAL);
   let skipped = 0;
   for (const pair of wanted) {
     if (existingKeys.has(`${pair.feeder}:${pair.meta}`)) continue;
@@ -407,8 +407,7 @@ export async function syncAutoEdges(
       continue;
     }
     room -= 1;
-    drawn += 1;
-    if (drawn % ARROWS_PER_RENEWAL === 0) await renew();
+    await drew();
     // Only a sync that outlasted the board's lock can have drawn it since.
     await ignoringDuplicateKeyErrors(() =>
       WhiteboardEdges.insertAsync({
@@ -744,6 +743,30 @@ export function deferSyncRoundsOnBoard(huntId: string, tagIds: string[]) {
   });
 }
 
+// A seeded node as it's stored, under the parent its seed's parentKey mapped
+// to.
+export function seedNodeDoc(
+  board: Pick<WhiteboardType, "_id" | "hunt">,
+  seed: SeedNode,
+  parent: string | undefined,
+  createdBy: string,
+) {
+  return {
+    hunt: board.hunt,
+    board: board._id,
+    type: seed.type,
+    parent,
+    position: seed.position,
+    width: seed.width,
+    height: seed.height,
+    puzzle: seed.puzzle,
+    tag: seed.tag,
+    label: seed.label,
+    frameKind: seed.frameKind,
+    createdBy,
+  };
+}
+
 async function seedBoard(
   board: Pick<WhiteboardType, "_id" | "hunt" | "createdBy">,
 ) {
@@ -764,21 +787,10 @@ async function seedBoard(
     const _id = Random.id();
     ids.set(seed.key, _id);
     if (seed.puzzle) cardsByPuzzle.set(seed.puzzle, _id);
-    return {
+    const parent = seed.parentKey ? ids.get(seed.parentKey) : undefined;
+    return Object.assign(seedNodeDoc(board, seed, parent, board.createdBy), {
       _id,
-      hunt: board.hunt,
-      board: board._id,
-      type: seed.type,
-      parent: seed.parentKey ? ids.get(seed.parentKey) : undefined,
-      position: seed.position,
-      width: seed.width,
-      height: seed.height,
-      puzzle: seed.puzzle,
-      tag: seed.tag,
-      label: seed.label,
-      frameKind: seed.frameKind,
-      createdBy: board.createdBy,
-    };
+    });
   });
   await WhiteboardNodes.insertManyAsync(nodeDocs);
 

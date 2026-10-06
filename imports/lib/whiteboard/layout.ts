@@ -5,7 +5,9 @@ import type { WhiteboardFrameKind } from "../models/WhiteboardNodes";
 import type { PuzzleGroup } from "../puzzle-sort-and-group";
 import { puzzleGroupsByRelevance } from "../puzzle-sort-and-group";
 import {
+  GROUP_TAG_PREFIX,
   isMetaForTag as isMetaForTagName,
+  META_FOR_TAG_PREFIX,
   TAG_SYNONYMS,
   type TagSynonymRule,
 } from "../tagNames";
@@ -66,9 +68,6 @@ interface SeedResult {
   edges: FeederPair[];
 }
 
-const GROUP_PREFIX = "group:";
-const META_FOR_PREFIX = "meta-for:";
-
 // Whether a tag marks its puzzle as a meta for a round (meta-for:X), read
 // through the synonym table (the server passes the saved one).
 export function isMetaForTag(
@@ -79,12 +78,12 @@ export function isMetaForTag(
 }
 
 function isFrameTag(tag: Pick<TagType, "name">): boolean {
-  return tag.name === "administrivia" || tag.name.startsWith(GROUP_PREFIX);
+  return tag.name === "administrivia" || tag.name.startsWith(GROUP_TAG_PREFIX);
 }
 
 export function frameLabelForTag(tag: Pick<TagType, "name">): string {
-  const label = tag.name.startsWith(GROUP_PREFIX)
-    ? tag.name.slice(GROUP_PREFIX.length)
+  const label = tag.name.startsWith(GROUP_TAG_PREFIX)
+    ? tag.name.slice(GROUP_TAG_PREFIX.length)
     : tag.name;
   // A bare "group:" keeps its whole name, since a stored label can't be empty.
   return label || tag.name;
@@ -194,8 +193,8 @@ export function computeFeederPairs(
   puzzles.forEach((p) => {
     p.tags.forEach((tagId) => {
       const name = tagsById.get(tagId)?.name;
-      if (name?.startsWith(META_FOR_PREFIX)) {
-        const group = name.slice(META_FOR_PREFIX.length);
+      if (name?.startsWith(META_FOR_TAG_PREFIX)) {
+        const group = name.slice(META_FOR_TAG_PREFIX.length);
         metasByGroup.set(group, [...(metasByGroup.get(group) ?? []), p._id]);
       }
     });
@@ -206,8 +205,8 @@ export function computeFeederPairs(
   puzzles.forEach((p) => {
     p.tags.forEach((tagId) => {
       const name = tagsById.get(tagId)?.name;
-      if (!name?.startsWith(GROUP_PREFIX)) return;
-      const metas = metasByGroup.get(name.slice(GROUP_PREFIX.length)) ?? [];
+      if (!name?.startsWith(GROUP_TAG_PREFIX)) return;
+      const metas = metasByGroup.get(name.slice(GROUP_TAG_PREFIX.length)) ?? [];
       metas.forEach((meta) => {
         const key = `${p._id}:${meta}`;
         if (meta === p._id || seen.has(key)) return;
@@ -258,13 +257,13 @@ export function limitFeedersPerMeta(
 
 // The meta-for:X tags for a frame tagged group:X. A frame for any other tag,
 // or none, has none.
-function roundMetaTags(
+export function roundMetaTags(
   frameTag: string | undefined,
   tags: Pick<TagType, "_id" | "name">[],
 ): Set<string> {
   const groupName = tags.find((t) => t._id === frameTag)?.name;
-  if (!groupName?.startsWith(GROUP_PREFIX)) return new Set();
-  const metaName = `${META_FOR_PREFIX}${groupName.slice(GROUP_PREFIX.length)}`;
+  if (!groupName?.startsWith(GROUP_TAG_PREFIX)) return new Set();
+  const metaName = `${META_FOR_TAG_PREFIX}${groupName.slice(GROUP_TAG_PREFIX.length)}`;
   return new Set(tags.filter((t) => t.name === metaName).map((t) => t._id));
 }
 
@@ -327,7 +326,7 @@ export function chooseFrameForPuzzle(
   for (const tag of puzzleTags) {
     if (!isMetaForTag(tag, synonyms)) continue;
     const groupTag = tagsByName.get(
-      `${GROUP_PREFIX}${tag.name.slice(META_FOR_PREFIX.length)}`,
+      `${GROUP_TAG_PREFIX}${tag.name.slice(META_FOR_TAG_PREFIX.length)}`,
     );
     const frame = groupTag && framesByTag.get(groupTag._id);
     if (frame) return { frameId: frame.id };
@@ -498,7 +497,7 @@ export function seedLayout(
       .toSorted(byCreatedAt)
       .map((t) =>
         tagsByName.get(
-          `${GROUP_PREFIX}${t.name.slice(META_FOR_PREFIX.length)}`,
+          `${GROUP_TAG_PREFIX}${t.name.slice(META_FOR_TAG_PREFIX.length)}`,
         ),
       )
       .map((t) => t && framesByTag.get(t._id))
