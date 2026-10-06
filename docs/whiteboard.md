@@ -35,6 +35,7 @@ files:
   - imports/client/components/whiteboard/NotOnBoardPanel.tsx
   - imports/client/components/whiteboard/OutlinePanel.tsx
   - imports/client/components/whiteboard/PeopleContext.ts
+  - imports/client/components/whiteboard/PreviewChrome.tsx
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
   - imports/client/components/whiteboard/RemoteEditingContext.ts
   - imports/client/components/whiteboard/RemoteSelectionLayer.tsx
@@ -55,14 +56,21 @@ files:
   - imports/client/components/whiteboard/tools.ts
   - imports/client/components/whiteboard/touch.ts
   - imports/client/hooks/useBoardClipboard.ts
+  - imports/client/hooks/useBoardComments.ts
   - imports/client/hooks/useBoardFocus.ts
+  - imports/client/hooks/useBoardGeometry.ts
+  - imports/client/hooks/useBoardKeys.ts
   - imports/client/hooks/useBoardNavigation.ts
   - imports/client/hooks/useBoardNotices.ts
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useChatImagesEnabled.ts
   - imports/client/hooks/useEditorImageUpload.ts
+  - imports/client/hooks/useFrameTools.ts
   - imports/client/hooks/useImageTool.ts
+  - imports/client/hooks/useInk.ts
   - imports/client/hooks/useKeyboardInset.ts
+  - imports/client/hooks/useLatest.ts
+  - imports/client/hooks/useLinkedComment.ts
   - imports/client/hooks/useLinkedTarget.ts
   - imports/client/hooks/useNotOnBoard.ts
   - imports/client/hooks/usePuzzleViewers.ts
@@ -71,6 +79,9 @@ files:
   - imports/client/hooks/useRemoteDrags.ts
   - imports/client/hooks/useRoundStates.ts
   - imports/client/hooks/useTagSynonyms.ts
+  - imports/client/hooks/useTimedValue.ts
+  - imports/client/hooks/useTouchGestures.ts
+  - imports/client/hooks/useVersionPreview.ts
   - imports/client/hooks/useWhiteboardLive.ts
   - imports/client/hooks/useWhiteboardNames.ts
   - imports/client/hooks/useWhiteboardOthersEditing.ts
@@ -563,11 +574,19 @@ The canvas itself is `WhiteboardCanvas`
 overlays drawn over the board and the small buttons the toolbars share, and
 `tools.ts` names the tools and what the placing ones put down. The alerts
 under the toolbar are `BoardNotices`, the Align and Distribute buttons
-`ArrangeToolbar` and the "Not on the board" panel `NotOnBoardPanel`. Parts
-of the canvas's state live in hooks in `imports/client/hooks/`:
-`useBoardNotices`, `useRemoteDrags`, `useNotOnBoard`, `useImageTool`,
-`usePlaceTool`, `useBoardNavigation`, `useLinkedTarget`, `useBoardFocus` and
-`useBoardClipboard`, each named below where what it owns is described.
+`ArrangeToolbar`, the "Not on the board" panel `NotOnBoardPanel`, and a
+preview's banner, Restore this item and restore confirmation
+`PreviewChrome`. Parts of the canvas's state live in hooks in
+`imports/client/hooks/`: `useBoardGeometry` (where things are on the
+board), `useFrameTools`, `useBoardNotices`, `useRemoteDrags`,
+`useNotOnBoard`, `useImageTool`, `usePlaceTool`, `useInk`,
+`useTouchGestures`, `useBoardKeys`, `useBoardNavigation`,
+`useLinkedTarget`, `useBoardComments`, `useLinkedComment`,
+`useVersionPreview`, `useBoardFocus` and `useBoardClipboard`, each named
+below where what it owns is described. The canvas keeps the pointer
+handlers, the lines, the movers (a drop, a burst of nudges, Align and
+Distribute, which share a `Mover` for what to save and show and where
+things landed) and the toolbars.
 
 A read-only board's toolbar says "Viewing only", gives the reason on the line
 below, and keeps the Comment tool for anyone who can comment, and the
@@ -668,7 +687,8 @@ to load, shows what it names, and is then dropped from the address:
   waiting for ever, and one on something that has been hidden or deleted
   says "That isn't on the board any more." The canvas knows the thread is
   gone once the puzzle page's chat has loaded, which the page tells it through
-  `ChatLoadedContext`. A thread on something inside a collapsed frame opens
+  `ChatLoadedContext` (`useLinkedComment` in `imports/client/hooks/` waits
+  for this, and for a thread chat asks the board to show). A thread on something inside a collapsed frame opens
   the frame for this viewer first (see Collapsed rounds), and so does "Show
   on board" from chat.
 - `?puzzle=<puzzleId>` pans to that puzzle's card and marks it, or says the
@@ -719,6 +739,10 @@ have none. Free line ends are left off, and everything else is grey
 (`miniMapColor` in `imports/lib/whiteboard/minimap.ts`).
 
 ## Comments
+
+The threads and their pins, the Comments list, the thread open in its panel
+and a comment being started are `useBoardComments`
+(`imports/client/hooks/`).
 
 ### Unread comments and the Comments panel
 
@@ -851,7 +875,9 @@ The tool keys, 1 to 4, N, Ctrl+A, Ctrl+L, Ctrl+C, Ctrl+V, Ctrl+D and the
 undo and redo keys only work while the board has focus (the last press or
 focus was on it) and nothing is being typed: not in a text box, a note being
 edited, the comment composer or the search field, where Ctrl+Z is the
-browser's own. Each tool's tooltip shows its key.
+browser's own. Each tool's tooltip shows its key. All but the clipboard's
+keys are `useBoardKeys` (`imports/client/hooks/`), whose listeners are
+registered once and read what the canvas last rendered.
 
 | Key | Does | Needs |
 |---|---|---|
@@ -911,7 +937,8 @@ a touch laptop whose main pointer is a finger. `WhiteboardPage` asks
 the screen isn't compact. That decides what the toolbar offers, that a
 tap places a note, and that only a selected node can be dragged. Otherwise
 what a press does is decided by the press itself
-(`pointerType === "touch"`), so a mouse on a tablet works as it does on a
+(`pointerType === "touch"`; long presses and pinches are `useTouchGestures`
+in `imports/client/hooks/`), so a mouse on a tablet works as it does on a
 desktop, and a finger on a touch laptop draws, erases, draws lines,
 selects by long press and pinches as it would on a tablet, though it
 places a note as a mouse does.
@@ -1214,7 +1241,8 @@ The pen draws a stroke as the pointer moves, dropping samples within half a
 unit of the last one kept, and saves it in segments of up to
 `MAX_INK_POINTS` (500) points that share a stroke id, each repeating the
 last two points of the one before so the joins overlap (`InkSegmenter` in
-`imports/lib/whiteboard/ink.ts`). While it's drawn the stroke goes to
+`imports/lib/whiteboard/ink.ts`; the pen and the eraser on the client are
+`useInk` in `imports/client/hooks/`). While it's drawn the stroke goes to
 everyone else on the live channel.
 
 The pen width select beside the pen has four widths: thin, medium and thick
@@ -1628,7 +1656,8 @@ someone who can edit it can put it back. The History button (a clock with an
 arrow) sits beside "Not on the board" in the toolbar, and in the read-only
 toolbar, so archived hunts and people who can't edit can look too. It isn't
 shown on a phone, and a screen that becomes phone-sized closes the panel and
-any preview.
+any preview. Fetching a version, what it has differently and restoring it
+are `useVersionPreview` (`imports/client/hooks/`).
 
 ### What a version is
 
@@ -2257,7 +2286,9 @@ state from `RoundStateContext`.
 #### Fit to contents, Tidy, and frames that grow
 
 A selected frame that isn't collapsed has two more buttons in the toolbar
-above it, beside "Collapse for everyone", for anyone who can edit:
+above it, beside "Collapse for everyone", for anyone who can edit
+(`useFrameTools` in `imports/client/hooks/`, which also grows frames round
+what lands in them):
 
 - **Fit to contents** makes the frame just big enough for everything
   directly in it, with 24 units of padding at the sides and bottom and the

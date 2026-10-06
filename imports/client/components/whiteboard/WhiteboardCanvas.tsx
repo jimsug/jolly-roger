@@ -61,38 +61,31 @@ import {
 } from "@xyflow/react";
 import React, {
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
-import Modal from "react-bootstrap/Modal";
 import Spinner from "react-bootstrap/Spinner";
 import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import { useTheme } from "styled-components";
 import Flags from "../../../Flags";
-import type { ChatMessageCommentAnchorType } from "../../../lib/models/ChatMessages";
 import Hunts from "../../../lib/models/Hunts";
 import Puzzles from "../../../lib/models/Puzzles";
-import Tags from "../../../lib/models/Tags";
 import WhiteboardEdges from "../../../lib/models/WhiteboardEdges";
 import type {
-  WhiteboardColor,
   WhiteboardShape,
   WhiteboardStrokeWidth,
 } from "../../../lib/models/WhiteboardNodes";
-import WhiteboardNodes, {
+import {
   WhiteboardShapes,
   WhiteboardStrokeWidths,
 } from "../../../lib/models/WhiteboardNodes";
 import type { WhiteboardEditPolicy } from "../../../lib/models/Whiteboards";
-import type { WhiteboardVersionType } from "../../../lib/models/WhiteboardVersions";
 import type {
   WhiteboardAccess,
   WhiteboardAccessReason,
@@ -112,47 +105,19 @@ import {
   sortParentsFirst,
 } from "../../../lib/whiteboard/arrange";
 import { collapsedAncestors } from "../../../lib/whiteboard/collapse";
-import {
-  commentPosition,
-  isUnread,
-  nextUnread,
-  threadList,
-} from "../../../lib/whiteboard/comments";
 import type { AttachHit } from "../../../lib/whiteboard/connectors";
 import {
   attachHit,
   centerOf,
   compareAttachHits,
-  contains,
   snapAngle,
 } from "../../../lib/whiteboard/connectors";
 import { exportFileName } from "../../../lib/whiteboard/exportFiles";
 import { feederFocus } from "../../../lib/whiteboard/feederFocus";
-import type {
-  Box,
-  BoxChange,
-  FrameAround,
-} from "../../../lib/whiteboard/frameTools";
-import {
-  fitFrame,
-  growFrameFor,
-  tidyFrame,
-} from "../../../lib/whiteboard/frameTools";
-import type { InkPoint } from "../../../lib/whiteboard/ink";
-import {
-  distanceToInk,
-  InkSegmenter,
-  inkBounds,
-  inkPath,
-  relativeTo,
-  round1,
-  STROKE_SIZES,
-  simulatedPressure,
-} from "../../../lib/whiteboard/ink";
-import { POINT_SIZE, roundMetas } from "../../../lib/whiteboard/layout";
+import { inkPath, round1 } from "../../../lib/whiteboard/ink";
+import { POINT_SIZE } from "../../../lib/whiteboard/layout";
 import {
   MAX_BATCH,
-  MAX_FRAME_DEPTH,
   MAX_LIVE_DRAG_NODES,
   MAX_LIVE_SELECTION,
 } from "../../../lib/whiteboard/limits";
@@ -170,11 +135,8 @@ import type { BoardSearchHit } from "../../../lib/whiteboard/search";
 import {
   pickToRestore,
   restoreItemSet,
-  versionDifferences,
 } from "../../../lib/whiteboard/versions";
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
-import restoreWhiteboardItems from "../../../methods/restoreWhiteboardItems";
-import restoreWhiteboardVersion from "../../../methods/restoreWhiteboardVersion";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../../../methods/upsertWhiteboardNodes";
 import {
@@ -183,23 +145,29 @@ import {
   useWhiteboardPenColor,
   useWhiteboardPenWidth,
   useWhiteboardShapeKind,
-  useWhiteboardShowResolvedComments,
   useWhiteboardViewport,
 } from "../../hooks/persisted-state";
 import useBoardClipboard from "../../hooks/useBoardClipboard";
+import useBoardComments from "../../hooks/useBoardComments";
 import useBoardFocus from "../../hooks/useBoardFocus";
+import useBoardGeometry from "../../hooks/useBoardGeometry";
+import useBoardKeys from "../../hooks/useBoardKeys";
 import useBoardNavigation from "../../hooks/useBoardNavigation";
 import useBoardNotices, { unannounced } from "../../hooks/useBoardNotices";
+import type { Landed } from "../../hooks/useFrameTools";
+import useFrameTools from "../../hooks/useFrameTools";
 import useImageTool from "../../hooks/useImageTool";
+import useInk from "../../hooks/useInk";
+import useLinkedComment from "../../hooks/useLinkedComment";
 import useLinkedTarget from "../../hooks/useLinkedTarget";
 import useNotOnBoard from "../../hooks/useNotOnBoard";
 import usePlaceTool from "../../hooks/usePlaceTool";
 import useRemoteDrags from "../../hooks/useRemoteDrags";
 import useRoundStates from "../../hooks/useRoundStates";
+import useTimedValue from "../../hooks/useTimedValue";
+import useTouchGestures from "../../hooks/useTouchGestures";
 import useTypedSubscribe from "../../hooks/useTypedSubscribe";
-import useWhiteboardComments, {
-  useSeenComments,
-} from "../../hooks/useWhiteboardComments";
+import useVersionPreview from "../../hooks/useVersionPreview";
 import useWhiteboardLive from "../../hooks/useWhiteboardLive";
 import useWhiteboardOthersEditing from "../../hooks/useWhiteboardOthersEditing";
 import type {
@@ -225,7 +193,6 @@ import {
 } from "./boardFiles";
 import type { BoardWrite, CommitOptions, Done } from "./boardWrites";
 import { sendAtOnce } from "./boardWrites";
-import ChatLoadedContext from "./ChatLoadedContext";
 import type { CollapseActions, FoldSummary } from "./CollapseContext";
 import CollapseContext from "./CollapseContext";
 import ColorPicker from "./ColorPicker";
@@ -242,20 +209,19 @@ import {
   CommentPanelPlace,
   CommentToolButton,
   dragOnlySelected,
-  inDialog,
-  isTyping,
   KeyboardCatcher,
   LocalStroke,
   NO_ESCAPE,
   OutlineButton,
+  OVERLAYS,
   PlaceGhost,
-  PreviewBanner,
-  PreviewItemBox,
+  PULSE_MS,
   PuzzlePeopleProvider,
   ReadOnlyButtons,
   ReadOnlyNote,
   ReadOnlyReason,
   SidePanel,
+  type SidePanelKind,
   ToolBox,
   ToolButton,
   ToolSelect,
@@ -265,14 +231,11 @@ import {
 import colors from "./colors";
 import type { DownloadKind } from "./DownloadButton";
 import DownloadButton from "./DownloadButton";
-import describeCommentTarget from "./describeCommentTarget";
 import EditPolicyModal, { EditPolicyButton } from "./EditPolicyModal";
 import FeederFocusContext from "./FeederFocusContext";
 import FrameLabelLayer from "./FrameLabelLayer";
 import FrameNode from "./FrameNode";
-import frameToolBox from "./frameToolBox";
-import type { VersionPreview } from "./HistoryPanel";
-import HistoryPanel, { loadVersion, versionMoment } from "./HistoryPanel";
+import HistoryPanel from "./HistoryPanel";
 import ImageNode from "./ImageNode";
 import InkNode from "./InkNode";
 import KeepAboveKeyboard from "./KeepAboveKeyboard";
@@ -280,11 +243,11 @@ import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
 import LineStyleIcon from "./LineStyleIcon";
 import LockLayoutButtons from "./LockLayoutButtons";
 import { strokeOpacity } from "./marker";
-import { MIN_SIZES } from "./NodeChrome";
 import NodePulse from "./NodePulse";
 import NotOnBoardPanel from "./NotOnBoardPanel";
 import OutlinePanel from "./OutlinePanel";
 import PointNode from "./PointNode";
+import PreviewChrome, { RestoreVersionModal } from "./PreviewChrome";
 import PuzzleCardNode from "./PuzzleCardNode";
 import RemoteEditingContext from "./RemoteEditingContext";
 import RemoteSelectionLayer from "./RemoteSelectionLayer";
@@ -295,8 +258,8 @@ import StickyNode from "./StickyNode";
 import TextNode from "./TextNode";
 import TouchTargetSize from "./TouchTargetSize";
 import type { Tool } from "./tools";
-import { isPlaceTool, PEN_WIDTH_KEYS, TOOLS_BY_KEY } from "./tools";
-import { CLICK_SLOP, LongPress, movedPastSlop, TOUCH_SLOP } from "./touch";
+import { isPlaceTool } from "./tools";
+import { CLICK_SLOP, movedPastSlop, TOUCH_SLOP } from "./touch";
 import type { WhiteboardActions } from "./WhiteboardContext";
 import WhiteboardContext from "./WhiteboardContext";
 import WhiteboardEdge from "./WhiteboardEdge";
@@ -314,11 +277,6 @@ const nodeTypes = {
   shape: ShapeNode,
 };
 const edgeTypes = { whiteboard: WhiteboardEdge };
-
-// The panel at the top right, under any open thread: what isn't on the
-// board, the list of comments, History or the Outline. Only one shows at a
-// time.
-type SidePanelKind = "hidden" | "comments" | "history" | "outline";
 
 // One end of a line: attached to a node, or free at a point (inside a frame,
 // if it's drawn in one).
@@ -351,13 +309,6 @@ interface TapPress {
 // Where nodes are being moved to, each in its frame (if any).
 type NodeMoves = Map<string, { position: XYPosition; parent?: string }>;
 
-// A node that has just been dropped, nudged or aligned, where it now is.
-interface Landed {
-  id: string;
-  parent: string | undefined;
-  position: XYPosition;
-}
-
 // One input per node, later fields winning.
 function mergeInputs(inputs: WhiteboardNodeInput[]): WhiteboardNodeInput[] {
   const byId = new Map<string, WhiteboardNodeInput>();
@@ -367,10 +318,50 @@ function mergeInputs(inputs: WhiteboardNodeInput[]): WhiteboardNodeInput[] {
   return [...byId.values()];
 }
 
-// The parts of the canvas that sit over the board, where presses are the
-// controls' own rather than a tool's.
-const OVERLAYS =
-  ".react-flow__panel, .react-flow__controls, .react-flow__minimap, .react-flow__node-toolbar, .jr-comment-pin, .jr-whos-here";
+type MarkPending = (
+  id: string,
+  change: { position: XYPosition; parent?: string | null },
+) => void;
+
+// Nodes dropped, nudged or arranged: what to save for each, which to show
+// in a new frame straight away, and where each landed for the frames to
+// grow round (saveMoves). Each mover walks its own nodes.
+class Mover {
+  readonly inputs: WhiteboardNodeInput[] = [];
+  readonly moves: NodeMoves = new Map();
+  readonly landed: Landed[] = [];
+
+  constructor(private readonly markPending: MarkPending) {}
+
+  // Saved where it is, in the frame it's in.
+  stay(id: string, parent: string | undefined, position: XYPosition) {
+    this.inputs.push({ _id: id, position });
+    this.markPending(id, { position });
+    this.landed.push({ id, parent, position });
+  }
+
+  // Saved where it is, having moved with its frame, so it hasn't landed
+  // anywhere new.
+  follow(id: string, position: XYPosition) {
+    this.inputs.push({ _id: id, position });
+    this.markPending(id, { position });
+  }
+
+  // Shifted within its frame, shown there at once.
+  shift(id: string, parent: string | undefined, position: XYPosition) {
+    this.moves.set(id, { position, parent });
+    this.stay(id, parent, position);
+  }
+
+  // Put into another frame, or out of one, shown there at once.
+  reparent(id: string, parent: string | undefined, position: XYPosition) {
+    this.inputs.push({ _id: id, position, parent: parent ?? null });
+    this.markPending(id, { position, parent: parent ?? null });
+    this.moves.set(id, { position, parent });
+    this.landed.push({ id, parent, position });
+  }
+}
+
 // How close (in screen pixels) a line end has to be to something to attach to
 // it: just outside its edge, or either side of a frame's border.
 const ATTACH_MARGIN = 8;
@@ -384,25 +375,8 @@ const MINI_MAP_FRAMES = {
   black: colors.fill.black,
 };
 
-interface Drawing {
-  stroke: string;
-  color: WhiteboardColor;
-  strokeWidth: WhiteboardStrokeWidth;
-  segmenter: InkSegmenter;
-  committed: number;
-  parent?: string;
-}
-
-// The stroke being drawn, as it's shown until it's saved.
-const strokeSoFar = (state: Drawing) => ({
-  color: state.color,
-  strokeWidth: state.strokeWidth,
-  points: [...state.segmenter.points],
-});
-
 const NO_REMOTE_DRAGS = new Map<string, RemoteDrag>();
 const NO_PINS: CommentPin[] = [];
-const NO_CHANGES: ReadonlySet<string> = new Set();
 const NO_FLOW_NODES: WhiteboardFlowNode[] = [];
 const NO_SOLVEDNESS = new Map<string, Solvedness>();
 
@@ -422,30 +396,6 @@ function useStableIds(ids: string[]): string[] {
   const key = ids.join(" ");
   return useMemo(() => (key ? key.split(" ") : []), [key]);
 }
-
-// A value shown for `ms`, then dropped. Showing another restarts the clock,
-// and unmounting stops it.
-function useTimedValue<T>(ms: number): [T | undefined, (value: T) => void] {
-  const [value, setValue] = useState<T>();
-  const timer = useRef<number | undefined>(undefined);
-  const show = useCallback(
-    (next: T) => {
-      setValue(next);
-      window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(() => setValue(undefined), ms);
-    },
-    [ms],
-  );
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  return [value, show];
-}
-
-// How far below the middle of the screen (as a share of the board's height)
-// the board centres on a pin on a phone, so the pin sits above the comment
-// sheet.
-const SHEET_OFFSET = 0.3;
-// How long a pin or node pulses after the board pans to it.
-const PULSE_MS = 2200;
 
 // The most frames a picture of the board waits for the nodes that were out
 // of view to be drawn and measured, before it's taken anyway.
@@ -520,36 +470,120 @@ const CanvasInner = ({
   onInitialTargetShown,
 }: CanvasProps) => {
   const theme = useTheme();
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const flow = useReactFlow<WhiteboardFlowNode, WhiteboardFlowEdge>();
   const storeApi = useStoreApi<WhiteboardFlowNode, WhiteboardFlowEdge>();
   const wrapperRef = useRef<HTMLDivElement>(null);
-  // An earlier version of the board being looked at, which can't be edited
-  // or commented on.
-  const [preview, setPreview] = useState<VersionPreview>();
-  // A version is previewed without its ink while this viewer hides ink, as
-  // the board is.
-  const shownPreview = useMemo(
-    () =>
-      preview && hideInk
-        ? { ...preview, nodes: preview.nodes.filter((n) => n.type !== "ink") }
-        : preview,
-    [preview, hideInk],
-  );
-  // The version being fetched to preview. Picking another, or going back to
-  // now, drops it.
-  const [previewLoading, setPreviewLoading] = useState<string>();
-  const previewRequest = useRef(0);
-  const backToNow = useCallback(() => {
-    previewRequest.current += 1;
-    setPreviewLoading(undefined);
-    setPreview(undefined);
-  }, []);
-  // Restoring the version being previewed asks first. The confirmation
-  // stays up until the server answers, and shows why if it refuses.
-  const [confirmingRestore, setConfirmingRestore] = useState(false);
+  const {
+    absoluteRect,
+    liveRect,
+    isWithin,
+    frameRects,
+    frameAt,
+    placementFor,
+    nodeCenter,
+    paneCenter,
+    flowPoint,
+    onBoard,
+  } = useBoardGeometry(wrapperRef);
   const mayComment = access === "edit" || access === "comment";
+  const mayEdit = access === "edit";
+  // Timeouts that only tidy up this component's state, cleared with it.
+  const tidyTimers = useRef(new Set<number>());
+  const tidyLater = useCallback((tidy: () => void, ms: number) => {
+    const timer = window.setTimeout(() => {
+      tidyTimers.current.delete(timer);
+      tidy();
+    }, ms);
+    tidyTimers.current.add(timer);
+  }, []);
+  useEffect(() => {
+    const timers = tidyTimers.current;
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, []);
+  const {
+    notice,
+    showNotice,
+    dismissNotice,
+    followNotice,
+    saveError,
+    reportRefusal,
+    dismissSaveError,
+    accessNotice,
+    dismissAccessNotice,
+  } = useBoardNotices({ mayEdit, accessReason, tidyLater });
+  const [sidePanel, setSidePanel] = useState<SidePanelKind>();
+  // Closes a panel, if it's the one open.
+  const closePanel = useCallback(
+    (panel: SidePanelKind) =>
+      setSidePanel((current) => (current === panel ? undefined : current)),
+    [],
+  );
+  const selfId = useTracker(() => Meteor.userId() ?? undefined, []);
+  const {
+    threads,
+    threadRows,
+    unreadCount,
+    resolvedCount,
+    showResolved,
+    toggleShowResolved,
+    openThreadData,
+    openThreadId,
+    steppedThread,
+    setSteppedThread,
+    draft,
+    clearDraft,
+    startDraft,
+    onDraftSent,
+    pulse,
+    commentPins,
+    commentTarget,
+    commentAnchorAt,
+    openComment,
+    closeComment,
+    dismissComment,
+    closeDeletedComment,
+    showComment,
+  } = useBoardComments({
+    boardId,
+    puzzleId,
+    compact,
+    wrapperRef,
+    selfId,
+    absoluteRect,
+    closePanel,
+  });
+  const {
+    preview,
+    shownPreview,
+    previewLoading,
+    backToNow,
+    confirmingRestore,
+    showVersion,
+    changed,
+    inkHiddenInPreview,
+    previewTime,
+    restoreBlocked,
+    restoring,
+    restoreError,
+    askRestore,
+    cancelRestore,
+    restore,
+    restoringItem,
+    restoreItem,
+  } = useVersionPreview({
+    boardId,
+    hideInk,
+    isOperator,
+    access,
+    accessReason,
+    closeComment,
+    showNotice,
+    reportRefusal,
+  });
   const readOnly = access !== "edit" || !!preview;
   const canComment = !preview && mayComment;
 
@@ -665,45 +699,17 @@ const CanvasInner = ({
   if (readOnly && tool !== "select" && !(tool === "comment" && canComment)) {
     setTool("select");
   }
-  const mayEdit = access === "edit";
   const [editingPolicy, setEditingPolicy] = useState(false);
   const openEditPolicy = useCallback(() => setEditingPolicy(true), []);
   const closeEditPolicy = useCallback(() => setEditingPolicy(false), []);
   const [penColor, setPenColor] = useWhiteboardPenColor();
   const [penWidth, setPenWidth] = useWhiteboardPenWidth();
   const [shapeKind, setShapeKind] = useWhiteboardShapeKind();
-  const [sidePanel, setSidePanel] = useState<SidePanelKind>();
-  // Closes a panel, if it's the one open.
-  const closePanel = useCallback(
-    (panel: SidePanelKind) =>
-      setSidePanel((current) => (current === panel ? undefined : current)),
-    [],
-  );
-  const [showResolved, setShowResolved] = useWhiteboardShowResolvedComments();
-  const [openThread, setOpenThread] = useState<string>();
-  const [draft, setDraft] = useState<ChatMessageCommentAnchorType>();
-  // A pin, and a node or a point, marked for a moment after the board pans
-  // to them.
-  const [pulse, pulseComment] = useTimedValue<string>(PULSE_MS);
+  // A node or a point marked for a moment after the board pans to it.
   const [nodePulse, pulseAt] = useTimedValue<{
     node?: string;
     point?: XYPosition;
   }>(PULSE_MS);
-  // Timeouts that only tidy up this component's state, cleared with it.
-  const tidyTimers = useRef(new Set<number>());
-  const tidyLater = useCallback((tidy: () => void, ms: number) => {
-    const timer = window.setTimeout(() => {
-      tidyTimers.current.delete(timer);
-      tidy();
-    }, ms);
-    tidyTimers.current.add(timer);
-  }, []);
-  useEffect(() => {
-    const timers = tidyTimers.current;
-    return () => {
-      timers.forEach((timer) => window.clearTimeout(timer));
-    };
-  }, []);
   // Where a press with the Comment tool (or a finger with a placing tool)
   // started, until it's let go there.
   const tapPress = useRef<TapPress | undefined>(undefined);
@@ -712,28 +718,6 @@ const CanvasInner = ({
   // the tap afterwards doesn't also follow a link, take focus from what was
   // just opened, or select only what's under it.
   const tapped = useRef(false);
-  // Fingers on the board and where each last was on screen.
-  const touches = useRef(new Map<number, { x: number; y: number }>());
-  // Two fingers panning and zooming the board while the tool in use takes
-  // one finger for itself (see fingerPans), from where they started.
-  const pinch = useRef<
-    | {
-        ids: [number, number];
-        viewport: { x: number; y: number; zoom: number };
-        mid: { x: number; y: number };
-        distance: number;
-      }
-    | undefined
-  >(undefined);
-  // Fingers that have been part of a pinch, which do nothing more until
-  // they're lifted.
-  const spentTouches = useRef(new Set<number>());
-  // A finger held on a node, which selects it after a while.
-  const longPress = useRef(new LongPress());
-  useEffect(() => {
-    const pending = longPress.current;
-    return () => pending.cancel();
-  }, []);
   // On a touch screen, whether one finger on the empty board draws a box to
   // select what's in it rather than panning.
   const [selectArea, setSelectArea] = useState(false);
@@ -750,10 +734,6 @@ const CanvasInner = ({
   // while it waits for the next click.
   const clickConnectFrom = useRef<string | undefined>(undefined);
   const [clickConnectPointer, setClickConnectPointer] = useState<XYPosition>();
-  // A comment just sent, to open once it comes back from the server.
-  const sentDraft = useRef<
-    { anchor: ChatMessageCommentAnchorType; at: number } | undefined
-  >(undefined);
   // What a line end would attach to: under the pointer with the line tool
   // before pressing, or under a free end being dragged.
   const [attachPreview, setAttachPreview] = useState<string | undefined>();
@@ -780,22 +760,11 @@ const CanvasInner = ({
     [t],
   );
   const [editOnAppear, setEditOnAppear] = useState<string | undefined>();
+  // The strokes under the eraser, faded until they're deleted (useInk).
   const [erasingStrokes, setErasingStrokes] = useState<Set<string>>(new Set());
-  const drawing = useRef<Drawing | undefined>(undefined);
-  const [localStroke, setLocalStroke] =
-    useState<ReturnType<typeof strokeSoFar>>();
+  // Whether Space is held, which pans the board instead of drawing; the
+  // keys set it.
   const spaceHeld = useRef(false);
-  const {
-    notice,
-    showNotice,
-    dismissNotice,
-    followNotice,
-    saveError,
-    reportRefusal,
-    dismissSaveError,
-    accessNotice,
-    dismissAccessNotice,
-  } = useBoardNotices({ mayEdit, accessReason, tidyLater });
 
   // A download being made. While a picture is drawn the board renders every
   // node, not just those in view, and leaves out cursors, others' selections
@@ -1287,311 +1256,32 @@ const CanvasInner = ({
       [deleteItems, showLockRefused, showNotice, t],
     );
 
-  // A node's box on the board as React Flow last laid it out. boxOf takes
-  // the laid-out node itself, and liveRect goes by the node's own position.
-  const absoluteRect = useCallback(
-    (id: string) => {
-      const internal = flow.getInternalNode(id);
-      if (!internal) return undefined;
-      return {
-        ...internal.internals.positionAbsolute,
-        width: internal.measured.width ?? internal.width ?? 0,
-        height: internal.measured.height ?? internal.height ?? 0,
-      };
-    },
-    [flow],
-  );
+  const { growForLanded, fitToContents, tidyCards } = useFrameTools({
+    huntId,
+    isDraggedByOthers,
+    markPending,
+    setNodes,
+    updateNodes,
+    showLockRefused,
+  });
 
-  // A node's box on the board from its own position, which during a drag is
-  // ahead of what React Flow last rendered.
-  const liveRect = useCallback(
-    (node: WhiteboardFlowNode) => {
-      const parent = node.parentId ? absoluteRect(node.parentId) : undefined;
-      return {
-        x: (parent?.x ?? 0) + node.position.x,
-        y: (parent?.y ?? 0) + node.position.y,
-        width: node.measured?.width ?? node.width ?? 0,
-        height: node.measured?.height ?? node.height ?? 0,
-      };
-    },
-    [absoluteRect],
-  );
-
-  const isWithin = useCallback(
-    (id: string, ancestorId: string) => {
-      let current: string | undefined = id;
-      for (let i = 0; current && i < MAX_FRAME_DEPTH; i++) {
-        if (current === ancestorId) return true;
-        current = flow.getInternalNode(current)?.parentId;
-      }
-      return false;
-    },
-    [flow],
-  );
-
-  // Every frame's box on the board. Worked out once when placing many nodes
-  // at a time, rather than once per node. A collapsed frame is left out, so
-  // nothing lands in it unseen: it's only its header on screen.
-  const frameRects = useCallback(
-    () =>
-      flow.getNodes().flatMap((n) => {
-        if (n.type !== "frame" || n.data.collapsed) return [];
-        const rect = absoluteRect(n.id);
-        return rect ? [{ id: n.id, rect }] : [];
-      }),
-    [flow, absoluteRect],
-  );
-
-  // The frame (if any) under a point, preferring the innermost.
-  const frameAt = useCallback(
-    (
-      point: XYPosition,
-      exclude: (id: string) => boolean,
-      frames: ReturnType<typeof frameRects> = frameRects(),
-    ) => {
-      let best: { id: string; area: number } | undefined;
-      frames.forEach(({ id, rect }) => {
-        if (exclude(id) || !contains(rect, point)) return;
-        const area = rect.width * rect.height;
-        if (!best || area < best.area) best = { id, area };
-      });
-      return best?.id;
-    },
-    [frameRects],
-  );
-
-  // Where a node whose box is now `rect` belongs: in the innermost frame
-  // under its centre (never itself, anything inside it, or anything in
-  // `moving`), positioned relative to that frame.
-  const placementFor = useCallback(
-    (
-      id: string,
-      rect: { x: number; y: number; width: number; height: number },
-      moving: Set<string>,
-      frames?: ReturnType<typeof frameRects>,
-    ) => {
-      const parent = frameAt(
-        centerOf(rect),
-        (frame) => moving.has(frame) || isWithin(frame, id),
-        frames,
+  // Shows a mover's moves and saves them, with the frames they grew.
+  const saveMoves = useCallback(
+    (mover: Mover, onDone?: Done) => {
+      showMoves(mover.moves);
+      updateNodes(
+        mergeInputs([...mover.inputs, ...growForLanded(mover.landed)]),
+        onDone,
       );
-      const parentRect = parent ? absoluteRect(parent) : undefined;
-      return {
-        parent,
-        position: {
-          x: rect.x - (parentRect?.x ?? 0),
-          y: rect.y - (parentRect?.y ?? 0),
-        },
-      };
     },
-    [frameAt, isWithin, absoluteRect],
-  );
-
-  // A node's box for the frame tools. Something someone else is dragging
-  // counts where it's saved: where they have it is theirs to save.
-  const toolBox = useCallback(
-    (n: WhiteboardFlowNode): Box => {
-      const found = frameToolBox(n);
-      return isDraggedByOthers(n.id)
-        ? { ...found, ...n.data.doc.position }
-        : found;
-    },
-    [isDraggedByOthers],
-  );
-
-  // The frame tools' changes, less any to something someone else is
-  // dragging other than the frame being worked on, which are theirs to save.
-  const notDraggedByOthers = useCallback(
-    (changes: BoxChange[], frameId: string) =>
-      changes.filter((c) => c.id === frameId || !isDraggedByOthers(c.id)),
-    [isDraggedByOthers],
-  );
-
-  // A frame, what's directly in it, and the frames around it (innermost
-  // first) with what's directly in each, as the frame tools take them.
-  const aroundFrame = useCallback(
-    (frameId: string) => {
-      const all = flow.getNodes();
-      const byId = new Map(all.map((n) => [n.id, n]));
-      const childrenOf = (id: string) => all.filter((n) => n.parentId === id);
-      const ancestors: FrameAround[] = [];
-      let parentId = byId.get(frameId)?.parentId;
-      for (let i = 0; parentId && i < MAX_FRAME_DEPTH; i++) {
-        const parent = byId.get(parentId);
-        if (!parent) break;
-        ancestors.push({
-          frame: toolBox(parent),
-          children: childrenOf(parent.id).map(toolBox),
-        });
-        parentId = parent.parentId;
-      }
-      return {
-        frame: byId.get(frameId),
-        children: childrenOf(frameId),
-        ancestors,
-      };
-    },
-    [flow, toolBox],
-  );
-
-  // Shows the frame tools' changes straight away and holds them until the
-  // server has them, and gives them back as inputs to save.
-  const showBoxChanges = useCallback(
-    (changes: BoxChange[]): WhiteboardNodeInput[] => {
-      if (changes.length === 0) return [];
-      const byId = new Map(changes.map((c) => [c.id, c]));
-      changes.forEach(({ id, ...change }) => markPending(id, change));
-      setNodes((nds) =>
-        nds.map((n) => {
-          const change = byId.get(n.id);
-          if (!change) return n;
-          return {
-            ...n,
-            ...(change.position ? { position: change.position } : {}),
-            ...(change.width !== undefined ? { width: change.width } : {}),
-            ...(change.height !== undefined && !n.data.collapsed
-              ? { height: change.height }
-              : {}),
-          };
-        }),
-      );
-      return changes.map(({ id, ...change }) => ({ _id: id, ...change }));
-    },
-    [markPending, setNodes],
-  );
-
-  // Grows the frames that what has just landed in them overhangs on the
-  // right or bottom, and the frames around those, never shrinking anything.
-  // A frame that's locked, or that would make a locked frame around it grow,
-  // stays as it is. Gives back the inputs to save with the move.
-  const growForLanded = useCallback(
-    (landed: Landed[]): WhiteboardNodeInput[] => {
-      const byFrame = new Map<string, Box[]>();
-      landed.forEach(({ id, parent, position }) => {
-        const node = parent && flow.getNode(id);
-        if (!parent || !node) return;
-        byFrame.set(parent, [
-          ...(byFrame.get(parent) ?? []),
-          { ...frameToolBox(node), ...position },
-        ]);
-      });
-      // Growing only reaches right and down, so where two frames grow the
-      // same frame around them, the bigger size takes both.
-      const grown = new Map<string, BoxChange>();
-      byFrame.forEach((boxes, frameId) => {
-        const { frame, ancestors } = aroundFrame(frameId);
-        if (!frame || frame.data.collapsed) return;
-        const result = growFrameFor(toolBox(frame), boxes, ancestors);
-        if (result.locked.length > 0) return;
-        result.changes.forEach(({ id, width, height }) => {
-          const merged = { ...grown.get(id), id };
-          if (width !== undefined) {
-            merged.width = Math.max(width, merged.width ?? 0);
-          }
-          if (height !== undefined) {
-            merged.height = Math.max(height, merged.height ?? 0);
-          }
-          grown.set(id, merged);
-        });
-      });
-      return showBoxChanges([...grown.values()]);
-    },
-    [flow, toolBox, aroundFrame, showBoxChanges],
-  );
-
-  // Fit to contents: the frame shrinks or grows to just take what's in it,
-  // and the frames around it grow if it would overhang them, with nothing
-  // moving on the board.
-  const fitToContents = useCallback(
-    (frameId: string) => {
-      const { frame, children, ancestors } = aroundFrame(frameId);
-      if (!frame || frame.data.collapsed) return;
-      const result = fitFrame(
-        toolBox(frame),
-        children.map(toolBox),
-        ancestors,
-        MIN_SIZES.frame,
-      );
-      if (result.locked.length > 0) {
-        showLockRefused();
-        return;
-      }
-      updateNodes(showBoxChanges(notDraggedByOthers(result.changes, frameId)));
-    },
-    [
-      aroundFrame,
-      toolBox,
-      notDraggedByOthers,
-      showBoxChanges,
-      showLockRefused,
-      updateNodes,
-    ],
-  );
-
-  // Tidy: lays a frame's cards out as a new board would, metas first, going
-  // round everything else in it, and grows the frame to take them.
-  const tidyCards = useCallback(
-    (frameId: string) => {
-      const { frame, children, ancestors } = aroundFrame(frameId);
-      if (!frame || frame.data.collapsed) return;
-      const puzzles = Puzzles.find(
-        { hunt: huntId },
-        { projection: { tags: 1, createdAt: 1 } },
-      ).fetch();
-      const tags = Tags.find(
-        { hunt: huntId },
-        { projection: { name: 1 } },
-      ).fetch();
-      const metaPuzzles = roundMetas(frame.data.doc.tag, tags, puzzles);
-      const createdAt = new Map(puzzles.map((p) => [p._id, +p.createdAt]));
-      // A card someone else is dragging stays put like everything else
-      const isCard = (n: WhiteboardFlowNode) =>
-        n.type === "puzzle" && !isDraggedByOthers(n.id);
-      const cards = children.filter(isCard);
-      const result = tidyFrame(
-        toolBox(frame),
-        cards.map((n) => ({
-          ...toolBox(n),
-          createdAt:
-            (n.data.doc.puzzle
-              ? createdAt.get(n.data.doc.puzzle)
-              : undefined) ?? Number.MAX_SAFE_INTEGER,
-        })),
-        new Set(
-          cards
-            .filter(
-              (n) => n.data.doc.puzzle && metaPuzzles.has(n.data.doc.puzzle),
-            )
-            .map((n) => n.id),
-        ),
-        children.filter((n) => !isCard(n)).map(toolBox),
-        ancestors,
-      );
-      if (result.locked.length > 0) {
-        showLockRefused();
-        return;
-      }
-      updateNodes(showBoxChanges(notDraggedByOthers(result.changes, frameId)));
-    },
-    [
-      huntId,
-      aroundFrame,
-      toolBox,
-      notDraggedByOthers,
-      showBoxChanges,
-      showLockRefused,
-      updateNodes,
-      isDraggedByOthers,
-    ],
+    [showMoves, growForLanded, updateNodes],
   );
 
   // Saves the nodes nudged with the arrow keys.
   const saveNudges = useCallback(() => {
-    const inputs: WhiteboardNodeInput[] = [];
+    const mover = new Mover(markPending);
     const nudgedIds = new Set(nudged.current);
     const frames = frameRects();
-    const moves: NodeMoves = new Map();
-    const landed: Landed[] = [];
     // A nudge to something someone else is dragging is dropped: it's theirs
     // to save
     const draggedByOthers: string[] = [];
@@ -1613,25 +1303,21 @@ const CanvasInner = ({
       if (rect) {
         const { parent, position } = placementFor(id, rect, nudgedIds, frames);
         if (parent !== node.parentId) {
-          inputs.push({ _id: id, position, parent: parent ?? null });
-          markPending(id, { position, parent: parent ?? null });
-          moves.set(id, { position, parent });
-          landed.push({ id, parent, position });
+          mover.reparent(id, parent, position);
           return;
         }
       }
-      inputs.push({ _id: id, position: node.position });
-      markPending(id, { position: node.position });
       // Something moving with its frame stays where it was in it
-      if (!insideMoved) {
-        landed.push({ id, parent: node.parentId, position: node.position });
+      if (insideMoved) {
+        mover.follow(id, node.position);
+      } else {
+        mover.stay(id, node.parentId, node.position);
       }
     });
     nudged.current.clear();
     companions.current.clear();
     if (draggedByOthers.length > 0) clearPending(draggedByOthers);
-    showMoves(moves);
-    updateNodes(mergeInputs([...inputs, ...growForLanded(landed)]));
+    saveMoves(mover);
   }, [
     flow,
     frameRects,
@@ -1640,9 +1326,7 @@ const CanvasInner = ({
     placementFor,
     markPending,
     clearPending,
-    showMoves,
-    growForLanded,
-    updateNodes,
+    saveMoves,
     isDraggedByOthers,
   ]);
   useEffect(() => {
@@ -1761,9 +1445,7 @@ const CanvasInner = ({
       setAttachPreview(undefined);
       const draggedIds = new Set(dragged.map((n) => n.id));
       const frames = frameRects();
-      const inputs: WhiteboardNodeInput[] = [];
-      const moves: NodeMoves = new Map();
-      const landed: Landed[] = [];
+      const mover = new Mover(markPending);
 
       dragged.forEach((node) => {
         // A line's free end dragged on its own onto something attaches there.
@@ -1782,39 +1464,23 @@ const CanvasInner = ({
           frames,
         );
         if (target === node.parentId) {
-          inputs.push({ _id: node.id, position: node.position });
-          markPending(node.id, { position: node.position });
-          landed.push({
-            id: node.id,
-            parent: node.parentId,
-            position: node.position,
-          });
+          mover.stay(node.id, node.parentId, node.position);
           return;
         }
-        inputs.push({ _id: node.id, position, parent: target ?? null });
-        markPending(node.id, { position, parent: target ?? null });
-        moves.set(node.id, { position, parent: target });
-        landed.push({ id: node.id, parent: target, position });
+        mover.reparent(node.id, target, position);
       });
 
       dragActive.current = false;
       companions.current.forEach((id) => {
         const carried = flow.getNode(id);
         if (!carried || draggedIds.has(id)) return;
-        inputs.push({ _id: id, position: carried.position });
-        markPending(id, { position: carried.position });
-        landed.push({
-          id,
-          parent: carried.parentId,
-          position: carried.position,
-        });
+        mover.stay(id, carried.parentId, carried.position);
       });
       companions.current.clear();
 
-      showMoves(moves);
       // Others drop their copy of the drag only once the saved positions
       // are on their way, so they never see the node jump back.
-      updateNodes(mergeInputs([...inputs, ...growForLanded(landed)]), () => {
+      saveMoves(mover, () => {
         if (!dragActive.current) live.setDrag(null);
       });
       markBusy([...draggedIds], false);
@@ -1829,18 +1495,8 @@ const CanvasInner = ({
       placementFor,
       frameRects,
       markPending,
-      showMoves,
-      growForLanded,
-      updateNodes,
+      saveMoves,
     ],
-  );
-
-  const nodeCenter = useCallback(
-    (id: string) => {
-      const rect = absoluteRect(id);
-      return rect && centerOf(rect);
-    },
-    [absoluteRect],
   );
 
   const endpointPosition = useCallback(
@@ -1972,15 +1628,6 @@ const CanvasInner = ({
     viewportMoves.current?.move(event);
   }, []);
 
-  const paneCenter = useCallback(() => {
-    const rect = wrapperRef.current?.getBoundingClientRect();
-    if (!rect) return { x: 0, y: 0 };
-    return flow.screenToFlowPosition({
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    });
-  }, [flow]);
-
   const {
     placing,
     setPlacing,
@@ -2077,9 +1724,7 @@ const CanvasInner = ({
           ? distributeItems(items, kind)
           : alignItems(items, kind);
 
-      const moved: NodeMoves = new Map();
-      const inputs: WhiteboardNodeInput[] = [];
-      const landed: Landed[] = [];
+      const mover = new Mover(markPending);
       const movingIds = new Set(
         [...units.values()].flatMap((members) => members.map((m) => m.id)),
       );
@@ -2106,29 +1751,19 @@ const CanvasInner = ({
               frames,
             );
           if (placed && placed.parent !== m.parentId) {
-            const { parent } = placed;
-            const position = {
+            mover.reparent(m.id, placed.parent, {
               x: round1(placed.position.x),
               y: round1(placed.position.y),
-            };
-            moved.set(m.id, { position, parent });
-            inputs.push({ _id: m.id, position, parent: parent ?? null });
-            markPending(m.id, { position, parent: parent ?? null });
-            landed.push({ id: m.id, parent, position });
+            });
             return;
           }
-          const position = {
+          mover.shift(m.id, m.parentId, {
             x: round1(m.position.x + shift.dx),
             y: round1(m.position.y + shift.dy),
-          };
-          moved.set(m.id, { position, parent: m.parentId });
-          inputs.push({ _id: m.id, position });
-          markPending(m.id, { position });
-          landed.push({ id: m.id, parent: m.parentId, position });
+          });
         });
       });
-      showMoves(moved);
-      updateNodes(mergeInputs([...inputs, ...growForLanded(landed)]));
+      saveMoves(mover);
     },
     [
       flow,
@@ -2136,9 +1771,7 @@ const CanvasInner = ({
       frameRects,
       placementFor,
       markPending,
-      showMoves,
-      growForLanded,
-      updateNodes,
+      saveMoves,
       isDraggedByOthers,
     ],
   );
@@ -2163,40 +1796,27 @@ const CanvasInner = ({
     commit,
   });
 
-  // Ink: pointer samples become a stroke in flow coordinates. Long strokes
-  // are saved in segments as they're drawn, so other people see them grow.
-  const commitSegment = useCallback(
-    (state: Drawing, points: InkPoint[]) => {
-      const size = STROKE_SIZES[state.strokeWidth];
-      const bounds = inkBounds(points, size);
-      const parentRect = state.parent ? absoluteRect(state.parent) : undefined;
-      updateNodes(
-        [
-          {
-            _id: Random.id(),
-            type: "ink",
-            position: {
-              x: bounds.x - (parentRect?.x ?? 0),
-              y: bounds.y - (parentRect?.y ?? 0),
-            },
-            width: Math.max(1, bounds.width),
-            height: Math.max(1, bounds.height),
-            parent: state.parent ?? null,
-            points: relativeTo(points, bounds),
-            strokeWidth: state.strokeWidth,
-            color: state.color,
-            stroke: state.stroke,
-          },
-        ],
-        undefined,
-        `stroke:${state.stroke}`,
-      );
-      state.committed += 1;
-    },
-    [absoluteRect, updateNodes],
-  );
-
-  const selfId = useTracker(() => Meteor.userId() ?? undefined, []);
+  const {
+    localStroke,
+    startStroke,
+    extendStroke,
+    endStroke,
+    dropStroke,
+    eraseAt,
+    finishErasing,
+  } = useInk({
+    penColor,
+    penWidth,
+    erasingStrokes,
+    setErasingStrokes,
+    absoluteRect,
+    frameAt,
+    flowPoint,
+    updateNodes,
+    deleteNodes,
+    tidyLater,
+    setLiveStroke: live.setStroke,
+  });
 
   // What Lock (Ctrl+L) does to the selection: lock it if any of it is
   // unlocked, otherwise unlock it, which is for whoever locked each node or
@@ -2227,24 +1847,6 @@ const CanvasInner = ({
     }
     updateNodes(ids.map((_id) => ({ _id, locked: lock })));
   }, [lockSelection, updateNodes, showNotice, cantUnlock]);
-  const threads = useWhiteboardComments(puzzleId);
-  const [seenComments, markCommentSeen] = useSeenComments(boardId, threads);
-  // The threads the Comments panel lists, and N steps through, leaving
-  // resolved ones out unless they're being shown, as the pins do.
-  const threadRows = useMemo(
-    () =>
-      threadList(threads.values(), {
-        seen: seenComments,
-        selfId,
-        showResolved,
-      }),
-    [threads, seenComments, selfId, showResolved],
-  );
-  const unreadCount = useMemo(
-    () => threadRows.filter((row) => row.unread).length,
-    [threadRows],
-  );
-
   // What each collapsed frame hides, for its header and far-zoom label.
   const foldedPuzzles = useMemo(() => {
     const docs = new Map(nodeDocs.map((d) => [d._id, d]));
@@ -2332,86 +1934,10 @@ const CanvasInner = ({
     threads,
     collapsedIds,
   ]);
-  // A thread that has gone (deleted, say) counts as closed.
-  const openThreadData = openThread ? threads.get(openThread) : undefined;
-  const openThreadId = openThreadData?.root._id;
-  // The thread N last went to, whose panel takes focus itself rather than
-  // giving it to the composer, so that N goes on to the next one.
-  const [steppedThread, setSteppedThread] = useState<string>();
   // An open thread or a comment being started takes the list's place.
   const commentListShown =
     sidePanel === "comments" && !draft && !openThreadData;
 
-  // A comment goes on the topmost thing under it (anything but ink and line
-  // ends), so it moves with it; otherwise it's pinned to the board.
-  const commentAnchorAt = useCallback(
-    (point: XYPosition): ChatMessageCommentAnchorType => {
-      let best:
-        | {
-            id: string;
-            z: number;
-            order: number;
-            rect: { x: number; y: number };
-          }
-        | undefined;
-      flow.getNodes().forEach((n, order) => {
-        if (n.type === "point" || n.type === "ink" || n.hidden) return;
-        const rect = absoluteRect(n.id);
-        if (!rect || !contains(rect, point)) return;
-        const z = flow.getInternalNode(n.id)?.internals.z ?? 0;
-        if (!best || z > best.z || (z === best.z && order > best.order)) {
-          best = { id: n.id, z, order, rect };
-        }
-      });
-      return best
-        ? {
-            node: best.id,
-            x: round1(point.x - best.rect.x),
-            y: round1(point.y - best.rect.y),
-          }
-        : { x: round1(point.x), y: round1(point.y) };
-    },
-    [flow, absoluteRect],
-  );
-
-  // Brings a pin to the middle of the screen at the given zoom or, on a
-  // phone, to the middle of the part above the comment sheet.
-  const panToPin = useCallback(
-    (at: XYPosition, zoom: number) => {
-      const height = compact ? (wrapperRef.current?.clientHeight ?? 0) : 0;
-      void flow.setCenter(at.x, at.y + (SHEET_OFFSET * height) / zoom, {
-        zoom,
-        duration: 400,
-      });
-    },
-    [flow, compact],
-  );
-
-  const openComment = useCallback(
-    (id: string) => {
-      if (id === "draft") return;
-      setOpenThread(id);
-      setSteppedThread(undefined);
-      setDraft(undefined);
-      closePanel("hidden");
-      if (!compact) return;
-      const anchor = threads.get(id)?.root.comment;
-      const at =
-        anchor &&
-        commentPosition(
-          anchor,
-          anchor.node ? absoluteRect(anchor.node) : undefined,
-        );
-      if (at) panToPin(at, flow.getZoom());
-    },
-    [closePanel, compact, threads, absoluteRect, panToPin, flow],
-  );
-
-  const closeComment = useCallback(() => {
-    setOpenThread(undefined);
-    setSteppedThread(undefined);
-    setDraft(undefined);
-  }, []);
   // Opens a panel in place of any thread, or comment being started.
   const openPanel = useCallback(
     (panel: SidePanelKind) => {
@@ -2428,73 +1954,6 @@ const CanvasInner = ({
     },
     [closeComment],
   );
-
-  // Closing a thread from its panel (Close, or Escape) puts focus back on
-  // its pin, if the pin is still showing. Deleting it puts focus on what it
-  // was on instead, since the pin goes with it.
-  const refocusAfterThread = useRef<string | undefined>(undefined);
-  const dismissComment = useCallback(() => {
-    refocusAfterThread.current =
-      openThreadId &&
-      `.jr-comment-pin[data-thread="${CSS.escape(openThreadId)}"]`;
-    closeComment();
-  }, [openThreadId, closeComment]);
-  const openThreadNode = openThreadData?.root.comment?.node;
-  const closeDeletedComment = useCallback(() => {
-    refocusAfterThread.current =
-      openThreadNode &&
-      `.react-flow__node[data-id="${CSS.escape(openThreadNode)}"]`;
-    closeComment();
-  }, [openThreadNode, closeComment]);
-  useEffect(() => {
-    const selector = refocusAfterThread.current;
-    if (!selector || openThreadId) return;
-    refocusAfterThread.current = undefined;
-    wrapperRef.current
-      ?.querySelector<HTMLElement>(selector)
-      ?.focus({ preventScroll: true });
-  }, [openThreadId]);
-
-  const onDraftSent = useCallback(
-    (sentAt: Date) => {
-      if (draft) sentDraft.current = { anchor: draft, at: +sentAt };
-      setDraft(undefined);
-    },
-    [draft],
-  );
-
-  // Open a comment we've just left as soon as it's saved, unless something
-  // else has been opened since.
-  useEffect(() => {
-    const sent = sentDraft.current;
-    if (!sent) return;
-    if (draft || openThreadId) {
-      sentDraft.current = undefined;
-      return;
-    }
-    const same = (a: number, b: number) => Math.abs(a - b) < 0.5;
-    const match = [...threads.values()].find((t) => {
-      const c = t.root.comment;
-      return (
-        c &&
-        t.root.sender === selfId &&
-        +t.root.timestamp >= sent.at - 60_000 &&
-        c.node === sent.anchor.node &&
-        same(c.x, sent.anchor.x) &&
-        same(c.y, sent.anchor.y)
-      );
-    });
-    if (match) {
-      sentDraft.current = undefined;
-      setOpenThread(match.root._id);
-    }
-  }, [threads, selfId, draft, openThreadId]);
-
-  useEffect(() => {
-    if (openThreadData) {
-      markCommentSeen(openThreadData.root._id, +openThreadData.lastActivity);
-    }
-  }, [openThreadData, markCommentSeen]);
 
   // On a phone the Outline's sheet covers the bottom of the board, so picking
   // a row closes it as the board starts to move.
@@ -2520,27 +1979,6 @@ const CanvasInner = ({
     peekAround,
     closeOutlineSheet,
   });
-
-  // Pans to a comment and opens it, if it's on the board, and says whether
-  // it was.
-  const showComment = useCallback(
-    (threadId: string) => {
-      const anchor = threads.get(threadId)?.root.comment;
-      if (!anchor) return false;
-      const at = commentPosition(
-        anchor,
-        anchor.node ? absoluteRect(anchor.node) : undefined,
-      );
-      if (!at) return false;
-      closePanel("hidden");
-      setDraft(undefined);
-      setOpenThread(threadId);
-      panToPin(at, Math.max(flow.getZoom(), 0.8));
-      pulseComment(threadId);
-      return true;
-    },
-    [threads, absoluteRect, panToPin, flow, closePanel, pulseComment],
-  );
 
   const putBackSearchHit = useCallback(
     (hit: BoardSearchHit) => {
@@ -2574,93 +2012,18 @@ const CanvasInner = ({
     return Meteor.absoluteUrl(`hunts/${huntId}/whiteboard?${query}`);
   }, [flow, paneCenter, huntId]);
 
-  // Once the board's chat has loaded, a thread that isn't in it is gone.
-  const commentsLoaded = useContext(ChatLoadedContext);
-
-  // A comment asked for before the board has its nodes laid out, or before
-  // the thread has reached this client, is shown as soon as both are ready.
-  // One from the page's ?comment= link waits the same way, each time the
-  // link changes.
-  const [pendingFocus, setPendingFocus] = useState(initialComment);
-  const [linkedComment, setLinkedComment] = useState(initialComment);
-  if (initialComment !== linkedComment) {
-    setLinkedComment(initialComment);
-    if (initialComment) setPendingFocus(initialComment);
-  }
-  const readyToShow = useCallback(
-    (threadId: string) => {
-      const anchor = threads.get(threadId)?.root.comment;
-      if (!anchor) return false;
-      if (!anchor.node) return true;
-      if (!boardLoaded) return false;
-      // Once loaded, a comment on something that isn't on the board (gone,
-      // hidden, or a card whose puzzle has gone) is as ready as it will ever
-      // be, and showComment then leaves it. Anything else waits to be laid
-      // out, and inside a collapsed frame for pendingFocus's effect to open
-      // the frame.
-      const doc = WhiteboardNodes.findOne(anchor.node);
-      const onBoard =
-        !!doc &&
-        !doc.hidden &&
-        (doc.type !== "puzzle" ||
-          (!!doc.puzzle && livePuzzleIds.has(doc.puzzle)));
-      return !onBoard || !!flow.getInternalNode(anchor.node);
-    },
-    [threads, boardLoaded, flow, livePuzzleIds],
-  );
-
-  const focusComment = useCallback(
-    (threadId: string) => {
-      if (readyToShow(threadId)) showComment(threadId);
-      else setPendingFocus(threadId);
-    },
-    [readyToShow, showComment],
-  );
-
-  // React Flow takes in new nodes before this component's effects run, so
-  // this is rechecked whenever they change.
-  useEffect(() => {
-    if (!pendingFocus) return;
-    if (commentsLoaded && !threads.has(pendingFocus)) {
-      setPendingFocus(undefined);
-      showNotice(t("whiteboard.link.commentGone", "That comment is gone."));
-      if (pendingFocus === initialComment) onInitialCommentShown?.();
-      return;
-    }
-    // A comment inside a collapsed frame opens the frame for this viewer
-    // first, so it's seen in place.
-    const anchorNode = threads.get(pendingFocus)?.root.comment?.node;
-    if (boardLoaded && anchorNode && peekAround(anchorNode)) return;
-    if (!readyToShow(pendingFocus)) return;
-    setPendingFocus(undefined);
-    if (!showComment(pendingFocus)) {
-      // What the comment was on has been hidden or deleted.
-      showNotice(
-        t("whiteboard.link.nodeGone", "That isn't on the board any more."),
-      );
-    }
-    if (pendingFocus === initialComment) onInitialCommentShown?.();
-  }, [
-    pendingFocus,
-    commentsLoaded,
-    threads,
-    boardLoaded,
-    peekAround,
-    readyToShow,
-    showComment,
-    showNotice,
-    t,
+  const focusComment = useLinkedComment({
     initialComment,
     onInitialCommentShown,
+    focusRef,
+    boardLoaded,
+    livePuzzleIds,
+    threads,
     nodes,
-  ]);
-
-  useEffect(() => {
-    focusRef.current = focusComment;
-    return () => {
-      focusRef.current = undefined;
-    };
-  }, [focusRef, focusComment]);
+    peekAround,
+    showComment,
+    showNotice,
+  });
 
   const setPendingTarget = useLinkedTarget({
     initialTarget,
@@ -2703,123 +2066,6 @@ const CanvasInner = ({
     [peekAround, showNode, showLine, setPendingTarget, setPendingLine],
   );
 
-  const commentPins = useMemo(() => {
-    const pins: CommentPin[] = [];
-    threads.forEach((thread) => {
-      const id = thread.root._id;
-      if (
-        thread.resolved &&
-        !showResolved &&
-        id !== openThreadId &&
-        id !== pulse
-      ) {
-        return;
-      }
-      pins.push({
-        id,
-        anchor: thread.root.comment!,
-        author: thread.root.sender,
-        replies: thread.replyCount,
-        unread: isUnread(thread, seenComments[id], selfId),
-        resolved: thread.resolved,
-      });
-    });
-    if (draft) {
-      pins.push({
-        id: "draft",
-        anchor: draft,
-        replies: 0,
-        unread: false,
-        resolved: false,
-        draft: true,
-      });
-    }
-    return pins;
-  }, [threads, showResolved, openThreadId, pulse, seenComments, selfId, draft]);
-
-  const resolvedCount = useMemo(
-    () => [...threads.values()].filter((t) => t.resolved).length,
-    [threads],
-  );
-
-  const commentTarget = useTracker(
-    () =>
-      describeCommentTarget(
-        draft ? draft.node : openThreadData?.root.comment?.node,
-        t,
-      ),
-    [draft, openThreadData?.root.comment?.node, t],
-  );
-
-  const toggleShowResolved = useCallback(
-    () => setShowResolved((current) => !current),
-    [setShowResolved],
-  );
-
-  const flowPoint = useCallback(
-    (event: React.PointerEvent | PointerEvent) =>
-      flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
-    [flow],
-  );
-
-  // Whether a pointer event happened on the board itself. React passes on
-  // events from dialogs drawn elsewhere on the page (the comment panel's
-  // delete dialog) as though they were inside it.
-  const onBoard = useCallback(
-    (event: React.PointerEvent) =>
-      event.target instanceof globalThis.Node &&
-      !!wrapperRef.current?.contains(event.target),
-    [],
-  );
-
-  // Locked ink isn't erased.
-  const eraseAt = useCallback(
-    (point: XYPosition) => {
-      const hits: string[] = [];
-      const all = flow.getNodes();
-      const locked = new Set(
-        all.flatMap((n) =>
-          n.data.doc.locked && n.data.doc.stroke ? [n.data.doc.stroke] : [],
-        ),
-      );
-      all.forEach((n) => {
-        const stroke = n.data.doc.stroke;
-        if (
-          n.type !== "ink" ||
-          !stroke ||
-          erasingStrokes.has(stroke) ||
-          locked.has(stroke)
-        ) {
-          return;
-        }
-        const rect = absoluteRect(n.id);
-        if (!rect || !contains(rect, point)) return;
-        const size = STROKE_SIZES[n.data.doc.strokeWidth ?? "medium"];
-        const distance = distanceToInk(
-          n.data.doc.points ?? [],
-          point.x - rect.x,
-          point.y - rect.y,
-        );
-        if (distance <= size + 4 / flow.getZoom()) hits.push(stroke);
-      });
-      if (hits.length > 0) {
-        setErasingStrokes((current) => new Set([...current, ...hits]));
-      }
-    },
-    [flow, absoluteRect, erasingStrokes],
-  );
-
-  const finishErasing = useCallback(() => {
-    if (erasingStrokes.size === 0) return;
-    const ids = flow
-      .getNodes()
-      .filter((n) => n.data.doc.stroke && erasingStrokes.has(n.data.doc.stroke))
-      .map((n) => n.id);
-    deleteNodes(ids);
-    // Leave them faded until the server removes them.
-    tidyLater(() => setErasingStrokes(new Set()), 1500);
-  }, [flow, erasingStrokes, deleteNodes, tidyLater]);
-
   // A long press on a node adds it to the selection, leaving the rest
   // selected, so a second long press selects two.
   const selectByLongPress = useCallback(
@@ -2840,18 +2086,8 @@ const CanvasInner = ({
   // finger turns it into a pinch. A stroke long enough to have been saved
   // in part is finished where it got to instead.
   const dropFingerAction = useCallback(() => {
-    longPress.current.cancel();
     tapPress.current = undefined;
-    const state = drawing.current;
-    if (state) {
-      drawing.current = undefined;
-      if (state.committed > 0) {
-        const rest = state.segmenter.finish(true);
-        if (rest) commitSegment(state, rest);
-      }
-      setLocalStroke(undefined);
-      live.setStroke(null);
-    }
+    dropStroke();
     setPlacing(undefined);
     setConnecting(undefined);
     setErasingStrokes(new Set());
@@ -2865,125 +2101,31 @@ const CanvasInner = ({
         userSelectionActive: false,
       });
     }
-  }, [commitSegment, live, storeApi, setPlacing]);
+  }, [dropStroke, storeApi, setPlacing]);
 
-  // Two fingers pan and zoom the board while a tool takes one finger for
-  // itself, which React Flow won't do then: the board point that was
-  // between them stays between them, and the zoom follows how far apart
-  // they are.
-  const startPinch = useCallback(() => {
-    const [first, second] = [...touches.current.entries()];
-    const box = storeApi.getState().domNode?.getBoundingClientRect();
-    if (!first || !second || !box) return;
-    const [firstId, a] = first;
-    const [secondId, b] = second;
-    pinch.current = {
-      ids: [firstId, secondId],
-      viewport: flow.getViewport(),
-      mid: { x: (a.x + b.x) / 2 - box.left, y: (a.y + b.y) / 2 - box.top },
-      distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
-    };
-    spentTouches.current.add(firstId);
-    spentTouches.current.add(secondId);
-    dropFingerAction();
-    try {
-      wrapperRef.current?.setPointerCapture(secondId);
-    } catch {
-      // A finger already lifted can't be captured; its pointerup has gone.
-    }
-  }, [storeApi, flow, dropFingerAction]);
-  const movePinch = useCallback(() => {
-    const current = pinch.current;
-    const box = storeApi.getState().domNode?.getBoundingClientRect();
-    if (!current || !box) return;
-    const a = touches.current.get(current.ids[0]);
-    const b = touches.current.get(current.ids[1]);
-    if (!a || !b) return;
-    const { viewport, mid, distance } = current;
-    const zoom = Math.min(
-      MAX_ZOOM,
-      Math.max(
-        MIN_ZOOM,
-        (viewport.zoom * Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))) /
-          distance,
-      ),
-    );
-    const boardX = (mid.x - viewport.x) / viewport.zoom;
-    const boardY = (mid.y - viewport.y) / viewport.zoom;
-    void flow.setViewport({
-      x: (a.x + b.x) / 2 - box.left - boardX * zoom,
-      y: (a.y + b.y) / 2 - box.top - boardY * zoom,
-      zoom,
-    });
-  }, [storeApi, flow]);
-  // A finger lifted or cancelled, which ends a pinch it was part of. Says
-  // whether it had been part of one, when it has nothing more to do.
-  const liftFinger = useCallback((event: React.PointerEvent) => {
-    if (event.pointerType !== "touch") return false;
-    touches.current.delete(event.pointerId);
-    longPress.current.end(event.pointerId);
-    if (pinch.current?.ids.includes(event.pointerId)) {
-      pinch.current = undefined;
-    }
-    return spentTouches.current.delete(event.pointerId);
-  }, []);
+  const {
+    fingerDown,
+    fingerMove,
+    liftFinger,
+    cancelLongPress,
+    longPressWaiting,
+  } = useTouchGestures({
+    wrapperRef,
+    tool,
+    readOnly,
+    fingerPans,
+    onBoard,
+    dropFingerAction,
+    onLongPress: selectByLongPress,
+  });
 
   const onPointerDownCapture = useCallback(
     (event: React.PointerEvent) => {
       tapped.current = false;
-      if (event.pointerType === "touch") {
-        // A first finger starts afresh, whatever was missed of the last
-        // gesture.
-        if (event.isPrimary) {
-          touches.current.clear();
-          spentTouches.current.clear();
-          pinch.current = undefined;
-        }
-        touches.current.set(event.pointerId, {
-          x: event.clientX,
-          y: event.clientY,
-        });
-        // A second finger means a pinch, not a tap, a long press or a
-        // stroke. React Flow pans and zooms unless the tool has the first
-        // finger, when the canvas does.
-        if (touches.current.size > 1) {
-          longPress.current.cancel();
-          tapPress.current = undefined;
-          if (
-            !fingerPans &&
-            touches.current.size === 2 &&
-            !pinch.current &&
-            onBoard(event)
-          ) {
-            event.preventDefault();
-            event.stopPropagation();
-            startPinch();
-          }
-          return;
-        }
-        if (
-          tool === "select" &&
-          !readOnly &&
-          event.button === 0 &&
-          // An ink stroke's press lands on its SVG path, not an HTMLElement
-          event.target instanceof Element
-        ) {
-          const node = event.target.closest<HTMLElement>(".react-flow__node");
-          const id = node?.dataset.id;
-          if (
-            id &&
-            onBoard(event) &&
-            !event.target.closest(
-              `${OVERLAYS}, .react-flow__handle, .react-flow__resize-control, input, textarea, [contenteditable="true"]`,
-            )
-          ) {
-            longPress.current.start(
-              event.pointerId,
-              { x: event.clientX, y: event.clientY },
-              () => selectByLongPress(id),
-            );
-          }
-        }
+      // A second finger means a pinch, not a tap, a long press or a stroke.
+      if (event.pointerType === "touch" && fingerDown(event)) {
+        tapPress.current = undefined;
+        return;
       }
       // A second pointer of another kind means the press isn't a tap either.
       if (tapPress.current && tapPress.current.pointerId !== event.pointerId) {
@@ -3045,38 +2187,20 @@ const CanvasInner = ({
         return;
       }
 
-      const stroke = Random.id();
-      const state: Drawing = {
-        stroke,
-        color: penColor,
-        strokeWidth: penWidth,
-        segmenter: new InkSegmenter(),
-        committed: 0,
-        parent: frameAt(point, () => false),
-      };
-      drawing.current = state;
-      const pressure =
-        event.pointerType === "pen" && event.pressure > 0
-          ? event.pressure
-          : 0.5;
-      state.segmenter.push([point.x, point.y, pressure]);
-      setLocalStroke(strokeSoFar(state));
+      startStroke(point, event);
     },
     [
       onBoard,
       readOnly,
       tool,
       coarse,
-      fingerPans,
-      startPinch,
-      selectByLongPress,
+      fingerDown,
       flowPoint,
       eraseAt,
-      penColor,
-      penWidth,
-      frameAt,
+      startStroke,
       resolveEndpoint,
       setPlacing,
+      spaceHeld,
     ],
   );
 
@@ -3136,18 +2260,7 @@ const CanvasInner = ({
   const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
       const at = { x: event.clientX, y: event.clientY };
-      if (
-        event.pointerType === "touch" &&
-        touches.current.has(event.pointerId)
-      ) {
-        touches.current.set(event.pointerId, at);
-        if (pinch.current?.ids.includes(event.pointerId)) {
-          movePinch();
-          return;
-        }
-        if (spentTouches.current.has(event.pointerId)) return;
-        longPress.current.move(event.pointerId, at);
-      }
+      if (fingerMove(event, at)) return;
       const press = tapPress.current;
       if (
         press &&
@@ -3195,33 +2308,11 @@ const CanvasInner = ({
         }
         return;
       }
-      const state = drawing.current;
-      if (!state) return;
-      const samples =
-        typeof event.nativeEvent.getCoalescedEvents === "function"
-          ? event.nativeEvent.getCoalescedEvents()
-          : [event.nativeEvent];
-      const size = STROKE_SIZES[state.strokeWidth];
-      (samples.length > 0 ? samples : [event.nativeEvent]).forEach((sample) => {
-        const p = flowPoint(sample);
-        const previous = state.segmenter.points.at(-1);
-        const pressure =
-          sample.pointerType === "pen" && sample.pressure > 0
-            ? sample.pressure
-            : simulatedPressure(previous, p.x, p.y, size);
-        const full = state.segmenter.push([p.x, p.y, pressure]);
-        if (full) commitSegment(state, full);
-      });
-      setLocalStroke(strokeSoFar(state));
-      live.setStroke({
-        color: state.color,
-        strokeWidth: state.strokeWidth,
-        points: state.segmenter.points,
-      });
+      extendStroke(event);
     },
     [
       onBoard,
-      movePinch,
+      fingerMove,
       flowPoint,
       live,
       preview,
@@ -3231,9 +2322,10 @@ const CanvasInner = ({
       targetFor,
       refreshAttachPreview,
       eraseAt,
-      commitSegment,
+      extendStroke,
       setPlacing,
       setHover,
+      spaceHeld,
     ],
   );
 
@@ -3296,11 +2388,8 @@ const CanvasInner = ({
           placeNode(tool, placementRect(tool, press.point, press.point));
           return;
         }
-        setDraft(commentAnchorAt(press.point));
-        setOpenThread(undefined);
-        closePanel("hidden");
+        startDraft(press.point);
         setTool("select");
-        if (compact) panToPin(press.point, flow.getZoom());
         return;
       }
       if (isPlaceTool(tool)) {
@@ -3311,20 +2400,14 @@ const CanvasInner = ({
         }
         return;
       }
-      const state = drawing.current;
-      if (!state) return;
-      drawing.current = undefined;
-      const rest = state.segmenter.finish(state.committed > 0);
-      if (rest) commitSegment(state, rest);
-      setLocalStroke(undefined);
-      live.setStroke(null);
+      endStroke();
     },
     [
       tool,
       placing,
       connecting,
       flow,
-      commentAnchorAt,
+      startDraft,
       moveLineEnd,
       createLine,
       endpointPosition,
@@ -3333,11 +2416,7 @@ const CanvasInner = ({
       placeNode,
       placementRect,
       flowPoint,
-      commitSegment,
-      live,
-      closePanel,
-      compact,
-      panToPin,
+      endStroke,
       liftFinger,
       catchKeyboard,
       setPlacing,
@@ -3369,9 +2448,12 @@ const CanvasInner = ({
 
   // A long press on a phone or tablet calls up the browser's own menu, which
   // shouldn't come with the selection it makes.
-  const onContextMenu = useCallback((event: React.MouseEvent) => {
-    if (longPress.current.waiting || tapped.current) event.preventDefault();
-  }, []);
+  const onContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      if (longPressWaiting() || tapped.current) event.preventDefault();
+    },
+    [longPressWaiting],
+  );
 
   // The browser follows a tap with mouse events and a click, which would
   // take focus from the composer of the comment the tap just placed, or
@@ -3609,23 +2691,30 @@ const CanvasInner = ({
     setHover(undefined);
     setAttachPreview(undefined);
     tapPress.current = undefined;
-    longPress.current.cancel();
+    cancelLongPress();
     setConnecting(undefined);
     setErasingStrokes(new Set());
     cancelClickConnect();
-  }, [tool, clearSelection, cancelClickConnect, setPlacing, setHover]);
+  }, [
+    tool,
+    clearSelection,
+    cancelClickConnect,
+    cancelLongPress,
+    setPlacing,
+    setHover,
+  ]);
 
   // What Escape does once nothing is open: drops a comment being started, a
   // line being drawn or joined, or an erase, turns off Select area and goes
   // back to Select. A touch screen has a Cancel button for it.
   const cancelTool = useCallback(() => {
-    setDraft(undefined);
+    clearDraft();
     setSelectArea(false);
     setConnecting(undefined);
     setErasingStrokes(new Set());
     cancelClickConnect();
     setTool("select");
-  }, [cancelClickConnect]);
+  }, [clearDraft, cancelClickConnect]);
 
   const canvasActive = useBoardFocus(wrapperRef);
 
@@ -3698,199 +2787,40 @@ const CanvasInner = ({
       : selectedNotEnds.map((n) => n.id),
   );
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (inDialog(event.target)) return;
-      if (event.code === "Space") spaceHeld.current = true;
-      // / or Ctrl+F searches the board while it has focus. Elsewhere, and
-      // from the search field itself, Ctrl+F is the browser's find.
-      const modified = event.ctrlKey || event.metaKey;
-      // Ctrl+key (Cmd+key on a Mac) with no other modifier, while the board
-      // can be edited and has focus and nothing is being typed.
-      const chord = (key: string) =>
-        modified &&
-        !event.shiftKey &&
-        !event.altKey &&
-        event.key.toLowerCase() === key &&
-        !readOnly &&
-        canvasActive.current &&
-        !isTyping(event.target);
-      const wantsSearch =
-        (event.key === "/" &&
-          !modified &&
-          !event.altKey &&
-          !isTyping(event.target)) ||
-        (modified &&
-          !event.shiftKey &&
-          !event.altKey &&
-          event.key.toLowerCase() === "f" &&
-          event.target !== searchRef.current);
-      if (wantsSearch && canvasActive.current && searchRef.current) {
-        event.preventDefault();
-        searchRef.current.focus();
-        searchRef.current.select();
-        return;
-      }
-      // Escape closes an open thread first, then the Comments list, then
-      // leaves a preview, then closes History or the Outline (which also
-      // closes itself on Escape from inside it); then it drops a comment being
-      // started, a line being drawn or joined, or an erase, and goes back to
-      // Select. The thread's panel closes itself on Escape from inside it,
-      // and the restore confirmation does the same. An open Feeders popover
-      // takes Escape before any of this (FeedersButton).
-      if (event.key === "Escape" && !isTyping(event.target)) {
-        if (confirmingRestore) return;
-        if (openThreadId) {
-          dismissComment();
-          return;
-        }
-        if (commentListShown) {
-          setSidePanel(undefined);
-          return;
-        }
-        if (preview || previewLoading) {
-          backToNow();
-          return;
-        }
-        if (sidePanel === "history" || sidePanel === "outline") {
-          setSidePanel(undefined);
-          return;
-        }
-        cancelTool();
-        return;
-      }
-      // A tool's key picks it, and 1 to 4 set the pen's width, while the
-      // board has focus and nothing is being typed.
-      if (
-        !modified &&
-        !event.altKey &&
-        canvasActive.current &&
-        !isTyping(event.target)
-      ) {
-        const key = event.key.toLowerCase();
-        const keyTool = TOOLS_BY_KEY.get(key);
-        if (keyTool && (keyTool === "comment" ? canComment : !readOnly)) {
-          event.preventDefault();
-          pickTool(keyTool);
-          return;
-        }
-        const width = PEN_WIDTH_KEYS.get(key);
-        if (width && !readOnly) {
-          event.preventDefault();
-          setPenWidth(width);
-          return;
-        }
-        // N goes to the next thread with something unread, for anyone who
-        // can see the board.
-        if (key === "n") {
-          const next = nextUnread(threadRows, openThreadId);
-          if (next) {
-            event.preventDefault();
-            setSteppedThread(next);
-            focusComment(next);
-          }
-          return;
-        }
-      }
-      // Ctrl+L (Cmd+L) locks or unlocks the selection. With nothing
-      // selected it's left to the browser.
-      if (chord("l") && tool === "select" && lockSelection.ids.length > 0) {
-        event.preventDefault();
-        toggleLock();
-        return;
-      }
-      // Ctrl+D (Cmd+D) duplicates the selection. With nothing selected or
-      // another tool it's left to the browser.
-      if (
-        chord("d") &&
-        tool === "select" &&
-        (flow.getNodes().some((n) => n.selected) ||
-          flow.getEdges().some((e) => e.selected))
-      ) {
-        event.preventDefault();
-        duplicateSelection();
-        return;
-      }
-      if (chord("a")) {
-        event.preventDefault();
-        setTool("select");
-        selectAll();
-        return;
-      }
-      // Enter on a focused sticky or text box starts editing it, as a
-      // double-click does. Held back from the note's new editor, where it
-      // would start a new line.
-      const note = event.target;
-      if (
-        event.key === "Enter" &&
-        !readOnly &&
-        tool === "select" &&
-        note instanceof HTMLElement &&
-        note.matches(".react-flow__node-sticky, .react-flow__node-text") &&
-        wrapperRef.current?.contains(note) &&
-        note.dataset.id &&
-        !flow.getNode(note.dataset.id)?.data.doc.locked
-      ) {
-        event.preventDefault();
-        setEditOnAppear(note.dataset.id);
-        return;
-      }
-      // Ctrl+Z (Cmd+Z) undoes the viewer's own last edit, and Ctrl+Shift+Z
-      // (Cmd+Shift+Z) or Ctrl+Y redoes it, while the board has focus and
-      // nothing is being typed. Text being typed has the browser's own.
-      if (
-        !readOnly &&
-        modified &&
-        !event.altKey &&
-        canvasActive.current &&
-        !isTyping(event.target)
-      ) {
-        const key = event.key.toLowerCase();
-        if (key === "z" || (key === "y" && event.ctrlKey && !event.shiftKey)) {
-          event.preventDefault();
-          if (key === "z" && !event.shiftKey) {
-            undo();
-          } else {
-            redo();
-          }
-        }
-      }
-    };
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (event.code === "Space") spaceHeld.current = false;
-    };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-    };
-  }, [
-    readOnly,
-    canComment,
-    tool,
-    undo,
-    redo,
-    openThreadId,
-    commentListShown,
-    confirmingRestore,
-    preview,
-    previewLoading,
-    backToNow,
-    sidePanel,
-    dismissComment,
-    cancelTool,
-    selectAll,
-    setPenWidth,
-    threadRows,
-    focusComment,
-    flow,
-    lockSelection,
-    toggleLock,
-    duplicateSelection,
-    pickTool,
+  useBoardKeys({
+    wrapperRef,
+    searchRef,
     canvasActive,
-  ]);
+    spaceHeld,
+    handlers: {
+      readOnly,
+      canComment,
+      tool,
+      confirmingRestore,
+      openThreadId,
+      commentListShown,
+      preview: !!preview,
+      previewLoading: !!previewLoading,
+      sidePanel,
+      threadRows,
+      lockSelection,
+      setSidePanel,
+      dismissComment,
+      backToNow,
+      cancelTool,
+      pickTool,
+      setPenWidth,
+      setSteppedThread,
+      focusComment,
+      toggleLock,
+      duplicateSelection,
+      setTool,
+      selectAll,
+      setEditOnAppear,
+      undo,
+      redo,
+    },
+  });
 
   // Double-clicking a card opens its puzzle, on any board, as long as nothing
   // sits over it there. Caught before React Flow's double-click zoom.
@@ -3964,88 +2894,6 @@ const CanvasInner = ({
     outlineButtonRef.current?.focus();
   }, [closePanel]);
 
-  const showVersion = useCallback(
-    (version: WhiteboardVersionType) => {
-      previewRequest.current += 1;
-      const request = previewRequest.current;
-      const failed = (reason: string) =>
-        showNotice(
-          t(
-            "whiteboard.history.loadFailed",
-            "Couldn't load that version: {{reason}}",
-            { reason, ...NO_ESCAPE },
-          ),
-        );
-      // Versions are gzipped, and only newer browsers can unpack that
-      if (typeof DecompressionStream === "undefined") {
-        setPreviewLoading(undefined);
-        failed(
-          t(
-            "whiteboard.history.browserTooOld",
-            "this browser can't open saved versions",
-          ),
-        );
-        return;
-      }
-      setPreviewLoading(version._id);
-      closeComment();
-      void loadVersion(boardId, version).then(
-        (loaded) => {
-          if (previewRequest.current !== request) return;
-          setPreviewLoading(undefined);
-          setPreview(loaded);
-        },
-        (error: unknown) => {
-          if (previewRequest.current !== request) return;
-          setPreviewLoading(undefined);
-          if (error instanceof Meteor.Error) {
-            failed(error.reason ?? error.message);
-            return;
-          }
-          // oxlint-disable-next-line no-console
-          console.error("Couldn't load a whiteboard version", error);
-          failed(t("whiteboard.history.unreadable", "it couldn't be read"));
-        },
-      );
-    },
-    [boardId, closeComment, showNotice, t],
-  );
-  const [restoring, setRestoring] = useState(false);
-  const [restoreError, setRestoreError] = useState<string>();
-  const askRestore = useCallback(() => {
-    setRestoreError(undefined);
-    setConfirmingRestore(true);
-  }, []);
-  const cancelRestore = useCallback(() => {
-    if (!restoring) setConfirmingRestore(false);
-  }, [restoring]);
-  const previewTime = preview
-    ? versionMoment(preview.version.createdAt, t, i18n.language)
-    : "";
-  const restore = useCallback(() => {
-    if (!preview) return;
-    const versionId = preview.version._id;
-    setRestoreError(undefined);
-    setRestoring(true);
-    restoreWhiteboardVersion.call({ boardId, versionId }, (error) => {
-      setRestoring(false);
-      if (error) {
-        setRestoreError(error.reason ?? error.message);
-        return;
-      }
-      setConfirmingRestore(false);
-      setPreview((current) =>
-        current?.version._id === versionId ? undefined : current,
-      );
-      showNotice(
-        t("whiteboard.history.restored", "Board restored to {{time}}.", {
-          time: previewTime,
-        }),
-        "success",
-      );
-    });
-  }, [preview, boardId, showNotice, t, previewTime]);
-
   // Nodes keep their selection by id when the board is redrawn, so opening,
   // switching or leaving a preview starts with nothing selected. Otherwise a
   // pick in a preview would stay selected on the live board, where a viewer
@@ -4056,35 +2904,6 @@ const CanvasInner = ({
     clearSelection();
   }, [previewVersionId, clearSelection]);
 
-  // In a preview, the board as it is now, so what the version has
-  // differently can be marked. Nodes and lines are matched by what they are,
-  // as a restore matches them. A lock is only marked for an operator, since
-  // only their Restore this version changes locks.
-  const liveBoard = useTracker(
-    () =>
-      preview
-        ? {
-            nodes: WhiteboardNodes.find({ board: boardId }).fetch(),
-            edges: WhiteboardEdges.find({ board: boardId }).fetch(),
-          }
-        : undefined,
-    [preview, boardId],
-  );
-  // Restoring a version replaces the board's ink with the version's, which a
-  // viewer hiding ink can't see in the preview, so the banner says so.
-  const inkHiddenInPreview =
-    hideInk &&
-    !!preview &&
-    [...preview.nodes, ...(liveBoard?.nodes ?? [])].some(
-      (n) => n.type === "ink",
-    );
-  const changed = useMemo(
-    () =>
-      shownPreview && liveBoard
-        ? versionDifferences(liveBoard, shownPreview, { locks: isOperator })
-        : NO_CHANGES,
-    [shownPreview, liveBoard, isOperator],
-  );
   const shownNodes = useMemo(() => {
     if (capturing) {
       return nodes.map((n) => (n.selected ? { ...n, selected: false } : n));
@@ -4125,49 +2944,6 @@ const CanvasInner = ({
         !items || items.nodes.size > MAX_BATCH || items.edges.size > MAX_BATCH,
     };
   }, [preview, nodes]);
-  const [restoringItem, setRestoringItem] = useState(false);
-  const restoreItem = useCallback(() => {
-    if (!preview || !previewPick) return;
-    setRestoringItem(true);
-    restoreWhiteboardItems.call(
-      {
-        boardId,
-        versionId: preview.version._id,
-        nodeIds: previewPick.ids,
-      },
-      (error, result) => {
-        setRestoringItem(false);
-        if (error) {
-          reportRefusal(error);
-          return;
-        }
-        const restored = result?.restored;
-        showNotice(
-          restored
-            ? t(
-                "whiteboard.history.restoredItem",
-                "Put back as it was at {{time}}.",
-                { time: previewTime },
-              )
-            : t(
-                "whiteboard.history.itemUnchanged",
-                "That's already as it was at {{time}}.",
-                { time: previewTime },
-              ),
-          restored ? "success" : "warning",
-        );
-      },
-    );
-  }, [
-    preview,
-    previewPick,
-    boardId,
-    reportRefusal,
-    showNotice,
-    t,
-    previewTime,
-  ]);
-
   // Reset layout records the board first so History can undo it, so it's
   // only offered while history is on.
   const historyOn = useTracker(
@@ -4247,11 +3023,6 @@ const CanvasInner = ({
     connecting && !connecting.edgeId && "node" in connecting.fixed
       ? connecting.fixed.node
       : undefined;
-  // Being offline gets a banner of its own rather than a reason.
-  const offlineText = t(
-    "whiteboard.offline",
-    "Offline: the board is view-only until you reconnect",
-  );
   const accessReasons: Record<
     Exclude<WhiteboardAccessReason, "offline">,
     string
@@ -4496,27 +3267,6 @@ const CanvasInner = ({
     >
       <FontAwesomeIcon icon={faClockRotateLeft} />
     </Button>
-  );
-  const restoreBlocked =
-    access === "edit"
-      ? undefined
-      : accessReason === "archived"
-        ? t("whiteboard.history.archived", "This hunt is archived.")
-        : accessReason === "offline"
-          ? offlineText
-          : t(
-              "whiteboard.history.cantEdit",
-              "Only people who can edit the board can restore it.",
-            );
-  // A frame with too much in it can't be put back in one go.
-  const restoreItemBlocked =
-    restoreBlocked ??
-    (previewPick?.tooBig
-      ? t("whiteboard.history.tooBig", "That's too much to restore at once.")
-      : undefined);
-  const restoreLabel = t(
-    "whiteboard.history.restoreButton",
-    "Restore this version",
   );
   let lockTitle: string;
   if (lockSelection.blocked) {
@@ -5388,38 +4138,6 @@ const CanvasInner = ({
                           </ToolBox>
                         </NodeToolbar>
                       )}
-                    {preview && !compact && previewPick && (
-                      <NodeToolbar
-                        nodeId={previewPick.ids[0]}
-                        isVisible
-                        position={Position.Top}
-                      >
-                        <PreviewItemBox>
-                          <Button
-                            size="sm"
-                            variant="primary"
-                            disabled={!!restoreItemBlocked || restoringItem}
-                            onClick={restoreItem}
-                          >
-                            {previewPick.frame
-                              ? t(
-                                  "whiteboard.history.restoreFrame",
-                                  "Restore this frame and everything in it as it was at {{time}}",
-                                  { time: previewTime },
-                                )
-                              : t(
-                                  "whiteboard.history.restoreItem",
-                                  "Restore this item",
-                                )}
-                          </Button>
-                          {restoreItemBlocked && (
-                            <ReadOnlyReason>
-                              {restoreItemBlocked}
-                            </ReadOnlyReason>
-                          )}
-                        </PreviewItemBox>
-                      </NodeToolbar>
-                    )}
                     {!readOnly &&
                       tool === "select" &&
                       selectedLines.length > 0 && (
@@ -5441,43 +4159,17 @@ const CanvasInner = ({
                         />
                       )}
                     {preview && !compact && (
-                      <Panel position="top-center">
-                        <PreviewBanner>
-                          <span>
-                            {t(
-                              "whiteboard.history.previewBanner",
-                              "Viewing the board as it was at {{time}}.",
-                              { time: previewTime },
-                            )}
-                          </span>
-                          <Button
-                            size="sm"
-                            variant="primary"
-                            disabled={!!restoreBlocked || restoring}
-                            onClick={askRestore}
-                          >
-                            {restoreLabel}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline-secondary"
-                            onClick={backToNow}
-                          >
-                            {t("whiteboard.history.backToNow", "Back to now")}
-                          </Button>
-                          {restoreBlocked && (
-                            <ReadOnlyReason>{restoreBlocked}</ReadOnlyReason>
-                          )}
-                          {inkHiddenInPreview && (
-                            <ReadOnlyReason>
-                              {t(
-                                "whiteboard.history.inkHidden",
-                                "Ink is hidden, so it isn't shown here. Restoring this version still puts its drawing back as it was.",
-                              )}
-                            </ReadOnlyReason>
-                          )}
-                        </PreviewBanner>
-                      </Panel>
+                      <PreviewChrome
+                        previewTime={previewTime}
+                        restoreBlocked={restoreBlocked}
+                        inkHidden={inkHiddenInPreview}
+                        restoring={restoring}
+                        onRestore={askRestore}
+                        onBackToNow={backToNow}
+                        pick={previewPick}
+                        restoringItem={restoringItem}
+                        onRestoreItem={restoreItem}
+                      />
                     )}
                     {sidePanel === "history" &&
                       !compact &&
@@ -5586,56 +4278,14 @@ const CanvasInner = ({
                     onHide={closeEditPolicy}
                   />
                 )}
-                <Modal
+                <RestoreVersionModal
                   show={confirmingRestore}
-                  onHide={cancelRestore}
-                  backdrop={restoring ? "static" : true}
-                  keyboard={!restoring}
-                >
-                  <Modal.Header closeButton={!restoring}>
-                    <Modal.Title>
-                      {t(
-                        "whiteboard.history.confirmTitle",
-                        "Restore the board to {{time}}?",
-                        { time: previewTime },
-                      )}
-                    </Modal.Title>
-                  </Modal.Header>
-                  <Modal.Body>
-                    {t(
-                      "whiteboard.history.confirmBody",
-                      "Changes since then, by anyone, are undone. Comments are kept. The board as it is now is saved in history, so you can come back to it.",
-                    )}
-                    {restoreError && (
-                      <Alert variant="danger" className="mt-3 mb-0">
-                        {t(
-                          "whiteboard.history.restoreFailed",
-                          "Couldn't restore the board: {{reason}}",
-                          { reason: restoreError, ...NO_ESCAPE },
-                        )}
-                      </Alert>
-                    )}
-                  </Modal.Body>
-                  <Modal.Footer>
-                    <Button
-                      variant="secondary"
-                      onClick={cancelRestore}
-                      disabled={restoring}
-                    >
-                      {t("common.cancel", "Cancel")}
-                    </Button>
-                    <Button
-                      variant="primary"
-                      onClick={restore}
-                      disabled={restoring}
-                      aria-busy={restoring}
-                    >
-                      {restoring
-                        ? t("whiteboard.history.restoring", "Restoring…")
-                        : restoreLabel}
-                    </Button>
-                  </Modal.Footer>
-                </Modal>
+                  previewTime={previewTime}
+                  restoring={restoring}
+                  error={restoreError}
+                  onCancel={cancelRestore}
+                  onRestore={restore}
+                />
               </CollapseContext>
             </RoundStateContext>
           </FeederFocusContext>

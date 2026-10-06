@@ -33,12 +33,19 @@ export const isTyping = (target: EventTarget | null) =>
 // A dialog over the page (deleting a comment, who can edit) has its own keys.
 export const inDialog = (target: EventTarget | null) =>
   target instanceof Element && !!target.closest(".modal");
+// The parts of the canvas that sit over the board, where presses are the
+// controls' own rather than a tool's.
+export const OVERLAYS =
+  ".react-flow__panel, .react-flow__controls, .react-flow__minimap, .react-flow__node-toolbar, .jr-comment-pin, .jr-whos-here";
 // Whether something is on the board itself, rather than a panel over it.
 export const onTheBoard = (target: EventTarget | null) =>
   target instanceof Element && !!target.closest(".react-flow__renderer");
 
 // Marks what a preview has differently from the board as it is now.
 export const CHANGED_CLASS = "jr-changed";
+
+// How long a pin or node pulses after the board pans to it.
+export const PULSE_MS = 2200;
 
 // An invisible target for a finger, `size` across, centred on the handle,
 // resize corner or grip it's the ::after of.
@@ -226,6 +233,11 @@ export const ToolBox = styled.div`
   border: 1px solid ${({ theme }) => theme.colors.border};
   box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
 `;
+
+// The panel at the top right, under any open thread: what isn't on the
+// board, the list of comments, History or the Outline. Only one shows at a
+// time.
+export type SidePanelKind = "hidden" | "comments" | "history" | "outline";
 
 export const SidePanel = styled.div`
   width: 260px;
