@@ -561,6 +561,52 @@ if (Meteor.isClient) {
     ...finger(at, pointerId),
     buttons: 0,
   });
+  // Waits `ms` for anything further to happen, such as a glide, or a save
+  // that shouldn't.
+  const settleFor = (ms: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  // The middle of `element` on screen.
+  const middleOf = (element: Element) => {
+    const box = element.getBoundingClientRect();
+    return {
+      clientX: box.left + box.width / 2,
+      clientY: box.top + box.height / 2,
+    };
+  };
+  // A finger held on `element` until it's a long press, then let go, with
+  // the click the browser makes unless `click` is off.
+  const pressAndHold = async (
+    element: Element,
+    { click: clicks = true }: { click?: boolean } = {},
+  ) => {
+    const at = middleOf(element);
+    await act(async () => {
+      fireEvent.pointerDown(element, finger(at));
+      await settleFor(LONG_PRESS_MS + 100);
+      await stabilize();
+    });
+    await act(async () => {
+      fireEvent.pointerUp(element, lift(at));
+      if (clicks) fireEvent.click(element, { button: 0, ...at });
+      await stabilize();
+    });
+  };
+  // A finger's tap on `target` at `at`, with the click the browser makes
+  // after unless `click` is off.
+  const tap = async (
+    target: Element,
+    at: { clientX: number; clientY: number } = middleOf(target),
+    { click: clicks = true }: { click?: boolean } = {},
+  ) => {
+    await act(async () => {
+      fireEvent.pointerDown(target, finger(at));
+      fireEvent.pointerUp(target, lift(at));
+      if (clicks) fireEvent.click(target, { button: 0, ...at });
+      await stabilize();
+    });
+  };
 
   // Types into a Slate editor, which takes text from beforeinput at the
   // selection focusing it set.
@@ -635,6 +681,66 @@ if (Meteor.isClient) {
     screen.getByRole("button", { name }).getAttribute("aria-pressed");
   const panelText = () =>
     document.querySelector(".react-flow__panel.top.right")?.textContent ?? "";
+  // The buttons of the open History or Comments panel, those `selector`
+  // picks out.
+  const panelButtons = (selector = "button") => [
+    ...document.querySelectorAll<HTMLElement>(
+      `.react-flow__panel.top.right ${selector}`,
+    ),
+  ];
+  // The Comments panel's row for thread `id`, if it's listed.
+  const threadRow = (id: string) =>
+    document.querySelector<HTMLElement>(
+      `.react-flow__panel.top.right button[data-thread="${id}"]`,
+    );
+  // The History panel's row whose text `matches`, once it's listed.
+  const historyRow = (matches: (text: string) => boolean) =>
+    waitFor(
+      () => {
+        const found = panelButtons().find((b) => matches(b.textContent ?? ""));
+        assert.exists(found);
+        return found;
+      },
+      { timeout: 10000 },
+    );
+  // Opens History and picks the row whose text `matches`.
+  const openHistoryRow = async (matches: (text: string) => boolean) => {
+    await click(screen.getByRole("button", { name: "History" }));
+    const row = await historyRow(matches);
+    await click(row);
+    return row;
+  };
+  // What a confirming modal shows, and the same once it's up.
+  const modalContent = () =>
+    document.querySelector<HTMLElement>(".modal.show .modal-content");
+  const modalShown = () =>
+    waitFor(() => {
+      const found = modalContent();
+      assert.exists(found);
+      return found;
+    });
+  // The comment thread's dialog, once it's open showing `text`.
+  const threadOpen = (text: string, options?: { timeout: number }) =>
+    waitFor(() => {
+      const found = document.querySelector<HTMLElement>("dialog[open]");
+      assert.ok(found);
+      assert.include(found.textContent ?? "", text);
+      return found;
+    }, options);
+  // Types `text` into the board's search box.
+  const searchFor = async (text: string) => {
+    const search = await screen.findByRole(
+      "combobox",
+      { name: "Search the board" },
+      { timeout: 20000 },
+    );
+    await act(async () => {
+      fireEvent.focus(search);
+      fireEvent.change(search, { target: { value: text } });
+      await stabilize();
+    });
+    return search;
+  };
 
   const nodeShown = (id: string) =>
     waitFor(
@@ -656,6 +762,47 @@ if (Meteor.isClient) {
       fireEvent.click(await nodeShown(id));
       await stabilize();
     });
+  };
+  // Adds `ids` to the selection: React Flow adds to it while Control is
+  // held.
+  const selectAlso = async (...ids: string[]) => {
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Control", code: "ControlLeft" });
+      await stabilize();
+    });
+    for (const id of ids) {
+      await select(id);
+    }
+    await act(async () => {
+      fireEvent.keyUp(document, { key: "Control", code: "ControlLeft" });
+      await stabilize();
+    });
+  };
+  // Opens `node`'s text, reading `from`, with a double click, then replaces
+  // it with `to` and leaves the editor.
+  const editText = async (node: HTMLElement, from: string, to: string) => {
+    await act(async () => {
+      fireEvent.doubleClick(within(node).getByText(from));
+      await stabilize();
+    });
+    const editor = within(node).getByRole("textbox");
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: to } });
+      fireEvent.blur(editor);
+      await stabilize();
+    });
+  };
+  // The swatch named `name` in the colour picker's toolbar (not
+  // Duplicate's), once it shows.
+  const colourSwatch = async (name: string) => {
+    const toolbar = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(
+        `.react-flow__node-toolbar:has([aria-label="${name}"])`,
+      );
+      assert.exists(found);
+      return found;
+    });
+    return within(toolbar).getByRole("button", { name });
   };
   const savedNode = (id: string) => WhiteboardNodes.findOneAsync(id);
   const removeNodes = (nodeIds: string[]) =>
@@ -691,6 +838,15 @@ if (Meteor.isClient) {
       errors,
       stop: () => window.removeEventListener("error", onError),
     };
+  };
+  // Gives React Flow long enough to measure what's changed, then checks
+  // its ResizeObserver didn't report a loop to `page`.
+  const expectNoResizeLoop = async (page: { errors: string[] }) => {
+    await settleFor(500);
+    assert.deepEqual(
+      page.errors.filter((e) => e.includes("ResizeObserver")),
+      [],
+    );
   };
 
   // What openBoard waits for once the page is up. The editing tests wait
@@ -825,6 +981,34 @@ if (Meteor.isClient) {
   const putNodes = async (nodes: WhiteboardNodeInput[]) => {
     await upsertWhiteboardNodes.callPromise({ boardId, nodes });
     return nodes.map((n) => n._id);
+  };
+  // A stroke of two ink segments side by side from `base`, on the board.
+  const twoSegmentStroke = async (base: Point) => {
+    const stroke = Random.id();
+    const segments = [Random.id(), Random.id()];
+    await putNodes(
+      segments.map((_id, i) =>
+        inkNode(
+          { x: base.x + i * 200, y: base.y },
+          { width: 200, height: 20 },
+          sampledStroke(),
+          { _id, stroke },
+        ),
+      ),
+    );
+    return { stroke, segments };
+  };
+  // A stroke of one ink segment at `base`, on the board.
+  const oneSegmentStroke = async (base: Point) => {
+    const stroke = Random.id();
+    const segment = Random.id();
+    await putNodes([
+      inkNode(base, { width: 200, height: 20 }, sampledStroke(), {
+        _id: segment,
+        stroke,
+      }),
+    ]);
+    return { stroke, segment };
   };
   // A sticky note on the board, by id.
   const addSticky = async (
@@ -1283,20 +1467,6 @@ if (Meteor.isClient) {
           ],
         });
 
-      const searchFor = async (text: string) => {
-        const search = await screen.findByRole(
-          "combobox",
-          { name: "Search the board" },
-          { timeout: 20000 },
-        );
-        await act(async () => {
-          fireEvent.focus(search);
-          fireEvent.change(search, { target: { value: text } });
-          await stabilize();
-        });
-        return search;
-      };
-
       beforeEach(function () {
         // Opens well away from the card
         localStorage.setItem(
@@ -1309,16 +1479,7 @@ if (Meteor.isClient) {
         this.timeout(30000);
         render(<TestApp />);
         await goTo(boardPath);
-        const search = await screen.findByRole(
-          "combobox",
-          { name: "Search the board" },
-          { timeout: 20000 },
-        );
-        await act(async () => {
-          fireEvent.focus(search);
-          fireEvent.change(search, { target: { value: "temperance" } });
-          await stabilize();
-        });
+        await searchFor("temperance");
         const option = await screen.findByRole("option", {
           name: /^Temperance/,
         });
@@ -2891,22 +3052,7 @@ if (Meteor.isClient) {
                 ?.parentElement?.querySelector('input[aria-hidden="true"]') ??
                 null,
             );
-            const box = card.getBoundingClientRect();
-            const at = {
-              clientX: box.left + box.width / 2,
-              clientY: box.top + box.height / 2,
-            };
-            await act(async () => {
-              fireEvent.pointerDown(card, finger(at));
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, LONG_PRESS_MS + 100);
-              });
-              await stabilize();
-            });
-            await act(async () => {
-              fireEvent.pointerUp(card, lift(at));
-              await stabilize();
-            });
+            await pressAndHold(card, { click: false });
             assert.isNull(document.querySelector(".react-flow__node.selected"));
           } finally {
             coarse.restore();
@@ -2937,7 +3083,6 @@ if (Meteor.isClient) {
         it("does nothing with a viewer's copy, paste or duplicate", async function () {
           this.timeout(30000);
           await openBoard({ until: viewingOnly });
-          await cardsShown();
           await pressBoard();
           const saves = sinon.spy(upsertWhiteboardNodes, "call");
           try {
@@ -2991,20 +3136,7 @@ if (Meteor.isClient) {
           );
           try {
             await openBoard({ until: viewingOnly });
-            await click(screen.getByRole("button", { name: "History" }));
-            const row = await waitFor(
-              () => {
-                const found = [
-                  ...document.querySelectorAll<HTMLElement>(
-                    ".react-flow__panel.top.right button",
-                  ),
-                ].find((b) => b.textContent?.startsWith("Before edits by"));
-                assert.exists(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
-            await click(row);
+            await openHistoryRow((text) => text.startsWith("Before edits by"));
             const shown = await waitFor(
               () => {
                 const found = nodeElement(note);
@@ -3454,18 +3586,10 @@ if (Meteor.isClient) {
             document.querySelector<HTMLElement>(
               `.jr-comment-pin[data-thread="${threadId}"]`,
             );
-          const panel = await waitFor(
-            () => {
-              const found = document.querySelector("dialog[open]");
-              assert.ok(found);
-              assert.include(found.textContent ?? "", "Keyboard thread");
-              assert.equal(
-                found.getAttribute("aria-label"),
-                "Comment on the board",
-              );
-              return found;
-            },
-            { timeout: 20000 },
+          const panel = await threadOpen("Keyboard thread", { timeout: 20000 });
+          assert.equal(
+            panel.getAttribute("aria-label"),
+            "Comment on the board",
           );
           const editor = panel.querySelector("[data-slate-editor]")!;
           await waitFor(() =>
@@ -3481,15 +3605,7 @@ if (Meteor.isClient) {
         it("keeps a thread open on Escape while its composer has text", async function () {
           this.timeout(30000);
           await openAtComment(4321);
-          const panel = await waitFor(
-            () => {
-              const found = document.querySelector<HTMLElement>("dialog[open]");
-              assert.ok(found);
-              assert.include(found.textContent ?? "", "Keyboard thread");
-              return found;
-            },
-            { timeout: 20000 },
-          );
+          const panel = await threadOpen("Keyboard thread", { timeout: 20000 });
           const editor = panel.querySelector<HTMLElement>(
             "[data-slate-editor]",
           )!;
@@ -3504,16 +3620,9 @@ if (Meteor.isClient) {
           const refuse = refuseCalls(setWhiteboardCommentResolved);
           try {
             await openAtComment(4321);
-            const panel = await waitFor(
-              () => {
-                const found =
-                  document.querySelector<HTMLElement>("dialog[open]");
-                assert.ok(found);
-                assert.include(found.textContent ?? "", "Keyboard thread");
-                return found;
-              },
-              { timeout: 20000 },
-            );
+            const panel = await threadOpen("Keyboard thread", {
+              timeout: 20000,
+            });
             await click(within(panel).getByRole("button", { name: "Resolve" }));
             await screen.findByText("Couldn't save: Refused for the test");
             assert.isTrue(refuse.calledOnce);
@@ -3529,12 +3638,7 @@ if (Meteor.isClient) {
             await openBoard();
             await click(screen.getByRole("button", { name: /^Comment:/ }));
             await pressBoard();
-            const panel = await waitFor(() => {
-              const found = document.querySelector<HTMLElement>("dialog[open]");
-              assert.ok(found);
-              assert.include(found.textContent ?? "", "New comment on");
-              return found;
-            });
+            const panel = await threadOpen("New comment on");
             await typeInto(
               panel.querySelector<HTMLElement>("[data-slate-editor]")!,
               "Refused words",
@@ -3751,16 +3855,7 @@ if (Meteor.isClient) {
             },
             { timeout: 20000 },
           );
-          await act(async () => {
-            fireEvent.doubleClick(within(note).getByText("Original"));
-            await stabilize();
-          });
-          const editor = within(note).getByRole("textbox");
-          await act(async () => {
-            fireEvent.change(editor, { target: { value: "Changed" } });
-            fireEvent.blur(editor);
-            await stabilize();
-          });
+          await editText(note, "Original", "Changed");
           await screen.findByText(
             "Couldn't save: Only operators can edit this whiteboard",
           );
@@ -3851,19 +3946,8 @@ if (Meteor.isClient) {
 
       it("erases a whole stroke from a press on any part of it", async function () {
         this.timeout(30000);
-        const stroke = Random.id();
-        const segments = [Random.id(), Random.id()];
         const base = { x: 20000, y: 20000 };
-        await putNodes(
-          segments.map((_id, i) =>
-            inkNode(
-              { x: base.x + i * 200, y: base.y },
-              { width: 200, height: 20 },
-              sampledStroke(),
-              { _id, stroke },
-            ),
-          ),
-        );
+        const { segments } = await twoSegmentStroke(base);
         const screenAt = lookAt(base);
         try {
           await openBoard();
@@ -4199,13 +4283,7 @@ if (Meteor.isClient) {
             },
             { timeout: 10000 },
           );
-          await new Promise((resolve) => {
-            setTimeout(resolve, 500);
-          });
-          assert.deepEqual(
-            page.errors.filter((e) => e.includes("ResizeObserver")),
-            [],
-          );
+          await expectNoResizeLoop(page);
         } finally {
           page.stop();
           forgetView();
@@ -4323,30 +4401,11 @@ if (Meteor.isClient) {
           },
         ]);
         lookAt(base);
-        const edit = async (id: string, from: string, to: string) => {
-          const node = await nodeShown(id);
-          await act(async () => {
-            fireEvent.doubleClick(within(node).getByText(from));
-            await stabilize();
-          });
-          const editor = within(node).getByRole("textbox");
-          await act(async () => {
-            fireEvent.change(editor, { target: { value: to } });
-            fireEvent.blur(editor);
-            await stabilize();
-          });
-        };
+        const edit = async (id: string, from: string, to: string) =>
+          editText(await nodeShown(id), from, to);
         const recolour = async (id: string, colour: string) => {
           await select(id);
-          // The colour picker's, not Duplicate's
-          const toolbar = await waitFor(() => {
-            const found = document.querySelector<HTMLElement>(
-              `.react-flow__node-toolbar:has([aria-label="${colour}"])`,
-            );
-            assert.exists(found);
-            return found;
-          });
-          await click(within(toolbar).getByRole("button", { name: colour }));
+          await click(await colourSwatch(colour));
         };
         try {
           await openBoard();
@@ -4390,20 +4449,7 @@ if (Meteor.isClient) {
         try {
           await openBoard();
           await select(ids[0]!);
-          // React Flow adds to the selection while Control is held
-          await act(async () => {
-            fireEvent.keyDown(document, {
-              key: "Control",
-              code: "ControlLeft",
-            });
-            await stabilize();
-          });
-          await select(ids[1]!);
-          await select(ids[2]!);
-          await act(async () => {
-            fireEvent.keyUp(document, { key: "Control", code: "ControlLeft" });
-            await stabilize();
-          });
+          await selectAlso(ids[1]!, ids[2]!);
           const arrange = async (name: string) => {
             const button = await screen.findByRole("button", { name });
             await click(button);
@@ -5031,9 +5077,7 @@ if (Meteor.isClient) {
               timeout: 10000,
             });
             // Long enough for a glide, and for React Flow to measure it
-            await new Promise((resolve) => {
-              setTimeout(resolve, 500);
-            });
+            await settleFor(500);
             widths.stop();
             notePlaces.stop();
             assert.deepEqual(widths.seen, ["400px", "600px"]);
@@ -5097,13 +5141,7 @@ if (Meteor.isClient) {
               },
               { timeout: 10000 },
             );
-            await new Promise((resolve) => {
-              setTimeout(resolve, 500);
-            });
-            assert.deepEqual(
-              page.errors.filter((e) => e.includes("ResizeObserver")),
-              [],
-            );
+            await expectNoResizeLoop(page);
           } finally {
             page.stop();
             forgetView();
@@ -5264,17 +5302,7 @@ if (Meteor.isClient) {
             );
             await canRedo();
 
-            const node = await nodeShown(id);
-            await act(async () => {
-              fireEvent.doubleClick(within(node).getByText("Before"));
-              await stabilize();
-            });
-            const editor = within(node).getByRole("textbox");
-            await act(async () => {
-              fireEvent.change(editor, { target: { value: "After" } });
-              fireEvent.blur(editor);
-              await stabilize();
-            });
+            await editText(await nodeShown(id), "Before", "After");
             await waitFor(
               async () => assert.equal((await savedNode(id))?.text, "After"),
               { timeout: 10000 },
@@ -5552,16 +5580,8 @@ if (Meteor.isClient) {
           try {
             await openBoard();
             await select(id);
-            // The colour picker's, not Duplicate's
-            const toolbar = await waitFor(() => {
-              const found = document.querySelector<HTMLElement>(
-                '.react-flow__node-toolbar:has([aria-label="Red"])',
-              );
-              assert.exists(found);
-              return found;
-            });
-            const red = within(toolbar).getByRole("button", { name: "Red" });
-            const blue = within(toolbar).getByRole("button", { name: "Blue" });
+            const red = await colourSwatch("Red");
+            const blue = await colourSwatch("Blue");
             // Both are sent before either save is back
             await act(async () => {
               fireEvent.click(red);
@@ -5663,21 +5683,7 @@ if (Meteor.isClient) {
             await openBoard();
             await pressBoard();
             await select(a);
-            await act(async () => {
-              fireEvent.keyDown(document, {
-                key: "Control",
-                code: "ControlLeft",
-              });
-              await stabilize();
-            });
-            await select(b);
-            await act(async () => {
-              fireEvent.keyUp(document, {
-                key: "Control",
-                code: "ControlLeft",
-              });
-              await stabilize();
-            });
+            await selectAlso(b);
 
             const copied = await clipboard("copy");
             assert.isTrue(copied.event.defaultPrevented);
@@ -5926,21 +5932,7 @@ if (Meteor.isClient) {
             await openBoard();
             await pressBoard();
             await select(card._id);
-            await act(async () => {
-              fireEvent.keyDown(document, {
-                key: "Control",
-                code: "ControlLeft",
-              });
-              await stabilize();
-            });
-            await select(note);
-            await act(async () => {
-              fireEvent.keyUp(document, {
-                key: "Control",
-                code: "ControlLeft",
-              });
-              await stabilize();
-            });
+            await selectAlso(note);
             await press(pane(), { key: "d", ctrlKey: true });
             await screen.findByText("Puzzle cards were left out");
             await waitFor(
@@ -6320,21 +6312,7 @@ if (Meteor.isClient) {
             await openBoard();
             await pressBoard();
             await select(a);
-            await act(async () => {
-              fireEvent.keyDown(document, {
-                key: "Control",
-                code: "ControlLeft",
-              });
-              await stabilize();
-            });
-            await select(b);
-            await act(async () => {
-              fireEvent.keyUp(document, {
-                key: "Control",
-                code: "ControlLeft",
-              });
-              await stabilize();
-            });
+            await selectAlso(b);
             const copied = await clipboard("copy");
             assert.lengthOf(
               JSON.parse(copied.text.slice(copied.text.indexOf("\n"))).edges,
@@ -6443,18 +6421,6 @@ if (Meteor.isClient) {
           const left = await images();
           if (left.length > 0) await removeNodes(left.map((n) => n._id));
         };
-        // Board point (x, y) on screen, for a view opened by lookAt(base).
-        const onScreen = (
-          base: { x: number; y: number },
-          x: number,
-          y: number,
-        ) => {
-          const box = pane().getBoundingClientRect();
-          return {
-            clientX: box.left + 150 - base.x + x,
-            clientY: box.top + 150 - base.y + y,
-          };
-        };
 
         it("adds an image from the Image tool in the middle of the view, no wider than 480", async function () {
           this.timeout(30000);
@@ -6549,7 +6515,7 @@ if (Meteor.isClient) {
           this.timeout(30000);
           const base = { x: 51000, y: 50000 };
           const stubs = stubUploads();
-          lookAt(base);
+          const screenAt = lookAt(base);
           try {
             await openWithImages();
             await pressBoard();
@@ -6557,7 +6523,7 @@ if (Meteor.isClient) {
             await act(async () => {
               fireEvent.pointerMove(pane(), {
                 pointerId: 1,
-                ...onScreen(base, at.x, at.y),
+                ...screenAt(at.x, at.y),
               });
               await stabilize();
             });
@@ -6601,7 +6567,7 @@ if (Meteor.isClient) {
           this.timeout(30000);
           const base = { x: 52000, y: 50000 };
           const stubs = stubUploads();
-          lookAt(base);
+          const screenAt = lookAt(base);
           try {
             await openWithImages();
             const at = { x: base.x + 250, y: base.y + 150 };
@@ -6611,7 +6577,7 @@ if (Meteor.isClient) {
               dataTransfer: data,
               bubbles: true,
               cancelable: true,
-              ...onScreen(base, at.x, at.y),
+              ...screenAt(at.x, at.y),
             };
             const over = new DragEvent("dragover", init);
             const drop = new DragEvent("drop", init);
@@ -6684,9 +6650,7 @@ if (Meteor.isClient) {
               { timeout: 10000 },
             );
             // Time for a board image to have started, were one coming
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 500);
-            });
+            await settleFor(500);
             sinon.assert.calledOnce(stubs.upload);
             assert.isNull(document.querySelector(".jr-image-uploading"));
             assert.isEmpty(await images());
@@ -7148,14 +7112,7 @@ if (Meteor.isClient) {
 
             // Recoloured, it's filled in the pastel
             await select(ellipse._id);
-            const toolbar = await waitFor(() => {
-              const found = document.querySelector<HTMLElement>(
-                '.react-flow__node-toolbar:has([aria-label="Blue"])',
-              );
-              assert.exists(found);
-              return found;
-            });
-            await click(within(toolbar).getByRole("button", { name: "Blue" }));
+            await click(await colourSwatch("Blue"));
             await waitFor(
               async () =>
                 assert.equal((await savedNode(ellipse._id))?.color, "blue"),
@@ -7175,17 +7132,11 @@ if (Meteor.isClient) {
               nodeElement(ellipse._id)
                 ?.querySelector("svg.jr-shape ellipse")
                 ?.getAttribute("fill");
-            const swatch = (name: string) =>
-              within(
-                document.querySelector<HTMLElement>(
-                  '.react-flow__node-toolbar:has([aria-label="Blue"])',
-                )!,
-              ).getByRole("button", { name });
             assert.equal(
-              swatch("No fill").getAttribute("aria-pressed"),
+              (await colourSwatch("No fill")).getAttribute("aria-pressed"),
               "false",
             );
-            await click(swatch("No fill"));
+            await click(await colourSwatch("No fill"));
             await waitFor(
               async () =>
                 assert.isUndefined((await savedNode(ellipse._id))?.color),
@@ -7193,10 +7144,10 @@ if (Meteor.isClient) {
             );
             await waitFor(() => assert.equal(shapeFill(), "none"));
             assert.equal(
-              swatch("No fill").getAttribute("aria-pressed"),
+              (await colourSwatch("No fill")).getAttribute("aria-pressed"),
               "true",
             );
-            await click(swatch("Blue"));
+            await click(await colourSwatch("Blue"));
             await waitFor(
               async () =>
                 assert.equal((await savedNode(ellipse._id))?.color, "blue"),
@@ -7466,24 +7417,12 @@ if (Meteor.isClient) {
           await click(screen.getByRole("button", { name: /^Comment:/ }));
           screen.getByText("Tap where your comment goes");
         };
-        const touch = (at: { x: number; y: number }, pointerId: number) => ({
-          button: 0,
-          pointerId,
-          pointerType: "touch",
-          isPrimary: pointerId === 1,
-          clientX: at.x,
-          clientY: at.y,
-        });
         const sheet = () =>
           document.querySelector<HTMLElement>(
             ".react-flow__panel.jr-comment-sheet",
           );
         const draftPin = () =>
           document.querySelector('.jr-comment-pin[data-thread="draft"]');
-        const middleOf = (element: Element) => {
-          const box = element.getBoundingClientRect();
-          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
-        };
         // A comment of this test's own, found once it reaches this client,
         // which needs the board open.
         const leaveComment = async (text: string, comment: Point) => {
@@ -7518,15 +7457,10 @@ if (Meteor.isClient) {
             name: "Open puzzle",
           });
           const at = middleOf(link);
-          const mouse = {
-            view: window,
-            button: 0,
-            clientX: at.x,
-            clientY: at.y,
-          };
+          const mouse = { view: window, button: 0, ...at };
           await act(async () => {
-            fireEvent.pointerDown(link, touch(at, 1));
-            fireEvent.pointerUp(link, touch(at, 1));
+            fireEvent.pointerDown(link, finger(at));
+            fireEvent.pointerUp(link, lift(at));
             fireEvent.mouseDown(link, mouse);
             fireEvent.mouseUp(link, mouse);
             fireEvent.click(link, mouse);
@@ -7582,22 +7516,22 @@ if (Meteor.isClient) {
           await openPhoneBoard();
           await armComment();
           const at = middleOf(pane());
-          const moved = { x: at.x + 30, y: at.y + 20 };
+          const moved = { clientX: at.clientX + 30, clientY: at.clientY + 20 };
           await act(async () => {
-            fireEvent.pointerDown(pane(), touch(at, 1));
-            fireEvent.pointerMove(pane(), touch(moved, 1));
-            fireEvent.pointerUp(pane(), touch(moved, 1));
+            fireEvent.pointerDown(pane(), finger(at));
+            fireEvent.pointerMove(pane(), finger(moved));
+            fireEvent.pointerUp(pane(), lift(moved));
             await stabilize();
           });
           assert.isNull(sheet());
           assert.isNull(draftPin());
           // nor does a pinch, whichever finger lifts first
-          const other = { x: at.x + 80, y: at.y };
+          const other = { clientX: at.clientX + 80, clientY: at.clientY };
           await act(async () => {
-            fireEvent.pointerDown(pane(), touch(at, 1));
-            fireEvent.pointerDown(pane(), touch(other, 2));
-            fireEvent.pointerUp(pane(), touch(at, 1));
-            fireEvent.pointerUp(pane(), touch(other, 2));
+            fireEvent.pointerDown(pane(), finger(at, 1));
+            fireEvent.pointerDown(pane(), finger(other, 2));
+            fireEvent.pointerUp(pane(), lift(at, 1));
+            fireEvent.pointerUp(pane(), lift(other, 2));
             await stabilize();
           });
           assert.isNull(sheet());
@@ -7612,11 +7546,11 @@ if (Meteor.isClient) {
           await armComment();
           const at = middleOf(pane());
           // Further than a mouse may move for a click, but not a pan
-          const wobbled = { x: at.x + 6, y: at.y + 5 };
+          const wobbled = { clientX: at.clientX + 6, clientY: at.clientY + 5 };
           await act(async () => {
-            fireEvent.pointerDown(pane(), touch(at, 1));
-            fireEvent.pointerMove(pane(), touch(wobbled, 1));
-            fireEvent.pointerUp(pane(), touch(wobbled, 1));
+            fireEvent.pointerDown(pane(), finger(at));
+            fireEvent.pointerMove(pane(), finger(wobbled));
+            fireEvent.pointerUp(pane(), lift(wobbled));
             await stabilize();
           });
           await waitFor(() => {
@@ -7634,14 +7568,10 @@ if (Meteor.isClient) {
           await armComment();
           const box = pane().getBoundingClientRect();
           const at = {
-            x: box.left + box.width / 2,
-            y: box.top + box.height * 0.8,
+            clientX: box.left + box.width / 2,
+            clientY: box.top + box.height * 0.8,
           };
-          await act(async () => {
-            fireEvent.pointerDown(pane(), touch(at, 1));
-            fireEvent.pointerUp(pane(), touch(at, 1));
-            await stabilize();
-          });
+          await tap(pane(), at, { click: false });
           const panel = await waitFor(() => {
             const found = sheet()?.querySelector<HTMLElement>("dialog[open]");
             assert.exists(found);
@@ -7663,8 +7593,8 @@ if (Meteor.isClient) {
           await armComment();
           const at = middleOf(pane());
           await act(async () => {
-            fireEvent.pointerDown(pane(), touch(at, 1));
-            fireEvent.pointerCancel(pane(), touch(at, 1));
+            fireEvent.pointerDown(pane(), finger(at));
+            fireEvent.pointerCancel(pane(), lift(at));
             await stabilize();
           });
           assert.isNull(sheet());
@@ -7789,24 +7719,14 @@ if (Meteor.isClient) {
             // Where the card is on the board; a drag may still pan the board
             const before = card.style.transform;
             const from = middleOf(card);
-            const to = { x: from.x + 120, y: from.y + 60 };
+            const to = {
+              clientX: from.clientX + 120,
+              clientY: from.clientY + 60,
+            };
             await act(async () => {
-              fireEvent.mouseDown(card, {
-                view: window,
-                button: 0,
-                clientX: from.x,
-                clientY: from.y,
-              });
-              fireEvent.mouseMove(document, {
-                view: window,
-                clientX: to.x,
-                clientY: to.y,
-              });
-              fireEvent.mouseUp(document, {
-                view: window,
-                clientX: to.x,
-                clientY: to.y,
-              });
+              fireEvent.mouseDown(card, { view: window, button: 0, ...from });
+              fireEvent.mouseMove(document, { view: window, ...to });
+              fireEvent.mouseUp(document, { view: window, ...to });
               await stabilize();
             });
             await press(card, { key: "ArrowRight" });
@@ -7933,12 +7853,7 @@ if (Meteor.isClient) {
           this.timeout(30000);
           await openPhoneBoard();
           await armComment();
-          const at = middleOf(pane());
-          await act(async () => {
-            fireEvent.pointerDown(pane(), touch(at, 1));
-            fireEvent.pointerUp(pane(), touch(at, 1));
-            await stabilize();
-          });
+          await tap(pane(), middleOf(pane()), { click: false });
           const editor = await waitFor(() => {
             const found = sheet()?.querySelector<HTMLElement>(
               "dialog[open] [data-slate-editor]",
@@ -7981,32 +7896,8 @@ if (Meteor.isClient) {
         const pick = async (name: RegExp | string) => {
           await click(toolbar().getByRole("button", { name }));
         };
-        const middleOf = (element: Element) => {
-          const box = element.getBoundingClientRect();
-          return {
-            clientX: box.left + box.width / 2,
-            clientY: box.top + box.height / 2,
-          };
-        };
         const stickies = (base: Point, count: number, text?: string) =>
           stickyRow(base, count, { width: 200, height: 160 }, 400, () => text);
-        // A finger held on `element` until it's a long press, then let go
-        // with the click the browser makes.
-        const pressAndHold = async (element: Element) => {
-          const at = middleOf(element);
-          await act(async () => {
-            fireEvent.pointerDown(element, finger(at));
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, LONG_PRESS_MS + 100);
-            });
-            await stabilize();
-          });
-          await act(async () => {
-            fireEvent.pointerUp(element, lift(at));
-            fireEvent.click(element, { button: 0, ...at });
-            await stabilize();
-          });
-        };
 
         it("places a sticky note with a tap and opens it to type in", async function () {
           this.timeout(30000);
@@ -8040,11 +7931,8 @@ if (Meteor.isClient) {
             });
             assert.equal(pressed(/^Sticky note/), "true");
 
-            const at = screenAt(base.x + 100, base.y + 80);
-            await act(async () => {
-              fireEvent.pointerDown(pane(), finger(at));
-              fireEvent.pointerUp(pane(), lift(at));
-              await stabilize();
+            await tap(pane(), screenAt(base.x + 100, base.y + 80), {
+              click: false,
             });
             const [note] = await waitFor(
               async () => {
@@ -8080,23 +7968,6 @@ if (Meteor.isClient) {
           const notes = stickies(base, 2);
           await upsertWhiteboardNodes.callPromise({ boardId, nodes: notes });
           lookAt(base);
-          const holdOn = async (node: HTMLElement) => {
-            const at = middleOf(node);
-            await act(async () => {
-              fireEvent.pointerDown(node, finger(at));
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, LONG_PRESS_MS + 100);
-              });
-              await stabilize();
-            });
-            // The browser's click from letting go doesn't then select only
-            // this one
-            await act(async () => {
-              fireEvent.pointerUp(node, lift(at));
-              fireEvent.click(node, { button: 0, ...at });
-              await stabilize();
-            });
-          };
           try {
             await openBoard();
             const first = await nodeShown(notes[0]!._id);
@@ -8110,13 +7981,13 @@ if (Meteor.isClient) {
               await stabilize();
             });
             await act(async () => {
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, LONG_PRESS_MS + 100);
-              });
+              await settleFor(LONG_PRESS_MS + 100);
             });
             assert.isFalse(first.classList.contains("selected"));
 
-            await holdOn(first);
+            // The browser's click from letting go doesn't then select only the
+            // one held
+            await pressAndHold(first);
             await waitFor(() => {
               assert.isTrue(first.classList.contains("selected"));
               // with its toolbar
@@ -8128,7 +7999,7 @@ if (Meteor.isClient) {
               assert.lengthOf(colours, 1);
             });
 
-            await holdOn(second);
+            await pressAndHold(second);
             await waitFor(() => {
               assert.isTrue(second.classList.contains("selected"));
               assert.isTrue(first.classList.contains("selected"));
@@ -8155,9 +8026,7 @@ if (Meteor.isClient) {
                 ...finger(at),
                 clientX: at.clientX + 30,
               });
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, LONG_PRESS_MS + 100);
-              });
+              await settleFor(LONG_PRESS_MS + 100);
               await stabilize();
             });
             assert.isFalse(node.classList.contains("selected"));
@@ -8213,15 +8082,8 @@ if (Meteor.isClient) {
 
         it("erases a stroke with a finger dragged across it", async function () {
           this.timeout(30000);
-          const stroke = Random.id();
-          const segment = Random.id();
           const base = { x: 24500, y: 23000 };
-          await putNodes([
-            inkNode(base, { width: 200, height: 20 }, sampledStroke(), {
-              _id: segment,
-              stroke,
-            }),
-          ]);
+          const { segment } = await oneSegmentStroke(base);
           const screenAt = lookAt(base);
           try {
             await openBoard();
@@ -8471,11 +8333,7 @@ if (Meteor.isClient) {
               clientY: box.bottom - 60,
             };
             assert.isAbove(at.clientY, window.innerHeight - keyboard);
-            await act(async () => {
-              fireEvent.pointerDown(pane(), finger(at));
-              fireEvent.pointerUp(pane(), lift(at));
-              await stabilize();
-            });
+            await tap(pane(), at, { click: false });
             const [note] = await waitFor(
               async () => {
                 const found = await made();
@@ -8564,19 +8422,13 @@ if (Meteor.isClient) {
             }).fetchAsync();
           // A tap at a fraction of the way across and down the board, clear
           // of its toolbars, and the board point it's at
-          const tap = async (fx: number, fy: number) => {
+          const tapAt = async (fx: number, fy: number) => {
             const box = pane().getBoundingClientRect();
             const at = {
               clientX: box.left + box.width * fx,
               clientY: box.top + box.height * fy,
             };
-            // with the click the browser makes after
-            await act(async () => {
-              fireEvent.pointerDown(pane(), finger(at));
-              fireEvent.pointerUp(pane(), lift(at));
-              fireEvent.click(pane(), { button: 0, ...at });
-              await stabilize();
-            });
+            await tap(pane(), at);
             return {
               x: base.x + (at.clientX - box.left - 150) / 0.5,
               y: base.y + (at.clientY - box.top - 150) / 0.5,
@@ -8585,7 +8437,7 @@ if (Meteor.isClient) {
           try {
             await openBoard();
             await pick(/^Text:/);
-            const tapped = await tap(0.4, 0.5);
+            const tapped = await tapAt(0.4, 0.5);
             const [text] = await waitFor(
               async () => {
                 const found = await made("text");
@@ -8604,7 +8456,7 @@ if (Meteor.isClient) {
             assert.equal(pressed(/^Select and move/), "true");
 
             await pick(/^Frame:/);
-            await tap(0.7, 0.7);
+            await tapAt(0.7, 0.7);
             await waitFor(async () => assert.lengthOf(await made("frame"), 1), {
               timeout: 10000,
             });
@@ -8633,13 +8485,7 @@ if (Meteor.isClient) {
             await openBoard();
             await pick(/^Shape:/);
             assert.equal(pressed(/^Shape:/), "true");
-            const at = screenAt(base.x + 100, base.y + 80);
-            await act(async () => {
-              fireEvent.pointerDown(pane(), finger(at));
-              fireEvent.pointerUp(pane(), lift(at));
-              fireEvent.click(pane(), { button: 0, ...at });
-              await stabilize();
-            });
+            await tap(pane(), screenAt(base.x + 100, base.y + 80));
             const [shape] = await waitFor(
               async () => {
                 const found = await made();
@@ -8675,12 +8521,7 @@ if (Meteor.isClient) {
             clientX: box.left + box.width * 0.6,
             clientY: box.top + box.height * 0.6,
           };
-          await act(async () => {
-            fireEvent.pointerDown(pane(), finger(at));
-            fireEvent.pointerUp(pane(), lift(at));
-            fireEvent.click(pane(), { button: 0, ...at });
-            await stabilize();
-          });
+          await tap(pane(), at);
           await waitFor(() =>
             assert.exists(
               document.querySelector('.jr-comment-pin[data-thread="draft"]'),
@@ -8723,9 +8564,7 @@ if (Meteor.isClient) {
               await stabilize();
             });
             await act(async () => {
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, 500);
-              });
+              await settleFor(500);
             });
             assert.isEmpty(await made());
             assert.equal(pressed(/^Sticky note/), "true");
@@ -8741,18 +8580,8 @@ if (Meteor.isClient) {
           const notes = stickies(base, 2);
           await upsertWhiteboardNodes.callPromise({ boardId, nodes: notes });
           lookAt(base, 0.5);
-          const tap = async (handle: Element) => {
-            const at = middleOf(handle);
-            await act(async () => {
-              fireEvent.pointerDown(handle, finger(at));
-              fireEvent.pointerUp(handle, lift(at));
-              fireEvent.click(handle, { button: 0, ...at });
-              await stabilize();
-            });
-          };
           try {
             await openBoard();
-            await Promise.all(notes.map((n) => nodeShown(n._id)));
             await tap(await handleOf(notes[0]!._id, "right"));
             // With no hover to find them by, every handle shows
             const end = await handleOf(notes[1]!._id, "left");
@@ -8841,19 +8670,8 @@ if (Meteor.isClient) {
 
         it("selects a whole ink stroke with a long press on it", async function () {
           this.timeout(30000);
-          const stroke = Random.id();
-          const segments = [Random.id(), Random.id()];
           const base = { x: 23000, y: 26500 };
-          await putNodes(
-            segments.map((_id, i) =>
-              inkNode(
-                { x: base.x + i * 200, y: base.y },
-                { width: 200, height: 20 },
-                sampledStroke(),
-                { _id, stroke },
-              ),
-            ),
-          );
+          const { segments } = await twoSegmentStroke(base);
           lookAt(base);
           try {
             await openBoard();
@@ -9044,17 +8862,13 @@ if (Meteor.isClient) {
           const newer = await theyComment("Newer thread", 27200);
           await click(screen.getByRole("button", { name: "Comments" }));
           const rows = () =>
-            [
-              ...document.querySelectorAll<HTMLElement>(
-                ".react-flow__panel.top.right button[data-thread]",
-              ),
-            ].map((row) => row.dataset.thread);
+            panelButtons("button[data-thread]").map(
+              (row) => row.dataset.thread,
+            );
           await waitFor(() =>
             assert.deepEqual(rows().slice(0, 2), [newer, older]),
           );
-          const row = document.querySelector<HTMLElement>(
-            `.react-flow__panel.top.right button[data-thread="${older}"]`,
-          )!;
+          const row = threadRow(older)!;
           assert.include(row.textContent ?? "", "Older thread");
           assert.include(row.textContent ?? "", "0 replies");
           await click(row);
@@ -9147,19 +8961,13 @@ if (Meteor.isClient) {
             );
             await click(list);
             const row = await waitFor(() => {
-              const found = document.querySelector<HTMLElement>(
-                `.react-flow__panel.top.right button[data-thread="${thread}"]`,
-              );
+              const found = threadRow(thread);
               assert.ok(found);
               return found;
             });
             assert.include(row.textContent ?? "", "Seen by a viewer");
             await click(list);
-            assert.isNull(
-              document.querySelector(
-                `.react-flow__panel.top.right button[data-thread="${thread}"]`,
-              ),
-            );
+            assert.isNull(threadRow(thread));
             await pressBoard();
             await press(pane(), { key: "n" });
             await waitFor(() => {
@@ -9208,7 +9016,7 @@ if (Meteor.isClient) {
                   `translate(${base.x + 300}px`,
                 );
               },
-              { timeout: 1500 },
+              { timeout: 5000 },
             );
           } finally {
             await other.callAsync(setWhiteboardLive.name, {
@@ -9299,23 +9107,7 @@ if (Meteor.isClient) {
           });
           try {
             await openBoard();
-            const node = await nodeShown(sticky);
-            const box = node.getBoundingClientRect();
-            const at = {
-              clientX: box.left + box.width / 2,
-              clientY: box.top + box.height / 2,
-            };
-            await act(async () => {
-              fireEvent.pointerDown(node, finger(at));
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, LONG_PRESS_MS + 100);
-              });
-              await stabilize();
-            });
-            await act(async () => {
-              fireEvent.pointerUp(node, lift(at));
-              await stabilize();
-            });
+            await pressAndHold(await nodeShown(sticky), { click: false });
             await waitFor(
               async () => {
                 const mine = await theirPresence.findOneAsync({
@@ -9584,20 +9376,7 @@ if (Meteor.isClient) {
             );
 
             // Nor anything from a preview
-            await click(screen.getByRole("button", { name: "History" }));
-            const row = await waitFor(
-              () => {
-                const found = [
-                  ...document.querySelectorAll<HTMLElement>(
-                    ".react-flow__panel.top.right button",
-                  ),
-                ].find((b) => b.textContent?.startsWith("Before edits"));
-                assert.exists(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
-            await click(row);
+            await openHistoryRow((text) => text.startsWith("Before edits"));
             await screen.findByText(
               /^Viewing the board as it was at /,
               {},
@@ -9766,18 +9545,7 @@ if (Meteor.isClient) {
           await nodeShown(note);
 
           await click(screen.getByRole("button", { name: "History" }));
-          const row = await waitFor(
-            () => {
-              const found = [
-                ...document.querySelectorAll<HTMLElement>(
-                  ".react-flow__panel.top.right button",
-                ),
-              ].find((b) => b.textContent?.includes(OTHER_NAME));
-              assert.exists(found);
-              return found;
-            },
-            { timeout: 10000 },
-          );
+          const row = await historyRow((text) => text.includes(OTHER_NAME));
           assert.match(
             row.textContent ?? "",
             /^Before edits by .* and Second Member, .* \(2 changes\)$/,
@@ -9817,13 +9585,7 @@ if (Meteor.isClient) {
               name: "Restore this version",
             }),
           );
-          const dialog = await waitFor(() => {
-            const found = document.querySelector<HTMLElement>(
-              ".modal.show .modal-content",
-            );
-            assert.exists(found);
-            return found;
-          });
+          const dialog = await modalShown();
           assert.include(
             dialog.textContent ?? "",
             "Changes since then, by anyone, are undone.",
@@ -9967,20 +9729,7 @@ if (Meteor.isClient) {
           try {
             await openBoard();
             await nodeShown(added);
-            await click(screen.getByRole("button", { name: "History" }));
-            const row = await waitFor(
-              () => {
-                const found = [
-                  ...document.querySelectorAll<HTMLElement>(
-                    ".react-flow__panel.top.right button",
-                  ),
-                ].find((b) => b.textContent?.startsWith("Before edits"));
-                assert.exists(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
-            await click(row);
+            await openHistoryRow((text) => text.startsWith("Before edits"));
             await screen.findByText(
               /^Viewing the board as it was at /,
               {},
@@ -9991,13 +9740,7 @@ if (Meteor.isClient) {
             await nodeShown(notes[4]!);
             await waitFor(() => assert.isNull(nodeElement(added)));
             // Long enough for React Flow to measure what's changed
-            await new Promise((resolve) => {
-              setTimeout(resolve, 500);
-            });
-            assert.deepEqual(
-              page.errors.filter((e) => e.includes("ResizeObserver")),
-              [],
-            );
+            await expectNoResizeLoop(page);
           } finally {
             page.stop();
             forgetView();
@@ -10234,20 +9977,7 @@ if (Meteor.isClient) {
                 { timeout: 5000 },
               );
 
-              await click(screen.getByRole("button", { name: "History" }));
-              const row = await waitFor(
-                () => {
-                  const found = [
-                    ...document.querySelectorAll<HTMLElement>(
-                      ".react-flow__panel.top.right button",
-                    ),
-                  ].find((b) => b.textContent?.includes(OTHER_NAME));
-                  assert.exists(found);
-                  return found;
-                },
-                { timeout: 10000 },
-              );
-              await click(row);
+              await openHistoryRow((text) => text.includes(OTHER_NAME));
               await screen.findByText(
                 `Following ${OTHER_NAME} is paused while you look at an earlier version.`,
                 {},
@@ -10514,21 +10244,7 @@ if (Meteor.isClient) {
                 fireEvent.keyUp(document.body, { key: "Delete" });
                 await stabilize();
               });
-              await act(async () => {
-                fireEvent.keyDown(document, {
-                  key: "Control",
-                  code: "ControlLeft",
-                });
-                await stabilize();
-              });
-              await select(free!);
-              await act(async () => {
-                fireEvent.keyUp(document, {
-                  key: "Control",
-                  code: "ControlLeft",
-                });
-                await stabilize();
-              });
+              await selectAlso(free!);
               await press(document.body, { key: "Delete" });
               await screen.findByText("Some of those are locked");
               await waitFor(
@@ -10564,22 +10280,7 @@ if (Meteor.isClient) {
             try {
               await openBoard();
               await select(ids[0]!);
-              await act(async () => {
-                fireEvent.keyDown(document, {
-                  key: "Control",
-                  code: "ControlLeft",
-                });
-                await stabilize();
-              });
-              await select(ids[1]!);
-              await select(ids[2]!);
-              await act(async () => {
-                fireEvent.keyUp(document, {
-                  key: "Control",
-                  code: "ControlLeft",
-                });
-                await stabilize();
-              });
+              await selectAlso(ids[1]!, ids[2]!);
               await click(
                 await screen.findByRole("button", { name: "Align top edges" }),
               );
@@ -10752,13 +10453,7 @@ if (Meteor.isClient) {
           await openBoard();
           await nodeShown(a._id);
           await click(screen.getByRole("button", { name: "Reset layout…" }));
-          const dialog = await waitFor(() => {
-            const found = document.querySelector<HTMLElement>(
-              ".modal.show .modal-content",
-            );
-            assert.exists(found);
-            return found;
-          });
+          const dialog = await modalShown();
           assert.include(
             dialog.textContent ?? "",
             "Every card and round frame goes back to where the puzzle list puts it, and collapsed rounds open.",
@@ -10785,17 +10480,8 @@ if (Meteor.isClient) {
           );
 
           await click(screen.getByRole("button", { name: "Open History" }));
-          const row = await waitFor(
-            () => {
-              const found = [
-                ...document.querySelectorAll<HTMLElement>(
-                  ".react-flow__panel.top.right button",
-                ),
-              ].find((b) => b.textContent?.includes("reset the layout"));
-              assert.exists(found);
-              return found;
-            },
-            { timeout: 10000 },
+          const row = await historyRow((text) =>
+            text.includes("reset the layout"),
           );
           await click(row);
           const banner = await screen.findByText(
@@ -10808,13 +10494,7 @@ if (Meteor.isClient) {
               name: "Restore this version",
             }),
           );
-          const confirm = await waitFor(() => {
-            const found = document.querySelector<HTMLElement>(
-              ".modal.show .modal-content",
-            );
-            assert.exists(found);
-            return found;
-          });
+          const confirm = await modalShown();
           await click(
             within(confirm).getByRole("button", {
               name: "Restore this version",
@@ -10853,20 +10533,7 @@ if (Meteor.isClient) {
         lookAt(base);
         try {
           await openBoard();
-          await click(screen.getByRole("button", { name: "History" }));
-          const row = await waitFor(
-            () => {
-              const found = [
-                ...document.querySelectorAll<HTMLElement>(
-                  ".react-flow__panel.top.right button",
-                ),
-              ].find((b) => b.textContent?.startsWith("Before edits by"));
-              assert.exists(found);
-              return found;
-            },
-            { timeout: 10000 },
-          );
-          await click(row);
+          await openHistoryRow((text) => text.startsWith("Before edits by"));
           await screen.findByText(
             /^Viewing the board as it was at /,
             {},
@@ -10940,13 +10607,7 @@ if (Meteor.isClient) {
             );
             await stabilize();
           });
-          const dialog = await waitFor(() => {
-            const found = document.querySelector<HTMLElement>(
-              ".modal.show .modal-content",
-            );
-            assert.exists(found);
-            return found;
-          });
+          const dialog = await modalShown();
           await click(
             within(dialog).getByRole("button", { name: "Reset layout" }),
           );
@@ -10971,9 +10632,7 @@ if (Meteor.isClient) {
             );
             await stabilize();
           });
-          const shown = document.querySelector<HTMLElement>(
-            ".modal.show .modal-content",
-          );
+          const shown = modalContent();
           assert.exists(shown);
           within(shown).getByText(
             "Couldn't reset the layout: Only operators can edit this whiteboard",
@@ -11205,16 +10864,7 @@ if (Meteor.isClient) {
         lookAt({ x: base.x + 3000, y: base.y + 3000 });
         try {
           await openBoard({ until: canvasShown });
-          const search = await screen.findByRole(
-            "combobox",
-            { name: "Search the board" },
-            { timeout: 20000 },
-          );
-          await act(async () => {
-            fireEvent.focus(search);
-            fireEvent.change(search, { target: { value: "zebra" } });
-            await stabilize();
-          });
+          await searchFor("zebra");
           await click(
             await screen.findByRole(
               "option",
