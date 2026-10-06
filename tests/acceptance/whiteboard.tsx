@@ -10,7 +10,9 @@ import { Tracker } from "meteor/tracker";
 import {
   act,
   cleanup,
+  configure,
   fireEvent,
+  getConfig,
   render,
   screen,
   waitFor,
@@ -695,14 +697,11 @@ if (Meteor.isClient) {
     );
   // The History panel's row whose text `matches`, once it's listed.
   const historyRow = (matches: (text: string) => boolean) =>
-    waitFor(
-      () => {
-        const found = panelButtons().find((b) => matches(b.textContent ?? ""));
-        assert.exists(found);
-        return found;
-      },
-      { timeout: 10000 },
-    );
+    waitFor(() => {
+      const found = panelButtons().find((b) => matches(b.textContent ?? ""));
+      assert.exists(found);
+      return found;
+    });
   // Opens History and picks the row whose text `matches`.
   const openHistoryRow = async (matches: (text: string) => boolean) => {
     await click(screen.getByRole("button", { name: "History" }));
@@ -1076,12 +1075,21 @@ if (Meteor.isClient) {
     );
 
   describe("whiteboard page", function () {
+    // Most waits here are for a round trip to the server, so give waitFor and
+    // findBy ten seconds instead of one. Testing Library's config is shared by
+    // every file in the run, so put it back afterwards.
+    const defaultAsyncUtilTimeout = getConfig().asyncUtilTimeout;
+    after(function () {
+      configure({ asyncUtilTimeout: defaultAsyncUtilTimeout });
+    });
+
     afterEach(function () {
       subs.splice(0).forEach((sub) => sub.stop());
     });
 
     before(async function () {
       this.timeout(10000);
+      configure({ asyncUtilTimeout: 10000 });
       await resetDatabase("whiteboard page");
       await provisionFirstUser.callPromise({
         email: USER_EMAIL,
@@ -1265,10 +1273,8 @@ if (Meteor.isClient) {
       await drag({ x: cardA.right + 7, y });
       // On the second card itself
       await drag({ x: cardB.left + cardB.width / 2, y });
-      await waitFor(
-        async () =>
-          assert.equal(await linesBetween(board._id, a._id, b._id), before + 1),
-        { timeout: 10000 },
+      await waitFor(async () =>
+        assert.equal(await linesBetween(board._id, a._id, b._id), before + 1),
       );
     });
 
@@ -1294,10 +1300,8 @@ if (Meteor.isClient) {
         clickHandle(to);
         await stabilize();
       });
-      await waitFor(
-        async () =>
-          assert.equal(await linesBetween(board._id, a._id, b._id), before + 1),
-        { timeout: 10000 },
+      await waitFor(async () =>
+        assert.equal(await linesBetween(board._id, a._id, b._id), before + 1),
       );
     });
 
@@ -1484,7 +1488,7 @@ if (Meteor.isClient) {
           name: /^Temperance/,
         });
         await click(option);
-        await waitFor(assertShown, { timeout: 10000 });
+        await waitFor(assertShown);
       });
 
       it("shows the card a ?puzzle= link names, then drops the link", async function () {
@@ -1597,17 +1601,14 @@ if (Meteor.isClient) {
             (await WhiteboardNodes.findOneAsync(cardId))?.hidden ?? false,
           );
           await click(within(option).getByRole("button", { name: "Put back" }));
-          await waitFor(
-            async () => {
-              const card = await WhiteboardNodes.findOneAsync(cardId);
-              assert.ok(card);
-              assert.isNotOk(card.hidden);
-              assert.isNotNull(
-                document.querySelector(`.jr-node-pulse[data-node="${cardId}"]`),
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const card = await WhiteboardNodes.findOneAsync(cardId);
+            assert.ok(card);
+            assert.isNotOk(card.hidden);
+            assert.isNotNull(
+              document.querySelector(`.jr-node-pulse[data-node="${cardId}"]`),
+            );
+          });
         } finally {
           await restoreCard();
         }
@@ -1644,15 +1645,12 @@ if (Meteor.isClient) {
           return found;
         });
         await click(within(option).getByRole("button", { name: "Put back" }));
-        await waitFor(
-          async () => {
-            const back = await WhiteboardNodes.findOneAsync(frame._id);
-            assert.ok(back);
-            assert.isNotOk(back.hidden);
-            assert.isUndefined(back.parent);
-          },
-          { timeout: 10000 },
-        );
+        await waitFor(async () => {
+          const back = await WhiteboardNodes.findOneAsync(frame._id);
+          assert.ok(back);
+          assert.isNotOk(back.hidden);
+          assert.isUndefined(back.parent);
+        });
       });
 
       it("finds a hidden card on a read-only board, with no way to put it back", async function () {
@@ -1878,11 +1876,9 @@ if (Meteor.isClient) {
           render(<TestApp />);
           await goTo(boardPath);
           await openOutline();
-          const round = await screen.findByRole(
-            "treeitem",
-            { name: /^games-island/ },
-            { timeout: 10000 },
-          );
+          const round = await screen.findByRole("treeitem", {
+            name: /^games-island/,
+          });
           assert.match(round.textContent ?? "", /\d+\/\d+ solved/);
           assert.equal(round.getAttribute("aria-level"), "1");
 
@@ -1896,18 +1892,16 @@ if (Meteor.isClient) {
           assert.equal(rows.indexOf(innerRow), rows.indexOf(outerRow) + 1);
 
           await click(round);
-          await waitFor(() => assertFitted(roundFrame), { timeout: 10000 });
+          await waitFor(() => assertFitted(roundFrame));
           // The panel stays open beside a wide board, clear of the frame
           const panel = screen
             .getByRole("tree", { name: "Outline" })
             .closest("section")!;
-          await waitFor(
-            () =>
-              assert.isAtMost(
-                nodeElement(roundFrame)!.getBoundingClientRect().right,
-                panel.getBoundingClientRect().left + 1,
-              ),
-            { timeout: 10000 },
+          await waitFor(() =>
+            assert.isAtMost(
+              nodeElement(roundFrame)!.getBoundingClientRect().right,
+              panel.getBoundingClientRect().left + 1,
+            ),
           );
         });
 
@@ -1916,13 +1910,11 @@ if (Meteor.isClient) {
           render(<TestApp />);
           await goTo(boardPath);
           const tree = await openOutline();
-          const round = await within(tree).findByRole(
-            "treeitem",
-            { name: /^games-island/ },
-            { timeout: 10000 },
-          );
+          const round = await within(tree).findByRole("treeitem", {
+            name: /^games-island/,
+          });
           await click(round);
-          await waitFor(() => assertFitted(roundFrame), { timeout: 10000 });
+          await waitFor(() => assertFitted(roundFrame));
           const viewport = () =>
             document.querySelector<HTMLElement>(".react-flow__viewport")!.style
               .transform;
@@ -1935,12 +1927,10 @@ if (Meteor.isClient) {
               before = now;
               assert.isTrue(settled);
             },
-            { timeout: 10000, interval: 500 },
+            { interval: 500 },
           );
           await click(screen.getByRole("button", { name: "Fit whole board" }));
-          await waitFor(() => assert.notEqual(viewport(), before), {
-            timeout: 10000,
-          });
+          await waitFor(() => assert.notEqual(viewport(), before));
 
           // A frame added while the panel is open gets a row
           const added = Random.id();
@@ -1952,11 +1942,9 @@ if (Meteor.isClient) {
                 { _id: added, label: "Outline added" },
               ),
             ]);
-            const addedRow = await screen.findByRole(
-              "treeitem",
-              { name: /^Outline added/ },
-              { timeout: 10000 },
-            );
+            const addedRow = await screen.findByRole("treeitem", {
+              name: /^Outline added/,
+            });
 
             // Escape from a row closes the panel and focus goes back to
             // its button
@@ -1983,11 +1971,9 @@ if (Meteor.isClient) {
           render(<TestApp />);
           await goTo(boardPath);
           await openOutline();
-          const outerRow = await screen.findByRole(
-            "treeitem",
-            { name: /^Outline outer/ },
-            { timeout: 10000 },
-          );
+          const outerRow = await screen.findByRole("treeitem", {
+            name: /^Outline outer/,
+          });
           act(() => outerRow.focus());
           await press(outerRow, { key: "ArrowDown" });
           assert.equal(document.activeElement, row(/^Outline inner/));
@@ -2007,7 +1993,7 @@ if (Meteor.isClient) {
           // The frame it's in is collapsed, so it's opened for this viewer
           // first.
           await press(innerRow, { key: "Enter" });
-          await waitFor(() => assertFitted(inner), { timeout: 10000 });
+          await waitFor(() => assertFitted(inner));
         });
 
         it("works for a viewer on an archived hunt", async function () {
@@ -2016,13 +2002,11 @@ if (Meteor.isClient) {
           try {
             await openBoard({ until: viewingOnly });
             await openOutline();
-            const round = await screen.findByRole(
-              "treeitem",
-              { name: /^games-island/ },
-              { timeout: 10000 },
-            );
+            const round = await screen.findByRole("treeitem", {
+              name: /^games-island/,
+            });
             await click(round);
-            await waitFor(() => assertFitted(roundFrame), { timeout: 10000 });
+            await waitFor(() => assertFitted(roundFrame));
           } finally {
             await setHuntArchived.callPromise({ huntId, isArchived: false });
           }
@@ -2036,20 +2020,15 @@ if (Meteor.isClient) {
             const tree = await openOutline();
             const sheet = tree.closest(".react-flow__panel.jr-comment-sheet");
             assert.isNotNull(sheet);
-            const round = await within(tree).findByRole(
-              "treeitem",
-              { name: /^games-island/ },
-              { timeout: 10000 },
-            );
+            const round = await within(tree).findByRole("treeitem", {
+              name: /^games-island/,
+            });
             assert.isAtLeast(round.getBoundingClientRect().height, 44);
             await click(round);
-            await waitFor(
-              () => {
-                assert.isNull(screen.queryByRole("tree", { name: "Outline" }));
-                assertFitted(roundFrame);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(() => {
+              assert.isNull(screen.queryByRole("tree", { name: "Outline" }));
+              assertFitted(roundFrame);
+            });
           } finally {
             phone.restore();
           }
@@ -2073,17 +2052,14 @@ if (Meteor.isClient) {
           expectedAnswerCount: 1,
           docType: "spreadsheet",
         });
-        const card = await waitFor(
-          async () => {
-            const found = await WhiteboardNodes.findOneAsync({
-              board: boardId,
-              puzzle: puzzleId,
-            });
-            assert.ok(found);
-            return found;
-          },
-          { timeout: 10000 },
-        );
+        const card = await waitFor(async () => {
+          const found = await WhiteboardNodes.findOneAsync({
+            board: boardId,
+            puzzle: puzzleId,
+          });
+          assert.ok(found);
+          return found;
+        });
         return { puzzleId, card };
       };
 
@@ -2123,16 +2099,8 @@ if (Meteor.isClient) {
           { timeout: 20000 },
         );
         await click(remove);
-        const dialog = await screen.findByRole(
-          "dialog",
-          {},
-          { timeout: 10000 },
-        );
-        const choose = await within(dialog).findByRole(
-          "combobox",
-          {},
-          { timeout: 10000 },
-        );
+        const dialog = await screen.findByRole("dialog", {});
+        const choose = await within(dialog).findByRole("combobox", {});
         await act(async () => {
           fireEvent.focus(choose);
           fireEvent.change(choose, { target: { value: "Stand-in puzzle" } });
@@ -2179,28 +2147,20 @@ if (Meteor.isClient) {
           puzzleId,
           copySheetsToReplacement: false,
         });
-        await waitFor(
-          async () => {
-            assert.isNull(nodeElement(card._id));
-            assert.isTrue(
-              (await WhiteboardNodes.findOneAsync(card._id))?.hidden,
-            );
-          },
-          { timeout: 10000 },
-        );
+        await waitFor(async () => {
+          assert.isNull(nodeElement(card._id));
+          assert.isTrue((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
+        });
 
         await undestroyPuzzle.callPromise({ puzzleId });
-        await waitFor(
-          async () => {
-            assert.isNotNull(nodeElement(card._id));
-            const back = await WhiteboardNodes.findOneAsync(card._id);
-            assert.ok(back);
-            assert.isUndefined(back.hidden);
-            assert.deepEqual(back.position, card.position);
-            assert.equal(back.parent, card.parent);
-          },
-          { timeout: 10000 },
-        );
+        await waitFor(async () => {
+          assert.isNotNull(nodeElement(card._id));
+          const back = await WhiteboardNodes.findOneAsync(card._id);
+          assert.ok(back);
+          assert.isUndefined(back.hidden);
+          assert.deepEqual(back.position, card.position);
+          assert.equal(back.parent, card.parent);
+        });
       });
 
       it("says so when a ?comment= link's card has gone with its puzzle", async function () {
@@ -2269,21 +2229,16 @@ if (Meteor.isClient) {
             puzzleId: robber,
             answers: ["MONEY"],
           });
-          await waitFor(
-            () => {
-              assert.match(header(), /Finished, [1-9]\d* unsolved/);
-              assert.isNotNull(
-                nodeElement(frameId)!.querySelector("svg.fa-check"),
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(() => {
+            assert.match(header(), /Finished, [1-9]\d* unsolved/);
+            assert.isNotNull(
+              nodeElement(frameId)!.querySelector("svg.fa-check"),
+            );
+          });
         } finally {
           await setPuzzleAnswers.callPromise({ puzzleId: robber, answers: [] });
         }
-        await waitFor(() => assert.notInclude(header(), "Finished"), {
-          timeout: 10000,
-        });
+        await waitFor(() => assert.notInclude(header(), "Finished"));
       });
 
       it("shows the people the puzzle list would on a card", async function () {
@@ -2506,13 +2461,10 @@ if (Meteor.isClient) {
               ),
             });
           }
-          await waitFor(
-            () => {
-              assert.include(header(), "Ready to meta");
-              assert.notInclude(header(), "Finished");
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(() => {
+            assert.include(header(), "Ready to meta");
+            assert.notInclude(header(), "Finished");
+          });
         } finally {
           for (const feeder of feeders) {
             await setPuzzleAnswers.callPromise({
@@ -2521,9 +2473,7 @@ if (Meteor.isClient) {
             });
           }
         }
-        await waitFor(() => assert.notInclude(header(), "Ready to meta"), {
-          timeout: 10000,
-        });
+        await waitFor(() => assert.notInclude(header(), "Ready to meta"));
       });
 
       it("shows a round's count and finished tick zoomed right out", async function () {
@@ -2552,15 +2502,12 @@ if (Meteor.isClient) {
             puzzleId: robber,
             answers: ["MONEY"],
           });
-          await waitFor(
-            () => {
-              const found = pill();
-              assert.ok(found);
-              assert.isNotNull(found.querySelector("svg.fa-check"));
-              assert.match(found.textContent ?? "", /\d+\/\d+/);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(() => {
+            const found = pill();
+            assert.ok(found);
+            assert.isNotNull(found.querySelector("svg.fa-check"));
+            assert.match(found.textContent ?? "", /\d+\/\d+/);
+          });
         } finally {
           await setPuzzleAnswers.callPromise({ puzzleId: robber, answers: [] });
           localStorage.removeItem(`whiteboard:viewport:${boardId}`);
@@ -2636,21 +2583,16 @@ if (Meteor.isClient) {
           act(() => {
             fireEvent.click(button);
           });
-          return waitFor(
-            () => {
-              const popover = document.querySelector<HTMLElement>(".popover");
-              assert.isNotNull(popover);
-              assert.isNotEmpty(popover.querySelectorAll("li"));
-              return popover;
-            },
-            { timeout: 10000 },
-          );
+          return waitFor(() => {
+            const popover = document.querySelector<HTMLElement>(".popover");
+            assert.isNotNull(popover);
+            assert.isNotEmpty(popover.querySelectorAll("li"));
+            return popover;
+          });
         };
 
         const popoverClosed = () =>
-          waitFor(() => assert.isNull(document.querySelector(".popover")), {
-            timeout: 10000,
-          });
+          waitFor(() => assert.isNull(document.querySelector(".popover")));
 
         const rowTitles = (popover: HTMLElement) =>
           [...popover.querySelectorAll("li a > span:first-child")].map(
@@ -2710,9 +2652,8 @@ if (Meteor.isClient) {
             act(() => {
               fireEvent.click(within(popover).getByLabelText("By solve time"));
             });
-            await waitFor(
-              () => assert.equal(rowTitles(popover)[0], feeder.title),
-              { timeout: 10000 },
+            await waitFor(() =>
+              assert.equal(rowTitles(popover)[0], feeder.title),
             );
             assert.equal(
               localStorage.getItem("whiteboard:feederOrder"),
@@ -2891,16 +2832,13 @@ if (Meteor.isClient) {
           await stabilize();
         });
         try {
-          await waitFor(
-            async () => {
-              assert.equal(
-                (await Whiteboards.findOneAsync(boardId))?.editPolicy,
-                "operators",
-              );
-              assert.isNull(screen.queryByText("Who can edit the board"));
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.equal(
+              (await Whiteboards.findOneAsync(boardId))?.editPolicy,
+              "operators",
+            );
+            assert.isNull(screen.queryByText("Who can edit the board"));
+          });
           await screen.findByTitle("Who can edit: Operators only");
         } finally {
           await setPolicy("members");
@@ -3137,14 +3075,11 @@ if (Meteor.isClient) {
           try {
             await openBoard({ until: viewingOnly });
             await openHistoryRow((text) => text.startsWith("Before edits by"));
-            const shown = await waitFor(
-              () => {
-                const found = nodeElement(note);
-                assert.isNotNull(found);
-                return found as HTMLElement;
-              },
-              { timeout: 10000 },
-            );
+            const shown = await waitFor(() => {
+              const found = nodeElement(note);
+              assert.isNotNull(found);
+              return found as HTMLElement;
+            });
             await click(shown);
             const button = await screen.findByRole("button", {
               name: "Restore this item",
@@ -3197,16 +3132,13 @@ if (Meteor.isClient) {
             await stabilize();
           });
           await click(within(panel).getByRole("button", { name: "Send" }));
-          await waitFor(
-            async () => {
-              const sent = await ChatMessages.findOneAsync({
-                sender: Meteor.userId()!,
-                comment: { $exists: true },
-              });
-              assert.exists(sent);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const sent = await ChatMessages.findOneAsync({
+              sender: Meteor.userId()!,
+              comment: { $exists: true },
+            });
+            assert.exists(sent);
+          });
         });
       });
     });
@@ -3230,9 +3162,7 @@ if (Meteor.isClient) {
         });
         let reused: Meteor.SubscriptionHandle | undefined;
         try {
-          await waitFor(() => assert.isTrue(held?.ready()), {
-            timeout: 10000,
-          });
+          await waitFor(() => assert.isTrue(held?.ready()));
           rerun.changed();
           reused = await typedSubscribe.async(whiteboardContents, { boardId });
           assert.exists(reused);
@@ -3703,10 +3633,8 @@ if (Meteor.isClient) {
           await click(deleteButton());
           await waitFor(() => assert.isNotNull(modal()));
           await click(within(modal()!).getByRole("button", { name: "Delete" }));
-          await waitFor(
-            async () =>
-              assert.isUndefined(await ChatMessages.findOneAsync(doomed)),
-            { timeout: 10000 },
+          await waitFor(async () =>
+            assert.isUndefined(await ChatMessages.findOneAsync(doomed)),
           );
         });
       });
@@ -3755,30 +3683,24 @@ if (Meteor.isClient) {
 
         const tag = await Tags.findOneAsync(frame.tag ?? "");
         await click(rowFor(tag!.name.replace(/^group:/, "")));
-        await waitFor(
-          async () => {
-            const back = await WhiteboardNodes.findOneAsync(frame._id);
-            assert.isUndefined(back?.hidden);
-            assert.isUndefined(back?.parent);
-          },
-          { timeout: 10000 },
-        );
+        await waitFor(async () => {
+          const back = await WhiteboardNodes.findOneAsync(frame._id);
+          assert.isUndefined(back?.hidden);
+          assert.isUndefined(back?.parent);
+        });
 
         const title = async (id: string | undefined) =>
           (await Puzzles.findOneAsync(id ?? ""))?.title;
         const firstLabel = `${await title(first!.feeder)} → ${await title(first!.meta)}`;
         await click(rowFor(firstLabel));
-        await waitFor(
-          async () => {
-            assert.isUndefined(
-              (await WhiteboardEdges.findOneAsync(first!._id))?.hidden,
-            );
-            assert.isTrue(
-              (await WhiteboardEdges.findOneAsync(second!._id))?.hidden,
-            );
-          },
-          { timeout: 10000 },
-        );
+        await waitFor(async () => {
+          assert.isUndefined(
+            (await WhiteboardEdges.findOneAsync(first!._id))?.hidden,
+          );
+          assert.isTrue(
+            (await WhiteboardEdges.findOneAsync(second!._id))?.hidden,
+          );
+        });
 
         // With feeder arrows turned off, the panel says why putting them back
         // shows nothing
@@ -3808,16 +3730,14 @@ if (Meteor.isClient) {
             name: "Put back all feeder arrows",
           }),
         );
-        await waitFor(
-          async () =>
-            assert.equal(
-              await WhiteboardEdges.find({
-                board: boardId,
-                hidden: true,
-              }).countAsync(),
-              0,
-            ),
-          { timeout: 10000 },
+        await waitFor(async () =>
+          assert.equal(
+            await WhiteboardEdges.find({
+              board: boardId,
+              hidden: true,
+            }).countAsync(),
+            0,
+          ),
         );
       });
 
@@ -3864,18 +3784,15 @@ if (Meteor.isClient) {
 
           refuse.restore();
           await click(retry);
-          await waitFor(
-            async () => {
-              assert.equal(
-                (await WhiteboardNodes.findOneAsync(sticky))?.text,
-                "Changed",
-              );
-              assert.isNull(
-                within(note).queryByRole("button", { name: "Retry" }),
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.equal(
+              (await WhiteboardNodes.findOneAsync(sticky))?.text,
+              "Changed",
+            );
+            assert.isNull(
+              within(note).queryByRole("button", { name: "Retry" }),
+            );
+          });
         } finally {
           refuse.restore();
           localStorage.removeItem(`whiteboard:viewport:${boardId}`);
@@ -3933,11 +3850,7 @@ if (Meteor.isClient) {
           await setOffline(true);
           await setHuntArchived.callPromise({ huntId, isArchived: true });
           await setOffline(false);
-          await screen.findByText(
-            "You can no longer edit this board.",
-            {},
-            { timeout: 10000 },
-          );
+          await screen.findByText("You can no longer edit this board.", {});
         } finally {
           status.restore();
           await setHuntArchived.callPromise({ huntId, isArchived: false });
@@ -3967,15 +3880,13 @@ if (Meteor.isClient) {
             fireEvent.pointerUp(pane(), { ...at, buttons: 0 });
             await stabilize();
           });
-          await waitFor(
-            async () =>
-              assert.equal(
-                await WhiteboardNodes.find({
-                  _id: { $in: segments },
-                }).countAsync(),
-                0,
-              ),
-            { timeout: 10000 },
+          await waitFor(async () =>
+            assert.equal(
+              await WhiteboardNodes.find({
+                _id: { $in: segments },
+              }).countAsync(),
+              0,
+            ),
           );
         } finally {
           forgetView();
@@ -4024,14 +3935,11 @@ if (Meteor.isClient) {
 
           await click(hideInk());
           assert.equal(hideInk().getAttribute("aria-pressed"), "true");
-          await waitFor(
-            async () => {
-              assert.isNull(nodeElement(segment));
-              assert.equal(await inkReceived(), 0);
-              assert.isTrue(await outlineReceived());
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.isNull(nodeElement(segment));
+            assert.equal(await inkReceived(), 0);
+            assert.isTrue(await outlineReceived());
+          });
           // Everything else is still there
           assert.isNotNull(nodeElement(note));
 
@@ -4040,9 +3948,7 @@ if (Meteor.isClient) {
           assert.isAbove(await inkReceived(), 0);
 
           await click(hideInk());
-          await waitFor(() => assert.isNull(nodeElement(segment)), {
-            timeout: 10000,
-          });
+          await waitFor(() => assert.isNull(nodeElement(segment)));
           await click(screen.getByRole("button", { name: /^Draw/ }));
           await nodeShown(segment);
           assert.equal(hideInk().getAttribute("aria-pressed"), "false");
@@ -4090,14 +3996,11 @@ if (Meteor.isClient) {
             });
             await stabilize();
           });
-          const frame = await waitFor(
-            async () => {
-              const [found] = await made();
-              assert.ok(found);
-              return found;
-            },
-            { timeout: 10000 },
-          );
+          const frame = await waitFor(async () => {
+            const [found] = await made();
+            assert.ok(found);
+            return found;
+          });
           assert.equal(frame.frameKind, "user");
           assert.closeTo(frame.width ?? 0, 400, 1);
           assert.closeTo(frame.height ?? 0, 300, 1);
@@ -4162,40 +4065,34 @@ if (Meteor.isClient) {
             });
             await stabilize();
           });
-          await waitFor(
-            async () => {
-              const resized = await savedNode(frame);
-              const child = await savedNode(sticky);
-              assert.closeTo(resized?.position.x ?? 0, base.x - 100, 1);
-              assert.closeTo(resized?.position.y ?? 0, base.y - 50, 1);
-              assert.closeTo(resized?.width ?? 0, 700, 1);
-              assert.closeTo(resized?.height ?? 0, 450, 1);
-              // Where it was on the board
-              assert.closeTo(
-                (resized?.position.x ?? 0) + (child?.position.x ?? 0),
-                base.x + 100,
-                1,
-              );
-              assert.closeTo(
-                (resized?.position.y ?? 0) + (child?.position.y ?? 0),
-                base.y + 100,
-                1,
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const resized = await savedNode(frame);
+            const child = await savedNode(sticky);
+            assert.closeTo(resized?.position.x ?? 0, base.x - 100, 1);
+            assert.closeTo(resized?.position.y ?? 0, base.y - 50, 1);
+            assert.closeTo(resized?.width ?? 0, 700, 1);
+            assert.closeTo(resized?.height ?? 0, 450, 1);
+            // Where it was on the board
+            assert.closeTo(
+              (resized?.position.x ?? 0) + (child?.position.x ?? 0),
+              base.x + 100,
+              1,
+            );
+            assert.closeTo(
+              (resized?.position.y ?? 0) + (child?.position.y ?? 0),
+              base.y + 100,
+              1,
+            );
+          });
 
           await press(document.body, { key: "Delete" });
-          await waitFor(
-            async () => {
-              assert.isUndefined(await savedNode(frame));
-              const child = await savedNode(sticky);
-              assert.isUndefined(child?.parent);
-              assert.closeTo(child?.position.x ?? 0, base.x + 100, 1);
-              assert.closeTo(child?.position.y ?? 0, base.y + 100, 1);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.isUndefined(await savedNode(frame));
+            const child = await savedNode(sticky);
+            assert.isUndefined(child?.parent);
+            assert.closeTo(child?.position.x ?? 0, base.x + 100, 1);
+            assert.closeTo(child?.position.y ?? 0, base.y + 100, 1);
+          });
         } finally {
           forgetView();
           await removeNodes([sticky, frame]);
@@ -4268,21 +4165,18 @@ if (Meteor.isClient) {
           };
           await drag(frame, 100, 50);
           await drag(sticky, 40, 20);
-          await waitFor(
-            async () => {
-              assert.closeTo(
-                (await savedNode(frame))?.width ?? 0,
-                600 + 100 / zoom,
-                1,
-              );
-              assert.closeTo(
-                (await savedNode(sticky))?.height ?? 0,
-                160 + 20 / zoom,
-                1,
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.closeTo(
+              (await savedNode(frame))?.width ?? 0,
+              600 + 100 / zoom,
+              1,
+            );
+            assert.closeTo(
+              (await savedNode(sticky))?.height ?? 0,
+              160 + 20 / zoom,
+              1,
+            );
+          });
           await expectNoResizeLoop(page);
         } finally {
           page.stop();
@@ -4319,10 +4213,8 @@ if (Meteor.isClient) {
           await openBoard();
           await nodeShown(frame);
           // Hidden, but there to be moved
-          await waitFor(
-            async () =>
-              assert.exists(await WhiteboardNodes.findOneAsync(segment)),
-            { timeout: 10000 },
+          await waitFor(async () =>
+            assert.exists(await WhiteboardNodes.findOneAsync(segment)),
           );
           assert.isNull(nodeElement(segment));
           await select(frame);
@@ -4355,24 +4247,21 @@ if (Meteor.isClient) {
             fireEvent.mouseUp(window, { ...mouse, ...to });
             await stabilize();
           });
-          await waitFor(
-            async () => {
-              const resized = await savedNode(frame);
-              const ink = await savedNode(segment);
-              assert.closeTo(resized?.position.x ?? 0, base.x - 100, 1);
-              assert.closeTo(
-                (resized?.position.x ?? 0) + (ink?.position.x ?? 0),
-                base.x + 100,
-                1,
-              );
-              assert.closeTo(
-                (resized?.position.y ?? 0) + (ink?.position.y ?? 0),
-                base.y + 100,
-                1,
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const resized = await savedNode(frame);
+            const ink = await savedNode(segment);
+            assert.closeTo(resized?.position.x ?? 0, base.x - 100, 1);
+            assert.closeTo(
+              (resized?.position.x ?? 0) + (ink?.position.x ?? 0),
+              base.x + 100,
+              1,
+            );
+            assert.closeTo(
+              (resized?.position.y ?? 0) + (ink?.position.y ?? 0),
+              base.y + 100,
+              1,
+            );
+          });
         } finally {
           localStorage.removeItem("whiteboard:hideInk");
           forgetView();
@@ -4413,17 +4302,14 @@ if (Meteor.isClient) {
           await edit(text, "Words", "Other words");
           await recolour(sticky, "Blue");
           await recolour(text, "Red");
-          await waitFor(
-            async () => {
-              const note = await savedNode(sticky);
-              const words = await savedNode(text);
-              assert.equal(note?.text, "After");
-              assert.equal(note?.color, "blue");
-              assert.equal(words?.text, "Other words");
-              assert.equal(words?.color, "red");
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const note = await savedNode(sticky);
+            const words = await savedNode(text);
+            assert.equal(note?.text, "After");
+            assert.equal(note?.color, "blue");
+            assert.equal(words?.text, "Other words");
+            assert.equal(words?.color, "red");
+          });
         } finally {
           forgetView();
           await removeNodes([sticky, text]);
@@ -4456,32 +4342,26 @@ if (Meteor.isClient) {
           };
           // The gaps even out with the ends kept still
           await arrange("Space evenly left to right");
-          await waitFor(
-            async () => {
-              const saved = await Promise.all(ids.map(savedNode));
-              assert.deepEqual(
-                saved.map((n) => Math.round(n?.position.x ?? 0)),
-                [base.x, base.x + 250, base.x + 500],
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const saved = await Promise.all(ids.map(savedNode));
+            assert.deepEqual(
+              saved.map((n) => Math.round(n?.position.x ?? 0)),
+              [base.x, base.x + 250, base.x + 500],
+            );
+          });
           await arrange("Align top edges");
-          await waitFor(
-            async () => {
-              const saved = await Promise.all(ids.map(savedNode));
-              assert.deepEqual(
-                saved.map((n) => Math.round(n?.position.y ?? 0)),
-                [base.y, base.y, base.y],
-              );
-              // Only along the one axis
-              assert.deepEqual(
-                saved.map((n) => Math.round(n?.position.x ?? 0)),
-                [base.x, base.x + 250, base.x + 500],
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const saved = await Promise.all(ids.map(savedNode));
+            assert.deepEqual(
+              saved.map((n) => Math.round(n?.position.y ?? 0)),
+              [base.y, base.y, base.y],
+            );
+            // Only along the one axis
+            assert.deepEqual(
+              saved.map((n) => Math.round(n?.position.x ?? 0)),
+              [base.x, base.x + 250, base.x + 500],
+            );
+          });
         } finally {
           forgetView();
           await removeNodes(ids);
@@ -4504,12 +4384,12 @@ if (Meteor.isClient) {
           await openBoard();
           await commentOn("All sorted", { x: 25000, y: 25000 });
           thread = await commentId({ "comment.x": 25000 }, 10000);
-          await waitFor(() => assert.isNotNull(pin()), { timeout: 10000 });
+          await waitFor(() => assert.isNotNull(pin()));
           await setWhiteboardCommentResolved.callPromise({
             messageId: thread,
             resolved: true,
           });
-          await waitFor(() => assert.isNull(pin()), { timeout: 10000 });
+          await waitFor(() => assert.isNull(pin()));
           await toggle();
           await waitFor(() => assert.isNotNull(pin()));
           await toggle();
@@ -4587,10 +4467,7 @@ if (Meteor.isClient) {
             puzzleId: puzzle._id,
             answers: ["SKYLARK", "SECOND"],
           });
-          await waitFor(
-            () => assert.equal(far.textContent?.trim(), "SKYLARK"),
-            { timeout: 10000 },
-          );
+          await waitFor(() => assert.equal(far.textContent?.trim(), "SKYLARK"));
         } finally {
           forgetView();
           await setPuzzleAnswers.callPromise({ puzzleId: puzzle._id, answers });
@@ -4653,36 +4530,24 @@ if (Meteor.isClient) {
           await openBoard();
           await select(sticky);
           await nudge("ArrowLeft", 4);
-          await waitFor(
-            async () => {
-              const moved = await savedNode(sticky);
-              assert.equal(moved?.parent, frame);
-              assert.deepEqual(moved?.position, { x: 340, y: 100 });
-              // It overhangs the frame's right edge by 40, so that grows
-              assert.equal(
-                (await savedNode(frame))?.width,
-                440 + FRAME_PADDING,
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const moved = await savedNode(sticky);
+            assert.equal(moved?.parent, frame);
+            assert.deepEqual(moved?.position, { x: 340, y: 100 });
+            // It overhangs the frame's right edge by 40, so that grows
+            assert.equal((await savedNode(frame))?.width, 440 + FRAME_PADDING);
+          });
           await nudge("ArrowRight", 4);
-          await waitFor(
-            async () => {
-              const moved = await savedNode(sticky);
-              assert.isUndefined(moved?.parent);
-              assert.deepEqual(moved?.position, {
-                x: base.x + 420,
-                y: base.y + 100,
-              });
-              // and doesn't shrink again
-              assert.equal(
-                (await savedNode(frame))?.width,
-                440 + FRAME_PADDING,
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const moved = await savedNode(sticky);
+            assert.isUndefined(moved?.parent);
+            assert.deepEqual(moved?.position, {
+              x: base.x + 420,
+              y: base.y + 100,
+            });
+            // and doesn't shrink again
+            assert.equal((await savedNode(frame))?.width, 440 + FRAME_PADDING);
+          });
         } finally {
           forgetView();
           await removeNodes([sticky, frame]);
@@ -4712,29 +4577,26 @@ if (Meteor.isClient) {
             const before = await onScreen(notes[1]!);
             await select(frame);
             await clickButton("Fit to contents");
-            await waitFor(
-              async () => {
-                const fitted = await savedNode(frame);
-                assert.deepEqual(fitted?.position, {
-                  x: base.x + 200 - FRAME_PADDING,
-                  y: base.y + 200 - FRAME_HEADER,
-                });
-                assert.equal(fitted?.width, 660 - 200 + FRAME_PADDING * 2);
-                assert.equal(
-                  fitted?.height,
-                  420 - 200 + FRAME_HEADER + FRAME_PADDING,
-                );
-                assert.deepEqual((await savedNode(notes[0]!))?.position, {
-                  x: FRAME_PADDING,
-                  y: FRAME_HEADER,
-                });
-                assert.deepEqual((await savedNode(notes[1]!))?.position, {
-                  x: 300 + FRAME_PADDING,
-                  y: 100 + FRAME_HEADER,
-                });
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const fitted = await savedNode(frame);
+              assert.deepEqual(fitted?.position, {
+                x: base.x + 200 - FRAME_PADDING,
+                y: base.y + 200 - FRAME_HEADER,
+              });
+              assert.equal(fitted?.width, 660 - 200 + FRAME_PADDING * 2);
+              assert.equal(
+                fitted?.height,
+                420 - 200 + FRAME_HEADER + FRAME_PADDING,
+              );
+              assert.deepEqual((await savedNode(notes[0]!))?.position, {
+                x: FRAME_PADDING,
+                y: FRAME_HEADER,
+              });
+              assert.deepEqual((await savedNode(notes[1]!))?.position, {
+                x: 300 + FRAME_PADDING,
+                y: 100 + FRAME_HEADER,
+              });
+            });
             const after = await onScreen(notes[1]!);
             assert.closeTo(after.left, before.left, 1);
             assert.closeTo(after.top, before.top, 1);
@@ -4789,18 +4651,15 @@ if (Meteor.isClient) {
               fireEvent.mouseUp(window, to);
               await stabilize();
             });
-            await waitFor(
-              async () => {
-                const dropped = await savedNode(note);
-                assert.equal(dropped?.parent, frame);
-                assert.deepEqual(dropped?.position, { x: 340, y: 100 });
-                const grown = await savedNode(frame);
-                assert.equal(grown?.width, 440 + FRAME_PADDING);
-                assert.equal(grown?.height, 300);
-                assert.deepEqual(grown?.position, base);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const dropped = await savedNode(note);
+              assert.equal(dropped?.parent, frame);
+              assert.deepEqual(dropped?.position, { x: 340, y: 100 });
+              const grown = await savedNode(frame);
+              assert.equal(grown?.width, 440 + FRAME_PADDING);
+              assert.equal(grown?.height, 300);
+              assert.deepEqual(grown?.position, base);
+            });
           } finally {
             forgetView();
             await removeNodes([note, frame]);
@@ -4831,41 +4690,34 @@ if (Meteor.isClient) {
             await openBoard();
             await select(frame._id);
             await clickButton("Tidy");
-            await waitFor(
-              async () => {
-                const cards = await WhiteboardNodes.find({
-                  board: boardId,
-                  parent: frame._id,
-                  type: "puzzle",
-                  hidden: { $ne: true },
-                }).fetchAsync();
-                const taken = cards.map((c) => JSON.stringify(c.position));
-                taken.forEach((at) => assert.isTrue(slots.has(at), at));
-                assert.equal(new Set(taken).size, taken.length);
-                assert.notDeepEqual(
-                  cards.find((c) => c._id === a._id)?.position,
-                  away,
-                );
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const cards = await WhiteboardNodes.find({
+                board: boardId,
+                parent: frame._id,
+                type: "puzzle",
+                hidden: { $ne: true },
+              }).fetchAsync();
+              const taken = cards.map((c) => JSON.stringify(c.position));
+              taken.forEach((at) => assert.isTrue(slots.has(at), at));
+              assert.equal(new Set(taken).size, taken.length);
+              assert.notDeepEqual(
+                cards.find((c) => c._id === a._id)?.position,
+                away,
+              );
+            });
             assert.deepEqual((await savedNode(note))?.position, notePosition);
-            await waitFor(
-              () =>
-                assert.isFalse(
-                  screen.getByRole<HTMLButtonElement>("button", {
-                    name: "Undo",
-                  }).disabled,
-                ),
-              { timeout: 10000 },
+            await waitFor(() =>
+              assert.isFalse(
+                screen.getByRole<HTMLButtonElement>("button", {
+                  name: "Undo",
+                }).disabled,
+              ),
             );
 
             await pressBoard();
             await press(pane(), { key: "z", ctrlKey: true });
-            await waitFor(
-              async () =>
-                assert.deepEqual((await savedNode(a._id))?.position, away),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.deepEqual((await savedNode(a._id))?.position, away),
             );
             assert.deepEqual((await savedNode(note))?.position, notePosition);
           } finally {
@@ -4946,10 +4798,8 @@ if (Meteor.isClient) {
             // Big enough for the cards already
             await lockedAt({ width: 4000, height: 4000 });
             await tidy();
-            await waitFor(
-              async () =>
-                assert.notDeepEqual((await savedNode(a._id))?.position, away),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.notDeepEqual((await savedNode(a._id))?.position, away),
             );
             const tidied = await savedNode(frame._id);
             assert.equal(tidied?.width, 4000);
@@ -5006,18 +4856,15 @@ if (Meteor.isClient) {
             // Two steps of 20 take its right edge 20 past the frame's
             await press(node, { key: "ArrowRight", shiftKey: true });
             await press(node, { key: "ArrowRight", shiftKey: true });
-            await waitFor(
-              async () => {
-                const moved = await savedNode(note);
-                assert.equal(moved?.parent, frame);
-                assert.deepEqual(moved?.position, { x: 320, y: 100 });
-                assert.equal(
-                  (await savedNode(frame))?.width,
-                  420 + FRAME_PADDING,
-                );
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const moved = await savedNode(note);
+              assert.equal(moved?.parent, frame);
+              assert.deepEqual(moved?.position, { x: 320, y: 100 });
+              assert.equal(
+                (await savedNode(frame))?.width,
+                420 + FRAME_PADDING,
+              );
+            });
           } finally {
             forgetView();
             await removeNodes([note, frame]);
@@ -5073,9 +4920,7 @@ if (Meteor.isClient) {
                 { _id: note!, position: { x: 140, y: 130 } },
               ],
             });
-            await waitFor(() => assert.equal(frameNode.style.width, "600px"), {
-              timeout: 10000,
-            });
+            await waitFor(() => assert.equal(frameNode.style.width, "600px"));
             // Long enough for a glide, and for React Flow to measure it
             await settleFor(500);
             widths.stop();
@@ -5117,30 +4962,23 @@ if (Meteor.isClient) {
             const node = await nodeShown(note);
             await press(node, { key: "ArrowRight", shiftKey: true });
             await press(node, { key: "ArrowRight", shiftKey: true });
-            await waitFor(
-              async () =>
-                assert.equal(
-                  (await savedNode(frame))?.width,
-                  420 + FRAME_PADDING,
-                ),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal(
+                (await savedNode(frame))?.width,
+                420 + FRAME_PADDING,
+              ),
             );
             const undo = screen.getByRole<HTMLButtonElement>("button", {
               name: "Undo",
             });
-            await waitFor(() => assert.isFalse(undo.disabled), {
-              timeout: 10000,
-            });
+            await waitFor(() => assert.isFalse(undo.disabled));
             await click(undo);
-            await waitFor(
-              async () => {
-                const moved = await savedNode(note);
-                assert.deepEqual(moved?.position, { x: 280, y: 100 });
-                assert.equal((await savedNode(frame))?.width, 400);
-                assert.equal((await nodeShown(frame)).style.width, "400px");
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const moved = await savedNode(note);
+              assert.deepEqual(moved?.position, { x: 280, y: 100 });
+              assert.equal((await savedNode(frame))?.width, 400);
+              assert.equal((await nodeShown(frame)).style.width, "400px");
+            });
             await expectNoResizeLoop(page);
           } finally {
             page.stop();
@@ -5175,14 +5013,11 @@ if (Meteor.isClient) {
             for (let i = 0; i < 4; i++) {
               await press(node, { key: "ArrowLeft", shiftKey: true });
             }
-            await waitFor(
-              async () => {
-                const moved = await savedNode(note);
-                assert.equal(moved?.parent, frame);
-                assert.deepEqual(moved?.position, { x: 340, y: 100 });
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const moved = await savedNode(note);
+              assert.equal(moved?.parent, frame);
+              assert.deepEqual(moved?.position, { x: 340, y: 100 });
+            });
             const held = await savedNode(frame);
             assert.equal(held?.width, 400);
             assert.equal(held?.height, 300);
@@ -5213,13 +5048,9 @@ if (Meteor.isClient) {
           "Changed by someone else since, so it wasn't undone";
         // An edit is on the undo stack once its save is back.
         const canUndo = () =>
-          waitFor(() => assert.isFalse(undoButton().disabled), {
-            timeout: 10000,
-          });
+          waitFor(() => assert.isFalse(undoButton().disabled));
         const canRedo = () =>
-          waitFor(() => assert.isFalse(redoButton().disabled), {
-            timeout: 10000,
-          });
+          waitFor(() => assert.isFalse(redoButton().disabled));
         const nudgeRight = async (id: string) => {
           await select(id);
           const node = await nodeShown(id);
@@ -5240,30 +5071,25 @@ if (Meteor.isClient) {
             assert.isTrue(redoButton().disabled);
             assert.include(undoButton().title, "Ctrl/⌘+Z");
             await nudgeRight(id);
-            await waitFor(
-              async () => assert.notDeepEqual(await positionOf(id), base),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.notDeepEqual(await positionOf(id), base),
             );
             const moved = await positionOf(id);
             await canUndo();
 
             await pressBoard();
             await undoKey();
-            await waitFor(
-              async () => {
-                const node = await savedNode(id);
-                assert.deepEqual(node?.position, base);
-                assert.isTrue(node?.manual);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const node = await savedNode(id);
+              assert.deepEqual(node?.position, base);
+              assert.isTrue(node?.manual);
+            });
             await canRedo();
             assert.isTrue(undoButton().disabled);
 
             await redoKey();
-            await waitFor(
-              async () => assert.deepEqual(await positionOf(id), moved),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.deepEqual(await positionOf(id), moved),
             );
             await canUndo();
             assert.isTrue(redoButton().disabled);
@@ -5286,43 +5112,33 @@ if (Meteor.isClient) {
             await openBoard();
             await select(id);
             await press(document.body, { key: "Delete" });
-            await waitFor(async () => assert.isUndefined(await savedNode(id)), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.isUndefined(await savedNode(id)));
             await canUndo();
             await pressBoard();
             await undoKey();
-            await waitFor(
-              async () => {
-                const node = await savedNode(id);
-                assert.equal(node?.text, "Before");
-                assert.deepEqual(node?.position, base);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const node = await savedNode(id);
+              assert.equal(node?.text, "Before");
+              assert.deepEqual(node?.position, base);
+            });
             await canRedo();
 
             await editText(await nodeShown(id), "Before", "After");
-            await waitFor(
-              async () => assert.equal((await savedNode(id))?.text, "After"),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal((await savedNode(id))?.text, "After"),
             );
             // A new edit leaves nothing to redo
-            await waitFor(() => assert.isTrue(redoButton().disabled), {
-              timeout: 10000,
-            });
+            await waitFor(() => assert.isTrue(redoButton().disabled));
 
             await pressBoard();
             await undoKey();
-            await waitFor(
-              async () => assert.equal((await savedNode(id))?.text, "Before"),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal((await savedNode(id))?.text, "Before"),
             );
             await canRedo();
             await redoKey();
-            await waitFor(
-              async () => assert.equal((await savedNode(id))?.text, "After"),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal((await savedNode(id))?.text, "After"),
             );
           } finally {
             forgetView();
@@ -5351,20 +5167,14 @@ if (Meteor.isClient) {
                 name: "Collapse for everyone",
               }),
             );
-            await waitFor(async () => assert.isTrue(await collapsed()), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.isTrue(await collapsed()));
             await canUndo();
             await pressBoard();
             await undoKey();
-            await waitFor(async () => assert.isFalse(await collapsed()), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.isFalse(await collapsed()));
             await canRedo();
             await press(pane(), { key: "y", ctrlKey: true });
-            await waitFor(async () => assert.isTrue(await collapsed()), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.isTrue(await collapsed()));
           } finally {
             forgetView();
             await removeNodes([frame]);
@@ -5416,29 +5226,22 @@ if (Meteor.isClient) {
               fireEvent.pointerUp(pane(), { ...point(80), buttons: 0 });
               await stabilize();
             });
-            ids = await waitFor(
-              async () => {
-                const segments = await drawn();
-                assert.isNotEmpty(segments);
-                return segments.map((n) => n._id);
-              },
-              { timeout: 10000 },
-            );
+            ids = await waitFor(async () => {
+              const segments = await drawn();
+              assert.isNotEmpty(segments);
+              return segments.map((n) => n._id);
+            });
             await canUndo();
 
             await undoKey();
-            await waitFor(async () => assert.isEmpty(await drawn()), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.isEmpty(await drawn()));
             await canRedo();
             await redoKey();
-            await waitFor(
-              async () =>
-                assert.sameMembers(
-                  (await drawn()).map((n) => n._id),
-                  ids,
-                ),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.sameMembers(
+                (await drawn()).map((n) => n._id),
+                ids,
+              ),
             );
           } finally {
             forgetView();
@@ -5462,9 +5265,8 @@ if (Meteor.isClient) {
               boardId,
               nodes: [{ _id: id, position: elsewhere }],
             });
-            await waitFor(
-              async () => assert.deepEqual(await positionOf(id), elsewhere),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.deepEqual(await positionOf(id), elsewhere),
             );
 
             await pressBoard();
@@ -5493,9 +5295,7 @@ if (Meteor.isClient) {
               boardId,
               putBack: false,
             });
-            await waitFor(() => assert.isTrue(undoButton().disabled), {
-              timeout: 10000,
-            });
+            await waitFor(() => assert.isTrue(undoButton().disabled));
 
             await pressBoard();
             await undoKey();
@@ -5518,17 +5318,13 @@ if (Meteor.isClient) {
             await canUndo();
             await setHuntArchived.callPromise({ huntId, isArchived: true });
             try {
-              await waitFor(
-                () =>
-                  assert.isNull(screen.queryByRole("button", { name: "Undo" })),
-                { timeout: 10000 },
+              await waitFor(() =>
+                assert.isNull(screen.queryByRole("button", { name: "Undo" })),
               );
             } finally {
               await setHuntArchived.callPromise({ huntId, isArchived: false });
             }
-            await waitFor(() => assert.isTrue(undoButton().disabled), {
-              timeout: 10000,
-            });
+            await waitFor(() => assert.isTrue(undoButton().disabled));
           } finally {
             forgetView();
             await removeNodes([id]);
@@ -5547,9 +5343,8 @@ if (Meteor.isClient) {
           try {
             await openBoard();
             await nudgeRight(id);
-            await waitFor(
-              async () => assert.notDeepEqual(await positionOf(id), base),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.notDeepEqual(await positionOf(id), base),
             );
             const moved = await positionOf(id);
             await canUndo();
@@ -5588,26 +5383,23 @@ if (Meteor.isClient) {
               fireEvent.click(blue);
               await stabilize();
             });
-            await waitFor(
-              async () => assert.equal((await savedNode(id))?.color, "blue"),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal((await savedNode(id))?.color, "blue"),
             );
             await canUndo();
 
             await pressBoard();
             await undoKey();
-            await waitFor(
-              async () => assert.isUndefined((await savedNode(id))?.color),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.isUndefined((await savedNode(id))?.color),
             );
             await canRedo();
             assert.isTrue(undoButton().disabled);
             assert.isNull(screen.queryByText(STALE_NOTICE));
 
             await redoKey();
-            await waitFor(
-              async () => assert.equal((await savedNode(id))?.color, "blue"),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal((await savedNode(id))?.color, "blue"),
             );
             await canUndo();
           } finally {
@@ -5697,55 +5489,47 @@ if (Meteor.isClient) {
             const pasted = await clipboard("paste", copied.text);
             assert.isTrue(pasted.event.defaultPrevented);
             const centre = viewCentre(base);
-            await waitFor(
-              async () => {
-                const found = await copies();
-                assert.lengthOf(found, 2);
-                const [a2, b2] = texts.map(
-                  (text) => found.find((n) => n.text === text)!,
-                );
-                // The same shape, its middle in the middle of the view
-                assert.equal(b2!.position.x - a2!.position.x, 300);
-                assert.equal(b2!.position.y - a2!.position.y, 40);
-                assert.closeTo(a2!.position.x + 230, centre.x, 1);
-                assert.closeTo(a2!.position.y + 80, centre.y, 1);
-                found.forEach((n) => {
-                  assert.isUndefined(n.parent);
-                  assert.isUndefined(n.locked);
-                  assert.equal(n.contributors[0]?.user, Meteor.userId());
-                });
-                const joined = await WhiteboardEdges.findOneAsync({
-                  source: a2!._id,
-                  target: b2!._id,
-                });
-                assert.equal(joined?.label, "then");
-                assert.isTrue(joined?.dashed);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const found = await copies();
+              assert.lengthOf(found, 2);
+              const [a2, b2] = texts.map(
+                (text) => found.find((n) => n.text === text)!,
+              );
+              // The same shape, its middle in the middle of the view
+              assert.equal(b2!.position.x - a2!.position.x, 300);
+              assert.equal(b2!.position.y - a2!.position.y, 40);
+              assert.closeTo(a2!.position.x + 230, centre.x, 1);
+              assert.closeTo(a2!.position.y + 80, centre.y, 1);
+              found.forEach((n) => {
+                assert.isUndefined(n.parent);
+                assert.isUndefined(n.locked);
+                assert.equal(n.contributors[0]?.user, Meteor.userId());
+              });
+              const joined = await WhiteboardEdges.findOneAsync({
+                source: a2!._id,
+                target: b2!._id,
+              });
+              assert.equal(joined?.label, "then");
+              assert.isTrue(joined?.dashed);
+            });
             const pastedIds = (await copies()).map((n) => n._id);
 
-            await waitFor(() => assert.isFalse(undoButton().disabled), {
-              timeout: 10000,
-            });
+            await waitFor(() => assert.isFalse(undoButton().disabled));
             await pressBoard();
             await press(pane(), { key: "z", ctrlKey: true });
-            await waitFor(
-              async () => {
-                assert.isEmpty(await copies());
-                assert.equal(
-                  await WhiteboardEdges.find({
-                    board: boardId,
-                    $or: [
-                      { source: { $in: pastedIds } },
-                      { target: { $in: pastedIds } },
-                    ],
-                  }).countAsync(),
-                  0,
-                );
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              assert.isEmpty(await copies());
+              assert.equal(
+                await WhiteboardEdges.find({
+                  board: boardId,
+                  $or: [
+                    { source: { $in: pastedIds } },
+                    { target: { $in: pastedIds } },
+                  ],
+                }).countAsync(),
+                0,
+              );
+            });
             assert.exists(await savedNode(a));
             assert.exists(await savedNode(b));
           } finally {
@@ -5776,18 +5560,15 @@ if (Meteor.isClient) {
               "Control+D Meta+D",
             );
             await press(pane(), { key: "d", ctrlKey: true });
-            await waitFor(
-              async () => {
-                const [copy, ...more] = await copies();
-                assert.isEmpty(more);
-                assert.deepEqual(copy?.position, {
-                  x: base.x + 24,
-                  y: base.y + 24,
-                });
-                assert.isUndefined(copy?.parent);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const [copy, ...more] = await copies();
+              assert.isEmpty(more);
+              assert.deepEqual(copy?.position, {
+                x: base.x + 24,
+                y: base.y + 24,
+              });
+              assert.isUndefined(copy?.parent);
+            });
 
             // The copy is what's selected now, so the next one fans out
             // from it
@@ -5799,21 +5580,18 @@ if (Meteor.isClient) {
             );
             assert.isFalse(nodeElement(id)?.classList.contains("selected"));
             await click(screen.getByRole("button", { name: "Duplicate" }));
-            await waitFor(
-              async () => {
-                const found = await copies();
-                assert.lengthOf(found, 2);
-                assert.sameDeepMembers(
-                  found.map((copy) => copy.position),
-                  [
-                    { x: base.x + 24, y: base.y + 24 },
-                    { x: base.x + 48, y: base.y + 48 },
-                  ],
-                );
-                found.forEach((copy) => assert.isUndefined(copy.parent));
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const found = await copies();
+              assert.lengthOf(found, 2);
+              assert.sameDeepMembers(
+                found.map((copy) => copy.position),
+                [
+                  { x: base.x + 24, y: base.y + 24 },
+                  { x: base.x + 48, y: base.y + 48 },
+                ],
+              );
+              found.forEach((copy) => assert.isUndefined(copy.parent));
+            });
           } finally {
             forgetView();
             const left = await withText([text]).fetchAsync();
@@ -5833,31 +5611,25 @@ if (Meteor.isClient) {
             const centre = viewCentre(base);
 
             await clipboard("paste", `  ${note}\n`);
-            await waitFor(
-              async () => {
-                const sticky = await WhiteboardNodes.findOneAsync({
-                  board: boardId,
-                  text: note,
-                });
-                assert.equal(sticky?.type, "sticky");
-                assert.closeTo(sticky!.position.x + 100, centre.x, 1);
-                assert.closeTo(sticky!.position.y + 80, centre.y, 1);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const sticky = await WhiteboardNodes.findOneAsync({
+                board: boardId,
+                text: note,
+              });
+              assert.equal(sticky?.type, "sticky");
+              assert.closeTo(sticky!.position.x + 100, centre.x, 1);
+              assert.closeTo(sticky!.position.y + 80, centre.y, 1);
+            });
 
             await clipboard("paste", url);
-            const link = await waitFor(
-              async () => {
-                const found = await WhiteboardNodes.findOneAsync({
-                  board: boardId,
-                  text: url,
-                });
-                assert.equal(found?.type, "text");
-                return found!;
-              },
-              { timeout: 10000 },
-            );
+            const link = await waitFor(async () => {
+              const found = await WhiteboardNodes.findOneAsync({
+                board: boardId,
+                text: url,
+              });
+              assert.equal(found?.type, "text");
+              return found!;
+            });
             const shown = await nodeShown(link._id);
             await waitFor(() =>
               assert.exists(shown.querySelector(`a[href="${url}"]`)),
@@ -5935,15 +5707,12 @@ if (Meteor.isClient) {
             await selectAlso(note);
             await press(pane(), { key: "d", ctrlKey: true });
             await screen.findByText("Puzzle cards were left out");
-            await waitFor(
-              async () => {
-                const copies = (await withText([text]).fetchAsync()).filter(
-                  (n) => n._id !== note,
-                );
-                assert.lengthOf(copies, 1);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const copies = (await withText([text]).fetchAsync()).filter(
+                (n) => n._id !== note,
+              );
+              assert.lengthOf(copies, 1);
+            });
             assert.equal(
               await WhiteboardNodes.find({
                 board: boardId,
@@ -5986,21 +5755,18 @@ if (Meteor.isClient) {
             await pressBoard();
             await select(frame);
             await press(pane(), { key: "d", ctrlKey: true });
-            await waitFor(
-              async () => {
-                const frameCopy = await copyOf(frame, { label });
-                assert.exists(frameCopy);
-                assert.isUndefined(frameCopy.parent);
-                assert.deepEqual(frameCopy.position, {
-                  x: base.x + 24,
-                  y: base.y + 24,
-                });
-                const insideCopy = await copyOf(inside, { text });
-                assert.equal(insideCopy?.parent, frameCopy._id);
-                assert.deepEqual(insideCopy?.position, { x: 40, y: 60 });
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const frameCopy = await copyOf(frame, { label });
+              assert.exists(frameCopy);
+              assert.isUndefined(frameCopy.parent);
+              assert.deepEqual(frameCopy.position, {
+                x: base.x + 24,
+                y: base.y + 24,
+              });
+              const insideCopy = await copyOf(inside, { text });
+              assert.equal(insideCopy?.parent, frameCopy._id);
+              assert.deepEqual(insideCopy?.position, { x: 40, y: 60 });
+            });
           } finally {
             forgetView();
             const left = await WhiteboardNodes.find({
@@ -6046,35 +5812,28 @@ if (Meteor.isClient) {
             await pressBoard();
             await select(frame);
             await press(pane(), { key: "d", ctrlKey: true });
-            const first = await waitFor(
-              async () => {
-                const copies = await WhiteboardNodes.find({
-                  board: boardId,
-                  label,
-                  _id: { $ne: frame },
-                }).fetchAsync();
-                assert.lengthOf(copies, 1);
-                return copies[0]!;
-              },
-              { timeout: 10000 },
-            );
+            const first = await waitFor(async () => {
+              const copies = await WhiteboardNodes.find({
+                board: boardId,
+                label,
+                _id: { $ne: frame },
+              }).fetchAsync();
+              assert.lengthOf(copies, 1);
+              return copies[0]!;
+            });
             // The copy's line, inside it, isn't drawn, which mustn't keep
             // the copy from being selected
-            await waitFor(
-              () =>
-                assert.isTrue(
-                  nodeElement(first._id)?.classList.contains("selected"),
-                ),
-              { timeout: 10000 },
+            await waitFor(() =>
+              assert.isTrue(
+                nodeElement(first._id)?.classList.contains("selected"),
+              ),
             );
             await press(pane(), { key: "d", ctrlKey: true });
-            await waitFor(
-              async () =>
-                assert.sameDeepMembers(await frameCopies(), [
-                  { x: base.x + 24, y: base.y + 24 },
-                  { x: base.x + 48, y: base.y + 48 },
-                ]),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.sameDeepMembers(await frameCopies(), [
+                { x: base.x + 24, y: base.y + 24 },
+                { x: base.x + 48, y: base.y + 48 },
+              ]),
             );
           } finally {
             forgetView();
@@ -6115,19 +5874,16 @@ if (Meteor.isClient) {
               await stabilize();
             });
             await clipboard("paste", note);
-            await waitFor(
-              async () => {
-                const sticky = await WhiteboardNodes.findOneAsync({
-                  board: boardId,
-                  text: note,
-                });
-                assert.exists(sticky);
-                assert.equal(sticky.parent, outer);
-                assert.closeTo(base.x + sticky.position.x + 100, at.x, 1);
-                assert.closeTo(base.y + sticky.position.y + 80, at.y, 1);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const sticky = await WhiteboardNodes.findOneAsync({
+                board: boardId,
+                text: note,
+              });
+              assert.exists(sticky);
+              assert.equal(sticky.parent, outer);
+              assert.closeTo(base.x + sticky.position.x + 100, at.x, 1);
+              assert.closeTo(base.y + sticky.position.y + 80, at.y, 1);
+            });
           } finally {
             forgetView();
             await upsertWhiteboardNodes.callPromise({
@@ -6211,15 +5967,13 @@ if (Meteor.isClient) {
             const pasted = await clipboard("paste", copied);
             assert.isTrue(pasted.event.defaultPrevented);
             await screen.findByText("Images from another hunt were left out");
-            await waitFor(
-              async () =>
-                assert.exists(
-                  await WhiteboardNodes.findOneAsync({
-                    board: boardId,
-                    text: note,
-                  }),
-                ),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.exists(
+                await WhiteboardNodes.findOneAsync({
+                  board: boardId,
+                  text: note,
+                }),
+              ),
             );
             assert.notExists(
               await WhiteboardNodes.findOneAsync({
@@ -6323,9 +6077,7 @@ if (Meteor.isClient) {
             await clipboard("paste", copied.text);
             await screen.findByText("Couldn't save: Refused for the test");
             assert.isTrue(refuse.calledOnce);
-            await waitFor(async () => assert.isEmpty(await copies()), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.isEmpty(await copies()));
             assert.isTrue(undoButton().disabled);
             assert.exists(await savedNode(a));
             assert.exists(await savedNode(b));
@@ -6411,9 +6163,7 @@ if (Meteor.isClient) {
         const openWithImages = async () => {
           await setImageBucket.callPromise({ on: true });
           await openBoard();
-          await waitFor(() => assert.isFalse(imageButton().disabled), {
-            timeout: 10000,
-          });
+          await waitFor(() => assert.isFalse(imageButton().disabled));
         };
         const images = () =>
           WhiteboardNodes.find({ board: boardId, type: "image" }).fetchAsync();
@@ -6453,16 +6203,13 @@ if (Meteor.isClient) {
             };
             // While it uploads, a placeholder the size it will be stands
             // where it will land, and nothing is saved
-            const placeholder = await waitFor(
-              () => {
-                const found = document.querySelector<HTMLElement>(
-                  ".jr-image-uploading",
-                );
-                assert.exists(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const placeholder = await waitFor(() => {
+              const found = document.querySelector<HTMLElement>(
+                ".jr-image-uploading",
+              );
+              assert.exists(found);
+              return found;
+            });
             assert.equal(placeholder.style.width, "480px");
             assert.equal(placeholder.style.height, "240px");
             const [, left, top] = /translate\(([-\d.]+)px, ([-\d.]+)px\)/
@@ -6474,15 +6221,12 @@ if (Meteor.isClient) {
             assert.isEmpty(await images());
             stubs.release();
 
-            const node = await waitFor(
-              async () => {
-                const [found, ...more] = await images();
-                assert.isEmpty(more);
-                assert.exists(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const node = await waitFor(async () => {
+              const [found, ...more] = await images();
+              assert.isEmpty(more);
+              assert.exists(found);
+              return found;
+            });
             sinon.assert.calledWith(stubs.upload, {
               puzzleId: backing,
               mimeType: "image/png",
@@ -6539,14 +6283,11 @@ if (Meteor.isClient) {
               await stabilize();
             });
             assert.isTrue(event.defaultPrevented);
-            const node = await waitFor(
-              async () => {
-                const [found] = await images();
-                assert.exists(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const node = await waitFor(async () => {
+              const [found] = await images();
+              assert.exists(found);
+              return found;
+            });
             assert.deepEqual(node.image, {
               url: stubs.urls[0]!,
               width: 200,
@@ -6588,14 +6329,11 @@ if (Meteor.isClient) {
             });
             assert.isTrue(over.defaultPrevented);
             assert.isTrue(drop.defaultPrevented);
-            const node = await waitFor(
-              async () => {
-                const [found] = await images();
-                assert.exists(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const node = await waitFor(async () => {
+              const [found] = await images();
+              assert.exists(found);
+              return found;
+            });
             assert.equal(node.image?.url, stubs.urls[0]);
             assert.equal(node.width, 120);
             assert.equal(node.height, 80);
@@ -6642,12 +6380,10 @@ if (Meteor.isClient) {
               await stabilize();
             });
             assert.isTrue(drop.defaultPrevented);
-            await waitFor(
-              () =>
-                assert.exists(
-                  editor.querySelector(`img[src="${stubs.urls[0]}"]`),
-                ),
-              { timeout: 10000 },
+            await waitFor(() =>
+              assert.exists(
+                editor.querySelector(`img[src="${stubs.urls[0]}"]`),
+              ),
             );
             // Time for a board image to have started, were one coming
             await settleFor(500);
@@ -6694,22 +6430,17 @@ if (Meteor.isClient) {
             await openWithImages();
             await select(id);
             await press(document.body, { key: "Delete" });
-            await waitFor(async () => assert.isUndefined(await savedNode(id)), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.isUndefined(await savedNode(id)));
             await pressBoard();
             await press(pane(), { key: "z", ctrlKey: true });
-            await waitFor(
-              async () => {
-                const node = await savedNode(id);
-                assert.equal(node?.type, "image");
-                assert.deepEqual(node?.image, image);
-                assert.equal(node?.width, 300);
-                assert.equal(node?.height, 150);
-                assert.deepEqual(node?.position, base);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const node = await savedNode(id);
+              assert.equal(node?.type, "image");
+              assert.deepEqual(node?.image, image);
+              assert.equal(node?.width, 300);
+              assert.equal(node?.height, 150);
+              assert.deepEqual(node?.position, base);
+            });
           } finally {
             forgetView();
             await removeImages();
@@ -6754,15 +6485,12 @@ if (Meteor.isClient) {
               fireEvent.mouseUp(window, { ...mouse, ...end });
               await stabilize();
             });
-            await waitFor(
-              async () => {
-                const resized = await savedNode(id);
-                assert.closeTo(resized?.width ?? 0, 400, 1);
-                assert.closeTo(resized?.height ?? 0, 200, 1);
-                assert.deepEqual(resized?.position, base);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const resized = await savedNode(id);
+              assert.closeTo(resized?.width ?? 0, 400, 1);
+              assert.closeTo(resized?.height ?? 0, 200, 1);
+              assert.deepEqual(resized?.position, base);
+            });
           } finally {
             forgetView();
             await removeImages();
@@ -6780,39 +6508,33 @@ if (Meteor.isClient) {
             await pressBoard();
             await select(id);
             await press(pane(), { key: "d", ctrlKey: true });
-            const first = await waitFor(
-              async () => {
-                const copies = (await images()).filter((n) => n._id !== id);
-                assert.lengthOf(copies, 1);
-                return copies[0]!;
-              },
-              { timeout: 10000 },
-            );
+            const first = await waitFor(async () => {
+              const copies = (await images()).filter((n) => n._id !== id);
+              assert.lengthOf(copies, 1);
+              return copies[0]!;
+            });
             await waitFor(() =>
               assert.isTrue(
                 nodeElement(first._id)?.classList.contains("selected"),
               ),
             );
             await press(pane(), { key: "d", ctrlKey: true });
-            await waitFor(
-              async () => {
-                const copies = (await images()).filter((n) => n._id !== id);
-                assert.lengthOf(copies, 2);
-                assert.sameDeepMembers(
-                  copies.map((n) => n.position),
-                  [
-                    { x: base.x + 24, y: base.y + 24 },
-                    { x: base.x + 48, y: base.y + 48 },
-                  ],
-                );
-                copies.forEach((n) => {
-                  assert.deepEqual(n.image, image);
-                  assert.equal(n.width, 300);
-                  assert.equal(n.height, 150);
-                });
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              const copies = (await images()).filter((n) => n._id !== id);
+              assert.lengthOf(copies, 2);
+              assert.sameDeepMembers(
+                copies.map((n) => n.position),
+                [
+                  { x: base.x + 24, y: base.y + 24 },
+                  { x: base.x + 48, y: base.y + 48 },
+                ],
+              );
+              copies.forEach((n) => {
+                assert.deepEqual(n.image, image);
+                assert.equal(n.width, 300);
+                assert.equal(n.height, 150);
+              });
+            });
           } finally {
             forgetView();
             await removeImages();
@@ -6833,11 +6555,7 @@ if (Meteor.isClient) {
               });
               await stabilize();
             });
-            await screen.findByText(
-              "Couldn't save: Refused for the test",
-              {},
-              { timeout: 10000 },
-            );
+            await screen.findByText("Couldn't save: Refused for the test", {});
             sinon.assert.calledOnce(upload);
             assert.isNull(document.querySelector(".jr-image-uploading"));
             assert.isEmpty(await images());
@@ -6956,14 +6674,11 @@ if (Meteor.isClient) {
               fireEvent.pointerUp(pane(), { ...point(xs.at(-1)!), buttons: 0 });
               await stabilize();
             });
-            const [segment] = await waitFor(
-              async () => {
-                const segments = await drawn();
-                assert.lengthOf(segments, 1);
-                return segments;
-              },
-              { timeout: 10000 },
-            );
+            const [segment] = await waitFor(async () => {
+              const segments = await drawn();
+              assert.lengthOf(segments, 1);
+              return segments;
+            });
             assert.equal(segment!.strokeWidth, "marker");
 
             const node = await nodeShown(segment!._id);
@@ -6996,9 +6711,7 @@ if (Meteor.isClient) {
               fireEvent.pointerUp(pane(), { ...point(xs[2]!), buttons: 0 });
               await stabilize();
             });
-            await waitFor(async () => assert.isEmpty(await drawn()), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.isEmpty(await drawn()));
             assert.exists(await savedNode(a._id));
           } finally {
             forgetView();
@@ -7048,15 +6761,12 @@ if (Meteor.isClient) {
               });
               await stabilize();
             });
-            const placed = await waitFor(
-              async () => {
-                const [found, ...more] = await shapes();
-                assert.ok(found);
-                assert.isEmpty(more);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const placed = await waitFor(async () => {
+              const [found, ...more] = await shapes();
+              assert.ok(found);
+              assert.isEmpty(more);
+              return found;
+            });
             rect = placed._id;
             assert.equal(placed.shape, "rect");
             assert.deepEqual(placed.position, {
@@ -7096,14 +6806,11 @@ if (Meteor.isClient) {
               });
               await stabilize();
             });
-            const ellipse = await waitFor(
-              async () => {
-                const found = (await shapes()).find((n) => n._id !== rect);
-                assert.ok(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const ellipse = await waitFor(async () => {
+              const found = (await shapes()).find((n) => n._id !== rect);
+              assert.ok(found);
+              return found;
+            });
             assert.equal(ellipse.shape, "ellipse");
             assert.deepEqual(ellipse.position, { x: base.x + 400, y: base.y });
             assert.equal(ellipse.width, 200);
@@ -7113,10 +6820,8 @@ if (Meteor.isClient) {
             // Recoloured, it's filled in the pastel
             await select(ellipse._id);
             await click(await colourSwatch("Blue"));
-            await waitFor(
-              async () =>
-                assert.equal((await savedNode(ellipse._id))?.color, "blue"),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal((await savedNode(ellipse._id))?.color, "blue"),
             );
             await waitFor(() =>
               assert.equal(
@@ -7137,10 +6842,8 @@ if (Meteor.isClient) {
               "false",
             );
             await click(await colourSwatch("No fill"));
-            await waitFor(
-              async () =>
-                assert.isUndefined((await savedNode(ellipse._id))?.color),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.isUndefined((await savedNode(ellipse._id))?.color),
             );
             await waitFor(() => assert.equal(shapeFill(), "none"));
             assert.equal(
@@ -7148,10 +6851,8 @@ if (Meteor.isClient) {
               "true",
             );
             await click(await colourSwatch("Blue"));
-            await waitFor(
-              async () =>
-                assert.equal((await savedNode(ellipse._id))?.color, "blue"),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal((await savedNode(ellipse._id))?.color, "blue"),
             );
 
             // The line tool joins them
@@ -7171,13 +6872,8 @@ if (Meteor.isClient) {
               });
               await stabilize();
             });
-            await waitFor(
-              async () =>
-                assert.equal(
-                  await linesBetween(boardId, rect!, ellipse._id),
-                  1,
-                ),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal(await linesBetween(boardId, rect!, ellipse._id), 1),
             );
             await press(pane(), { key: "v" });
 
@@ -7189,9 +6885,8 @@ if (Meteor.isClient) {
               await stabilize();
             });
             await press(rectNode, { key: "l", ctrlKey: true });
-            await waitFor(
-              async () => assert.isTrue((await savedNode(rect!))?.locked),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.isTrue((await savedNode(rect!))?.locked),
             );
             await waitFor(() =>
               assert.exists(
@@ -7202,38 +6897,31 @@ if (Meteor.isClient) {
             // Duplicated, then undone
             await select(ellipse._id);
             await press(pane(), { key: "d", ctrlKey: true });
-            const copy = await waitFor(
-              async () => {
-                const found = (await shapes()).find(
-                  (n) => n._id !== rect && n._id !== ellipse._id,
-                );
-                assert.ok(found);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const copy = await waitFor(async () => {
+              const found = (await shapes()).find(
+                (n) => n._id !== rect && n._id !== ellipse._id,
+              );
+              assert.ok(found);
+              return found;
+            });
             assert.equal(copy.shape, "ellipse");
             assert.equal(copy.color, "blue");
             assert.deepEqual(copy.position, {
               x: ellipse.position.x + 24,
               y: ellipse.position.y + 24,
             });
-            await waitFor(
-              () =>
-                assert.isFalse(
-                  screen.getByRole<HTMLButtonElement>("button", {
-                    name: "Undo",
-                  }).disabled,
-                ),
-              { timeout: 10000 },
+            await waitFor(() =>
+              assert.isFalse(
+                screen.getByRole<HTMLButtonElement>("button", {
+                  name: "Undo",
+                }).disabled,
+              ),
             );
             // The duplicate's save is back, so it's the edit Undo takes
             await nodeShown(copy._id);
             await clearPuzzleSubscribers.callPromise({ userIds: [] });
             await press(pane(), { key: "z", ctrlKey: true });
-            await waitFor(async () => assert.notOk(await savedNode(copy._id)), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.notOk(await savedNode(copy._id)));
             assert.lengthOf(await shapes(), 2);
           } finally {
             forgetView();
@@ -7328,16 +7016,11 @@ if (Meteor.isClient) {
               fireEvent.pointerUp(pane(), { ...pointer, buttons: 0, ...to });
               await stabilize();
             });
-            const [line] = await waitFor(
-              async () => {
-                const made = (await linesFromB()).filter(
-                  (id) => !before.has(id),
-                );
-                assert.lengthOf(made, 1);
-                return made;
-              },
-              { timeout: 10000 },
-            );
+            const [line] = await waitFor(async () => {
+              const made = (await linesFromB()).filter((id) => !before.has(id));
+              assert.lengthOf(made, 1);
+              return made;
+            });
             assert.equal(
               (await WhiteboardEdges.findOneAsync(line))?.target,
               a._id,
@@ -7494,17 +7177,14 @@ if (Meteor.isClient) {
           });
           await typeInto(editor, "Tapped on from a phone");
           await click(within(panel).getByRole("button", { name: "Send" }));
-          const sent = await waitFor(
-            async () => {
-              const found = await ChatMessages.findOneAsync({
-                "comment.node": a._id,
-                sender: Meteor.userId()!,
-              });
-              assert.exists(found);
-              return found;
-            },
-            { timeout: 10000 },
-          );
+          const sent = await waitFor(async () => {
+            const found = await ChatMessages.findOneAsync({
+              "comment.node": a._id,
+              sender: Meteor.userId()!,
+            });
+            assert.exists(found);
+            return found;
+          });
           threads.push(sent._id);
         });
 
@@ -7636,61 +7316,46 @@ if (Meteor.isClient) {
 
           await typeInto(editor, "Replied from a phone");
           await click(within(panel).getByRole("button", { name: "Send" }));
-          await waitFor(
-            async () => {
-              assert.exists(
-                await ChatMessages.findOneAsync({
-                  parentId: id,
-                  "content.children.text": "Replied from a phone",
-                }),
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.exists(
+              await ChatMessages.findOneAsync({
+                parentId: id,
+                "content.children.text": "Replied from a phone",
+              }),
+            );
+          });
 
           await click(
             within(panel).getAllByRole("button", { name: "React" })[0]!,
           );
-          const tick = await waitFor(
-            () => {
-              const found = document.querySelector('[data-unified="2705"]');
-              assert.exists(found);
-              return found;
-            },
-            { timeout: 10000 },
-          );
+          const tick = await waitFor(() => {
+            const found = document.querySelector('[data-unified="2705"]');
+            assert.exists(found);
+            return found;
+          });
           await click(tick);
-          await waitFor(
-            async () => {
-              assert.exists(
-                await ChatMessages.findOneAsync({
-                  parentId: id,
-                  "content.children.text": "✅",
-                }),
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.exists(
+              await ChatMessages.findOneAsync({
+                parentId: id,
+                "content.children.text": "✅",
+              }),
+            );
+          });
 
           await click(within(panel).getByRole("button", { name: "Resolve" }));
-          await waitFor(
-            async () => {
-              const root = await ChatMessages.findOneAsync(id);
-              assert.exists(root?.comment?.resolvedAt);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const root = await ChatMessages.findOneAsync(id);
+            assert.exists(root?.comment?.resolvedAt);
+          });
           const reopen = await within(panel).findByRole("button", {
             name: "Reopen",
           });
           await click(reopen);
-          await waitFor(
-            async () => {
-              const root = await ChatMessages.findOneAsync(id);
-              assert.notExists(root?.comment?.resolvedAt);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const root = await ChatMessages.findOneAsync(id);
+            assert.notExists(root?.comment?.resolvedAt);
+          });
         });
 
         it("offers no download on a phone", async function () {
@@ -7817,16 +7482,13 @@ if (Meteor.isClient) {
             x: Math.round((pane.width / 2 - e) / a),
             y: Math.round((pane.height * 0.8 - f) / a),
           });
-          const pin = await waitFor(
-            () => {
-              const found = document.querySelector<HTMLElement>(
-                `.jr-comment-pin[data-thread="${id}"]`,
-              );
-              assert.exists(found);
-              return found;
-            },
-            { timeout: 10000 },
-          );
+          const pin = await waitFor(() => {
+            const found = document.querySelector<HTMLElement>(
+              `.jr-comment-pin[data-thread="${id}"]`,
+            );
+            assert.exists(found);
+            return found;
+          });
           assert.closeTo(
             pin.getBoundingClientRect().bottom,
             pane.top + pane.height * 0.8,
@@ -7934,14 +7596,11 @@ if (Meteor.isClient) {
             await tap(pane(), screenAt(base.x + 100, base.y + 80), {
               click: false,
             });
-            const [note] = await waitFor(
-              async () => {
-                const found = await made();
-                assert.lengthOf(found, 1);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const [note] = await waitFor(async () => {
+              const found = await made();
+              assert.lengthOf(found, 1);
+              return found;
+            });
             // Centred on the tap, at the size a click gives
             assert.closeTo(note!.position.x, base.x, 1);
             assert.closeTo(note!.position.y, base.y, 1);
@@ -8109,10 +7768,8 @@ if (Meteor.isClient) {
               fireEvent.pointerUp(pane(), lift(path.at(-1)!));
               await stabilize();
             });
-            await waitFor(
-              async () =>
-                assert.notExists(await WhiteboardNodes.findOneAsync(segment)),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.notExists(await WhiteboardNodes.findOneAsync(segment)),
             );
           } finally {
             forgetView();
@@ -8144,13 +7801,11 @@ if (Meteor.isClient) {
               fireEvent.pointerUp(b!, lift(middleOf(b!)));
               await stabilize();
             });
-            await waitFor(
-              async () =>
-                assert.equal(
-                  await linesBetween(boardId, notes[0]!._id, notes[1]!._id),
-                  1,
-                ),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal(
+                await linesBetween(boardId, notes[0]!._id, notes[1]!._id),
+                1,
+              ),
             );
           } finally {
             forgetView();
@@ -8184,17 +7839,13 @@ if (Meteor.isClient) {
             assert.isTrue(node.classList.contains("selected"));
 
             await pick("Duplicate");
-            await waitFor(async () => assert.lengthOf(await copies(), 2), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.lengthOf(await copies(), 2));
 
             await pick("Copy");
             await waitFor(() => assert.isTrue(written.calledOnce));
             read.resolves(written.firstCall.args[0]);
             await pick("Paste");
-            await waitFor(async () => assert.lengthOf(await copies(), 3), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.lengthOf(await copies(), 3));
 
             // The paste is what's selected now, and Delete takes it away
             const pasted = (await copies()).find(
@@ -8208,9 +7859,7 @@ if (Meteor.isClient) {
               assert.equal(all.length, 1);
             });
             await pick("Delete");
-            await waitFor(async () => assert.lengthOf(await copies(), 2), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.lengthOf(await copies(), 2));
 
             // Without a way to read the clipboard there's no Paste button
             Object.defineProperty(navigator.clipboard, "readText", {
@@ -8334,14 +7983,11 @@ if (Meteor.isClient) {
             };
             assert.isAbove(at.clientY, window.innerHeight - keyboard);
             await tap(pane(), at, { click: false });
-            const [note] = await waitFor(
-              async () => {
-                const found = await made();
-                assert.lengthOf(found, 1);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const [note] = await waitFor(async () => {
+              const found = await made();
+              assert.lengthOf(found, 1);
+              return found;
+            });
             const node = await nodeShown(note!._id);
             await waitFor(() =>
               assert.exists(node.querySelector("textarea:focus")),
@@ -8438,14 +8084,11 @@ if (Meteor.isClient) {
             await openBoard();
             await pick(/^Text:/);
             const tapped = await tapAt(0.4, 0.5);
-            const [text] = await waitFor(
-              async () => {
-                const found = await made("text");
-                assert.lengthOf(found, 1);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const [text] = await waitFor(async () => {
+              const found = await made("text");
+              assert.lengthOf(found, 1);
+              return found;
+            });
             // Centred on the tap
             assert.closeTo(text!.position.x, tapped.x - 120, 1);
             assert.closeTo(text!.position.y, tapped.y - 24, 1);
@@ -8457,9 +8100,7 @@ if (Meteor.isClient) {
 
             await pick(/^Frame:/);
             await tapAt(0.7, 0.7);
-            await waitFor(async () => assert.lengthOf(await made("frame"), 1), {
-              timeout: 10000,
-            });
+            await waitFor(async () => assert.lengthOf(await made("frame"), 1));
           } finally {
             forgetView();
             await removeNodes(
@@ -8486,14 +8127,11 @@ if (Meteor.isClient) {
             await pick(/^Shape:/);
             assert.equal(pressed(/^Shape:/), "true");
             await tap(pane(), screenAt(base.x + 100, base.y + 80));
-            const [shape] = await waitFor(
-              async () => {
-                const found = await made();
-                assert.lengthOf(found, 1);
-                return found;
-              },
-              { timeout: 10000 },
-            );
+            const [shape] = await waitFor(async () => {
+              const found = await made();
+              assert.lengthOf(found, 1);
+              return found;
+            });
             assert.equal(shape!.shape, "rect");
             assert.deepEqual(shape!.position, {
               x: base.x + 20,
@@ -8590,13 +8228,11 @@ if (Meteor.isClient) {
             );
             toolbar().getByRole("button", { name: "Cancel" });
             await tap(end);
-            await waitFor(
-              async () =>
-                assert.equal(
-                  await linesBetween(boardId, notes[0]!._id, notes[1]!._id),
-                  1,
-                ),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.equal(
+                await linesBetween(boardId, notes[0]!._id, notes[1]!._id),
+                1,
+              ),
             );
           } finally {
             forgetView();
@@ -8714,10 +8350,8 @@ if (Meteor.isClient) {
             );
             await pick("Delete");
             await screen.findByText("Some of those are locked");
-            await waitFor(
-              async () =>
-                assert.notExists(await WhiteboardNodes.findOneAsync(free!._id)),
-              { timeout: 10000 },
+            await waitFor(async () =>
+              assert.notExists(await WhiteboardNodes.findOneAsync(free!._id)),
             );
             assert.exists(await WhiteboardNodes.findOneAsync(held!._id));
           } finally {
@@ -8845,9 +8479,7 @@ if (Meteor.isClient) {
           await settle();
           const before = unread();
           const thread = await theyComment("Unread for now", 27000);
-          await waitFor(() => assert.equal(unread(), before + 1), {
-            timeout: 10000,
-          });
+          await waitFor(() => assert.equal(unread(), before + 1));
           await click(pinFor(thread)!);
           await waitFor(() => {
             assert.include(panelText(), "Unread for now");
@@ -8946,19 +8578,16 @@ if (Meteor.isClient) {
             await openBoard({ until: viewingOnly });
             await settle();
             assert.isNull(screen.queryByRole("button", { name: /^Comment:/ }));
-            const list = await waitFor(
-              () => {
-                const button = screen.getByRole("button", {
-                  name: /^Comments \(1 unread\)$/,
-                });
-                assert.equal(
-                  button.querySelector(".jr-unread-comments")?.textContent,
-                  "1",
-                );
-                return button;
-              },
-              { timeout: 10000 },
-            );
+            const list = await waitFor(() => {
+              const button = screen.getByRole("button", {
+                name: /^Comments \(1 unread\)$/,
+              });
+              assert.equal(
+                button.querySelector(".jr-unread-comments")?.textContent,
+                "1",
+              );
+              return button;
+            });
             await click(list);
             const row = await waitFor(() => {
               const found = threadRow(thread);
@@ -9081,13 +8710,10 @@ if (Meteor.isClient) {
               fireEvent.pointerUp(pane(), lift(path.at(-1)!));
               await stabilize();
             });
-            await waitFor(
-              async () => {
-                assert.isNotEmpty(await drawn());
-                assert.notExists((await mine())?.stroke);
-              },
-              { timeout: 10000 },
-            );
+            await waitFor(async () => {
+              assert.isNotEmpty(await drawn());
+              assert.notExists((await mine())?.stroke);
+            });
           } finally {
             subscription.stop();
             coarse.restore();
@@ -9377,11 +9003,7 @@ if (Meteor.isClient) {
 
             // Nor anything from a preview
             await openHistoryRow((text) => text.startsWith("Before edits"));
-            await screen.findByText(
-              /^Viewing the board as it was at /,
-              {},
-              { timeout: 10000 },
-            );
+            await screen.findByText(/^Viewing the board as it was at /, {});
             await sent({ selection: null, editing: null });
           } finally {
             subscription.stop();
@@ -9556,11 +9178,7 @@ if (Meteor.isClient) {
 
           // Escape leaves a preview and leaves History open
           await click(row);
-          await screen.findByText(
-            /^Viewing the board as it was at /,
-            {},
-            { timeout: 10000 },
-          );
+          await screen.findByText(/^Viewing the board as it was at /, {});
           await press(document.body, { key: "Escape" });
           assert.isNull(screen.queryByText(/^Viewing the board as it was at /));
           assert.exists(
@@ -9572,7 +9190,6 @@ if (Meteor.isClient) {
           const banner = await screen.findByText(
             /^Viewing the board as it was at /,
             {},
-            { timeout: 10000 },
           );
           await waitFor(() => assert.isNull(nodeElement(note)));
           assert.equal(row.getAttribute("aria-pressed"), "true");
@@ -9596,15 +9213,12 @@ if (Meteor.isClient) {
             }),
           );
 
-          await waitFor(
-            async () => {
-              assert.notOk(await WhiteboardNodes.findOneAsync(note));
-              assert.isNull(
-                screen.queryByText(/^Viewing the board as it was at /),
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.notOk(await WhiteboardNodes.findOneAsync(note));
+            assert.isNull(
+              screen.queryByText(/^Viewing the board as it was at /),
+            );
+          });
           await screen.findByText(/^Board restored to /);
           await screen.findByRole("button", { name: /^Select and move/ });
           assert.isNull(nodeElement(note));
@@ -9730,11 +9344,7 @@ if (Meteor.isClient) {
             await openBoard();
             await nodeShown(added);
             await openHistoryRow((text) => text.startsWith("Before edits"));
-            await screen.findByText(
-              /^Viewing the board as it was at /,
-              {},
-              { timeout: 10000 },
-            );
+            await screen.findByText(/^Viewing the board as it was at /, {});
             // The board as it was: the note since taken away is back, and
             // the one since added is gone
             await nodeShown(notes[4]!);
@@ -9788,7 +9398,7 @@ if (Meteor.isClient) {
             }
           };
           const pickAction = async (name: string) => {
-            const face = await waitFor(() => theirFace(), { timeout: 10000 });
+            const face = await waitFor(() => theirFace());
             await click(face);
             const action = await screen.findByRole("button", { name });
             await click(action);
@@ -9826,9 +9436,7 @@ if (Meteor.isClient) {
             try {
               await openBoard();
               await theirLive({ cursor: { x: 29000, y: 29500 } });
-              const face = await waitFor(() => theirFace(), {
-                timeout: 10000,
-              });
+              const face = await waitFor(() => theirFace());
               // You first, and not a button, then them
               const stack = face.parentElement!;
               assert.equal(stack.firstElementChild?.tagName, "DIV");
@@ -9849,7 +9457,7 @@ if (Meteor.isClient) {
           it("can't jump to someone whose pointer hasn't been on the board", async function () {
             this.timeout(30000);
             await openBoard();
-            const face = await waitFor(() => theirFace(), { timeout: 10000 });
+            const face = await waitFor(() => theirFace());
             await click(face);
             const jump = await screen.findByRole("button", {
               name: "Jump to their cursor",
@@ -9981,7 +9589,6 @@ if (Meteor.isClient) {
               await screen.findByText(
                 `Following ${OTHER_NAME} is paused while you look at an earlier version.`,
                 {},
-                { timeout: 10000 },
               );
               // Nothing about what this page looks at, or who it follows,
               // goes out
@@ -10096,9 +9703,7 @@ if (Meteor.isClient) {
             try {
               await openBoard({ until: phoneBanner });
               await settle();
-              const face = await waitFor(() => theirFace(), {
-                timeout: 10000,
-              });
+              const face = await waitFor(() => theirFace());
               assert.equal(face.getBoundingClientRect().height, 44);
               assert.equal(face.getBoundingClientRect().width, 44);
               await follow({ x: 29600, y: 29700, zoom: 0.8 });
@@ -10156,14 +9761,11 @@ if (Meteor.isClient) {
               assert.equal(lockButton().getAttribute("aria-label"), "Lock");
               assert.include(lockButton().title, "Ctrl/⌘+L");
               await click(lockButton());
-              await waitFor(
-                async () => {
-                  const saved = await savedNode(note!);
-                  assert.isTrue(saved?.locked);
-                  assert.equal(saved?.lockedBy, Meteor.userId());
-                },
-                { timeout: 10000 },
-              );
+              await waitFor(async () => {
+                const saved = await savedNode(note!);
+                assert.isTrue(saved?.locked);
+                assert.equal(saved?.lockedBy, Meteor.userId());
+              });
               await waitFor(() => {
                 assert.match(badge(note!)?.title ?? "", /^Locked/);
                 assert.equal(lockButton().getAttribute("aria-label"), "Unlock");
@@ -10184,9 +9786,8 @@ if (Meteor.isClient) {
                 await stabilize();
               });
               await press(node, { key: "l", ctrlKey: true });
-              await waitFor(
-                async () => assert.notOk((await savedNode(note!))?.locked),
-                { timeout: 10000 },
+              await waitFor(async () =>
+                assert.notOk((await savedNode(note!))?.locked),
               );
               await waitFor(() => assert.notOk(badge(note!)));
               await theyMove(note!);
@@ -10247,9 +9848,8 @@ if (Meteor.isClient) {
               await selectAlso(free!);
               await press(document.body, { key: "Delete" });
               await screen.findByText("Some of those are locked");
-              await waitFor(
-                async () => assert.isUndefined(await savedNode(free!)),
-                { timeout: 10000 },
+              await waitFor(async () =>
+                assert.isUndefined(await savedNode(free!)),
               );
               assert.ok(await savedNode(held!));
             } finally {
@@ -10284,13 +9884,11 @@ if (Meteor.isClient) {
               await click(
                 await screen.findByRole("button", { name: "Align top edges" }),
               );
-              await waitFor(
-                async () =>
-                  assert.equal(
-                    Math.round((await savedNode(ids[2]!))?.position.y ?? 0),
-                    base.y,
-                  ),
-                { timeout: 10000 },
+              await waitFor(async () =>
+                assert.equal(
+                  Math.round((await savedNode(ids[2]!))?.position.y ?? 0),
+                  base.y,
+                ),
               );
               assert.equal((await savedNode(ids[1]!))?.position.y, base.y + 60);
             } finally {
@@ -10345,9 +9943,8 @@ if (Meteor.isClient) {
                   await stabilize();
                 });
               }
-              await waitFor(
-                async () => assert.isUndefined(await savedNode(free)),
-                { timeout: 10000 },
+              await waitFor(async () =>
+                assert.isUndefined(await savedNode(free)),
               );
               assert.ok(await savedNode(held));
             } finally {
@@ -10369,20 +9966,16 @@ if (Meteor.isClient) {
               await openBoard();
               await select(note!);
               await click(lockButton());
-              await waitFor(
-                async () => assert.isTrue((await savedNode(note!))?.locked),
-                { timeout: 10000 },
+              await waitFor(async () =>
+                assert.isTrue((await savedNode(note!))?.locked),
               );
               const undo = screen.getByRole<HTMLButtonElement>("button", {
                 name: "Undo",
               });
-              await waitFor(() => assert.isFalse(undo.disabled), {
-                timeout: 10000,
-              });
+              await waitFor(() => assert.isFalse(undo.disabled));
               await click(undo);
-              await waitFor(
-                async () => assert.notOk((await savedNode(note!))?.locked),
-                { timeout: 10000 },
+              await waitFor(async () =>
+                assert.notOk((await savedNode(note!))?.locked),
               );
             } finally {
               forgetView();
@@ -10407,10 +10000,8 @@ if (Meteor.isClient) {
             try {
               await openBoard();
               await click(screen.getByRole("button", { name: "Lock layout" }));
-              await waitFor(
-                async () =>
-                  (await frames()).forEach((f) => assert.isTrue(f.locked)),
-                { timeout: 10000 },
+              await waitFor(async () =>
+                (await frames()).forEach((f) => assert.isTrue(f.locked)),
               );
               // In a frame's header, or on its label zoomed right out
               const frameLock = () =>
@@ -10423,10 +10014,8 @@ if (Meteor.isClient) {
               await click(
                 screen.getByRole("button", { name: "Unlock layout" }),
               );
-              await waitFor(
-                async () =>
-                  (await frames()).forEach((f) => assert.notOk(f.locked)),
-                { timeout: 10000 },
+              await waitFor(async () =>
+                (await frames()).forEach((f) => assert.notOk(f.locked)),
               );
               await waitFor(() => assert.isNull(frameLock()));
             } finally {
@@ -10466,14 +10055,11 @@ if (Meteor.isClient) {
           await click(
             within(dialog).getByRole("button", { name: "Reset layout" }),
           );
-          await waitFor(
-            async () => {
-              const card = await WhiteboardNodes.findOneAsync(a._id);
-              assert.equal(card?.parent, a.parent);
-              assert.notOk(card?.manual);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const card = await WhiteboardNodes.findOneAsync(a._id);
+            assert.equal(card?.parent, a.parent);
+            assert.notOk(card?.manual);
+          });
           await screen.findByText("Layout reset. Undo it from History.");
           await waitFor(() =>
             assert.isNull(document.querySelector(".modal.show")),
@@ -10487,7 +10073,6 @@ if (Meteor.isClient) {
           const banner = await screen.findByText(
             /^Viewing the board as it was at /,
             {},
-            { timeout: 10000 },
           );
           await click(
             within(banner.parentElement!).getByRole("button", {
@@ -10500,15 +10085,12 @@ if (Meteor.isClient) {
               name: "Restore this version",
             }),
           );
-          await waitFor(
-            async () => {
-              const card = await WhiteboardNodes.findOneAsync(a._id);
-              assert.deepEqual(card?.position, dragged);
-              assert.notOk(card?.parent);
-              assert.isTrue(card?.manual);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const card = await WhiteboardNodes.findOneAsync(a._id);
+            assert.deepEqual(card?.position, dragged);
+            assert.notOk(card?.parent);
+            assert.isTrue(card?.manual);
+          });
         } finally {
           forgetView();
           await upsertWhiteboardNodes.callPromise({
@@ -10534,11 +10116,7 @@ if (Meteor.isClient) {
         try {
           await openBoard();
           await openHistoryRow((text) => text.startsWith("Before edits by"));
-          await screen.findByText(
-            /^Viewing the board as it was at /,
-            {},
-            { timeout: 10000 },
-          );
+          await screen.findByText(/^Viewing the board as it was at /, {});
           const shown = await nodeShown(note);
           await waitFor(() =>
             assert.isTrue(shown.classList.contains("jr-changed")),
@@ -10549,14 +10127,11 @@ if (Meteor.isClient) {
             name: "Restore this item",
           });
           await click(button);
-          await waitFor(
-            async () => {
-              const restored = await savedNode(note);
-              assert.equal(restored?.text, "Deleted by mistake");
-              assert.deepEqual(restored?.position, base);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const restored = await savedNode(note);
+            assert.equal(restored?.text, "Deleted by mistake");
+            assert.deepEqual(restored?.position, base);
+          });
           await screen.findByText(/^Put back as it was at /);
           // Still previewing, and the note now matches the board
           screen.getByText(/^Viewing the board as it was at /);
@@ -10599,11 +10174,7 @@ if (Meteor.isClient) {
           await openBoard();
           await act(async () => {
             fireEvent.click(
-              await screen.findByRole(
-                "button",
-                { name: "Reset layout…" },
-                { timeout: 10000 },
-              ),
+              await screen.findByRole("button", { name: "Reset layout…" }),
             );
             await stabilize();
           });
@@ -10664,24 +10235,19 @@ if (Meteor.isClient) {
         try {
           await openBoard();
           await select(a._id);
-          const place = await screen.findByRole(
-            "button",
-            { name: "Place by tags" },
-            { timeout: 10000 },
-          );
+          const place = await screen.findByRole("button", {
+            name: "Place by tags",
+          });
           assert.equal(
             place.title,
             "Move back to where its tags put it, and keep it in step from now on",
           );
           await click(place);
-          await waitFor(
-            async () => {
-              const card = await WhiteboardNodes.findOneAsync(a._id);
-              assert.equal(card?.parent, a.parent);
-              assert.notOk(card?.manual);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const card = await WhiteboardNodes.findOneAsync(a._id);
+            assert.equal(card?.parent, a.parent);
+            assert.notOk(card?.manual);
+          });
         } finally {
           forgetView();
           await upsertWhiteboardNodes.callPromise({
@@ -10760,32 +10326,26 @@ if (Meteor.isClient) {
         try {
           await openBoard({ until: canvasShown });
           const frame = await nodeShown(ids.frame);
-          await waitFor(
-            () => {
-              assert.equal(frame.style.height, "56px");
-              assert.isNull(nodeElement(ids.inside));
-              assert.isNull(nodeElement(ids.alsoInside));
-              assert.isNotNull(nodeElement(ids.outside));
-              assert.include(frame.textContent ?? "", "2 items");
-              // The line out of the frame now starts at it; the one inside
-              // isn't drawn
-              assert.isNotNull(drawnLine(out));
-              assert.isNull(drawnLine(inside));
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(() => {
+            assert.equal(frame.style.height, "56px");
+            assert.isNull(nodeElement(ids.inside));
+            assert.isNull(nodeElement(ids.alsoInside));
+            assert.isNotNull(nodeElement(ids.outside));
+            assert.include(frame.textContent ?? "", "2 items");
+            // The line out of the frame now starts at it; the one inside
+            // isn't drawn
+            assert.isNotNull(drawnLine(out));
+            assert.isNull(drawnLine(inside));
+          });
 
           await click(
             within(frame).getByRole("button", { name: "Expand for everyone" }),
           );
-          await waitFor(
-            async () => {
-              assert.isFalse(await isCollapsed(ids.frame));
-              assert.isNotNull(nodeElement(ids.inside));
-              assert.isNotNull(drawnLine(inside));
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.isFalse(await isCollapsed(ids.frame));
+            assert.isNotNull(nodeElement(ids.inside));
+            assert.isNotNull(drawnLine(inside));
+          });
           assert.equal(
             within(nodeElement(ids.frame) as HTMLElement)
               .getByRole("button", { name: "Collapse for everyone" })
@@ -10825,20 +10385,15 @@ if (Meteor.isClient) {
               name: "Collapse for everyone",
             }),
           );
-          await waitFor(
-            async () => {
-              assert.isTrue(await isCollapsed(frame));
-              assert.isNull(nodeElement(shape));
-              assert.include(header.textContent ?? "", "1 item");
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.isTrue(await isCollapsed(frame));
+            assert.isNull(nodeElement(shape));
+            assert.include(header.textContent ?? "", "1 item");
+          });
           await click(
             within(header).getByRole("button", { name: "Expand for everyone" }),
           );
-          await waitFor(() => assert.isNotNull(nodeElement(shape)), {
-            timeout: 10000,
-          });
+          await waitFor(() => assert.isNotNull(nodeElement(shape)));
         } finally {
           forgetView();
           await removeNodes([frame, shape]);
@@ -10866,27 +10421,20 @@ if (Meteor.isClient) {
           await openBoard({ until: canvasShown });
           await searchFor("zebra");
           await click(
-            await screen.findByRole(
-              "option",
-              { name: /^Zebra crossing/ },
-              { timeout: 10000 },
-            ),
+            await screen.findByRole("option", { name: /^Zebra crossing/ }),
           );
-          await waitFor(
-            () => {
-              assert.isNotNull(nodeElement(ids.inside));
-              assert.isNotNull(
-                document.querySelector(
-                  `.react-flow__edge[data-id="${line}"] .react-flow__edge-path`,
-                ),
-              );
-              // The mark at the line's middle, rather than at a node
-              assert.isNotNull(
-                document.querySelector(".jr-node-pulse:not([data-node])"),
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(() => {
+            assert.isNotNull(nodeElement(ids.inside));
+            assert.isNotNull(
+              document.querySelector(
+                `.react-flow__edge[data-id="${line}"] .react-flow__edge-path`,
+              ),
+            );
+            // The mark at the line's middle, rather than at a node
+            assert.isNotNull(
+              document.querySelector(".jr-node-pulse:not([data-node])"),
+            );
+          });
           assert.isTrue(await isCollapsed(ids.frame));
         } finally {
           forgetView();
@@ -10910,24 +10458,19 @@ if (Meteor.isClient) {
             () => assert.include(nodeElement(frameId)?.textContent, "Finished"),
             { timeout: 20000 },
           );
-          const button = await screen.findByRole(
-            "button",
-            { name: "Collapse finished rounds" },
-            { timeout: 10000 },
-          );
+          const button = await screen.findByRole("button", {
+            name: "Collapse finished rounds",
+          });
           assert.equal(button.title, "Fold every round whose metas are solved");
           await click(button);
-          await waitFor(
-            async () => {
-              assert.isTrue(await isCollapsed(frameId));
-              assert.isNull(
-                screen.queryByRole("button", {
-                  name: "Collapse finished rounds",
-                }),
-              );
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            assert.isTrue(await isCollapsed(frameId));
+            assert.isNull(
+              screen.queryByRole("button", {
+                name: "Collapse finished rounds",
+              }),
+            );
+          });
         } finally {
           await setPuzzleAnswers.callPromise({ puzzleId: robber, answers: [] });
           const collapsed = await WhiteboardNodes.find({
@@ -10974,14 +10517,11 @@ if (Meteor.isClient) {
               await stabilize();
             });
           }
-          await waitFor(
-            async () => {
-              const moved = await WhiteboardNodes.findOneAsync(a._id);
-              assert.equal(moved?.position.x, base.x + 540 - CARD_WIDTH / 2);
-              assert.isUndefined(moved?.parent);
-            },
-            { timeout: 10000 },
-          );
+          await waitFor(async () => {
+            const moved = await WhiteboardNodes.findOneAsync(a._id);
+            assert.equal(moved?.position.x, base.x + 540 - CARD_WIDTH / 2);
+            assert.isUndefined(moved?.parent);
+          });
         } finally {
           forgetView();
           await removeNodes(Object.values(ids));
@@ -11007,11 +10547,9 @@ if (Meteor.isClient) {
               name: "Expand for everyone",
             }),
           );
-          const show = await within(frame).findByRole(
-            "button",
-            { name: "Show (only for you)" },
-            { timeout: 10000 },
-          );
+          const show = await within(frame).findByRole("button", {
+            name: "Show (only for you)",
+          });
           assert.equal(show.getAttribute("aria-expanded"), "false");
           await click(show);
           await nodeShown(ids.inside);
@@ -11022,9 +10560,7 @@ if (Meteor.isClient) {
               name: "Hide again",
             }),
           );
-          await waitFor(() => assert.isNull(nodeElement(ids.inside)), {
-            timeout: 10000,
-          });
+          await waitFor(() => assert.isNull(nodeElement(ids.inside)));
           assert.isTrue(await isCollapsed(ids.frame));
         } finally {
           forgetView();
@@ -11218,7 +10754,7 @@ if (Meteor.isClient) {
             fireEvent.click(screen.getByRole("button", { name: "Save" }));
             await stabilize();
           });
-          await screen.findByText("Saved changes.", {}, { timeout: 10000 });
+          await screen.findByText("Saved changes.", {});
           assert.isFalse((await Meteor.userAsync())?.boardCommentNotifications);
 
           await openPuzzle(cardPuzzle);
