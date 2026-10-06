@@ -45,6 +45,7 @@ import whiteboardContents from "../../imports/lib/publications/whiteboardContent
 import whiteboardForHunt from "../../imports/lib/publications/whiteboardForHunt";
 import whiteboardPresence from "../../imports/lib/publications/whiteboardPresence";
 import { COLLAPSED_FRAME_HEIGHT } from "../../imports/lib/whiteboard/collapse";
+import { snapAngle } from "../../imports/lib/whiteboard/connectors";
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
@@ -52,6 +53,7 @@ import {
   FRAME_HEADER,
   FRAME_PADDING,
   GAP,
+  POINT_SIZE,
 } from "../../imports/lib/whiteboard/layout";
 import {
   MAX_INK_POINTS_PER_BOARD,
@@ -3269,6 +3271,242 @@ if (Meteor.isClient) {
         assert.isTrue(to.classList.contains("clickconnecting"));
         await press(document.body, { key: "Escape" });
         assert.equal(await linesBetween(boardId, a._id, b._id), before);
+      });
+
+      // A mouse on the board: pressed, moved and let go at screen points.
+      const mouseOn = (
+        at: { clientX: number; clientY: number },
+        init: { shiftKey?: boolean } = {},
+      ) => ({ button: 0, pointerId: 1, ...at, ...init });
+      const dragOnBoard = async (
+        from: { element: Element; at: { clientX: number; clientY: number } },
+        to: { clientX: number; clientY: number },
+        init: { shiftKey?: boolean } = {},
+      ) => {
+        await act(async () => {
+          fireEvent.pointerDown(from.element, {
+            ...mouseOn(from.at, init),
+            buttons: 1,
+          });
+          await stabilize();
+        });
+        await act(async () => {
+          fireEvent.pointerMove(pane(), {
+            ...mouseOn(to, init),
+            buttons: 1,
+          });
+          await stabilize();
+        });
+        await act(async () => {
+          fireEvent.pointerUp(pane(), {
+            ...mouseOn(to, init),
+            buttons: 0,
+          });
+          await stabilize();
+        });
+      };
+      // Selects line `id` and drags the grip at the end nearest `end` to
+      // `to`, both on screen.
+      const dragGrip = async (
+        id: string,
+        end: { clientX: number; clientY: number },
+        to: { clientX: number; clientY: number },
+      ) => {
+        await click(
+          document.querySelector(`.react-flow__edge[data-id="${id}"]`)!,
+        );
+        const grip = await waitFor(() => {
+          const found = [
+            ...document.querySelectorAll<HTMLElement>(".jr-line-grip"),
+          ];
+          assert.lengthOf(found, 2);
+          const away = (grip: Element) => {
+            const at = middleOf(grip);
+            return Math.hypot(
+              at.clientX - end.clientX,
+              at.clientY - end.clientY,
+            );
+          };
+          return found.toSorted((a, b) => away(a) - away(b))[0]!;
+        });
+        await dragOnBoard({ element: grip, at: middleOf(grip) }, to);
+      };
+      const lineEnd = async (id: string) =>
+        (await WhiteboardEdges.findOneAsync(id))?.target;
+      const noteSize = { width: 120, height: 100 };
+
+      it("moves a line's end onto another note by its grip", async function () {
+        this.timeout(30000);
+        const base = { x: 33000, y: 31000 };
+        const [a, b, c] = await putNodes([
+          stickyNode(base, noteSize),
+          stickyNode({ x: base.x + 300, y: base.y }, noteSize),
+          stickyNode({ x: base.x + 300, y: base.y + 250 }, noteSize),
+        ]);
+        const line = Random.id();
+        await upsertWhiteboardEdges.callPromise({
+          boardId,
+          edges: [{ _id: line, source: a!, target: b! }],
+        });
+        const at = lookAt(base);
+        try {
+          await openBoard();
+          await nodeShown(c!);
+          await dragGrip(
+            line,
+            at(base.x + 300, base.y + 50),
+            at(base.x + 360, base.y + 300),
+          );
+          await waitFor(async () => assert.equal(await lineEnd(line), c));
+        } finally {
+          forgetView();
+          await deleteWhiteboardEdges.callPromise({ boardId, edgeIds: [line] });
+          await removeNodes([a!, b!, c!]);
+        }
+      });
+
+      it("moves a line's end to a free spot by its grip, leaving a point there", async function () {
+        this.timeout(30000);
+        const base = { x: 33000, y: 32000 };
+        const [a, b] = await putNodes([
+          stickyNode(base, noteSize),
+          stickyNode({ x: base.x + 300, y: base.y }, noteSize),
+        ]);
+        const line = Random.id();
+        await upsertWhiteboardEdges.callPromise({
+          boardId,
+          edges: [{ _id: line, source: a!, target: b! }],
+        });
+        const at = lookAt(base);
+        const spot = { x: base.x + 150, y: base.y + 300 };
+        let point: string | undefined;
+        try {
+          await openBoard();
+          await nodeShown(b!);
+          await dragGrip(
+            line,
+            at(base.x + 300, base.y + 50),
+            at(spot.x, spot.y),
+          );
+          await waitFor(async () => {
+            const end = await lineEnd(line);
+            assert.notEqual(end, b);
+            point = end;
+            const made = await savedNode(end!);
+            assert.equal(made?.type, "point");
+            assert.isUndefined(made?.parent);
+            assert.closeTo(made!.position.x, spot.x - POINT_SIZE / 2, 0.5);
+            assert.closeTo(made!.position.y, spot.y - POINT_SIZE / 2, 0.5);
+          });
+        } finally {
+          forgetView();
+          await deleteWhiteboardEdges.callPromise({ boardId, edgeIds: [line] });
+          await removeNodes([a!, b!, ...(point ? [point] : [])]);
+        }
+      });
+
+      it("attaches a free end dragged onto a note, and drops its point", async function () {
+        this.timeout(30000);
+        const base = { x: 33000, y: 33000 };
+        const point = Random.id();
+        const [a, , c] = await putNodes([
+          stickyNode(base, noteSize),
+          {
+            _id: point,
+            type: "point",
+            position: { x: base.x + 300, y: base.y + 50 },
+          },
+          stickyNode({ x: base.x + 450, y: base.y }, noteSize),
+        ]);
+        const line = Random.id();
+        await upsertWhiteboardEdges.callPromise({
+          boardId,
+          edges: [{ _id: line, source: a!, target: point }],
+        });
+        lookAt(base);
+        try {
+          await openBoard();
+          const end = await nodeShown(point);
+          const target = await nodeShown(c!);
+          const from = middleOf(end);
+          const to = middleOf(target);
+          const mouse = { button: 0, view: window };
+          await act(async () => {
+            fireEvent.mouseDown(end, { ...mouse, ...from });
+            await stabilize();
+          });
+          for (const step of [
+            { clientX: from.clientX + 2, clientY: from.clientY },
+            to,
+          ]) {
+            await act(async () => {
+              fireEvent.mouseMove(window, { ...mouse, ...step });
+              await stabilize();
+            });
+          }
+          await act(async () => {
+            fireEvent.mouseUp(window, { ...mouse, ...to });
+            await stabilize();
+          });
+          await waitFor(async () => {
+            assert.equal(await lineEnd(line), c);
+            assert.isUndefined(await savedNode(point));
+          });
+        } finally {
+          forgetView();
+          await deleteWhiteboardEdges.callPromise({ boardId, edgeIds: [line] });
+          await removeNodes([a!, c!, point]);
+        }
+      });
+
+      it("snaps a free end's angle while Shift is held", async function () {
+        this.timeout(30000);
+        const base = { x: 33000, y: 34000 };
+        const [a] = await putNodes([stickyNode(base, noteSize)]);
+        const at = lookAt(base);
+        const origin = {
+          x: base.x + noteSize.width / 2,
+          y: base.y + noteSize.height / 2,
+        };
+        // Not on a 15 degree step, so snapping moves it
+        const raw = { x: origin.x + 300, y: origin.y + 100 };
+        const snapped = snapAngle(origin, raw);
+        const linesFromNote = () =>
+          WhiteboardEdges.find({
+            board: boardId,
+            source: a!,
+            auto: { $ne: true },
+          }).fetchAsync();
+        let point: string | undefined;
+        try {
+          await openBoard();
+          await nodeShown(a!);
+          await click(screen.getByRole("button", { name: /^Line:/ }));
+          await dragOnBoard(
+            { element: pane(), at: at(origin.x, origin.y) },
+            at(raw.x, raw.y),
+            { shiftKey: true },
+          );
+          await waitFor(async () => {
+            const lines = await linesFromNote();
+            assert.lengthOf(lines, 1);
+            point = lines[0]!.target;
+            const made = await savedNode(point);
+            assert.equal(made?.type, "point");
+            assert.closeTo(made!.position.x, snapped.x - POINT_SIZE / 2, 0.5);
+            assert.closeTo(made!.position.y, snapped.y - POINT_SIZE / 2, 0.5);
+          });
+        } finally {
+          forgetView();
+          const lines = await linesFromNote();
+          if (lines.length > 0) {
+            await deleteWhiteboardEdges.callPromise({
+              boardId,
+              edgeIds: lines.map((l) => l._id),
+            });
+          }
+          await removeNodes([a!, ...(point ? [point] : [])]);
+        }
       });
 
       it("downloads the board as a picture and as data", async function () {
