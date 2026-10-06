@@ -3023,6 +3023,9 @@ if (Meteor.isClient) {
         it("does nothing with a viewer's copy, paste or duplicate", async function () {
           this.timeout(30000);
           await openBoard({ until: viewingOnly });
+          // A "nothing happens" check only means something once the board's
+          // handlers are up, which the cards arriving shows
+          await cardsShown();
           await pressBoard();
           const saves = sinon.spy(upsertWhiteboardNodes, "call");
           try {
