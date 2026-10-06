@@ -37,6 +37,7 @@ import WhiteboardEdges from "../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../imports/lib/models/WhiteboardNodes";
 import type { WhiteboardEditPolicy } from "../../imports/lib/models/Whiteboards";
 import Whiteboards from "../../imports/lib/models/Whiteboards";
+import chatMessagesForPuzzle from "../../imports/lib/publications/chatMessagesForPuzzle";
 import whiteboardContents from "../../imports/lib/publications/whiteboardContents";
 import whiteboardForHunt from "../../imports/lib/publications/whiteboardForHunt";
 import whiteboardPresence from "../../imports/lib/publications/whiteboardPresence";
@@ -8016,36 +8017,18 @@ if (Meteor.isClient) {
         };
         // A comment of this test's own, found once it reaches this client,
         // which needs the board open.
-        const leaveComment = async (
-          text: string,
-          comment: { node?: string; x: number; y: number },
-        ) => {
-          await sendChatMessage.callPromise({
-            puzzleId: boardPuzzle,
-            content: JSON.stringify({
-              type: "message",
-              children: [{ text }],
-            }),
-            comment,
-          });
-          const id = await waitFor(
-            async () => {
-              const found = await ChatMessages.findOneAsync({
-                "comment.x": comment.x,
-                "comment.y": comment.y,
-              });
-              assert.ok(found);
-              return found._id;
-            },
-            { timeout: 10000 },
+        const leaveComment = async (text: string, comment: Point) => {
+          await commentOn(text, comment);
+          const id = await commentId(
+            { "comment.x": comment.x, "comment.y": comment.y },
+            10000,
           );
           threads.push(id);
           return id;
         };
-        let boardPuzzle: string;
         before(async function () {
           this.timeout(10000);
-          boardPuzzle = (await ensureBoard()).puzzle;
+          await ensureBoard();
         });
 
         it("places a comment on a card from a phone with a tap", async function () {
@@ -9781,15 +9764,23 @@ if (Meteor.isClient) {
 
         it("lists comments and goes to them on N on a board that can only be viewed", async function () {
           this.timeout(30000);
-          const thread = await theyComment("Seen by a viewer", 27500);
+          // The comment is sent before the board opens, so it arrives through
+          // a subscription of this test's own rather than the last test's
+          // closing one
+          const messages = await typedSubscribe.async(chatMessagesForPuzzle, {
+            puzzleId: boardPuzzle,
+            huntId,
+          });
+          let thread: string;
+          try {
+            thread = await theyComment("Seen by a viewer", 27500);
+          } finally {
+            messages.stop();
+          }
           await setHuntArchived.callPromise({ huntId, isArchived: true });
           try {
-            render(<TestApp />);
-            await goTo(boardPath);
-            await screen.findByText("Viewing only", {}, { timeout: 20000 });
-            await act(async () => {
-              await stabilize();
-            });
+            await openBoard({ until: viewingOnly });
+            await settle();
             assert.isNull(screen.queryByRole("button", { name: /^Comment:/ }));
             const list = await waitFor(
               () => {
@@ -12461,8 +12452,6 @@ if (Meteor.isClient) {
         require("../../imports/lib/models/ChatNotifications").default;
       const { Subscribers: ClientSubscribers } =
         require("../../imports/client/subscribers") as typeof import("../../imports/client/subscribers");
-      const chatMessagesForPuzzle: typeof import("../../imports/lib/publications/chatMessagesForPuzzle").default =
-        require("../../imports/lib/publications/chatMessagesForPuzzle").default;
 
       // Opens a puzzle's page, which puts this browser on the puzzle, and
       // waits until the server has it there.
