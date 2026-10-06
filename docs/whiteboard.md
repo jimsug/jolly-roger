@@ -1394,7 +1394,12 @@ they count towards History's versions, and a refusal shows in the usual
 `imports/client/components/whiteboard/boardWrites.ts` works out each step's
 reverse from the documents the client has just before the save, and
 `useWhiteboardUndo` keeps the stacks, joins saves still on their way, and
-sends the steps. So that a colour can go back to none, `upsertNodes` and
+sends the steps. The canvas saves every edit it records through one path,
+`commit`, which records the step, makes the write's method calls all at once
+(the server runs one connection's calls in order, so a line can follow its
+new free ends), and on a refusal drops what was shown ahead of the server,
+shows the alert and takes back what the save had made (a line's new free
+ends, or a paste). So that a colour can go back to none, `upsertNodes` and
 `upsertEdges` take `color: null` to clear it.
 
 ### Locks

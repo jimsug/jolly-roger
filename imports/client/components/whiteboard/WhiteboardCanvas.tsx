@@ -206,16 +206,12 @@ import {
   restoreItemSet,
   versionDifferences,
 } from "../../../lib/whiteboard/versions";
-import deleteWhiteboardEdges from "../../../methods/deleteWhiteboardEdges";
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
-import placeWhiteboardCardsByTags from "../../../methods/placeWhiteboardCardsByTags";
 import restoreWhiteboardItems from "../../../methods/restoreWhiteboardItems";
 import restoreWhiteboardVersion from "../../../methods/restoreWhiteboardVersion";
 import type { WhiteboardLiveState } from "../../../methods/setWhiteboardLive";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
-import upsertWhiteboardEdges from "../../../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../../../methods/upsertWhiteboardNodes";
-import upsertWhiteboardNodes from "../../../methods/upsertWhiteboardNodes";
 import {
   useWhiteboardFeederArrows,
   useWhiteboardLineStyle,
@@ -257,8 +253,8 @@ import {
   fetchBoardJson,
   saveBlob,
 } from "./boardFiles";
-import type { Done } from "./boardWrites";
-import { callAll, chunks, sendWrite } from "./boardWrites";
+import type { BoardWrite, Done } from "./boardWrites";
+import { chunks, sendAtOnce } from "./boardWrites";
 import ChatLoadedContext from "./ChatLoadedContext";
 import type { CollapseActions, FoldSummary } from "./CollapseContext";
 import CollapseContext from "./CollapseContext";
@@ -392,6 +388,19 @@ interface Landed {
   id: string;
   parent: string | undefined;
   position: XYPosition;
+}
+
+// How an edit is saved (see commit).
+interface CommitOptions {
+  // Saves in the same group, one straight after another, undo as one.
+  group?: string;
+  // Nodes and lines shown changed before the server has it, put back as
+  // they were if it says no.
+  pendingNodes?: string[];
+  pendingEdges?: string[];
+  // Takes off what a refused save had made.
+  rollback?: () => void;
+  onDone?: Done;
 }
 
 // One input per node, later fields winning.
@@ -1868,36 +1877,38 @@ const CanvasInner = ({
     [feederFocusCards],
   );
 
+  // Saves an edit: records it to undo and sends it, and if the server says
+  // no, drops what was shown ahead of it, says so and takes back what the
+  // save had made.
+  const commit = useCallback(
+    (write: BoardWrite, options: CommitOptions = {}) => {
+      const settled = recordEdit(write, options.group);
+      sendAtOnce(boardId, write, (error) => {
+        settled(error);
+        if (error) {
+          if (options.pendingNodes) clearPending(options.pendingNodes);
+          if (options.pendingEdges) clearEdgePending(options.pendingEdges);
+          reportRefusal(error);
+          options.rollback?.();
+        }
+        options.onDone?.(error);
+      });
+    },
+    [boardId, clearPending, clearEdgePending, reportRefusal, recordEdit],
+  );
+
   const updateNodes = useCallback(
-    (
-      inputs: WhiteboardNodeInput[],
-      onDone?: (error?: Meteor.Error) => void,
-      // Saves in the same group, one straight after another, undo as one.
-      group?: string,
-    ) => {
+    (inputs: WhiteboardNodeInput[], onDone?: Done, group?: string) => {
       if (inputs.length === 0) {
         onDone?.();
         return;
       }
-      const settled = recordEdit({ upsertNodes: inputs }, group);
-      callAll(
-        chunks(inputs, MAX_BATCH).map(
-          (batch) => (done) =>
-            upsertWhiteboardNodes.call({ boardId, nodes: batch }, (error) => {
-              if (error) {
-                clearPending(batch.map((n) => n._id));
-                reportRefusal(error);
-              }
-              done(error);
-            }),
-        ),
-        (refused) => {
-          settled(refused);
-          onDone?.(refused);
-        },
+      commit(
+        { upsertNodes: inputs },
+        { group, pendingNodes: inputs.map((n) => n._id), onDone },
       );
     },
-    [boardId, clearPending, reportRefusal, recordEdit],
+    [commit],
   );
 
   // Collapses or expands frames for everyone, showing it at once.
@@ -1918,28 +1929,9 @@ const CanvasInner = ({
   const deleteItems = useCallback(
     (nodeIds: string[], edgeIds: string[]) => {
       if (nodeIds.length === 0 && edgeIds.length === 0) return;
-      const settled = recordEdit({
-        deleteNodes: nodeIds,
-        deleteEdges: edgeIds,
-      });
-      callAll(
-        [
-          ...chunks(nodeIds, MAX_BATCH).map(
-            (batch) => (done: Done) =>
-              deleteWhiteboardNodes.call({ boardId, nodeIds: batch }, done),
-          ),
-          ...chunks(edgeIds, MAX_BATCH).map(
-            (batch) => (done: Done) =>
-              deleteWhiteboardEdges.call({ boardId, edgeIds: batch }, done),
-          ),
-        ],
-        (refused) => {
-          settled(refused);
-          reportRefusal(refused);
-        },
-      );
+      commit({ deleteNodes: nodeIds, deleteEdges: edgeIds });
     },
-    [boardId, reportRefusal, recordEdit],
+    [commit],
   );
   const deleteNodes = useCallback(
     (ids: string[]) => deleteItems(ids, []),
@@ -1966,31 +1958,19 @@ const CanvasInner = ({
   );
 
   const updateEdge = useCallback(
-    (input: WhiteboardEdgeInput, onDone?: (error?: Meteor.Error) => void) => {
+    (input: WhiteboardEdgeInput, onDone?: Done) => {
       // Changes to a line show at once; a new line waits for the server.
       const existing = !!flow.getEdge(input._id);
       if (existing) {
         const { _id, ...change } = input;
         markEdgePending(_id, change);
       }
-      const settled = recordEdit({ upsertEdges: [input] });
-      upsertWhiteboardEdges.call({ boardId, edges: [input] }, (error) => {
-        settled(error);
-        if (error) {
-          if (existing) clearEdgePending([input._id]);
-          reportRefusal(error);
-        }
-        onDone?.(error);
-      });
+      commit(
+        { upsertEdges: [input] },
+        { pendingEdges: existing ? [input._id] : undefined, onDone },
+      );
     },
-    [
-      boardId,
-      flow,
-      markEdgePending,
-      clearEdgePending,
-      reportRefusal,
-      recordEdit,
-    ],
+    [flow, markEdgePending, commit],
   );
 
   // After a resize, save the node's new box and any of its children whose
@@ -2780,34 +2760,20 @@ const CanvasInner = ({
         target: idFor(to),
         ...lineStyle,
       };
-      const settled = recordEdit({ upsertNodes: points, upsertEdges: [edge] });
-      // The server runs one client's calls in order, so the line can follow
-      // its free ends without waiting for them.
-      callAll(
-        [
-          ...(points.length > 0
-            ? [
-                (done: Done) =>
-                  upsertWhiteboardNodes.call({ boardId, nodes: points }, done),
-              ]
-            : []),
-          (done: Done) =>
-            upsertWhiteboardEdges.call({ boardId, edges: [edge] }, done),
-        ],
-        (error) => {
-          settled(error);
-          if (!error) return;
-          reportRefusal(error);
-          if (points.length > 0) {
+      commit(
+        { upsertNodes: points, upsertEdges: [edge] },
+        {
+          rollback: () => {
+            if (points.length === 0) return;
             deleteWhiteboardNodes.call({
               boardId,
               nodeIds: points.map((p) => p._id),
             });
-          }
+          },
         },
       );
     },
-    [boardId, lineStyle, pointPlacement, reportRefusal, recordEdit],
+    [boardId, lineStyle, pointPlacement, commit],
   );
 
   // Moves one end of an existing line: onto something, or to a free spot.
@@ -2839,7 +2805,6 @@ const CanvasInner = ({
         updateNodes([{ _id: currentId, ...placement }]);
         return;
       }
-      // The line can follow its new free end straight away, as in createLine.
       const _id = Random.id();
       const point: WhiteboardNodeInput = {
         _id,
@@ -2847,22 +2812,11 @@ const CanvasInner = ({
         ...pointPlacement(endpoint),
       };
       const moved: WhiteboardEdgeInput = { _id: edgeId, [end]: _id };
-      const settled = recordEdit({
-        upsertNodes: [point],
-        upsertEdges: [moved],
-      });
-      callAll(
-        [
-          (done: Done) =>
-            upsertWhiteboardNodes.call({ boardId, nodes: [point] }, done),
-          (done: Done) =>
-            upsertWhiteboardEdges.call({ boardId, edges: [moved] }, done),
-        ],
-        (error) => {
-          settled(error);
-          if (!error) return;
-          reportRefusal(error);
-          deleteWhiteboardNodes.call({ boardId, nodeIds: [_id] });
+      commit(
+        { upsertNodes: [point], upsertEdges: [moved] },
+        {
+          rollback: () =>
+            deleteWhiteboardNodes.call({ boardId, nodeIds: [_id] }),
         },
       );
     },
@@ -2874,8 +2828,7 @@ const CanvasInner = ({
       showMoves,
       updateEdge,
       updateNodes,
-      reportRefusal,
-      recordEdit,
+      commit,
     ],
   );
 
@@ -2983,24 +2936,11 @@ const CanvasInner = ({
   const placeSelectedByTags = useCallback(() => {
     if (placeableCards.length === 0) return;
     setPlacingByTags(true);
-    const settled = recordEdit({ placeByTags: placeableCards });
-    callAll(
-      chunks(placeableCards, MAX_BATCH).map(
-        (batch) => (done: Done) =>
-          placeWhiteboardCardsByTags.call(
-            { boardId, nodeIds: batch },
-            (error) => {
-              reportRefusal(error);
-              done(error);
-            },
-          ),
-      ),
-      (refused) => {
-        setPlacingByTags(false);
-        settled(refused);
-      },
+    commit(
+      { placeByTags: placeableCards },
+      { onDone: () => setPlacingByTags(false) },
     );
-  }, [placeableCards, boardId, reportRefusal, recordEdit]);
+  }, [placeableCards, commit]);
   // The first selected line's look, for the restyling controls.
   const selectedLineStyle = useMemo((): LineStyle => {
     const doc = selectedLines[0]?.data?.doc;
@@ -3017,23 +2957,9 @@ const CanvasInner = ({
       const lines = selectedLines.slice(0, MAX_BATCH);
       const inputs = lines.map((e) => ({ _id: e.id, ...patch }));
       lines.forEach((e) => markEdgePending(e.id, patch));
-      const settled = recordEdit({ upsertEdges: inputs });
-      upsertWhiteboardEdges.call({ boardId, edges: inputs }, (error) => {
-        settled(error);
-        if (error) {
-          clearEdgePending(lines.map((e) => e.id));
-          reportRefusal(error);
-        }
-      });
+      commit({ upsertEdges: inputs }, { pendingEdges: lines.map((e) => e.id) });
     },
-    [
-      boardId,
-      selectedLines,
-      markEdgePending,
-      clearEdgePending,
-      reportRefusal,
-      recordEdit,
-    ],
+    [selectedLines, markEdgePending, commit],
   );
   const updateLineStyle = useCallback(
     (patch: Partial<LineStyle>) =>
@@ -3242,21 +3168,9 @@ const CanvasInner = ({
   );
 
   const putBackArrows = useCallback(
-    (ids: string[]) => {
-      const inputs = ids.map((_id) => ({ _id, hidden: false }));
-      const settled = recordEdit({ upsertEdges: inputs });
-      callAll(
-        chunks(inputs, MAX_BATCH).map(
-          (batch) => (done: Done) =>
-            upsertWhiteboardEdges.call({ boardId, edges: batch }, done),
-        ),
-        (refused) => {
-          settled(refused);
-          reportRefusal(refused);
-        },
-      );
-    },
-    [boardId, reportRefusal, recordEdit],
+    (ids: string[]) =>
+      commit({ upsertEdges: ids.map((_id) => ({ _id, hidden: false })) }),
+    [commit],
   );
   const putBackArrow = useCallback(
     (arrow: HiddenArrow) => putBackArrows([arrow.id]),
@@ -4996,22 +4910,22 @@ const CanvasInner = ({
         until: Date.now() + 10_000,
       };
       selectOnArrival.current = wanted;
-      const write = { upsertNodes: pasted.nodes, upsertEdges: pasted.edges };
-      const settled = recordEdit(write);
-      sendWrite(boardId, write, (error) => {
-        settled(error);
-        if (!error) return;
-        if (selectOnArrival.current === wanted) {
-          selectOnArrival.current = undefined;
-        }
-        reportRefusal(error);
-        chunks(
-          pasted.nodes.map((n) => n._id),
-          MAX_BATCH,
-        ).forEach((nodeIds) =>
-          deleteWhiteboardNodes.call({ boardId, nodeIds }),
-        );
-      });
+      commit(
+        { upsertNodes: pasted.nodes, upsertEdges: pasted.edges },
+        {
+          rollback: () => {
+            if (selectOnArrival.current === wanted) {
+              selectOnArrival.current = undefined;
+            }
+            chunks(
+              pasted.nodes.map((n) => n._id),
+              MAX_BATCH,
+            ).forEach((nodeIds) =>
+              deleteWhiteboardNodes.call({ boardId, nodeIds }),
+            );
+          },
+        },
+      );
     },
     [
       flow,
@@ -5021,8 +4935,7 @@ const CanvasInner = ({
       absoluteRect,
       boardId,
       huntId,
-      recordEdit,
-      reportRefusal,
+      commit,
       showNotice,
       t,
     ],

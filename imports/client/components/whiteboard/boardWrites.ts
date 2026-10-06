@@ -363,9 +363,9 @@ export function inverseOf(write: BoardWrite, docs: BoardDocs): BoardWrite {
   return builder.build();
 }
 
-// Sends a write's methods one after another, stopping at the first refusal.
-export function sendWrite(boardId: string, write: BoardWrite, done: Done) {
-  const steps: ((next: Done) => void)[] = [
+// The method calls a write takes, in the order they're to be made.
+function stepsOf(boardId: string, write: BoardWrite): ((next: Done) => void)[] {
+  return [
     ...chunks(parentsFirst(write.upsertNodes ?? []), MAX_BATCH).map(
       (nodes) => (next: Done) =>
         upsertWhiteboardNodes.call({ boardId, nodes }, next),
@@ -387,6 +387,18 @@ export function sendWrite(boardId: string, write: BoardWrite, done: Done) {
         placeWhiteboardCardsByTags.call({ boardId, nodeIds }, next),
     ),
   ];
+}
+
+// Makes a write's method calls all at once. The server runs one client's
+// calls in the order they're made, so a line can follow its free ends
+// without waiting for them.
+export function sendAtOnce(boardId: string, write: BoardWrite, done: Done) {
+  callAll(stepsOf(boardId, write), done);
+}
+
+// Sends a write's methods one after another, stopping at the first refusal.
+export function sendWrite(boardId: string, write: BoardWrite, done: Done) {
+  const steps = stepsOf(boardId, write);
   const run = (i: number) => {
     const step = steps[i];
     if (!step) {
