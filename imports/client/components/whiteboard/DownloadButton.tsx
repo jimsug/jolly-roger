@@ -15,12 +15,12 @@ const DownloadButton = ({
   onDownload,
 }: {
   busy: boolean;
-  onDownload: (kind: DownloadKind) => void;
+  onDownload: (kind: DownloadKind) => void | Promise<void>;
 }) => {
   const { t } = useTranslation();
   const select = useCallback(
     (key: string | null) => {
-      if (key === "png" || key === "json") onDownload(key);
+      if (key === "png" || key === "json") void onDownload(key);
     },
     [onDownload],
   );

@@ -1530,6 +1530,10 @@ refused comment or reply goes back in the composer, unless something new has
 been written there since, and a new comment's panel stays open until the
 server has taken it.
 
+An image that can't be added (a file the board can't show, one over the
+board's cap, or a failed upload) is reported in the same alert, with a reason
+worked out on the client (see Images).
+
 ### Offline
 
 While Meteor reports the connection down, the board is view-only for that
