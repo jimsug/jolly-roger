@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { gunzipSync } from "node:zlib";
-import { Accounts } from "meteor/accounts-base";
 import { EJSON } from "meteor/ejson";
 import type { Meteor } from "meteor/meteor";
 import type { Mongo } from "meteor/mongo";
@@ -11,12 +10,11 @@ import FixtureHunt from "../../../../imports/FixtureHunt";
 import ChatMessages, {
   contentFromMessage,
 } from "../../../../imports/lib/models/ChatMessages";
+import type { FeatureFlagType } from "../../../../imports/lib/models/FeatureFlags";
 import FeatureFlags from "../../../../imports/lib/models/FeatureFlags";
 import Hunts from "../../../../imports/lib/models/Hunts";
 import MergeOperations from "../../../../imports/lib/models/MergeOperations";
-import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Puzzles from "../../../../imports/lib/models/Puzzles";
-import Settings from "../../../../imports/lib/models/Settings";
 import WhiteboardEdges from "../../../../imports/lib/models/WhiteboardEdges";
 import WhiteboardNodes from "../../../../imports/lib/models/WhiteboardNodes";
 import Whiteboards from "../../../../imports/lib/models/Whiteboards";
@@ -39,7 +37,6 @@ import restoreWhiteboardVersion from "../../../../imports/methods/restoreWhitebo
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import setWhiteboardEditPolicy from "../../../../imports/methods/setWhiteboardEditPolicy";
 import makeFixtureHunt from "../../../../imports/server/makeFixtureHunt";
-import Locks from "../../../../imports/server/models/Locks";
 import WhiteboardVersionChunks from "../../../../imports/server/models/WhiteboardVersionChunks";
 import {
   ensureWhiteboard,
@@ -63,27 +60,22 @@ import {
   serializeBoard,
 } from "../../../../imports/server/whiteboardVersions";
 import asUser from "../../../lib/asUser";
-import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
 import StubSubscription, {
   publishHandler,
 } from "../../../lib/StubSubscription";
+import {
+  fillInk,
+  lockThief,
+  makeUser,
+  otherHuntBoard,
+  uploadUrl,
+  withImageBucket,
+  zigzag,
+} from "../../../lib/whiteboardFixtures";
 
 const huntId = FixtureHunt._id;
 const MINUTE = 60 * 1000;
-
-async function makeUser(email: string, roles?: string[]) {
-  const userId = await Accounts.createUserAsync({
-    email,
-    password: "password",
-  });
-  if (roles) {
-    await MeteorUsers.updateAsync(userId, {
-      $set: { hunts: [huntId], roles: { [huntId]: roles } },
-    });
-  }
-  return userId;
-}
 
 describe("whiteboard versions", function () {
   this.timeout(30000);
@@ -155,6 +147,73 @@ describe("whiteboard versions", function () {
     nodes: await WhiteboardNodes.find({ board: boardId }).fetchAsync(),
     edges: await WhiteboardEdges.find({ board: boardId }).fetchAsync(),
   });
+  const node = (id: string) => WhiteboardNodes.findOneAsync(id);
+  const edge = (id: string) => WhiteboardEdges.findOneAsync(id);
+  const setFlag = (name: FeatureFlagType["name"]) =>
+    FeatureFlags.insertAsync({ name, type: "on", createdBy: operator });
+  const restoreAs = (userId: string, versionId: string) =>
+    asUser(userId, () =>
+      restoreWhiteboardVersion.callPromise({ boardId, versionId }),
+    );
+  const restoreItemsAs = (
+    userId: string,
+    versionId: string,
+    nodeIds: string[],
+  ) =>
+    asUser(userId, () =>
+      restoreWhiteboardItems.callPromise({ boardId, versionId, nodeIds }),
+    );
+  // The version an edit in a new window records
+  const versionAfter = async (edit: () => Promise<unknown>) => {
+    await nextWindow();
+    await edit();
+    return newest();
+  };
+  // The board and its history, to check nothing has changed them since
+  const snapshot = async () => ({
+    board: await board(),
+    versionIds: (await versions()).map((v) => v._id),
+  });
+  const assertUnchanged = async ({
+    board: before,
+    versionIds,
+  }: Awaited<ReturnType<typeof snapshot>>) => {
+    const after = await board();
+    assert.sameDeepMembers(after.nodes, before.nodes);
+    assert.sameDeepMembers(after.edges, before.edges);
+    assert.sameMembers(
+      (await versions()).map((v) => v._id),
+      versionIds,
+    );
+  };
+  // A comment by the member pinned to node, 10 across and 20 down from its
+  // corner; returns its id
+  const commentOn = async (node: string, text: string) => {
+    const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+    await asUser(member, () =>
+      sendChatMessage.callPromise({
+        puzzleId,
+        content: JSON.stringify(contentFromMessage(text)),
+        comment: { node, x: 10, y: 20 },
+      }),
+    );
+    return (await ChatMessages.findOneAsync({
+      "content.children.text": text,
+    }))!._id;
+  };
+  // A version of another hunt's board, recorded by a note put on it
+  const foreignVersion = async () => {
+    const { board: otherBoard } = await otherHuntBoard(operator);
+    const note = Random.id();
+    await upsertNodes(operator, otherBoard, [
+      { _id: note, type: "sticky", position: { x: 0, y: 0 } },
+    ]);
+    const version = (await WhiteboardVersions.findOneAsync({
+      board: otherBoard,
+    }))!;
+    return { otherBoard, note, version };
+  };
+  const inkAt = { x: 600, y: 600 };
 
   // Stores a version made from a payload, as recording one would.
   const storeVersion = async (
@@ -195,21 +254,6 @@ describe("whiteboard versions", function () {
     });
     return { versionId, chunks };
   };
-
-  // An ink stroke of `count` points that zigzags, so simplifying keeps
-  // every one of them
-  const zigzag = (count: number) => ({
-    _id: Random.id(),
-    type: "ink" as const,
-    position: { x: 600, y: 600 },
-    strokeWidth: "thin" as const,
-    stroke: Random.id(),
-    points: Array.from({ length: count }, (_, i): [number, number, number] => [
-      i * 5,
-      (i % 2) * 5,
-      0.5,
-    ]),
-  });
 
   describe("recording", function () {
     it("records a version on a user's first edit", async function () {
@@ -309,7 +353,7 @@ describe("whiteboard versions", function () {
       }
       await nextWindow();
       const id = await sticky(member);
-      assert.ok(await WhiteboardNodes.findOneAsync(id));
+      assert.ok(await node(id));
       const left = (await versions()).map((v) => v._id);
       assert.lengthOf(left, 3);
       assert.include(left, fakes[0]);
@@ -356,11 +400,7 @@ describe("whiteboard versions", function () {
       // An archived hunt's history can still be read
       await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
       assert.lengthOf(await fetch(member, 0), chunks[0]!.length);
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard_versions",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard_versions");
       await assert.isRejected(fetch(member, 0), /history is turned off/);
     });
   });
@@ -379,7 +419,7 @@ describe("whiteboard versions", function () {
     };
 
     it("gives a member every node and line on the board, ink included", async function () {
-      const ink = zigzag(20);
+      const ink = zigzag(20, inkAt);
       await upsertNodes(member, boardId, [ink]);
       const [a, b] = [await sticky(member), await sticky(member)];
       await upsertEdges(member, boardId, [
@@ -659,22 +699,14 @@ describe("whiteboard versions", function () {
 
     it("works on an archived hunt, and with history off", async function () {
       await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard_versions",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard_versions");
       const payload = await download(member);
       assert.sameDeepMembers(payload.nodes, (await board()).nodes);
     });
 
     it("refuses someone outside the hunt, and while the whiteboard is off", async function () {
       await assert.isRejected(exportChunk(outsider), /member/);
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard");
       await assert.isRejected(exportChunk(member), /whiteboard is disabled/);
     });
   });
@@ -710,40 +742,31 @@ describe("whiteboard versions", function () {
         board: boardId,
         type: "puzzle",
       }))!;
-      await nextWindow();
-      await upsertNodes(member, boardId, [
-        { _id: moved, position: { x: 500, y: 500 } },
-      ]);
-      const version = await newest();
-      await deleteNodes(member, boardId, [deleted, card._id]);
-      assert.isTrue((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
-
-      await asUser(member, () =>
-        restoreWhiteboardVersion.callPromise({
-          boardId,
-          versionId: version._id,
-        }),
+      const version = await versionAfter(() =>
+        upsertNodes(member, boardId, [
+          { _id: moved, position: { x: 500, y: 500 } },
+        ]),
       );
+      await deleteNodes(member, boardId, [deleted, card._id]);
+      assert.isTrue((await node(card._id))?.hidden);
 
-      assert.deepEqual((await WhiteboardNodes.findOneAsync(moved))?.position, {
+      await restoreAs(member, version._id);
+
+      assert.deepEqual((await node(moved))?.position, {
         x: 0,
         y: 0,
       });
-      assert.ok(await WhiteboardNodes.findOneAsync(deleted));
-      assert.notOk((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
+      assert.ok(await node(deleted));
+      assert.notOk((await node(card._id))?.hidden);
       assert.ok((await Whiteboards.findOneAsync(boardId))?.lastRewrittenAt);
     });
 
     it("keeps an image node in a version and puts it back", async function () {
-      await Settings.insertAsync({
-        name: "s3.image_bucket",
-        value: { bucketName: "jr-test-images", bucketRegion: "us-east-1" },
-        createdBy: operator,
-      });
+      await withImageBucket(operator);
       const backing = (await Whiteboards.findOneAsync(boardId))!.puzzle;
       const _id = Random.id();
       const image = {
-        url: `https://s3.us-east-1.amazonaws.com/jr-test-images/${huntId}/${backing}/${Random.id()}`,
+        url: uploadUrl(huntId, backing),
         width: 640,
         height: 480,
       };
@@ -757,19 +780,14 @@ describe("whiteboard versions", function () {
           image,
         },
       ]);
-      await nextWindow();
-      await deleteNodes(member, boardId, [_id]);
-      const version = await newest();
+      const version = await versionAfter(() =>
+        deleteNodes(member, boardId, [_id]),
+      );
       const payload = await payloadOf(version);
       assert.deepEqual(payload.nodes.find((n) => n._id === _id)?.image, image);
 
-      await asUser(member, () =>
-        restoreWhiteboardVersion.callPromise({
-          boardId,
-          versionId: version._id,
-        }),
-      );
-      const restored = (await WhiteboardNodes.findOneAsync(_id))!;
+      await restoreAs(member, version._id);
+      const restored = (await node(_id))!;
       assert.equal(restored.type, "image");
       assert.deepEqual(restored.image, image);
       assert.equal(restored.width, 320);
@@ -801,25 +819,17 @@ describe("whiteboard versions", function () {
           ],
         },
       ]);
-      await nextWindow();
-      await deleteNodes(member, boardId, [shape, marker]);
-      const version = await newest();
-
-      await asUser(member, () =>
-        restoreWhiteboardVersion.callPromise({
-          boardId,
-          versionId: version._id,
-        }),
+      const version = await versionAfter(() =>
+        deleteNodes(member, boardId, [shape, marker]),
       );
-      const restored = (await WhiteboardNodes.findOneAsync(shape))!;
+
+      await restoreAs(member, version._id);
+      const restored = (await node(shape))!;
       assert.equal(restored.type, "shape");
       assert.equal(restored.shape, "ellipse");
       assert.equal(restored.color, "pink");
       assert.equal(restored.width, 160);
-      assert.equal(
-        (await WhiteboardNodes.findOneAsync(marker))?.strokeWidth,
-        "marker",
-      );
+      assert.equal((await node(marker))?.strokeWidth, "marker");
     });
 
     it("doesn't put back a deleted puzzle's card, but moves it with the version", async function () {
@@ -829,26 +839,21 @@ describe("whiteboard versions", function () {
       await upsertEdges(member, boardId, [
         { _id: line, source: note, target: card._id },
       ]);
-      await nextWindow();
-      await sticky(member);
-      const version = await newest();
+      const version = await versionAfter(() => sticky(member));
       await upsertNodes(member, boardId, [
         { _id: card._id, position: { x: 7000, y: 7000 } },
       ]);
       await deletePuzzle(card.puzzle!);
-      assert.isTrue((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
+      assert.isTrue((await node(card._id))?.hidden);
 
       await restoreVersion(member, boardId, version._id);
 
-      const after = (await WhiteboardNodes.findOneAsync(card._id))!;
+      const after = (await node(card._id))!;
       assert.isTrue(after.hidden);
       assert.isTrue(after.hiddenWithPuzzle);
       assert.deepEqual(after.position, card.position);
       assert.equal(after.parent, card.parent);
-      assert.equal(
-        (await WhiteboardEdges.findOneAsync(line))?.target,
-        card._id,
-      );
+      assert.equal((await edge(line))?.target, card._id);
       assert.equal(
         await WhiteboardNodes.find({
           board: boardId,
@@ -866,16 +871,11 @@ describe("whiteboard versions", function () {
       await upsertEdges(member, boardId, [
         { _id: line, source: note, target: card._id },
       ]);
-      await nextWindow();
-      await sticky(member);
-      const version = await newest();
+      const version = await versionAfter(() => sticky(member));
       const old = (await Puzzles.findOneAsync(card.puzzle))!;
       const replacement = await newPuzzle(old.tags);
       await deletePuzzle(old._id, replacement);
-      assert.equal(
-        (await WhiteboardNodes.findOneAsync(card._id))?.puzzle,
-        replacement,
-      );
+      assert.equal((await node(card._id))?.puzzle, replacement);
       await upsertNodes(member, boardId, [
         { _id: card._id, position: { x: 7000, y: 7000 } },
       ]);
@@ -892,10 +892,7 @@ describe("whiteboard versions", function () {
       );
       assert.deepEqual(cards[0]!.position, card.position);
       assert.equal(cards[0]!.parent, card.parent);
-      assert.equal(
-        (await WhiteboardEdges.findOneAsync(line))?.target,
-        card._id,
-      );
+      assert.equal((await edge(line))?.target, card._id);
     });
 
     it("restores whether a frame is collapsed", async function () {
@@ -903,20 +900,15 @@ describe("whiteboard versions", function () {
         board: boardId,
         type: "frame",
       }))!;
-      const isCollapsed = async () =>
-        (await WhiteboardNodes.findOneAsync(frame._id))?.collapsed;
+      const isCollapsed = async () => (await node(frame._id))?.collapsed;
       // Folding alone records nothing, so an edit after it records the board
       // with the frame folded
       await upsertNodes(member, boardId, [{ _id: frame._id, collapsed: true }]);
-      await nextWindow();
-      await sticky(member);
-      const folded = await newest();
+      const folded = await versionAfter(() => sticky(member));
       await upsertNodes(member, boardId, [
         { _id: frame._id, collapsed: false },
       ]);
-      await nextWindow();
-      await sticky(member);
-      const open = await newest();
+      const open = await versionAfter(() => sticky(member));
       assert.notEqual(open._id, folded._id);
       assert.isUndefined(await isCollapsed());
 
@@ -936,9 +928,7 @@ describe("whiteboard versions", function () {
       await upsertEdges(member, boardId, [
         { _id: Random.id(), source: note, target: card._id },
       ]);
-      await nextWindow();
-      await sticky(member);
-      const version = await newest();
+      const version = await versionAfter(() => sticky(member));
 
       // The card is replaced by another for the same puzzle, somewhere else
       await WhiteboardEdges.removeAsync({ target: card._id });
@@ -977,21 +967,8 @@ describe("whiteboard versions", function () {
       await nextWindow();
       const added = await sticky(member, { x: 1000, y: 1000 });
       const version = await newest();
-      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-      const comment = async (node: string, text: string) => {
-        await asUser(member, () =>
-          sendChatMessage.callPromise({
-            puzzleId,
-            content: JSON.stringify(contentFromMessage(text)),
-            comment: { node, x: 10, y: 20 },
-          }),
-        );
-        return (await ChatMessages.findOneAsync({
-          "content.children.text": text,
-        }))!._id;
-      };
-      const onKept = await comment(kept, "on the kept sticky");
-      const onAdded = await comment(added, "on the added sticky");
+      const onKept = await commentOn(kept, "on the kept sticky");
+      const onAdded = await commentOn(added, "on the added sticky");
       await deleteNodes(member, boardId, [kept]);
       assert.deepEqual((await ChatMessages.findOneAsync(onKept))?.comment, {
         x: 110,
@@ -1001,8 +978,8 @@ describe("whiteboard versions", function () {
 
       await restoreVersion(member, boardId, version._id);
 
-      assert.ok(await WhiteboardNodes.findOneAsync(kept));
-      assert.notOk(await WhiteboardNodes.findOneAsync(added));
+      assert.ok(await node(kept));
+      assert.notOk(await node(added));
       assert.deepEqual((await ChatMessages.findOneAsync(onKept))?.comment, {
         node: kept,
         x: 10,
@@ -1021,27 +998,15 @@ describe("whiteboard versions", function () {
       const line = Random.id();
       await upsertEdges(member, boardId, [{ _id: line, source: a, target: b }]);
       await upsertNodes(member, boardId, [{ _id: a, text: "taken" }]);
-      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-      await asUser(member, () =>
-        sendChatMessage.callPromise({
-          puzzleId,
-          content: JSON.stringify(contentFromMessage("on the taken sticky")),
-          comment: { node: a, x: 10, y: 20 },
-        }),
+      await commentOn(a, "on the taken sticky");
+      const version = await versionAfter(() =>
+        sticky(member, { x: 800, y: 0 }),
       );
-      await nextWindow();
-      await sticky(member, { x: 800, y: 0 });
-      const version = await newest();
       await deleteNodes(member, boardId, [a]);
-      assert.notOk(await WhiteboardEdges.findOneAsync(line));
+      assert.notOk(await edge(line));
 
       // A member of another hunt reuses both ids there
-      const otherHunt = await createTestHunt(operator);
-      await MeteorUsers.updateAsync(operator, {
-        $addToSet: { hunts: otherHunt },
-        $set: { [`roles.${otherHunt}`]: ["operator"] },
-      });
-      const otherBoard = await ensureWhiteboard(operator, otherHunt);
+      const { board: otherBoard } = await otherHuntBoard(operator);
       const end = Random.id();
       await upsertNodes(operator, otherBoard, [
         { _id: a, type: "sticky", position: { x: 0, y: 0 } },
@@ -1075,11 +1040,8 @@ describe("whiteboard versions", function () {
         restored._id,
       );
       // The other board's are left alone
-      assert.equal((await WhiteboardNodes.findOneAsync(a))?.board, otherBoard);
-      assert.equal(
-        (await WhiteboardEdges.findOneAsync(line))?.board,
-        otherBoard,
-      );
+      assert.equal((await node(a))?.board, otherBoard);
+      assert.equal((await edge(line))?.board, otherBoard);
       // and so it can be restored again, when the node keeps its new id
       // and its comment
       await restoreVersion(other, boardId, version._id);
@@ -1107,9 +1069,9 @@ describe("whiteboard versions", function () {
       await upsertEdges(member, boardId, [
         { _id: Random.id(), source: a, target: b },
       ]);
-      await nextWindow();
-      await sticky(member, { x: 800, y: 0 });
-      const version = await newest();
+      const version = await versionAfter(() =>
+        sticky(member, { x: 800, y: 0 }),
+      );
       const target = await payloadOf(version);
       await deleteNodes(member, boardId, [a, b]);
 
@@ -1135,9 +1097,9 @@ describe("whiteboard versions", function () {
 
     it("records one version for a burst of resets and restores by one person", async function () {
       await sticky(member, { x: 0, y: 0 });
-      await nextWindow();
-      await sticky(member, { x: 400, y: 0 });
-      const version = await newest();
+      const version = await versionAfter(() =>
+        sticky(member, { x: 400, y: 0 }),
+      );
       await restoreVersion(member, boardId, version._id);
       const recorded = (await versions()).length;
       const size = (await versions()).reduce((sum, v) => sum + v.size, 0);
@@ -1159,16 +1121,16 @@ describe("whiteboard versions", function () {
 
     it("gives what it puts back a fresh updatedAt", async function () {
       const id = await sticky(member, { x: 0, y: 0 });
-      await nextWindow();
-      await sticky(member, { x: 400, y: 0 });
-      const version = await newest();
-      const stored = (await WhiteboardNodes.findOneAsync(id))!.updatedAt;
+      const version = await versionAfter(() =>
+        sticky(member, { x: 400, y: 0 }),
+      );
+      const stored = (await node(id))!.updatedAt;
       await deleteNodes(member, boardId, [id]);
       const before = new Date();
 
       await restoreVersion(member, boardId, version._id);
 
-      const restored = (await WhiteboardNodes.findOneAsync(id))!;
+      const restored = (await node(id))!;
       assert.isAtLeast(restored.updatedAt.getTime(), before.getTime());
       assert.isAbove(restored.updatedAt.getTime(), stored.getTime());
     });
@@ -1187,49 +1149,31 @@ describe("whiteboard versions", function () {
       await upsertNodes(member, boardId, [
         { _id: moved, position: { x: 800, y: 800 } },
       ]);
-      const before = await board();
-      const recorded = (await versions()).map((v) => v._id);
+      const before = await snapshot();
 
-      const lockName = `whiteboard:${boardId}`;
-      let held: string | undefined;
-      const steal = async () => {
-        const theirs = await Locks.findOneAsync({ name: lockName });
-        if (theirs && !held) {
-          await Locks.removeAsync(theirs._id);
-          held = await Locks.insertAsync({ name: lockName });
-        }
-      };
-      const letGo = async () => {
-        if (held) await Locks.removeAsync(held);
-        held = undefined;
-      };
-      const stubbed = stub(steal);
+      const thief = lockThief(boardId);
+      const stubbed = stub(thief.steal);
       try {
         await assert.isRejected(
           restoreVersion(member, boardId, version._id),
           /The board was busy; try again/,
         );
-        assert.ok(held);
-        await letGo();
+        assert.ok(thief.held);
+        await thief.letGo();
         await assert.isRejected(
           resetLayout(member, boardId, false),
           /The board was busy; try again/,
         );
-        assert.ok(held);
+        assert.ok(thief.held);
       } finally {
         stubbed.restore();
-        await letGo();
+        await thief.letGo();
       }
 
-      assert.sameDeepMembers((await board()).nodes, before.nodes);
-      assert.sameDeepMembers((await board()).edges, before.edges);
-      assert.sameMembers(
-        (await versions()).map((v) => v._id),
-        recorded,
-      );
+      await assertUnchanged(before);
       assert.equal(
         await WhiteboardVersionChunks.find({ board: boardId }).countAsync(),
-        recorded.length,
+        before.versionIds.length,
       );
     };
 
@@ -1260,9 +1204,9 @@ describe("whiteboard versions", function () {
 
     it("records a restore version after planning and before writing", async function () {
       await sticky(member, { x: 0, y: 0 });
-      await nextWindow();
-      await sticky(member, { x: 400, y: 0 });
-      const version = await newest();
+      const version = await versionAfter(() =>
+        sticky(member, { x: 400, y: 0 }),
+      );
       await sticky(member, { x: 800, y: 0 });
       const before = await board();
 
@@ -1319,9 +1263,7 @@ describe("whiteboard versions", function () {
     });
 
     it("records nothing when a version has more on it than a board can hold", async function () {
-      const template = (await WhiteboardNodes.findOneAsync(
-        await sticky(member),
-      ))!;
+      const template = (await node(await sticky(member)))!;
       const crowded = await storeVersion(
         Array.from({ length: MAX_NODES_PER_BOARD + 1 }, () => ({
           ...template,
@@ -1329,80 +1271,46 @@ describe("whiteboard versions", function () {
         })),
         [],
       );
-      const before = await versions();
-      const { nodes } = await board();
+      const before = await snapshot();
       await assert.isRejected(
         restoreVersion(member, boardId, crowded.versionId),
         /more on it than a board can hold/,
       );
-      assert.sameMembers(
-        (await versions()).map((v) => v._id),
-        before.map((v) => v._id),
-      );
-      assert.sameDeepMembers((await board()).nodes, nodes);
+      await assertUnchanged(before);
     });
 
     it("records nothing when a version has more drawing on it than a board can hold", async function () {
-      const stroke = zigzag(3);
+      const stroke = zigzag(3, inkAt);
       await upsertNodes(member, boardId, [stroke]);
-      const template = (await WhiteboardNodes.findOneAsync(stroke._id))!;
+      const template = (await node(stroke._id))!;
       const inky = await storeVersion(
         [{ ...template, points: zigzag(MAX_INK_POINTS_PER_BOARD + 1).points }],
         [],
       );
-      const before = await versions();
-      const { nodes } = await board();
+      const before = await snapshot();
       await assert.isRejected(
         restoreVersion(member, boardId, inky.versionId),
         /more drawing on it than a board can hold/,
       );
-      assert.sameMembers(
-        (await versions()).map((v) => v._id),
-        before.map((v) => v._id),
-      );
-      assert.sameDeepMembers((await board()).nodes, nodes);
+      await assertUnchanged(before);
     });
 
     it("restores a version with less drawing on a board already past the budget", async function () {
-      const stroke = zigzag(10);
+      const stroke = zigzag(10, inkAt);
       await upsertNodes(member, boardId, [stroke]);
-      await nextWindow();
-      await deleteNodes(member, boardId, [stroke._id]);
-      const version = await newest();
+      const version = await versionAfter(() =>
+        deleteNodes(member, boardId, [stroke._id]),
+      );
       // Ink from before there was a budget
-      const heavy = await WhiteboardNodes.insertAsync({
-        hunt: huntId,
-        board: boardId,
-        type: "ink",
-        position: { x: 0, y: 0 },
-        strokeWidth: "thin",
-        points: zigzag(MAX_INK_POINTS_PER_BOARD + 10).points,
-        createdBy: member,
-      });
+      const heavy = await fillInk(boardId, -10, member);
 
       await restoreVersion(member, boardId, version._id);
-      assert.ok(await WhiteboardNodes.findOneAsync(stroke._id));
-      assert.notOk(await WhiteboardNodes.findOneAsync(heavy));
+      assert.ok(await node(stroke._id));
+      assert.notOk(await node(heavy));
     });
 
     it("refuses a version from another board", async function () {
-      const otherHunt = await Hunts.insertAsync({
-        name: "Another hunt",
-        openSignups: true,
-        hasGuessQueue: true,
-        createdBy: operator,
-      });
-      await MeteorUsers.updateAsync(operator, {
-        $addToSet: { hunts: otherHunt },
-        $set: { [`roles.${otherHunt}`]: ["operator"] },
-      });
-      const otherBoard = await ensureWhiteboard(operator, otherHunt);
-      await upsertNodes(operator, otherBoard, [
-        { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-      ]);
-      const foreign = (await WhiteboardVersions.findOneAsync({
-        board: otherBoard,
-      }))!;
+      const { otherBoard, version: foreign } = await foreignVersion();
       const otherNodes = await WhiteboardNodes.find({
         board: otherBoard,
       }).fetchAsync();
@@ -1418,12 +1326,7 @@ describe("whiteboard versions", function () {
         /Unknown version/,
       );
       await assert.isRejected(
-        asUser(member, () =>
-          restoreWhiteboardVersion.callPromise({
-            boardId,
-            versionId: foreign._id,
-          }),
-        ),
+        restoreAs(member, foreign._id),
         /Unknown version/,
       );
       assert.sameDeepMembers(
@@ -1439,9 +1342,7 @@ describe("whiteboard versions", function () {
     it("maps merged accounts in a restored payload", async function () {
       const source = await makeUser("source@example.com", []);
       const id = await sticky(source);
-      await nextWindow();
-      await sticky(member);
-      const version = await newest();
+      const version = await versionAfter(() => sticky(member));
       await deleteNodes(member, boardId, [id]);
       await MergeOperations.insertAsync({
         participants: [source, other],
@@ -1452,7 +1353,7 @@ describe("whiteboard versions", function () {
 
       await restoreVersion(member, boardId, version._id);
 
-      const restored = (await WhiteboardNodes.findOneAsync(id))!;
+      const restored = (await node(id))!;
       assert.equal(restored.createdBy, other);
       assert.deepEqual(
         restored.contributors.map((c) => c.user),
@@ -1470,15 +1371,7 @@ describe("whiteboard versions", function () {
           editors: [],
         }),
       );
-      await assert.isRejected(
-        asUser(member, () =>
-          restoreWhiteboardVersion.callPromise({
-            boardId,
-            versionId: version._id,
-          }),
-        ),
-        /Only operators/,
-      );
+      await assert.isRejected(restoreAs(member, version._id), /Only operators/);
       await assert.isRejected(
         restoreVersion(outsider, boardId, version._id),
         /member/,
@@ -1491,16 +1384,12 @@ describe("whiteboard versions", function () {
       );
       await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
 
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard_versions",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard_versions");
       await assert.isRejected(
         restoreVersion(operator, boardId, version._id),
         /history is turned off/,
       );
-      assert.ok(await WhiteboardNodes.findOneAsync(id));
+      assert.ok(await node(id));
       assert.lengthOf(await versions(), 1);
     });
   });
@@ -1530,38 +1419,20 @@ describe("whiteboard versions", function () {
       );
       return ids;
     };
-    const nodeById = async (id: string) =>
-      (await WhiteboardNodes.findOneAsync(id))!;
 
     it("restores one deleted sticky from a version", async function () {
       const gone = await sticky(member, { x: 300, y: 40 });
       await upsertNodes(member, boardId, [{ _id: gone, text: "remember me" }]);
-      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-      await asUser(member, () =>
-        sendChatMessage.callPromise({
-          puzzleId,
-          content: JSON.stringify(contentFromMessage("on the sticky")),
-          comment: { node: gone, x: 10, y: 20 },
-        }),
+      const pin = await commentOn(gone, "on the sticky");
+      const version = await versionAfter(() =>
+        deleteNodes(member, boardId, [gone]),
       );
-      const pin = (await ChatMessages.findOneAsync({
-        "content.children.text": "on the sticky",
-      }))!._id;
-      await nextWindow();
-      await deleteNodes(member, boardId, [gone]);
-      const version = await newest();
-      assert.notOk(await WhiteboardNodes.findOneAsync(gone));
+      assert.notOk(await node(gone));
 
-      const changed = await asUser(member, () =>
-        restoreWhiteboardItems.callPromise({
-          boardId,
-          versionId: version._id,
-          nodeIds: [gone],
-        }),
-      );
+      const changed = await restoreItemsAs(member, version._id, [gone]);
 
       assert.isTrue(changed.restored);
-      const restored = await nodeById(gone);
+      const restored = (await node(gone))!;
       assert.deepEqual(restored.position, { x: 300, y: 40 });
       assert.equal(restored.text, "remember me");
       assert.deepEqual((await ChatMessages.findOneAsync(pin))?.comment, {
@@ -1573,28 +1444,15 @@ describe("whiteboard versions", function () {
 
     it("changes nothing, and says so, for an item that's as the version has it", async function () {
       const id = await sticky(member, { x: 300, y: 40 });
-      await nextWindow();
-      await sticky(member, { x: 900, y: 40 });
-      const version = await newest();
-      const before = await board();
-      const recorded = (await versions()).map((v) => v._id);
-
-      const changed = await asUser(member, () =>
-        restoreWhiteboardItems.callPromise({
-          boardId,
-          versionId: version._id,
-          nodeIds: [id],
-        }),
+      const version = await versionAfter(() =>
+        sticky(member, { x: 900, y: 40 }),
       );
+      const before = await snapshot();
+
+      const changed = await restoreItemsAs(member, version._id, [id]);
 
       assert.isFalse(changed.restored);
-      const after = await board();
-      assert.sameDeepMembers(after.nodes, before.nodes);
-      assert.sameDeepMembers(after.edges, before.edges);
-      assert.sameMembers(
-        (await versions()).map((v) => v._id),
-        recorded,
-      );
+      await assertUnchanged(before);
     });
 
     it("takes comments off a node it hides", async function () {
@@ -1604,27 +1462,17 @@ describe("whiteboard versions", function () {
         type: "puzzle",
       }))!;
       await deleteNodes(member, boardId, [card._id]);
-      await nextWindow();
-      await upsertNodes(member, boardId, [{ _id: card._id, hidden: false }]);
-      const version = await newest();
-      assert.notOk((await nodeById(card._id)).hidden);
-      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-      await asUser(member, () =>
-        sendChatMessage.callPromise({
-          puzzleId,
-          content: JSON.stringify(contentFromMessage("on the shown card")),
-          comment: { node: card._id, x: 10, y: 20 },
-        }),
+      const version = await versionAfter(() =>
+        upsertNodes(member, boardId, [{ _id: card._id, hidden: false }]),
       );
-      const pin = (await ChatMessages.findOneAsync({
-        "content.children.text": "on the shown card",
-      }))!._id;
+      assert.notOk((await node(card._id))!.hidden);
+      const pin = await commentOn(card._id, "on the shown card");
 
       assert.isTrue(
         await restoreItems(member, boardId, version._id, [card._id]),
       );
 
-      assert.isTrue((await nodeById(card._id)).hidden);
+      assert.isTrue((await node(card._id))!.hidden);
       const comment = (await ChatMessages.findOneAsync(pin))?.comment;
       assert.isUndefined(comment?.node);
       assert.equal(comment?.detachedFrom, card._id);
@@ -1635,35 +1483,30 @@ describe("whiteboard versions", function () {
       const children = await stickiesIn(small, 3);
       const big = await frame({ x: 12000, y: 0 });
       const crowd = await stickiesIn(big, MAX_BATCH);
-      await nextWindow();
-      await upsertNodes(member, boardId, [
-        { _id: children[0]!, parent: null, position: { x: 9000, y: 9000 } },
-      ]);
-      const version = await newest();
+      const version = await versionAfter(() =>
+        upsertNodes(member, boardId, [
+          { _id: children[0]!, parent: null, position: { x: 9000, y: 9000 } },
+        ]),
+      );
       await deleteNodes(member, boardId, [small, big]);
-      assert.notOk(await WhiteboardNodes.findOneAsync(small));
+      assert.notOk(await node(small));
 
       await restoreItems(member, boardId, version._id, [small]);
 
-      assert.ok(await WhiteboardNodes.findOneAsync(small));
+      assert.ok(await node(small));
       for (const [i, id] of children.entries()) {
-        const child = await nodeById(id);
+        const child = (await node(id))!;
         assert.equal(child.parent, small);
         assert.deepEqual(child.position, { x: 24 + i * 200, y: 64 });
       }
 
-      const before = await board();
-      const recorded = (await versions()).map((v) => v._id);
+      const before = await snapshot();
       await assert.isRejected(
         restoreItems(member, boardId, version._id, [big]),
         /too much to restore at once/,
       );
-      assert.notOk(await WhiteboardNodes.findOneAsync(big));
-      assert.sameDeepMembers((await board()).nodes, before.nodes);
-      assert.sameMembers(
-        (await versions()).map((v) => v._id),
-        recorded,
-      );
+      assert.notOk(await node(big));
+      await assertUnchanged(before);
       assert.lengthOf(crowd, MAX_BATCH);
     });
 
@@ -1671,12 +1514,12 @@ describe("whiteboard versions", function () {
       const round = await frame({ x: 6000, y: 0 });
       const [inside] = await stickiesIn(round, 1);
       const outside = await sticky(member, { x: 0, y: 6000 });
-      await nextWindow();
-      await upsertNodes(member, boardId, [
-        { _id: inside!, parent: null, position: { x: 9000, y: 9000 } },
-        { _id: outside, position: { x: 100, y: 7000 } },
-      ]);
-      const version = await newest();
+      const version = await versionAfter(() =>
+        upsertNodes(member, boardId, [
+          { _id: inside!, parent: null, position: { x: 9000, y: 9000 } },
+          { _id: outside, position: { x: 100, y: 7000 } },
+        ]),
+      );
       // Added since: a sticky in the frame and a line to it
       const [added] = await stickiesIn(round, 1);
       await upsertNodes(member, boardId, [
@@ -1699,11 +1542,11 @@ describe("whiteboard versions", function () {
         after.edges.map((e) => e._id),
         before.edges.map((e) => e._id),
       );
-      assert.equal((await nodeById(inside!)).parent, round);
-      const stillAdded = await nodeById(added!);
+      assert.equal((await node(inside!))!.parent, round);
+      const stillAdded = (await node(added!))!;
       assert.equal(stillAdded.parent, round);
       assert.deepEqual(stillAdded.position, { x: 1200, y: 1200 });
-      assert.deepEqual((await nodeById(outside)).position, {
+      assert.deepEqual((await node(outside))!.position, {
         x: 100,
         y: 7000,
       });
@@ -1714,9 +1557,7 @@ describe("whiteboard versions", function () {
         board: boardId,
         type: "puzzle",
       }))!;
-      await nextWindow();
-      await sticky(member);
-      const version = await newest();
+      const version = await versionAfter(() => sticky(member));
 
       // The card is replaced by another for the same puzzle, somewhere else
       await WhiteboardNodes.removeAsync(card._id);
@@ -1745,14 +1586,12 @@ describe("whiteboard versions", function () {
 
     it("doesn't put back a deleted puzzle's card", async function () {
       const card = await firstCard();
-      await nextWindow();
-      await sticky(member);
-      const version = await newest();
+      const version = await versionAfter(() => sticky(member));
       await deletePuzzle(card.puzzle!);
 
       await restoreItems(member, boardId, version._id, [card._id]);
 
-      const after = (await WhiteboardNodes.findOneAsync(card._id))!;
+      const after = (await node(card._id))!;
       assert.isTrue(after.hidden);
       assert.isTrue(after.hiddenWithPuzzle);
       assert.equal(
@@ -1766,9 +1605,9 @@ describe("whiteboard versions", function () {
 
     it("refuses without edit access, on an archived hunt and with history off", async function () {
       const id = await sticky(member);
-      await nextWindow();
-      await deleteNodes(member, boardId, [id]);
-      const version = await newest();
+      const version = await versionAfter(() =>
+        deleteNodes(member, boardId, [id]),
+      );
       await asUser(operator, () =>
         setWhiteboardEditPolicy.callPromise({
           boardId,
@@ -1777,13 +1616,7 @@ describe("whiteboard versions", function () {
         }),
       );
       await assert.isRejected(
-        asUser(member, () =>
-          restoreWhiteboardItems.callPromise({
-            boardId,
-            versionId: version._id,
-            nodeIds: [id],
-          }),
-        ),
+        restoreItemsAs(member, version._id, [id]),
         /Only operators/,
       );
       await assert.isRejected(
@@ -1819,59 +1652,31 @@ describe("whiteboard versions", function () {
       );
       await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
 
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard_versions",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard_versions");
       await assert.isRejected(
         restoreItems(operator, boardId, version._id, [id]),
         /history is turned off/,
       );
-      assert.notOk(await WhiteboardNodes.findOneAsync(id));
+      assert.notOk(await node(id));
       assert.lengthOf(await versions(), 2);
     });
 
     it("refuses a version from another board", async function () {
-      const otherHunt = await Hunts.insertAsync({
-        name: "Another hunt",
-        openSignups: true,
-        hasGuessQueue: true,
-        createdBy: operator,
-      });
-      await MeteorUsers.updateAsync(operator, {
-        $addToSet: { hunts: otherHunt },
-        $set: { [`roles.${otherHunt}`]: ["operator"] },
-      });
-      const otherBoard = await ensureWhiteboard(operator, otherHunt);
-      const foreignSticky = Random.id();
-      await upsertNodes(operator, otherBoard, [
-        { _id: foreignSticky, type: "sticky", position: { x: 0, y: 0 } },
-      ]);
-      const foreign = (await WhiteboardVersions.findOneAsync({
-        board: otherBoard,
-      }))!;
-      const before = await board();
-      const recorded = (await versions()).map((v) => v._id);
+      const { version: foreign, note: foreignSticky } = await foreignVersion();
+      const before = await snapshot();
 
       await assert.isRejected(
         restoreItems(operator, boardId, foreign._id, [foreignSticky]),
         /Unknown version/,
       );
-      const after = await board();
-      assert.sameDeepMembers(after.nodes, before.nodes);
-      assert.sameDeepMembers(after.edges, before.edges);
-      assert.sameMembers(
-        (await versions()).map((v) => v._id),
-        recorded,
-      );
+      await assertUnchanged(before);
     });
 
     it("records an edits version, not a restore one, and leaves lastRewrittenAt unset", async function () {
       const id = await sticky(member);
-      await nextWindow();
-      await deleteNodes(member, boardId, [id]);
-      const version = await newest();
+      const version = await versionAfter(() =>
+        deleteNodes(member, boardId, [id]),
+      );
       await nextWindow();
 
       await restoreItems(other, boardId, version._id, [id]);
@@ -1901,9 +1706,9 @@ describe("whiteboard versions", function () {
 
     it("records no version when there's nothing to restore", async function () {
       const id = await sticky(member, { x: 300, y: 40 });
-      await nextWindow();
-      await sticky(member, { x: 900, y: 40 });
-      const version = await newest();
+      const version = await versionAfter(() =>
+        sticky(member, { x: 900, y: 40 }),
+      );
       // Far enough on that any edit would start a version of its own
       await nextWindow();
       const before = (await versions()).map((v) => [v._id, v.changeCount]);
@@ -1918,26 +1723,18 @@ describe("whiteboard versions", function () {
     });
 
     it("refuses to put back ink the board has no room for", async function () {
-      const stroke = zigzag(20);
+      const stroke = zigzag(20, inkAt);
       await upsertNodes(member, boardId, [stroke]);
-      await nextWindow();
-      await deleteNodes(member, boardId, [stroke._id]);
-      const version = await newest();
-      await WhiteboardNodes.insertAsync({
-        hunt: huntId,
-        board: boardId,
-        type: "ink",
-        position: { x: 0, y: 0 },
-        strokeWidth: "thin",
-        points: zigzag(MAX_INK_POINTS_PER_BOARD - 10).points,
-        createdBy: member,
-      });
+      const version = await versionAfter(() =>
+        deleteNodes(member, boardId, [stroke._id]),
+      );
+      await fillInk(boardId, 10, member);
 
       await assert.isRejected(
         restoreItems(member, boardId, version._id, [stroke._id]),
         /as much drawing as it can hold/,
       );
-      assert.notOk(await WhiteboardNodes.findOneAsync(stroke._id));
+      assert.notOk(await node(stroke._id));
     });
 
     it("restores every segment of an ink stroke from one of them", async function () {
@@ -1960,13 +1757,13 @@ describe("whiteboard versions", function () {
           stroke,
         })),
       );
-      await nextWindow();
-      await deleteNodes(member, boardId, [segments[0]!]);
+      const version = await versionAfter(() =>
+        deleteNodes(member, boardId, [segments[0]!]),
+      );
       assert.equal(
         await WhiteboardNodes.find({ _id: { $in: segments } }).countAsync(),
         0,
       );
-      const version = await newest();
 
       const restored = await restoreItems(member, boardId, version._id, [
         segments[1]!,
@@ -2102,15 +1899,11 @@ describe("whiteboard versions", function () {
     assert.notProperty(published[0], "hash");
     assert.deepEqual(await publish(outsider), []);
 
-    await FeatureFlags.insertAsync({
-      name: "disable.whiteboard_versions",
-      type: "on",
-      createdBy: operator,
-    });
+    await setFlag("disable.whiteboard_versions");
     assert.deepEqual(await publish(member), []);
     // and records nothing, while edits still go through
     const id = await sticky(other);
-    assert.ok(await WhiteboardNodes.findOneAsync(id));
+    assert.ok(await node(id));
     assert.lengthOf(await versions(), 1);
   });
 });

@@ -1,4 +1,3 @@
-import { Accounts } from "meteor/accounts-base";
 import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { assert } from "chai";
@@ -16,6 +15,7 @@ import ChatMessages, {
 } from "../../../../imports/lib/models/ChatMessages";
 import ChatNotifications from "../../../../imports/lib/models/ChatNotifications";
 import Documents from "../../../../imports/lib/models/Documents";
+import type { FeatureFlagType } from "../../../../imports/lib/models/FeatureFlags";
 import FeatureFlags from "../../../../imports/lib/models/FeatureFlags";
 import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
@@ -49,7 +49,6 @@ import {
   MAX_FEEDERS_PER_META,
   MAX_FRAME_DEPTH,
   MAX_IMAGES_PER_BOARD,
-  MAX_INK_POINTS_PER_BOARD,
   MAX_LIVE_SELECTION,
   MAX_NODES_PER_BOARD,
   MAX_WHITEBOARD_EDITORS,
@@ -113,21 +112,19 @@ import StubSubscription, {
   publishHandler,
 } from "../../../lib/StubSubscription";
 import waitForAssertion from "../../../lib/waitForAssertion";
+import {
+  fillInk,
+  IMAGE_BUCKET,
+  inBucket,
+  lockThief,
+  makeUser,
+  otherHuntBoard,
+  uploadUrl,
+  withImageBucket,
+  zigzag,
+} from "../../../lib/whiteboardFixtures";
 
 const huntId = FixtureHunt._id;
-
-async function makeUser(email: string, roles?: string[]) {
-  const userId = await Accounts.createUserAsync({
-    email,
-    password: "password",
-  });
-  if (roles) {
-    await MeteorUsers.updateAsync(userId, {
-      $set: { hunts: [huntId], roles: { [huntId]: roles } },
-    });
-  }
-  return userId;
-}
 
 function fakeConnection() {
   const closers: (() => void)[] = [];
@@ -155,6 +152,8 @@ describe("whiteboard", function () {
   let operator: string;
   let member: string;
   let outsider: string;
+  let boardId: string;
+  let backingId: string;
 
   beforeEach(async function () {
     await resetDatabase("whiteboard");
@@ -163,6 +162,105 @@ describe("whiteboard", function () {
     outsider = await makeUser("outsider@example.com");
     await makeFixtureHunt(operator);
   });
+
+  // The hunt's board, fresh for the test, and the puzzle its chat is on
+  const makeBoard = async () => {
+    boardId = await ensureWhiteboard(operator, huntId);
+    backingId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+  };
+  const node = (id: string) => WhiteboardNodes.findOneAsync(id);
+  const edge = (id: string) => WhiteboardEdges.findOneAsync(id);
+  // A new sticky at (x, y), with whatever else `extra` sends with it
+  const stickyInput = (
+    x: number,
+    y: number,
+    extra: Partial<WhiteboardNodeInput> = {},
+  ) => ({
+    _id: Random.id(),
+    type: "sticky" as const,
+    position: { x, y },
+    ...extra,
+  });
+  // Puts a sticky on the board as userId, and returns its id
+  const addSticky = async (
+    userId: string,
+    position: { x: number; y: number },
+    extra: Partial<WhiteboardNodeInput> = {},
+  ) => {
+    const _id = Random.id();
+    await upsertNodes(userId, boardId, [
+      { _id, type: "sticky", position, ...extra },
+    ]);
+    return _id;
+  };
+  const setFlag = (name: FeatureFlagType["name"]) =>
+    FeatureFlags.insertAsync({ name, type: "on", createdBy: operator });
+  const setPolicy = (
+    userId: string,
+    editPolicy: WhiteboardEditPolicy,
+    editors: string[] = [],
+  ) =>
+    asUser(userId, () =>
+      setWhiteboardEditPolicy.callPromise({ boardId, editPolicy, editors }),
+    );
+  // Sends a chat message on the board and returns it. Texts must be unique
+  // within a test.
+  const sendComment = async (
+    userId: string,
+    text: string,
+    {
+      puzzleId = backingId,
+      mention,
+      ...rest
+    }: {
+      puzzleId?: string;
+      mention?: string;
+      parentId?: string;
+      comment?: CommentAnchorInput;
+    } = {},
+  ) => {
+    const content = contentFromMessage(text);
+    if (mention) {
+      content.children.unshift({ type: "mention", userId: mention });
+    }
+    await asUser(userId, () =>
+      sendChatMessage.callPromise({
+        puzzleId,
+        content: JSON.stringify(content),
+        ...rest,
+      }),
+    );
+    return (await ChatMessages.findOneAsync({
+      puzzle: puzzleId,
+      "content.children.text": text,
+    }))!;
+  };
+  // Nodes straight into the board, bypassing the caps, leaving `room` for more
+  const fillNodesToCap = async (room: number) => {
+    const have = await WhiteboardNodes.find({ board: boardId }).countAsync();
+    await WhiteboardNodes.insertManyAsync(
+      Array.from({ length: MAX_NODES_PER_BOARD - have - room }, (_, i) => ({
+        hunt: huntId,
+        board: boardId,
+        type: "text" as const,
+        position: { x: i, y: 0 },
+        createdBy: member,
+      })),
+    );
+  };
+  // Lines from a to b straight into the board, leaving `room` for more
+  const fillEdgesToCap = async (a: string, b: string, room: number) => {
+    const have = await WhiteboardEdges.find({ board: boardId }).countAsync();
+    await WhiteboardEdges.insertManyAsync(
+      Array.from({ length: MAX_EDGES_PER_BOARD - have - room }, () => ({
+        hunt: huntId,
+        board: boardId,
+        source: a,
+        target: b,
+        createdBy: member,
+      })),
+    );
+  };
 
   describe("ensureWhiteboard", function () {
     it("seeds a frame per round, a card per puzzle and feeder arrows", async function () {
@@ -267,11 +365,7 @@ describe("whiteboard", function () {
     });
 
     it("refuses while the whiteboard is switched off", async function () {
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard");
       await assert.isRejected(ensureWhiteboard(operator, huntId), /disabled/);
       assert.equal(await Puzzles.find({ kind: "whiteboard" }).countAsync(), 0);
     });
@@ -285,7 +379,6 @@ describe("whiteboard", function () {
   });
 
   describe("placement", function () {
-    let boardId: string;
     const groupTag = FixtureHunt.tags.find((t) => t.name === "group:anger")!;
     const otherGroupTag = FixtureHunt.tags.find((t) => t.name === "group:joy")!;
 
@@ -307,9 +400,7 @@ describe("whiteboard", function () {
         createdBy: operator,
       });
 
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-    });
+    beforeEach(makeBoard);
 
     it("places puzzles created through addPuzzle, locked or not", async function () {
       await Hunts.updateAsync(huntId, {
@@ -539,18 +630,7 @@ describe("whiteboard", function () {
           { limit: 2 },
         ).fetchAsync();
         const room = 3;
-        const have = await WhiteboardEdges.find({
-          board: boardId,
-        }).countAsync();
-        await WhiteboardEdges.insertManyAsync(
-          Array.from({ length: MAX_EDGES_PER_BOARD - have - room }, () => ({
-            hunt: huntId,
-            board: boardId,
-            source: a!._id,
-            target: b!._id,
-            createdBy: member,
-          })),
-        );
+        await fillEdgesToCap(a!._id, b!._id, room);
         await rename();
         const warn = sinon.spy(Logger, "warn");
         await syncPuzzlesOnBoard(huntId, [meta]);
@@ -564,18 +644,7 @@ describe("whiteboard", function () {
       });
 
       it("puts a card at the top level rather than add a frame to a full board", async function () {
-        const have = await WhiteboardNodes.find({
-          board: boardId,
-        }).countAsync();
-        await WhiteboardNodes.insertManyAsync(
-          Array.from({ length: MAX_NODES_PER_BOARD - have }, (_, i) => ({
-            hunt: huntId,
-            board: boardId,
-            type: "sticky" as const,
-            position: { x: i, y: 50_000 },
-            createdBy: member,
-          })),
-        );
+        await fillNodesToCap(0);
         const tag = await Tags.insertAsync({
           hunt: huntId,
           name: "group:no-room",
@@ -793,7 +862,7 @@ describe("whiteboard", function () {
           },
         ]);
         await settle();
-        const after = await WhiteboardNodes.findOneAsync(card);
+        const after = await node(card);
         assert.isUndefined(after?.parent);
         assert.deepEqual(after?.position, { x: -7000, y: -7000 });
       });
@@ -815,11 +884,8 @@ describe("whiteboard", function () {
           /archived/,
         );
         await settle();
-        assert.isTrue((await WhiteboardNodes.findOneAsync(frame._id))?.hidden);
-        assert.equal(
-          (await WhiteboardNodes.findOneAsync(card._id))?.parent,
-          frame.parent,
-        );
+        assert.isTrue((await node(frame._id))?.hidden);
+        assert.equal((await node(card._id))?.parent, frame.parent);
       });
     });
 
@@ -926,7 +992,7 @@ describe("whiteboard", function () {
       for (const id of ids) {
         assert.equal((await cardFor(id)).parent, frame._id);
       }
-      const grown = (await WhiteboardNodes.findOneAsync(frame._id))!;
+      const grown = (await node(frame._id))!;
       assert.isTrue(grown.collapsed);
       assert.isAbove(grown.height!, frame.height!);
     });
@@ -939,7 +1005,7 @@ describe("whiteboard", function () {
       const card = await cardFor(puzzle._id);
       await deleteNodes(member, boardId, [card._id]);
       await syncPuzzlesOnBoard(huntId, [puzzle._id]);
-      assert.isTrue((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
+      assert.isTrue((await node(card._id))?.hidden);
     });
 
     it("keeps a new feeder out of a seeded round's meta row", async function () {
@@ -990,13 +1056,7 @@ describe("whiteboard", function () {
   });
 
   describe("deleted and replaced puzzles", function () {
-    let boardId: string;
-    let backingId: string;
-
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-      backingId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-    });
+    beforeEach(makeBoard);
 
     const cardFor = (puzzleId: string) =>
       WhiteboardNodes.findOneAsync({ board: boardId, puzzle: puzzleId });
@@ -1030,19 +1090,8 @@ describe("whiteboard", function () {
     const undestroy = (puzzleId: string) =>
       asUser(operator, () => undestroyPuzzle.callPromise({ puzzleId }));
     // A comment pinned to a node, 3 across and 4 down from its corner
-    const pin = async (node: string, text: string) => {
-      await asUser(member, () =>
-        sendChatMessage.callPromise({
-          puzzleId: backingId,
-          content: JSON.stringify(contentFromMessage(text)),
-          comment: { node, x: 3, y: 4 },
-        }),
-      );
-      return (await ChatMessages.findOneAsync({
-        puzzle: backingId,
-        "content.children.text": text,
-      }))!._id;
-    };
+    const pin = async (node: string, text: string) =>
+      (await sendComment(member, text, { comment: { node, x: 3, y: 4 } }))._id;
     const anchorOf = async (messageId: string) =>
       (await ChatMessages.findOneAsync(messageId))?.comment;
 
@@ -1056,7 +1105,7 @@ describe("whiteboard", function () {
           position: { x: card.position.x + 7, y: card.position.y + 9 },
         },
       });
-      const before = (await WhiteboardNodes.findOneAsync(card._id))!;
+      const before = (await node(card._id))!;
       const comment = await pin(card._id, "on the old card");
 
       // The replacement already has a card, with a comment and a line
@@ -1073,7 +1122,7 @@ describe("whiteboard", function () {
       const note = Random.id();
       const line = Random.id();
       await upsertNodes(member, boardId, [
-        { _id: note, type: "sticky", position: { x: -900, y: -900 } },
+        stickyInput(-900, -900, { _id: note }),
       ]);
       await upsertEdges(member, boardId, [
         { _id: line, source: note, target: theirs._id },
@@ -1100,7 +1149,7 @@ describe("whiteboard", function () {
         );
       }, 5000);
 
-      const after = (await WhiteboardNodes.findOneAsync(card._id))!;
+      const after = (await node(card._id))!;
       for (const field of [
         "position",
         "parent",
@@ -1114,14 +1163,11 @@ describe("whiteboard", function () {
         assert.deepEqual(after[field], before[field], field);
       }
       assert.isUndefined(await cardFor(puzzle._id));
-      assert.isUndefined(await WhiteboardNodes.findOneAsync(theirs._id));
+      assert.isUndefined(await node(theirs._id));
       assert.equal((await anchorOf(comment))?.node, card._id);
       assert.equal((await anchorOf(theirComment))?.node, card._id);
       assert.equal((await anchorOf(freePin))?.detachedFrom, card._id);
-      assert.equal(
-        (await WhiteboardEdges.findOneAsync(line))?.target,
-        card._id,
-      );
+      assert.equal((await edge(line))?.target, card._id);
     });
 
     it("gives a replacement placed at the same moment no card of its own", async function () {
@@ -1151,18 +1197,15 @@ describe("whiteboard", function () {
 
       await destroy(puzzle._id);
       await waitForAssertion(async () => {
-        const hidden = await WhiteboardNodes.findOneAsync(card._id);
+        const hidden = await node(card._id);
         assert.isTrue(hidden?.hidden);
         assert.isTrue(hidden?.hiddenWithPuzzle);
-        assert.isTrue((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+        assert.isTrue((await edge(arrow._id))?.hidden);
         const anchor = await anchorOf(comment);
         assert.isUndefined(anchor?.node);
         assert.equal(anchor?.detachedFrom, card._id);
       }, 5000);
-      assert.deepEqual(
-        (await WhiteboardNodes.findOneAsync(card._id))?.position,
-        card.position,
-      );
+      assert.deepEqual((await node(card._id))?.position, card.position);
 
       // Nobody can put them back while the puzzle is deleted
       await assert.isRejected(
@@ -1175,16 +1218,16 @@ describe("whiteboard", function () {
       );
       // and placing the meta leaves the arrow hidden rather than removing it
       await syncPuzzlesOnBoard(huntId, [arrow.meta!]);
-      assert.isTrue((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+      assert.isTrue((await edge(arrow._id))?.hidden);
 
       await undestroy(puzzle._id);
       await waitForAssertion(async () => {
-        const back = (await WhiteboardNodes.findOneAsync(card._id))!;
+        const back = (await node(card._id))!;
         assert.isUndefined(back.hidden);
         assert.isUndefined(back.hiddenWithPuzzle);
         assert.deepEqual(back.position, card.position);
         assert.equal(back.parent, card.parent);
-        const shown = await WhiteboardEdges.findOneAsync(arrow._id);
+        const shown = await edge(arrow._id);
         assert.exists(shown);
         assert.isUndefined(shown.hidden);
         assert.isUndefined(shown.hiddenWithPuzzle);
@@ -1203,38 +1246,31 @@ describe("whiteboard", function () {
       await destroy(puzzle._id);
       // As the deferred sync does, but known to have finished
       await syncPuzzlesOnBoard(huntId, [puzzle._id]);
-      assert.isNotOk(
-        (await WhiteboardNodes.findOneAsync(card._id))?.hiddenWithPuzzle,
-      );
+      assert.isNotOk((await node(card._id))?.hiddenWithPuzzle);
       await undestroy(puzzle._id);
       await syncPuzzlesOnBoard(huntId, [puzzle._id]);
-      const after = (await WhiteboardNodes.findOneAsync(card._id))!;
+      const after = (await node(card._id))!;
       assert.isTrue(after.hidden);
-      assert.isTrue((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+      assert.isTrue((await edge(arrow._id))?.hidden);
     });
 
     it("leaves what someone put back and took off again off when its puzzle comes back", async function () {
       const { arrow, puzzle, card } = await feederWithArrow();
       await Puzzles.destroyAsync(puzzle._id);
       await syncPuzzlesOnBoard(huntId, [puzzle._id]);
-      assert.isTrue(
-        (await WhiteboardEdges.findOneAsync(arrow._id))?.hiddenWithPuzzle,
-      );
+      assert.isTrue((await edge(arrow._id))?.hiddenWithPuzzle);
       // Back, but before the sync that would show them again
       await Puzzles.undestroyAsync(puzzle._id);
       await upsertNodes(member, boardId, [{ _id: card._id, hidden: false }]);
       await upsertEdges(member, boardId, [{ _id: arrow._id, hidden: false }]);
-      const shownArrow = await WhiteboardEdges.findOneAsync(arrow._id);
+      const shownArrow = await edge(arrow._id);
       assert.isUndefined(shownArrow?.hidden);
       assert.isUndefined(shownArrow?.hiddenWithPuzzle);
       await deleteNodes(member, boardId, [card._id]);
       await deleteEdges(member, boardId, [arrow._id]);
       await syncPuzzlesOnBoard(huntId, [puzzle._id]);
 
-      for (const doc of [
-        await WhiteboardNodes.findOneAsync(card._id),
-        await WhiteboardEdges.findOneAsync(arrow._id),
-      ]) {
+      for (const doc of [await node(card._id), await edge(arrow._id)]) {
         assert.isTrue(doc?.hidden);
         assert.isUndefined(doc?.hiddenWithPuzzle);
       }
@@ -1249,7 +1285,7 @@ describe("whiteboard", function () {
       await syncAutoEdges(board, [], tags, () => Promise.resolve(), [
         puzzle._id,
       ]);
-      const after = await WhiteboardEdges.findOneAsync(arrow._id);
+      const after = await edge(arrow._id);
       assert.isTrue(after?.hidden);
       assert.isUndefined(after?.hiddenWithPuzzle);
     });
@@ -1279,21 +1315,15 @@ describe("whiteboard", function () {
       await deleteNodes(member, boardId, [other._id]);
       await Puzzles.destroyAsync(meta);
       await syncPuzzlesOnBoard(huntId, [meta]);
-      assert.isTrue(
-        (await WhiteboardEdges.findOneAsync(withPuzzle._id))?.hiddenWithPuzzle,
-      );
+      assert.isTrue((await edge(withPuzzle._id))?.hiddenWithPuzzle);
 
       await asUser(operator, () =>
         resetWhiteboardLayout.callPromise({ boardId, putBack: true }),
       );
 
-      assert.isTrue((await WhiteboardEdges.findOneAsync(byHand._id))?.hidden);
-      assert.isTrue(
-        (await WhiteboardEdges.findOneAsync(withPuzzle._id))?.hidden,
-      );
-      assert.isUndefined(
-        (await WhiteboardNodes.findOneAsync(other._id))?.hidden,
-      );
+      assert.isTrue((await edge(byHand._id))?.hidden);
+      assert.isTrue((await edge(withPuzzle._id))?.hidden);
+      assert.isUndefined((await node(other._id))?.hidden);
     });
 
     it("gives a puzzle that comes back after being replaced a card of its own", async function () {
@@ -1315,21 +1345,14 @@ describe("whiteboard", function () {
   });
 
   describe("edits", function () {
-    let boardId: string;
-
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-    });
+    beforeEach(makeBoard);
 
     it("records who made and edited a sticky, but not who moved it", async function () {
-      const _id = Random.id();
-      await upsertNodes(member, boardId, [
-        { _id, type: "sticky", position: { x: 0, y: 0 }, text: "hello" },
-      ]);
+      const _id = await addSticky(member, { x: 0, y: 0 }, { text: "hello" });
       await upsertNodes(operator, boardId, [{ _id, text: "hello there" }]);
       await upsertNodes(member, boardId, [{ _id, position: { x: 50, y: 50 } }]);
 
-      const sticky = (await WhiteboardNodes.findOneAsync(_id))!;
+      const sticky = (await node(_id))!;
       assert.deepEqual(
         sticky.contributors.map((c) => c.user),
         [member, operator],
@@ -1344,7 +1367,7 @@ describe("whiteboard", function () {
         { _id, type: "text", position: { x: 0, y: 0 }, color: "red" },
       ]);
       await upsertNodes(member, boardId, [{ _id, color: null }]);
-      const text = (await WhiteboardNodes.findOneAsync(_id))!;
+      const text = (await node(_id))!;
       assert.isUndefined(text.color);
       assert.lengthOf(text.contributors, 2);
     });
@@ -1353,13 +1376,11 @@ describe("whiteboard", function () {
       const _id = Random.id();
       await upsertNodes(member, boardId, [
         {
-          _id,
-          type: "sticky",
-          position: { x: 0, y: 0 },
+          ...stickyInput(0, 0, { _id }),
           contributors: [{ user: outsider, at: new Date() }],
         } as never,
       ]);
-      const sticky = (await WhiteboardNodes.findOneAsync(_id))!;
+      const sticky = (await node(_id))!;
       assert.deepEqual(
         sticky.contributors.map((c) => c.user),
         [member],
@@ -1381,14 +1402,11 @@ describe("whiteboard", function () {
     });
 
     it("caps the contributor log at 50", async function () {
-      const _id = Random.id();
-      await upsertNodes(member, boardId, [
-        { _id, type: "sticky", position: { x: 0, y: 0 }, text: "0" },
-      ]);
+      const _id = await addSticky(member, { x: 0, y: 0 }, { text: "0" });
       for (let i = 1; i <= 55; i++) {
         await upsertNodes(member, boardId, [{ _id, text: `${i}` }]);
       }
-      const sticky = (await WhiteboardNodes.findOneAsync(_id))!;
+      const sticky = (await node(_id))!;
       assert.lengthOf(sticky.contributors, 50);
       // The creator is never dropped.
       assert.equal(sticky.contributors[0]!.user, member);
@@ -1398,19 +1416,17 @@ describe("whiteboard", function () {
       const kept = Random.id();
       await assert.isRejected(
         upsertNodes(member, boardId, [
-          { _id: kept, type: "sticky", position: { x: 0, y: 0 } },
+          stickyInput(0, 0, { _id: kept }),
           { _id: Random.id(), text: "edit to a node that's gone" },
         ]),
         /type and a position/,
       );
-      assert.notOk(await WhiteboardNodes.findOneAsync(kept));
+      assert.notOk(await node(kept));
     });
 
     it("rejects people outside the hunt", async function () {
       await assert.isRejected(
-        upsertNodes(outsider, boardId, [
-          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-        ]),
+        upsertNodes(outsider, boardId, [stickyInput(0, 0)]),
         /member/,
       );
       await assert.isRejected(deleteNodes(outsider, boardId, []), /member/);
@@ -1421,9 +1437,7 @@ describe("whiteboard", function () {
     it("rejects edits in an archived hunt", async function () {
       await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
       await assert.isRejected(
-        upsertNodes(member, boardId, [
-          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-        ]),
+        upsertNodes(member, boardId, [stickyInput(0, 0)]),
         /archived/,
       );
       await assert.isRejected(deleteNodes(operator, boardId, []), /archived/);
@@ -1442,7 +1456,7 @@ describe("whiteboard", function () {
         /another board/,
       );
       await deleteNodes(member, boardId, [_id]);
-      assert.ok(await WhiteboardNodes.findOneAsync(_id));
+      assert.ok(await node(_id));
     });
 
     it("only puts this hunt's puzzles on the board", async function () {
@@ -1471,7 +1485,7 @@ describe("whiteboard", function () {
     });
 
     it("rejects out-of-range and oversized input", async function () {
-      const sticky = { _id: Random.id(), type: "sticky" as const };
+      const sticky = stickyInput(0, 0);
       await assert.isRejected(
         upsertNodes(member, boardId, [
           { ...sticky, position: { x: 1e9, y: 0 } },
@@ -1544,31 +1558,14 @@ describe("whiteboard", function () {
         upsertNodes(
           member,
           boardId,
-          Array.from({ length: MAX_BATCH + 1 }, () => ({
-            _id: Random.id(),
-            type: "sticky" as const,
-            position: { x: 0, y: 0 },
-          })),
+          Array.from({ length: MAX_BATCH + 1 }, () => stickyInput(0, 0)),
         ),
         /Too many nodes/,
       );
 
-      const existing = await WhiteboardNodes.find({
-        board: boardId,
-      }).countAsync();
-      await WhiteboardNodes.insertManyAsync(
-        Array.from({ length: MAX_NODES_PER_BOARD - existing }, (_, i) => ({
-          hunt: huntId,
-          board: boardId,
-          type: "text" as const,
-          position: { x: i, y: 0 },
-          createdBy: member,
-        })),
-      );
+      await fillNodesToCap(0);
       await assert.isRejected(
-        upsertNodes(member, boardId, [
-          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-        ]),
+        upsertNodes(member, boardId, [stickyInput(0, 0)]),
         /board is full/,
       );
     });
@@ -1580,19 +1577,14 @@ describe("whiteboard", function () {
         parent: { $exists: true },
       }))!;
       const seededFrame = (await WhiteboardNodes.findOneAsync(card.parent))!;
-      const sticky = Random.id();
-      await upsertNodes(member, boardId, [
-        { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
-      ]);
+      const sticky = await addSticky(member, { x: 0, y: 0 });
 
       await deleteNodes(member, boardId, [card._id, sticky]);
-      assert.isTrue((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
-      assert.notOk(await WhiteboardNodes.findOneAsync(sticky));
+      assert.isTrue((await node(card._id))?.hidden);
+      assert.notOk(await node(sticky));
 
       await deleteNodes(member, boardId, [seededFrame._id]);
-      assert.isTrue(
-        (await WhiteboardNodes.findOneAsync(seededFrame._id))?.hidden,
-      );
+      assert.isTrue((await node(seededFrame._id))?.hidden);
       // Its cards moved out of it, keeping their place on the board
       assert.equal(
         await WhiteboardNodes.find({
@@ -1601,7 +1593,7 @@ describe("whiteboard", function () {
         }).countAsync(),
         0,
       );
-      const freed = (await WhiteboardNodes.findOneAsync(card._id))!;
+      const freed = (await node(card._id))!;
       assert.equal(freed.parent, seededFrame.parent);
       assert.deepEqual(freed.position, {
         x: card.position.x + seededFrame.position.x,
@@ -1616,21 +1608,20 @@ describe("whiteboard", function () {
       const a = Random.id();
       const b = Random.id();
       await upsertNodes(member, boardId, [
-        { _id: a, type: "sticky", position: { x: 0, y: 0 } },
-        { _id: b, type: "sticky", position: { x: 300, y: 0 } },
+        stickyInput(0, 0, { _id: a }),
+        stickyInput(300, 0, { _id: b }),
       ]);
       const drawn = Random.id();
       await upsertEdges(member, boardId, [
         { _id: drawn, source: a, target: b },
       ]);
       await deleteEdges(member, boardId, [auto._id, drawn]);
-      assert.isTrue((await WhiteboardEdges.findOneAsync(auto._id))?.hidden);
-      assert.notOk(await WhiteboardEdges.findOneAsync(drawn));
+      assert.isTrue((await edge(auto._id))?.hidden);
+      assert.notOk(await edge(drawn));
     });
 
     it("keeps a deleted frame's contents where they were", async function () {
       const frame = Random.id();
-      const sticky = Random.id();
       await upsertNodes(member, boardId, [
         {
           _id: frame,
@@ -1640,18 +1631,15 @@ describe("whiteboard", function () {
           height: 500,
         },
       ]);
-      await upsertNodes(member, boardId, [
-        {
-          _id: sticky,
-          type: "sticky",
-          position: { x: 10, y: 20 },
-          parent: frame,
-        },
-      ]);
+      const sticky = await addSticky(
+        member,
+        { x: 10, y: 20 },
+        { parent: frame },
+      );
       await deleteNodes(member, boardId, [frame]);
 
-      assert.notOk(await WhiteboardNodes.findOneAsync(frame));
-      const moved = (await WhiteboardNodes.findOneAsync(sticky))!;
+      assert.notOk(await node(frame));
+      const moved = (await node(sticky))!;
       assert.notOk(moved.parent);
       assert.deepEqual(moved.position, { x: 110, y: 120 });
     });
@@ -1659,7 +1647,6 @@ describe("whiteboard", function () {
     it("moves a nested frame's contents into the frame around it", async function () {
       const outer = Random.id();
       const inner = Random.id();
-      const sticky = Random.id();
       await upsertNodes(member, boardId, [
         { _id: outer, type: "frame", position: { x: 100, y: 100 } },
       ]);
@@ -1671,16 +1658,9 @@ describe("whiteboard", function () {
           parent: outer,
         },
       ]);
-      await upsertNodes(member, boardId, [
-        {
-          _id: sticky,
-          type: "sticky",
-          position: { x: 5, y: 6 },
-          parent: inner,
-        },
-      ]);
+      const sticky = await addSticky(member, { x: 5, y: 6 }, { parent: inner });
       await deleteNodes(member, boardId, [inner]);
-      const moved = (await WhiteboardNodes.findOneAsync(sticky))!;
+      const moved = (await node(sticky))!;
       assert.equal(moved.parent, outer);
       assert.deepEqual(moved.position, { x: 35, y: 46 });
     });
@@ -1723,14 +1703,7 @@ describe("whiteboard", function () {
         },
       ]);
       await assert.isRejected(
-        upsertNodes(member, boardId, [
-          {
-            _id: Random.id(),
-            type: "sticky",
-            position: { x: 0, y: 0 },
-            parent: inner,
-          },
-        ]),
+        upsertNodes(member, boardId, [stickyInput(0, 0, { parent: inner })]),
         /nested/,
       );
 
@@ -1772,7 +1745,7 @@ describe("whiteboard", function () {
       } finally {
         update.restore();
       }
-      const saved = (await WhiteboardNodes.findOneAsync(a))!;
+      const saved = (await node(a))!;
       assert.notOk(saved.parent);
       assert.deepEqual(saved.position, { x: 0, y: 0 });
     });
@@ -1794,9 +1767,7 @@ describe("whiteboard", function () {
       const b = segment(10);
       await upsertNodes(member, boardId, [a, b]);
       assert.deepEqual(
-        (await WhiteboardNodes.findOneAsync(a._id))?.contributors.map(
-          (c) => c.user,
-        ),
+        (await node(a._id))?.contributors.map((c) => c.user),
         [member],
       );
       await deleteNodes(member, boardId, [a._id]);
@@ -1807,36 +1778,6 @@ describe("whiteboard", function () {
     });
 
     describe("ink budget", function () {
-      // A stroke of `count` points that zigzags, so simplifying keeps every
-      // one of them
-      const zigzag = (count: number) => ({
-        _id: Random.id(),
-        type: "ink" as const,
-        position: { x: 0, y: 0 },
-        strokeWidth: "thin" as const,
-        stroke: Random.id(),
-        points: Array.from(
-          { length: count },
-          (_, i): [number, number, number] => [i * 5, (i % 2) * 5, 0.5],
-        ),
-      });
-      // Ink straight into the board, bypassing the budget, leaving `room`
-      // points of it
-      const fillInk = async (room: number) => {
-        await WhiteboardNodes.insertAsync({
-          hunt: huntId,
-          board: boardId,
-          type: "ink",
-          position: { x: 0, y: 0 },
-          strokeWidth: "thin",
-          points: Array.from(
-            { length: MAX_INK_POINTS_PER_BOARD - room },
-            (_, i): [number, number, number] => [i % 1000, i % 7, 0.5],
-          ),
-          createdBy: member,
-        });
-      };
-
       it("stores a new stroke simplified, keeping its ends and its pressure", async function () {
         const straight = {
           ...zigzag(0),
@@ -1847,26 +1788,16 @@ describe("whiteboard", function () {
         };
         const bent = zigzag(10);
         await upsertNodes(member, boardId, [straight, bent]);
-        assert.deepEqual(
-          (await WhiteboardNodes.findOneAsync(straight._id))?.points,
-          [
-            [0, 10, 0.2],
-            [198, 10, 1],
-          ],
-        );
-        assert.deepEqual(
-          (await WhiteboardNodes.findOneAsync(bent._id))?.points,
-          bent.points,
-        );
+        assert.deepEqual((await node(straight._id))?.points, [
+          [0, 10, 0.2],
+          [198, 10, 1],
+        ]);
+        assert.deepEqual((await node(bent._id))?.points, bent.points);
       });
 
       it("refuses a whole batch that would take the board past its ink budget", async function () {
-        await fillInk(15);
-        const note = {
-          _id: Random.id(),
-          type: "sticky" as const,
-          position: { x: 0, y: 0 },
-        };
+        await fillInk(boardId, 15, member);
+        const note = stickyInput(0, 0);
         const stroke = zigzag(20);
         await assert.isRejected(
           asUser(member, () =>
@@ -1877,8 +1808,8 @@ describe("whiteboard", function () {
           ),
           /as much drawing as it can hold/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
-        assert.notOk(await WhiteboardNodes.findOneAsync(stroke._id));
+        assert.notOk(await node(note._id));
+        assert.notOk(await node(stroke._id));
 
         // What's left fits, counted once simplified
         const long = {
@@ -1889,11 +1820,9 @@ describe("whiteboard", function () {
           ),
         };
         await upsertNodes(member, boardId, [zigzag(10), long, note]);
-        assert.ok(await WhiteboardNodes.findOneAsync(long._id));
+        assert.ok(await node(long._id));
         // Anything but ink still goes on a board with no ink to spare
-        await upsertNodes(member, boardId, [
-          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-        ]);
+        await upsertNodes(member, boardId, [stickyInput(0, 0)]);
         await upsertNodes(member, boardId, [
           { _id: note._id, position: { x: 50, y: 50 } },
         ]);
@@ -1904,7 +1833,7 @@ describe("whiteboard", function () {
       });
 
       it("stores a highlighter stroke and counts it like any other", async function () {
-        await fillInk(15);
+        await fillInk(boardId, 15, member);
         const marker = { ...zigzag(20), strokeWidth: "marker" as const };
         await assert.isRejected(
           asUser(member, () =>
@@ -1912,13 +1841,13 @@ describe("whiteboard", function () {
           ),
           /as much drawing as it can hold/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(marker._id));
+        assert.notOk(await node(marker._id));
 
         const fits = { ...zigzag(10), strokeWidth: "marker" as const };
         await asUser(member, () =>
           upsertWhiteboardNodes.callPromise({ boardId, nodes: [fits] }),
         );
-        const stored = (await WhiteboardNodes.findOneAsync(fits._id))!;
+        const stored = (await node(fits._id))!;
         assert.equal(stored.strokeWidth, "marker");
         assert.deepEqual(stored.points, fits.points);
         await assert.isRejected(
@@ -1938,7 +1867,7 @@ describe("whiteboard", function () {
         note = Random.id();
         ink = Random.id();
         await upsertNodes(member, boardId, [
-          { _id: note, type: "sticky", position: { x: 0, y: 0 } },
+          stickyInput(0, 0, { _id: note }),
           {
             _id: ink,
             type: "ink",
@@ -2010,11 +1939,7 @@ describe("whiteboard", function () {
           await published(whiteboardInk, outsider, { outlines: false }),
         );
         assert.isEmpty(await published(whiteboardContents, outsider));
-        await FeatureFlags.insertAsync({
-          name: "disable.whiteboard",
-          type: "on",
-          createdBy: operator,
-        });
+        await setFlag("disable.whiteboard");
         assert.isEmpty(
           await published(whiteboardInk, member, { outlines: false }),
         );
@@ -2023,10 +1948,7 @@ describe("whiteboard", function () {
     });
 
     it("only joins nodes on the same board with arrows", async function () {
-      const a = Random.id();
-      await upsertNodes(member, boardId, [
-        { _id: a, type: "sticky", position: { x: 0, y: 0 } },
-      ]);
+      const a = await addSticky(member, { x: 0, y: 0 });
       await assert.isRejected(
         upsertEdges(member, boardId, [
           { _id: Random.id(), source: a, target: Random.id() },
@@ -2040,17 +1962,14 @@ describe("whiteboard", function () {
         board: boardId,
         auto: true,
       }))!;
-      const sticky = Random.id();
-      await upsertNodes(member, boardId, [
-        { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
-      ]);
+      const sticky = await addSticky(member, { x: 0, y: 0 });
       await assert.isRejected(
         upsertEdges(member, boardId, [{ _id: auto._id, target: sticky }]),
         /follow their tags/,
       );
       // Restyling one is fine, and isn't attributed to anyone
       await upsertEdges(member, boardId, [{ _id: auto._id, dashed: true }]);
-      const saved = (await WhiteboardEdges.findOneAsync(auto._id))!;
+      const saved = (await edge(auto._id))!;
       assert.isTrue(saved.dashed);
       assert.lengthOf(saved.contributors, 0);
     });
@@ -2061,7 +1980,7 @@ describe("whiteboard", function () {
         auto: true,
       }))!;
       await deleteEdges(member, boardId, [auto._id]);
-      assert.isTrue((await WhiteboardEdges.findOneAsync(auto._id))?.hidden);
+      assert.isTrue((await edge(auto._id))?.hidden);
 
       // Hiding goes through deleteEdges, not here
       await assert.isRejected(
@@ -2076,8 +1995,8 @@ describe("whiteboard", function () {
 
       const [a, b] = [Random.id(), Random.id()];
       await upsertNodes(member, boardId, [
-        { _id: a, type: "sticky", position: { x: 0, y: 0 } },
-        { _id: b, type: "sticky", position: { x: 300, y: 0 } },
+        stickyInput(0, 0, { _id: a }),
+        stickyInput(300, 0, { _id: b }),
       ]);
       const line = Random.id();
       await upsertEdges(member, boardId, [{ _id: line, source: a, target: b }]);
@@ -2099,7 +2018,7 @@ describe("whiteboard", function () {
         ]),
         /Only a feeder arrow can be put back/,
       );
-      assert.isTrue((await WhiteboardEdges.findOneAsync(auto._id))?.hidden);
+      assert.isTrue((await edge(auto._id))?.hidden);
 
       await asUser(member, () =>
         upsertWhiteboardEdges.callPromise({
@@ -2107,21 +2026,14 @@ describe("whiteboard", function () {
           edges: [{ _id: auto._id, hidden: false }],
         }),
       );
-      const restored = (await WhiteboardEdges.findOneAsync(auto._id))!;
+      const restored = (await edge(auto._id))!;
       assert.isUndefined(restored.hidden);
       assert.lengthOf(restored.contributors, 0);
     });
 
     describe("images", function () {
-      const bucket = {
-        bucketName: "jr-test-images",
-        bucketRegion: "ap-southeast-2",
-      };
-      const inBucket = (key: string) =>
-        `https://s3.${bucket.bucketRegion}.amazonaws.com/${bucket.bucketName}/${key}`;
-      let backing: string;
       // Where an upload for the board's chat would be
-      const stored = () => inBucket(`${huntId}/${backing}/${Random.id()}`);
+      const stored = () => uploadUrl(huntId, backingId);
       const imageInput = (url: string) => ({
         _id: Random.id(),
         type: "image" as const,
@@ -2131,14 +2043,7 @@ describe("whiteboard", function () {
         image: { url, width: 800, height: 400 },
       });
 
-      beforeEach(async function () {
-        backing = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-        await Settings.insertAsync({
-          name: "s3.image_bucket",
-          value: bucket,
-          createdBy: operator,
-        });
-      });
+      beforeEach(() => withImageBucket(operator));
 
       it("takes an image uploaded for the board, with its size", async function () {
         const input = imageInput(stored());
@@ -2164,18 +2069,18 @@ describe("whiteboard", function () {
           upsertNodes(member, boardId, [input]),
           /That image isn't one we stored/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
+        assert.notOk(await node(input._id));
       });
 
       it("refuses an image from anywhere else", async function () {
         const elsewhere = [
           "https://example.com/cat.png",
           "data:image/png;base64,iVBORw0KGgo=",
-          inBucket(`${backing}/${Random.id()}`),
-          inBucket(`chat/${backing}/${Random.id()}`),
-          inBucket(`${huntId}/${backing}/${Random.id()}/more`),
-          inBucket(`${huntId}/${backing}/../${Random.id()}`),
-          `https://s3.${bucket.bucketRegion}.amazonaws.com/another-bucket/${huntId}/${backing}/${Random.id()}`,
+          inBucket(`${backingId}/${Random.id()}`),
+          inBucket(`chat/${backingId}/${Random.id()}`),
+          inBucket(`${huntId}/${backingId}/${Random.id()}/more`),
+          inBucket(`${huntId}/${backingId}/../${Random.id()}`),
+          `https://s3.${IMAGE_BUCKET.bucketRegion}.amazonaws.com/another-bucket/${huntId}/${backingId}/${Random.id()}`,
         ];
         for (const url of elsewhere) {
           const input = imageInput(url);
@@ -2183,7 +2088,7 @@ describe("whiteboard", function () {
             upsertNodes(member, boardId, [input]),
             /That image isn't one we stored/,
           );
-          assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
+          assert.notOk(await node(input._id));
         }
       });
 
@@ -2228,11 +2133,9 @@ describe("whiteboard", function () {
           upsertNodes(member, boardId, [extra]),
           /can't take any more images/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(extra._id));
+        assert.notOk(await node(extra._id));
         // Other nodes still go in
-        await upsertNodes(member, boardId, [
-          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-        ]);
+        await upsertNodes(member, boardId, [stickyInput(0, 0)]);
       });
 
       it("never changes an image once it's on the board", async function () {
@@ -2258,10 +2161,7 @@ describe("whiteboard", function () {
         assert.deepEqual(node.image, input.image);
         assert.equal(node.width, 480);
 
-        const sticky = Random.id();
-        await upsertNodes(member, boardId, [
-          { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
-        ]);
+        const sticky = await addSticky(member, { x: 0, y: 0 });
         await assert.isRejected(
           upsertNodes(member, boardId, [{ _id: sticky, image: input.image }]),
           /Only image nodes have an image/,
@@ -2280,7 +2180,7 @@ describe("whiteboard", function () {
         );
         await upsertNodes(member, boardId, [{ _id: input._id, locked: false }]);
         await deleteNodes(member, boardId, [input._id]);
-        assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
+        assert.notOk(await node(input._id));
       });
     });
 
@@ -2303,7 +2203,7 @@ describe("whiteboard", function () {
             nodes: [rect, ellipse],
           }),
         );
-        const stored = (await WhiteboardNodes.findOneAsync(rect._id))!;
+        const stored = (await node(rect._id))!;
         assert.equal(stored.type, "shape");
         assert.equal(stored.shape, "rect");
         assert.equal(stored.color, "blue");
@@ -2313,17 +2213,13 @@ describe("whiteboard", function () {
           stored.contributors.map((c) => c.user),
           [member],
         );
-        const clear = (await WhiteboardNodes.findOneAsync(ellipse._id))!;
+        const clear = (await node(ellipse._id))!;
         assert.equal(clear.shape, "ellipse");
         assert.isUndefined(clear.color);
       });
 
       it("refuses a shape it doesn't know, writing nothing", async function () {
-        const note = {
-          _id: Random.id(),
-          type: "sticky" as const,
-          position: { x: 0, y: 0 },
-        };
+        const note = stickyInput(0, 0);
         const star = { ...shapeInput(), shape: "star" as "rect" };
         await assert.isRejected(
           asUser(member, () =>
@@ -2335,8 +2231,8 @@ describe("whiteboard", function () {
           upsertNodes(member, boardId, [note, star]),
           /Unknown shape/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
-        assert.notOk(await WhiteboardNodes.findOneAsync(star._id));
+        assert.notOk(await node(note._id));
+        assert.notOk(await node(star._id));
       });
 
       it("needs a shape and a size on a shape node, and no shape on anything else", async function () {
@@ -2378,10 +2274,7 @@ describe("whiteboard", function () {
         assert.equal(node.width, 300);
         assert.equal(node.color, "green");
 
-        const sticky = Random.id();
-        await upsertNodes(member, boardId, [
-          { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
-        ]);
+        const sticky = await addSticky(member, { x: 0, y: 0 });
         await assert.isRejected(
           upsertNodes(member, boardId, [{ _id: sticky, shape: "rect" }]),
           /Only shape nodes have a shape/,
@@ -2389,23 +2282,7 @@ describe("whiteboard", function () {
       });
 
       it("counts shapes within the node cap", async function () {
-        await WhiteboardNodes.insertManyAsync(
-          Array.from(
-            {
-              length:
-                MAX_NODES_PER_BOARD -
-                (await WhiteboardNodes.find({ board: boardId }).countAsync()),
-            },
-            () => ({
-              hunt: huntId,
-              board: boardId,
-              type: "sticky" as const,
-              position: { x: 0, y: 0 },
-              contributors: [],
-              createdBy: member,
-            }),
-          ),
-        );
+        await fillNodesToCap(0);
         await assert.isRejected(
           upsertNodes(member, boardId, [shapeInput()]),
           /This board is full/,
@@ -2424,7 +2301,7 @@ describe("whiteboard", function () {
         );
         await upsertNodes(member, boardId, [{ _id: input._id, locked: false }]);
         await deleteNodes(member, boardId, [input._id]);
-        assert.notOk(await WhiteboardNodes.findOneAsync(input._id));
+        assert.notOk(await node(input._id));
       });
     });
 
@@ -2474,31 +2351,12 @@ describe("whiteboard", function () {
 
       const accepted = (results: unknown[]) =>
         results.filter((r) => r === "accepted").length;
-      const sticky = () => ({
-        _id: Random.id(),
-        type: "sticky" as const,
-        position: { x: 0, y: 0 },
-      });
 
       it("lets only one of two batches that together pass the node cap in", async function () {
-        const existing = await WhiteboardNodes.find({
-          board: boardId,
-        }).countAsync();
-        await WhiteboardNodes.insertManyAsync(
-          Array.from(
-            { length: MAX_NODES_PER_BOARD - existing - 1 },
-            (_, i) => ({
-              hunt: huntId,
-              board: boardId,
-              type: "text" as const,
-              position: { x: i, y: 0 },
-              createdBy: member,
-            }),
-          ),
-        );
+        await fillNodesToCap(1);
         const results = await raceForLock([
-          () => upsertNodes(member, boardId, [sticky()]),
-          () => upsertNodes(operator, boardId, [sticky()]),
+          () => upsertNodes(member, boardId, [stickyInput(0, 0)]),
+          () => upsertNodes(operator, boardId, [stickyInput(0, 0)]),
         ]);
         assert.equal(accepted(results), 1);
         const refused = results.find((r) => r !== "accepted");
@@ -2510,31 +2368,8 @@ describe("whiteboard", function () {
       });
 
       it("lets only one of two batches that together pass the ink budget in", async function () {
-        await WhiteboardNodes.insertAsync({
-          hunt: huntId,
-          board: boardId,
-          type: "ink",
-          position: { x: 0, y: 0 },
-          strokeWidth: "thin",
-          points: Array.from(
-            { length: MAX_INK_POINTS_PER_BOARD - 15 },
-            (_, i): [number, number, number] => [i % 1000, i % 7, 0.5],
-          ),
-          createdBy: member,
-        });
-        // Ten points that zigzag, so simplifying keeps them all
-        const stroke = () => ({
-          _id: Random.id(),
-          type: "ink" as const,
-          position: { x: 0, y: 0 },
-          strokeWidth: "thin" as const,
-          stroke: Random.id(),
-          points: Array.from(
-            { length: 10 },
-            (_, i): [number, number, number] => [i * 5, (i % 2) * 5, 0.5],
-          ),
-        });
-        const strokes = [stroke(), stroke()];
+        await fillInk(boardId, 15, member);
+        const strokes = [zigzag(10), zigzag(10)];
         const results = await raceForLock(
           strokes.map((s) => () => upsertNodes(member, boardId, [s])),
         );
@@ -2552,27 +2387,14 @@ describe("whiteboard", function () {
       });
 
       it("lets only one of two batches that together pass the image cap in", async function () {
-        const bucket = {
-          bucketName: "jr-test-images",
-          bucketRegion: "ap-southeast-2",
-        };
-        await Settings.insertAsync({
-          name: "s3.image_bucket",
-          value: bucket,
-          createdBy: operator,
-        });
-        const backing = (await Whiteboards.findOneAsync(boardId))!.puzzle;
+        await withImageBucket(operator);
         const image = () => ({
           _id: Random.id(),
           type: "image" as const,
           position: { x: 10, y: 20 },
           width: 240,
           height: 120,
-          image: {
-            url: `https://s3.${bucket.bucketRegion}.amazonaws.com/${bucket.bucketName}/${huntId}/${backing}/${Random.id()}`,
-            width: 800,
-            height: 400,
-          },
+          image: { url: uploadUrl(huntId, backingId), width: 800, height: 400 },
         });
         await WhiteboardNodes.insertManyAsync(
           Array.from({ length: MAX_IMAGES_PER_BOARD - 1 }, () => {
@@ -2599,20 +2421,9 @@ describe("whiteboard", function () {
       });
 
       it("lets only one of two batches that together pass the line cap in", async function () {
-        const [a, b] = [sticky(), sticky()];
+        const [a, b] = [stickyInput(0, 0), stickyInput(0, 0)];
         await upsertNodes(member, boardId, [a, b]);
-        const existing = await WhiteboardEdges.find({
-          board: boardId,
-        }).countAsync();
-        await WhiteboardEdges.insertManyAsync(
-          Array.from({ length: MAX_EDGES_PER_BOARD - existing - 1 }, () => ({
-            hunt: huntId,
-            board: boardId,
-            source: a._id,
-            target: b._id,
-            createdBy: member,
-          })),
-        );
+        await fillEdgesToCap(a._id, b._id, 1);
         const line = () => ({ _id: Random.id(), source: a._id, target: b._id });
         const results = await raceForLock([
           () => upsertEdges(member, boardId, [line()]),
@@ -2632,8 +2443,7 @@ describe("whiteboard", function () {
       it("refuses readably, with nothing written, when another server takes the lock while it counts", async function () {
         // Another server takes the lock the moment this one counts the
         // board's nodes.
-        const lockName = `whiteboard:${boardId}`;
-        let held: string | undefined;
+        const thief = lockThief(boardId);
         const find = WhiteboardNodes.find.bind(WhiteboardNodes);
         const stub = sinon
           .stub(WhiteboardNodes, "find")
@@ -2646,28 +2456,24 @@ describe("whiteboard", function () {
             ) {
               const counted = cursor.countAsync.bind(cursor);
               cursor.countAsync = async () => {
-                const theirs = await Locks.findOneAsync({ name: lockName });
-                if (theirs && !held) {
-                  await Locks.removeAsync(theirs._id);
-                  held = await Locks.insertAsync({ name: lockName });
-                }
+                await thief.steal();
                 return counted();
               };
             }
             return cursor;
           });
-        const note = sticky();
+        const note = stickyInput(0, 0);
         try {
           await assert.isRejected(
             upsertNodes(member, boardId, [note]),
             /The board was busy; try again/,
           );
-          assert.ok(held);
+          assert.ok(thief.held);
         } finally {
           stub.restore();
-          if (held) await Locks.removeAsync(held);
+          await thief.letGo();
         }
-        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
+        assert.notOk(await node(note._id));
       });
 
       it("writes nothing from a batch whose last node has a bad parent, puzzle or loop", async function () {
@@ -2678,16 +2484,16 @@ describe("whiteboard", function () {
           width: 400,
           height: 400,
         };
-        const moved = sticky();
+        const moved = stickyInput(0, 0);
         await upsertNodes(member, boardId, [frame, moved]);
         const before = await WhiteboardNodes.find({
           board: boardId,
         }).fetchAsync();
 
-        const fresh = sticky();
+        const fresh = stickyInput(0, 0);
         const tries: [WhiteboardNodeInput, RegExp][] = [
           [
-            { ...sticky(), parent: moved._id },
+            stickyInput(0, 0, { parent: moved._id }),
             /Parent must be a frame on this board/,
           ],
           [
@@ -2733,23 +2539,12 @@ describe("whiteboard", function () {
       });
 
       it("records no version for a batch the caps refuse", async function () {
-        const existing = await WhiteboardNodes.find({
-          board: boardId,
-        }).countAsync();
-        await WhiteboardNodes.insertManyAsync(
-          Array.from({ length: MAX_NODES_PER_BOARD - existing }, (_, i) => ({
-            hunt: huntId,
-            board: boardId,
-            type: "text" as const,
-            position: { x: i, y: 0 },
-            createdBy: member,
-          })),
-        );
+        await fillNodesToCap(0);
         const versions = await WhiteboardVersions.find({
           board: boardId,
         }).countAsync();
         await assert.isRejected(
-          upsertNodes(member, boardId, [sticky()]),
+          upsertNodes(member, boardId, [stickyInput(0, 0)]),
           /board is full/,
         );
         assert.equal(
@@ -2761,33 +2556,28 @@ describe("whiteboard", function () {
       it("takes back the version it recorded if it loses the lock before writing", async function () {
         // Another server takes the lock just after this one stores the
         // version.
-        const lockName = `whiteboard:${boardId}`;
-        let held: string | undefined;
+        const thief = lockThief(boardId);
         const insertVersion =
           WhiteboardVersions.insertAsync.bind(WhiteboardVersions);
         const stub = sinon
           .stub(WhiteboardVersions, "insertAsync")
           .callsFake(async (...args: Parameters<typeof insertVersion>) => {
             const id = await insertVersion(...args);
-            const theirs = await Locks.findOneAsync({ name: lockName });
-            if (theirs && !held) {
-              await Locks.removeAsync(theirs._id);
-              held = await Locks.insertAsync({ name: lockName });
-            }
+            await thief.steal();
             return id;
           });
-        const note = sticky();
+        const note = stickyInput(0, 0);
         try {
           await assert.isRejected(
             upsertNodes(member, boardId, [note]),
             /The board was busy; try again/,
           );
-          assert.ok(held);
+          assert.ok(thief.held);
         } finally {
           stub.restore();
-          if (held) await Locks.removeAsync(held);
+          await thief.letGo();
         }
-        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
+        assert.notOk(await node(note._id));
         assert.equal(
           await WhiteboardVersions.find({ board: boardId }).countAsync(),
           0,
@@ -2799,7 +2589,7 @@ describe("whiteboard", function () {
       });
 
       it("refuses, writing nothing, a batch that makes a node or a line twice", async function () {
-        const note = sticky();
+        const note = stickyInput(0, 0);
         await assert.isRejected(
           upsertNodes(member, boardId, [
             note,
@@ -2807,16 +2597,16 @@ describe("whiteboard", function () {
           ]),
           /can only be in a batch once/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(note._id));
+        assert.notOk(await node(note._id));
 
-        const [a, b] = [sticky(), sticky()];
+        const [a, b] = [stickyInput(0, 0), stickyInput(0, 0)];
         await upsertNodes(member, boardId, [a, b]);
         const line = { _id: Random.id(), source: a._id, target: b._id };
         await assert.isRejected(
           upsertEdges(member, boardId, [line, line]),
           /can only be in a batch once/,
         );
-        assert.notOk(await WhiteboardEdges.findOneAsync(line._id));
+        assert.notOk(await edge(line._id));
       });
 
       it("refuses, writing nothing, a second card for a puzzle", async function () {
@@ -2830,7 +2620,7 @@ describe("whiteboard", function () {
           position: { x: 0, y: 0 },
           puzzle: card.puzzle!,
         });
-        const fresh = sticky();
+        const fresh = stickyInput(0, 0);
         await assert.isRejected(
           upsertNodes(member, boardId, [fresh, newCard()]),
           /That puzzle is already on the board/,
@@ -2841,7 +2631,7 @@ describe("whiteboard", function () {
           upsertNodes(member, boardId, [fresh, newCard(), newCard()]),
           /That puzzle is already on the board/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(fresh._id));
+        assert.notOk(await node(fresh._id));
         assert.notOk(
           await WhiteboardNodes.findOneAsync({
             board: boardId,
@@ -2851,7 +2641,7 @@ describe("whiteboard", function () {
       });
 
       it("writes nothing from a line batch whose last line is bad", async function () {
-        const [a, b] = [sticky(), sticky()];
+        const [a, b] = [stickyInput(0, 0), stickyInput(0, 0)];
         await upsertNodes(member, boardId, [a, b]);
         const before = await WhiteboardEdges.find({
           board: boardId,
@@ -2895,9 +2685,9 @@ describe("whiteboard", function () {
           width: 400,
           height: 400,
         };
-        const [a, b] = [sticky(), sticky()];
+        const [a, b] = [stickyInput(0, 0), stickyInput(0, 0)];
         await upsertNodes(member, boardId, [frame, a, b]);
-        const child = { ...sticky(), parent: frame._id };
+        const child = stickyInput(0, 0, { parent: frame._id });
         const line = { _id: Random.id(), source: a._id, target: b._id };
         const results = await raceForLock(
           [
@@ -2917,13 +2707,13 @@ describe("whiteboard", function () {
           (results[1] as Meteor.Error).reason!,
           /join nodes on this board/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(child._id));
-        assert.notOk(await WhiteboardEdges.findOneAsync(line._id));
+        assert.notOk(await node(child._id));
+        assert.notOk(await edge(line._id));
       });
 
       it("checks again, once it has the lock, that the editor may still edit", async function () {
         const results = await raceForLock(
-          [() => upsertNodes(member, boardId, [sticky()])],
+          [() => upsertNodes(member, boardId, [stickyInput(0, 0)])],
           () =>
             Whiteboards.updateAsync(boardId, {
               $set: { editPolicy: "operators" },
@@ -2947,22 +2737,16 @@ describe("whiteboard", function () {
           width: 400,
           height: 400,
         };
-        const child = { ...sticky(), parent: frame._id };
-        const existing = sticky();
+        const child = stickyInput(0, 0, { parent: frame._id });
+        const existing = stickyInput(0, 0);
         await upsertNodes(member, boardId, [existing]);
         await upsertNodes(member, boardId, [
           frame,
           child,
           { _id: existing._id, parent: frame._id },
         ]);
-        assert.equal(
-          (await WhiteboardNodes.findOneAsync(child._id))?.parent,
-          frame._id,
-        );
-        assert.equal(
-          (await WhiteboardNodes.findOneAsync(existing._id))?.parent,
-          frame._id,
-        );
+        assert.equal((await node(child._id))?.parent, frame._id);
+        assert.equal((await node(existing._id))?.parent, frame._id);
       });
     });
 
@@ -2983,7 +2767,7 @@ describe("whiteboard", function () {
             nodes: [{ _id: frame._id, collapsed: true }],
           }),
         );
-        const collapsed = (await WhiteboardNodes.findOneAsync(frame._id))!;
+        const collapsed = (await node(frame._id))!;
         assert.isTrue(collapsed.collapsed);
         assert.notOk(collapsed.manual);
         assert.deepEqual(collapsed.contributors, frame.contributors);
@@ -2993,7 +2777,7 @@ describe("whiteboard", function () {
         await upsertNodes(member, boardId, [
           { _id: frame._id, collapsed: false },
         ]);
-        const expanded = (await WhiteboardNodes.findOneAsync(frame._id))!;
+        const expanded = (await node(frame._id))!;
         assert.notProperty(expanded, "collapsed");
         assert.notOk(expanded.manual);
       });
@@ -3002,18 +2786,13 @@ describe("whiteboard", function () {
         const sticky = Random.id();
         await assert.isRejected(
           upsertNodes(member, boardId, [
-            {
-              _id: sticky,
-              type: "sticky",
-              position: { x: 0, y: 0 },
-              collapsed: true,
-            },
+            stickyInput(0, 0, { _id: sticky, collapsed: true }),
           ]),
           /Only frames can be collapsed/,
         );
-        assert.notOk(await WhiteboardNodes.findOneAsync(sticky));
+        assert.notOk(await node(sticky));
         await upsertNodes(member, boardId, [
-          { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
+          stickyInput(0, 0, { _id: sticky }),
         ]);
         await assert.isRejected(
           upsertNodes(member, boardId, [{ _id: sticky, collapsed: false }]),
@@ -3023,10 +2802,7 @@ describe("whiteboard", function () {
 
       it("refuses a batch with a non-frame collapse before writing any of it", async function () {
         const frame = await seededFrame();
-        const sticky = Random.id();
-        await upsertNodes(member, boardId, [
-          { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
-        ]);
+        const sticky = await addSticky(member, { x: 0, y: 0 });
         await assert.isRejected(
           upsertNodes(member, boardId, [
             { _id: frame._id, position: { x: 12345, y: 12345 } },
@@ -3034,10 +2810,7 @@ describe("whiteboard", function () {
           ]),
           /Only frames can be collapsed/,
         );
-        assert.deepEqual(
-          (await WhiteboardNodes.findOneAsync(frame._id))?.position,
-          frame.position,
-        );
+        assert.deepEqual((await node(frame._id))?.position, frame.position);
       });
 
       it("refuses collapsing to someone who can't edit", async function () {
@@ -3053,9 +2826,7 @@ describe("whiteboard", function () {
           upsertNodes(outsider, boardId, [{ _id: frame._id, collapsed: true }]),
           /member/,
         );
-        assert.notOk(
-          (await WhiteboardNodes.findOneAsync(frame._id))?.collapsed,
-        );
+        assert.notOk((await node(frame._id))?.collapsed);
 
         await Whiteboards.updateAsync(boardId, { $unset: { editPolicy: 1 } });
         await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
@@ -3077,7 +2848,7 @@ describe("whiteboard", function () {
             collapsed: true,
           },
         ]);
-        assert.isTrue((await WhiteboardNodes.findOneAsync(frame))?.collapsed);
+        assert.isTrue((await node(frame))?.collapsed);
         const open = Random.id();
         await upsertNodes(member, boardId, [
           {
@@ -3089,10 +2860,7 @@ describe("whiteboard", function () {
             collapsed: false,
           },
         ]);
-        assert.notProperty(
-          (await WhiteboardNodes.findOneAsync(open))!,
-          "collapsed",
-        );
+        assert.notProperty((await node(open))!, "collapsed");
       });
 
       it("opens a seeded frame when it's taken off the board", async function () {
@@ -3101,16 +2869,14 @@ describe("whiteboard", function () {
           { _id: frame._id, collapsed: true },
         ]);
         await deleteNodes(member, boardId, [frame._id]);
-        const hidden = (await WhiteboardNodes.findOneAsync(frame._id))!;
+        const hidden = (await node(frame._id))!;
         assert.isTrue(hidden.hidden);
         assert.notProperty(hidden, "collapsed");
 
         await upsertNodes(member, boardId, [
           { _id: frame._id, hidden: false, parent: null },
         ]);
-        assert.notOk(
-          (await WhiteboardNodes.findOneAsync(frame._id))?.collapsed,
-        );
+        assert.notOk((await node(frame._id))?.collapsed);
       });
 
       it("records no version for a collapse-only batch", async function () {
@@ -3140,19 +2906,8 @@ describe("whiteboard", function () {
   });
 
   describe("lines", function () {
-    let boardId: string;
+    beforeEach(makeBoard);
 
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-    });
-
-    const sticky = async (x: number) => {
-      const _id = Random.id();
-      await upsertNodes(member, boardId, [
-        { _id, type: "sticky", position: { x, y: 0 } },
-      ]);
-      return _id;
-    };
     const point = async (x: number, size?: number) => {
       const _id = Random.id();
       await upsertNodes(member, boardId, [
@@ -3166,18 +2921,17 @@ describe("whiteboard", function () {
       ]);
       return _id;
     };
-    const exists = async (id: string) =>
-      !!(await WhiteboardNodes.findOneAsync(id));
+    const exists = async (id: string) => !!(await node(id));
 
     it("clears a line's colour when sent null", async function () {
-      const a = await sticky(0);
-      const b = await sticky(300);
+      const a = await addSticky(member, { x: 0, y: 0 });
+      const b = await addSticky(member, { x: 300, y: 0 });
       const line = Random.id();
       await upsertEdges(member, boardId, [
         { _id: line, source: a, target: b, color: "red" },
       ]);
       await upsertEdges(member, boardId, [{ _id: line, color: null }]);
-      assert.isUndefined((await WhiteboardEdges.findOneAsync(line))?.color);
+      assert.isUndefined((await edge(line))?.color);
     });
 
     it("keeps a free end small whatever size is asked for", async function () {
@@ -3198,29 +2952,29 @@ describe("whiteboard", function () {
     });
 
     it("removes a free end that's no longer used after re-attaching", async function () {
-      const a = await sticky(0);
-      const b = await sticky(300);
+      const a = await addSticky(member, { x: 0, y: 0 });
+      const b = await addSticky(member, { x: 300, y: 0 });
       const p = await point(100);
       const line = Random.id();
       await upsertEdges(member, boardId, [{ _id: line, source: a, target: p }]);
       await upsertEdges(member, boardId, [{ _id: line, target: b }]);
       assert.isFalse(await exists(p));
-      assert.equal((await WhiteboardEdges.findOneAsync(line))?.target, b);
+      assert.equal((await edge(line))?.target, b);
     });
 
     it("removes a dangling line with the thing it was attached to", async function () {
-      const a = await sticky(0);
+      const a = await addSticky(member, { x: 0, y: 0 });
       const p = await point(100);
       const line = Random.id();
       await upsertEdges(member, boardId, [{ _id: line, source: a, target: p }]);
       await deleteNodes(member, boardId, [a]);
-      assert.notOk(await WhiteboardEdges.findOneAsync(line));
+      assert.notOk(await edge(line));
       assert.isFalse(await exists(p));
     });
 
     it("won't join a line's end to its other end", async function () {
-      const a = await sticky(0);
-      const b = await sticky(300);
+      const a = await addSticky(member, { x: 0, y: 0 });
+      const b = await addSticky(member, { x: 300, y: 0 });
       const line = Random.id();
       await upsertEdges(member, boardId, [{ _id: line, source: a, target: b }]);
       await assert.isRejected(
@@ -3230,9 +2984,9 @@ describe("whiteboard", function () {
     });
 
     it("records who drew and restyled a line, but not who moved its ends", async function () {
-      const a = await sticky(0);
-      const b = await sticky(300);
-      const c = await sticky(600);
+      const a = await addSticky(member, { x: 0, y: 0 });
+      const b = await addSticky(member, { x: 300, y: 0 });
+      const c = await addSticky(member, { x: 600, y: 0 });
       const line = Random.id();
       await upsertEdges(member, boardId, [
         { _id: line, source: a, target: b, pathStyle: "straight" },
@@ -3242,7 +2996,7 @@ describe("whiteboard", function () {
       ]);
       const mover = await makeUser("mover@example.com", []);
       await upsertEdges(mover, boardId, [{ _id: line, target: c }]);
-      const saved = (await WhiteboardEdges.findOneAsync(line))!;
+      const saved = (await edge(line))!;
       assert.deepEqual(
         saved.contributors.map((x) => x.user),
         [member, operator],
@@ -3254,11 +3008,7 @@ describe("whiteboard", function () {
   });
 
   describe("live", function () {
-    let boardId: string;
-
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-    });
+    beforeEach(makeBoard);
 
     it("keeps one document per connection and cleans up on close", async function () {
       const { connection, close } = fakeConnection();
@@ -3651,11 +3401,7 @@ describe("whiteboard", function () {
     });
 
     it("does nothing while live updates are switched off", async function () {
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard_live",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard_live");
       await setLive(member, fakeConnection().connection, boardId, state);
       assert.equal(await WhiteboardPresence.find({}).countAsync(), 0);
       assert.deepEqual(
@@ -3832,12 +3578,7 @@ describe("whiteboard", function () {
           /must be on this board/,
         );
         // On another hunt's board
-        const otherHunt = await createTestHunt(operator);
-        await MeteorUsers.updateAsync(operator, {
-          $addToSet: { hunts: otherHunt },
-          $set: { [`roles.${otherHunt}`]: ["operator"] },
-        });
-        const otherBoard = await ensureWhiteboard(operator, otherHunt);
+        const { board: otherBoard } = await otherHuntBoard(operator);
         const elsewhere = fakeConnection();
         await setLive(operator, elsewhere.connection, otherBoard, state);
         await assert.isRejected(
@@ -3875,11 +3616,9 @@ describe("whiteboard", function () {
           board: boardId,
         }).countAsync();
         if (have < count) {
-          const notes = Array.from({ length: count - have }, (_, i) => ({
-            _id: Random.id(),
-            type: "sticky" as const,
-            position: { x: i * 10, y: 0 },
-          }));
+          const notes = Array.from({ length: count - have }, (_, i) =>
+            stickyInput(i * 10, 0),
+          );
           for (let i = 0; i < notes.length; i += 100) {
             await upsertNodes(member, boardId, notes.slice(i, i + 100));
           }
@@ -3971,15 +3710,10 @@ describe("whiteboard", function () {
             /Invalid live update/,
           );
           // A node on another board is as good as none
-          const otherHunt = await createTestHunt(operator);
-          await MeteorUsers.updateAsync(operator, {
-            $addToSet: { hunts: otherHunt },
-            $set: { [`roles.${otherHunt}`]: ["operator"] },
-          });
-          const otherBoard = await ensureWhiteboard(operator, otherHunt);
+          const { board: otherBoard } = await otherHuntBoard(operator);
           const elsewhere = Random.id();
           await upsertNodes(operator, otherBoard, [
-            { _id: elsewhere, type: "sticky", position: { x: 0, y: 0 } },
+            stickyInput(0, 0, { _id: elsewhere }),
           ]);
           await assert.isRejected(
             setLive(member, connection, boardId, {
@@ -4118,47 +3852,10 @@ describe("whiteboard", function () {
   });
 
   describe("comments", function () {
-    let boardId: string;
-    let backingId: string;
+    beforeEach(makeBoard);
 
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-      backingId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-    });
-
-    // Sends a chat message and returns it. Texts must be unique within a test.
-    const send = async (
-      userId: string,
-      text: string,
-      {
-        puzzleId = backingId,
-        mention,
-        ...rest
-      }: {
-        puzzleId?: string;
-        mention?: string;
-        parentId?: string;
-        comment?: CommentAnchorInput;
-      } = {},
-    ) => {
-      const content = contentFromMessage(text);
-      if (mention) {
-        content.children.unshift({ type: "mention", userId: mention });
-      }
-      await asUser(userId, () =>
-        sendChatMessage.callPromise({
-          puzzleId,
-          content: JSON.stringify(content),
-          ...rest,
-        }),
-      );
-      return (await ChatMessages.findOneAsync({
-        puzzle: puzzleId,
-        "content.children.text": text,
-      }))!;
-    };
     const reply = (userId: string, parentId: string, text: string) =>
-      send(userId, text, { parentId });
+      sendComment(userId, text, { parentId });
     const reload = async (id: string) =>
       (await ChatMessages.findOneAllowingDeletedAsync(id))!;
     const setResolved = (
@@ -4171,38 +3868,28 @@ describe("whiteboard", function () {
       );
     const deleteComment = (userId: string, messageId: string) =>
       asUser(userId, () => deleteWhiteboardComment.callPromise({ messageId }));
-    const sticky = async (
-      position: { x: number; y: number },
-      parent?: string,
-    ) => {
-      const _id = Random.id();
-      await upsertNodes(member, boardId, [
-        { _id, type: "sticky", position, parent },
-      ]);
-      return _id;
-    };
 
     it("pins a comment to a node or loose on the board", async function () {
-      const node = await sticky({ x: 100, y: 100 });
-      const pinned = await send(member, "on the sticky", {
+      const node = await addSticky(member, { x: 100, y: 100 });
+      const pinned = await sendComment(member, "on the sticky", {
         comment: { node, x: 5, y: 6 },
       });
       assert.deepEqual(pinned.comment, { node, x: 5, y: 6 });
       assert.notOk(pinned.thread);
 
-      const loose = await send(member, "on the board", {
+      const loose = await sendComment(member, "on the board", {
         comment: { x: -50, y: 70 },
       });
       assert.deepEqual(loose.comment, { x: -50, y: 70 });
     });
 
     it("doesn't treat a comment as a /pin command", async function () {
-      const message = await send(member, "/unpin", {
+      const message = await sendComment(member, "/unpin", {
         comment: { x: 0, y: 0 },
       });
       assert.ok(message.comment);
       assert.notOk(message.pinTs);
-      const pinned = await send(member, "/pin look here", {
+      const pinned = await sendComment(member, "/pin look here", {
         comment: { x: 1, y: 1 },
       });
       assert.notOk(pinned.pinTs);
@@ -4211,21 +3898,20 @@ describe("whiteboard", function () {
     it("rejects comments from outside the hunt, in an archived hunt or with the whiteboard off", async function () {
       const comment = { x: 0, y: 0 };
       await assert.isRejected(
-        send(outsider, "outsider", { comment }),
+        sendComment(outsider, "outsider", { comment }),
         /member/,
       );
 
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard",
-        type: "on",
-        createdBy: operator,
-      });
-      await assert.isRejected(send(member, "flag", { comment }), /disabled/);
+      await setFlag("disable.whiteboard");
+      await assert.isRejected(
+        sendComment(member, "flag", { comment }),
+        /disabled/,
+      );
       await FeatureFlags.removeAsync({ name: "disable.whiteboard" });
 
       await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
       await assert.isRejected(
-        send(member, "archived", { comment }),
+        sendComment(member, "archived", { comment }),
         /archived/,
       );
       assert.equal(
@@ -4240,7 +3926,7 @@ describe("whiteboard", function () {
         kind: { $ne: "whiteboard" },
       }))!;
       await assert.isRejected(
-        send(member, "not a board", {
+        sendComment(member, "not a board", {
           puzzleId: ordinary._id,
           comment: { x: 0, y: 0 },
         }),
@@ -4277,20 +3963,22 @@ describe("whiteboard", function () {
 
       for (const node of [elsewhere, card._id, ink, Random.id()]) {
         await assert.isRejected(
-          send(member, `on ${node}`, { comment: { node, x: 0, y: 0 } }),
+          sendComment(member, `on ${node}`, { comment: { node, x: 0, y: 0 } }),
           /pinned there/,
         );
       }
       await assert.isRejected(
-        send(member, "far away", { comment: { x: 2e6, y: 0 } }),
+        sendComment(member, "far away", { comment: { x: 2e6, y: 0 } }),
         /out of range/,
       );
     });
 
     it("won't start a thread on a reply", async function () {
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       await assert.isRejected(
-        send(member, "both", {
+        sendComment(member, "both", {
           parentId: root._id,
           comment: { x: 10, y: 10 },
         }),
@@ -4299,7 +3987,9 @@ describe("whiteboard", function () {
     });
 
     it("won't take a reply to a deleted comment", async function () {
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       await deleteComment(member, root._id);
       await assert.isRejected(
         reply(member, root._id, "too late"),
@@ -4308,7 +3998,9 @@ describe("whiteboard", function () {
     });
 
     it("stamps every reply in a thread with its root", async function () {
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       const first = await reply(operator, root._id, "first");
       const nested = await reply(member, first._id, "nested");
       const reaction = await reply(operator, nested._id, "👍");
@@ -4316,14 +4008,14 @@ describe("whiteboard", function () {
       assert.equal(nested.thread, root._id);
       assert.equal(reaction.thread, root._id);
 
-      const plain = await send(member, "plain chat");
+      const plain = await sendComment(member, "plain chat");
       const plainReply = await reply(operator, plain._id, "plain reply");
       assert.notOk(plainReply.thread);
     });
 
     it("reopens a resolved thread on a reply but not a reaction", async function () {
-      const node = await sticky({ x: 0, y: 0 });
-      const root = await send(member, "root", {
+      const node = await addSticky(member, { x: 0, y: 0 });
+      const root = await sendComment(member, "root", {
         comment: { node, x: 1, y: 2 },
       });
 
@@ -4356,9 +4048,11 @@ describe("whiteboard", function () {
     });
 
     it("won't take a reply in a thread on a board that can't be written", async function () {
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       const first = await reply(operator, root._id, "first reply");
-      const plain = await send(member, "plain chat");
+      const plain = await sendComment(member, "plain chat");
       await setResolved(member, root._id, true);
 
       await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
@@ -4369,11 +4063,7 @@ describe("whiteboard", function () {
       await reply(member, plain._id, "plain reply");
       await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
 
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard");
       await assert.isRejected(reply(member, root._id, "flag"), /disabled/);
 
       assert.ok((await reload(root._id)).comment?.resolvedAt);
@@ -4384,9 +4074,11 @@ describe("whiteboard", function () {
     });
 
     it("only resolves root comments, for anyone in the hunt", async function () {
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       const replyMessage = await reply(operator, root._id, "a reply");
-      const plain = await send(member, "plain chat");
+      const plain = await sendComment(member, "plain chat");
 
       await assert.isRejected(setResolved(outsider, root._id, true), /member/);
       await assert.isRejected(
@@ -4404,7 +4096,9 @@ describe("whiteboard", function () {
 
     it("lets the author delete a comment until someone else replies", async function () {
       const other = await makeUser("other@example.com", []);
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       // Reactions and the author's own replies don't count.
       await reply(other, root._id, "👀");
       const own = await reply(member, root._id, "and another thing");
@@ -4419,14 +4113,18 @@ describe("whiteboard", function () {
         0,
       );
 
-      const second = await send(member, "second", { comment: { x: 0, y: 0 } });
+      const second = await sendComment(member, "second", {
+        comment: { x: 0, y: 0 },
+      });
       await reply(other, second._id, "a real reply");
       await assert.isRejected(deleteComment(member, second._id), /operator/);
     });
 
     it("lets an operator delete any comment along with its thread", async function () {
       const other = await makeUser("other@example.com", []);
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       const first = await reply(other, root._id, "first");
       const nested = await reply(member, first._id, "nested");
       assert.isAbove(
@@ -4455,12 +4153,16 @@ describe("whiteboard", function () {
           height: 500,
         },
       ]);
-      const nested = await sticky({ x: 10, y: 20 }, frame);
-      const topLevel = await sticky({ x: 300, y: 400 });
-      const onNested = await send(member, "on nested", {
+      const nested = await addSticky(
+        member,
+        { x: 10, y: 20 },
+        { parent: frame },
+      );
+      const topLevel = await addSticky(member, { x: 300, y: 400 });
+      const onNested = await sendComment(member, "on nested", {
         comment: { node: nested, x: 5, y: 6 },
       });
-      const onTopLevel = await send(member, "on top level", {
+      const onTopLevel = await sendComment(member, "on top level", {
         comment: { node: topLevel, x: 7, y: 8 },
       });
 
@@ -4483,11 +4185,15 @@ describe("whiteboard", function () {
       await upsertNodes(member, boardId, [
         { _id: frame, type: "frame", position: { x: 100, y: 200 } },
       ]);
-      const nested = await sticky({ x: 10, y: 20 }, frame);
-      const onFrame = await send(member, "on frame", {
+      const nested = await addSticky(
+        member,
+        { x: 10, y: 20 },
+        { parent: frame },
+      );
+      const onFrame = await sendComment(member, "on frame", {
         comment: { node: frame, x: 1, y: 1 },
       });
-      const onNested = await send(member, "on nested", {
+      const onNested = await sendComment(member, "on nested", {
         comment: { node: nested, x: 5, y: 6 },
       });
 
@@ -4513,15 +4219,15 @@ describe("whiteboard", function () {
       ).find((n) => n.parent)!;
       let at = { ...card.position };
       for (let parent = card.parent; parent; ) {
-        const frame = (await WhiteboardNodes.findOneAsync(parent))!;
+        const frame = (await node(parent))!;
         at = { x: at.x + frame.position.x, y: at.y + frame.position.y };
         parent = frame.parent;
       }
-      const message = await send(member, "on the card", {
+      const message = await sendComment(member, "on the card", {
         comment: { node: card._id, x: 3, y: 4 },
       });
       await deleteNodes(member, boardId, [card._id]);
-      assert.isTrue((await WhiteboardNodes.findOneAsync(card._id))?.hidden);
+      assert.isTrue((await node(card._id))?.hidden);
       assert.deepEqual((await reload(message._id)).comment, {
         x: at.x + 3,
         y: at.y + 4,
@@ -4530,11 +4236,11 @@ describe("whiteboard", function () {
     });
 
     it("keeps a comment on the edge of a node that has shrunk when it goes", async function () {
-      const node = await sticky({ x: 100, y: 100 });
+      const node = await addSticky(member, { x: 100, y: 100 });
       await upsertNodes(member, boardId, [
         { _id: node, type: "sticky", width: 200, height: 100 },
       ]);
-      const message = await send(member, "near the corner", {
+      const message = await sendComment(member, "near the corner", {
         comment: { node, x: 180, y: 90 },
       });
       await upsertNodes(member, boardId, [
@@ -4552,7 +4258,9 @@ describe("whiteboard", function () {
       const replier = await makeUser("replier@example.com", []);
       const leaver = await makeUser("leaver@example.com", []);
       const reactor = await makeUser("reactor@example.com", []);
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       await reply(replier, root._id, "first");
       await reply(leaver, root._id, "second");
       await reply(reactor, root._id, "😀");
@@ -4575,7 +4283,9 @@ describe("whiteboard", function () {
 
     it("doesn't notify anyone about a reaction", async function () {
       const other = await makeUser("other@example.com", []);
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
       await reply(operator, root._id, "first");
       const reaction = await reply(other, root._id, "👍");
       assert.equal(
@@ -4585,8 +4295,10 @@ describe("whiteboard", function () {
     });
 
     it("sends one notification for a mention in a reply", async function () {
-      const root = await send(member, "root", { comment: { x: 0, y: 0 } });
-      const mention = await send(operator, " have a look", {
+      const root = await sendComment(member, "root", {
+        comment: { x: 0, y: 0 },
+      });
+      const mention = await sendComment(operator, " have a look", {
         parentId: root._id,
         mention: member,
       });
@@ -4600,7 +4312,7 @@ describe("whiteboard", function () {
     });
 
     it("links a mention in a new comment to its thread", async function () {
-      const root = await send(operator, " can you check this", {
+      const root = await sendComment(operator, " can you check this", {
         comment: { x: 0, y: 0 },
         mention: member,
       });
@@ -4612,10 +4324,12 @@ describe("whiteboard", function () {
     });
 
     it("leaves ordinary chat on the board out of any thread", async function () {
-      const message = await send(member, "just chatting");
+      const message = await sendComment(member, "just chatting");
       assert.notOk(message.comment);
       assert.notOk(message.thread);
-      const mention = await send(operator, " hello", { mention: member });
+      const mention = await sendComment(operator, " hello", {
+        mention: member,
+      });
       const notification = await ChatNotifications.findOneAsync({
         message: mention._id,
       });
@@ -4682,7 +4396,7 @@ describe("whiteboard", function () {
       });
 
       it("tells the puzzle's viewers, callers and bookmarkers about a new comment", async function () {
-        const root = await send(member, "look at this", {
+        const root = await sendComment(member, "look at this", {
           comment: { node: card, x: 5, y: 5 },
         });
         const rows = await notified(root._id);
@@ -4712,7 +4426,7 @@ describe("whiteboard", function () {
       });
 
       it("tells someone who is also mentioned once, as a mention", async function () {
-        const root = await send(operator, " look at this", {
+        const root = await sendComment(operator, " look at this", {
           comment: { node: card, x: 5, y: 5 },
           mention: viewer,
         });
@@ -4726,7 +4440,7 @@ describe("whiteboard", function () {
       });
 
       it("leaves replies to the thread's participants", async function () {
-        const root = await send(member, "the root", {
+        const root = await sendComment(member, "the root", {
           comment: { node: card, x: 5, y: 5 },
         });
         const answer = await reply(operator, root._id, "a reply");
@@ -4737,11 +4451,13 @@ describe("whiteboard", function () {
       });
 
       it("tells nobody new about a comment on a note or loose on the board", async function () {
-        const node = await sticky({ x: 100, y: 100 });
-        const onNote = await send(member, "on the note", {
+        const node = await addSticky(member, { x: 100, y: 100 });
+        const onNote = await sendComment(member, "on the note", {
           comment: { node, x: 5, y: 5 },
         });
-        const loose = await send(member, "loose", { comment: { x: 0, y: 0 } });
+        const loose = await sendComment(member, "loose", {
+          comment: { x: 0, y: 0 },
+        });
         assert.lengthOf(await notified(onNote._id), 0);
         assert.lengthOf(await notified(loose._id), 0);
       });
@@ -4753,7 +4469,7 @@ describe("whiteboard", function () {
         await MeteorUsers.updateAsync(caller, {
           $set: { boardCommentNotifications: true },
         });
-        const root = await send(member, "look at this", {
+        const root = await sendComment(member, "look at this", {
           comment: { node: card, x: 5, y: 5 },
         });
         assert.sameMembers(
@@ -4770,7 +4486,7 @@ describe("whiteboard", function () {
             ],
           },
         });
-        const root = await send(member, "look at this", {
+        const root = await sendComment(member, "look at this", {
           comment: { node: card, x: 5, y: 5 },
         });
         await asUser(viewer, () =>
@@ -4792,7 +4508,7 @@ describe("whiteboard", function () {
         await MeteorUsers.updateAsync(viewer, {
           $set: { dingwords: ["meta"] },
         });
-        const root = await send(member, "is this the meta", {
+        const root = await sendComment(member, "is this the meta", {
           comment: { node: card, x: 5, y: 5 },
         });
         const rows = await ChatNotifications.find({
@@ -4840,7 +4556,7 @@ describe("whiteboard", function () {
             { _id: { $in: [staleTab, visibleTab] } },
             { $set: { updatedAt: longAgo } },
           );
-        const root = await send(member, "look at this", {
+        const root = await sendComment(member, "look at this", {
           comment: { node: card, x: 5, y: 5 },
         });
         assert.sameMembers(
@@ -4854,7 +4570,7 @@ describe("whiteboard", function () {
         await MeteorUsers.updateAsync(bookmarker, {
           $pull: { hunts: huntId },
         });
-        const root = await send(member, "look at this", {
+        const root = await sendComment(member, "look at this", {
           comment: { node: card, x: 5, y: 5 },
         });
         assert.sameMembers(
@@ -4865,19 +4581,15 @@ describe("whiteboard", function () {
 
       it("tells nobody new about a comment on a deleted puzzle's card", async function () {
         await Puzzles.updateAsync(cardPuzzle, { $set: { deleted: true } });
-        const root = await send(member, "look at this", {
+        const root = await sendComment(member, "look at this", {
           comment: { node: card, x: 5, y: 5 },
         });
         assert.lengthOf(await notified(root._id), 0);
       });
 
       it("leaves out callers while calls are turned off", async function () {
-        await FeatureFlags.insertAsync({
-          name: "disable.webrtc",
-          type: "on",
-          createdBy: operator,
-        });
-        const root = await send(member, "look at this", {
+        await setFlag("disable.webrtc");
+        const root = await sendComment(member, "look at this", {
           comment: { node: card, x: 5, y: 5 },
         });
         assert.sameMembers(
@@ -4889,29 +4601,21 @@ describe("whiteboard", function () {
   });
 
   describe("purging and merging", function () {
-    let boardId: string;
-
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-    });
+    beforeEach(makeBoard);
 
     it("purges the board with the hunt", async function () {
       const a = Random.id();
       const b = Random.id();
       await upsertNodes(member, boardId, [
-        { _id: a, type: "sticky", position: { x: 0, y: 0 } },
-        { _id: b, type: "sticky", position: { x: 300, y: 0 } },
+        stickyInput(0, 0, { _id: a }),
+        stickyInput(300, 0, { _id: b }),
       ]);
       await upsertEdges(member, boardId, [
         { _id: Random.id(), source: a, target: b },
       ]);
       await setLive(member, fakeConnection().connection, boardId, state);
       // Keep the purge away from Google Drive
-      await FeatureFlags.insertAsync({
-        name: "disable.google",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.google");
 
       await runJob(purgeHuntJob, { huntId }, { userId: operator });
 
@@ -4935,17 +4639,11 @@ describe("whiteboard", function () {
     });
 
     it("purges versions and chunks with the hunt", async function () {
-      await upsertNodes(member, boardId, [
-        { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-      ]);
+      await upsertNodes(member, boardId, [stickyInput(0, 0)]);
       assert.equal(await WhiteboardVersions.find({}).countAsync(), 1);
       assert.isAbove(await WhiteboardVersionChunks.find({}).countAsync(), 0);
       // Keep the purge away from Google Drive
-      await FeatureFlags.insertAsync({
-        name: "disable.google",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.google");
 
       await runJob(purgeHuntJob, { huntId }, { userId: operator });
 
@@ -4956,15 +4654,9 @@ describe("whiteboard", function () {
     it("reassigns whiteboard version users", async function () {
       const source = await makeUser("source@example.com", []);
       const target = await makeUser("target@example.com", []);
-      await upsertNodes(source, boardId, [
-        { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-      ]);
-      await upsertNodes(member, boardId, [
-        { _id: Random.id(), type: "sticky", position: { x: 300, y: 0 } },
-      ]);
-      await upsertNodes(target, boardId, [
-        { _id: Random.id(), type: "sticky", position: { x: 600, y: 0 } },
-      ]);
+      await upsertNodes(source, boardId, [stickyInput(0, 0)]);
+      await upsertNodes(member, boardId, [stickyInput(300, 0)]);
+      await upsertNodes(target, boardId, [stickyInput(600, 0)]);
 
       await runJob(
         mergeUsersJob,
@@ -4988,21 +4680,15 @@ describe("whiteboard", function () {
       const a = Random.id();
       const b = Random.id();
       await upsertNodes(source, boardId, [
-        { _id: a, type: "sticky", position: { x: 0, y: 0 } },
-        { _id: b, type: "sticky", position: { x: 300, y: 0 } },
+        stickyInput(0, 0, { _id: a }),
+        stickyInput(300, 0, { _id: b }),
       ]);
       await upsertNodes(target, boardId, [{ _id: a, text: "edited" }]);
       const line = Random.id();
       await upsertEdges(source, boardId, [{ _id: line, source: a, target: b }]);
-      const backingId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-      await asUser(member, () =>
-        sendChatMessage.callPromise({
-          puzzleId: backingId,
-          content: JSON.stringify(contentFromMessage("look")),
-          comment: { node: a, x: 1, y: 1 },
-        }),
-      );
-      const root = (await ChatMessages.findOneAsync({ puzzle: backingId }))!;
+      const root = await sendComment(member, "look", {
+        comment: { node: a, x: 1, y: 1 },
+      });
       await asUser(source, () =>
         setWhiteboardCommentResolved.callPromise({
           messageId: root._id,
@@ -5022,7 +4708,7 @@ describe("whiteboard", function () {
         { userId: target },
       );
 
-      const sticky = (await WhiteboardNodes.findOneAsync(a))!;
+      const sticky = (await node(a))!;
       assert.equal(sticky.createdBy, target);
       assert.deepEqual(
         sticky.contributors.map((c) => c.user),
@@ -5052,13 +4738,7 @@ describe("whiteboard", function () {
     it("moves the merged account onto the editor list", async function () {
       const source = await makeUser("source@example.com", []);
       const target = await makeUser("target@example.com", []);
-      await asUser(operator, () =>
-        setWhiteboardEditPolicy.callPromise({
-          boardId,
-          editPolicy: "operatorsAndEditors",
-          editors: [member, source],
-        }),
-      );
+      await setPolicy(operator, "operatorsAndEditors", [member, source]);
 
       await runJob(
         mergeUsersJob,
@@ -5074,27 +4754,8 @@ describe("whiteboard", function () {
   });
 
   describe("edit policy", function () {
-    let boardId: string;
-    let backingId: string;
+    beforeEach(makeBoard);
 
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-      backingId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-    });
-
-    const setPolicy = (
-      userId: string,
-      editPolicy: WhiteboardEditPolicy,
-      editors: string[] = [],
-    ) =>
-      asUser(userId, () =>
-        setWhiteboardEditPolicy.callPromise({ boardId, editPolicy, editors }),
-      );
-    const sticky = () => ({
-      _id: Random.id(),
-      type: "sticky" as const,
-      position: { x: 0, y: 0 },
-    });
     const editors = async () =>
       (await Whiteboards.findOneAsync(boardId))?.editors;
     const presenceOf = (connection: Meteor.Connection) =>
@@ -5118,10 +4779,33 @@ describe("whiteboard", function () {
         editingAt: new Date(),
       };
     };
+    // Someone who can't edit: their cursor shows, and none of their live edits
+    const assertNoLiveEdits = (
+      doc: Awaited<ReturnType<typeof presenceOf>>,
+      cursor: { x: number; y: number },
+    ) => {
+      assert.deepEqual(doc?.cursor, cursor);
+      assert.isNull(doc?.drag);
+      assert.isNull(doc?.stroke);
+      assert.isNull(doc?.selection);
+      assert.isNull(doc?.editing);
+      assert.isNull(doc?.editingAt);
+    };
+    // Someone who can: everything they sent is kept
+    const assertLiveEdits = (
+      doc: Awaited<ReturnType<typeof presenceOf>>,
+      live: Awaited<ReturnType<typeof busy>>,
+    ) => {
+      assert.deepEqual(doc?.drag, live.drag);
+      assert.deepEqual(doc?.stroke, live.stroke);
+      assert.deepEqual(doc?.selection, live.selection);
+      assert.equal(doc?.editing, live.editing);
+      assert.deepEqual(doc?.editingAt, live.editingAt);
+    };
 
     it("refuses node edits, deletes and edge edits from non-editors", async function () {
-      const a = sticky();
-      const b = sticky();
+      const a = stickyInput(0, 0);
+      const b = stickyInput(0, 0);
       const line = Random.id();
       await upsertNodes(member, boardId, [a, b]);
       await upsertEdges(member, boardId, [
@@ -5130,7 +4814,7 @@ describe("whiteboard", function () {
       await setPolicy(operator, "operators");
 
       await assert.isRejected(
-        upsertNodes(member, boardId, [sticky()]),
+        upsertNodes(member, boardId, [stickyInput(0, 0)]),
         /Only operators can edit/,
       );
       await assert.isRejected(
@@ -5145,51 +4829,42 @@ describe("whiteboard", function () {
         deleteEdges(member, boardId, [line]),
         /Only operators can edit/,
       );
-      assert.ok(await WhiteboardNodes.findOneAsync(a._id));
-      assert.notOk((await WhiteboardEdges.findOneAsync(line))?.label);
+      assert.ok(await node(a._id));
+      assert.notOk((await edge(line))?.label);
 
-      await upsertNodes(operator, boardId, [sticky()]);
+      await upsertNodes(operator, boardId, [stickyInput(0, 0)]);
       await deleteEdges(operator, boardId, [line]);
     });
 
     it("lets listed people edit", async function () {
       const listed = await makeUser("listed@example.com", []);
       await setPolicy(operator, "operatorsAndEditors", [listed]);
-      await upsertNodes(listed, boardId, [sticky()]);
-      await upsertNodes(operator, boardId, [sticky()]);
+      await upsertNodes(listed, boardId, [stickyInput(0, 0)]);
+      await upsertNodes(operator, boardId, [stickyInput(0, 0)]);
       await assert.isRejected(
-        upsertNodes(member, boardId, [sticky()]),
+        upsertNodes(member, boardId, [stickyInput(0, 0)]),
         /people they've chosen/,
       );
     });
 
     it("applies a policy change to the next edit", async function () {
-      await upsertNodes(member, boardId, [sticky()]);
+      await upsertNodes(member, boardId, [stickyInput(0, 0)]);
       await setPolicy(operator, "operators");
-      await assert.isRejected(upsertNodes(member, boardId, [sticky()]));
+      await assert.isRejected(
+        upsertNodes(member, boardId, [stickyInput(0, 0)]),
+      );
       await setPolicy(operator, "members");
-      await upsertNodes(member, boardId, [sticky()]);
+      await upsertNodes(member, boardId, [stickyInput(0, 0)]);
     });
 
     it("lets anyone in the hunt comment, reply, react and resolve whatever the policy", async function () {
       await setPolicy(operator, "operators");
-      const send = async (text: string, extra: object) => {
-        await asUser(member, () =>
-          sendChatMessage.callPromise({
-            puzzleId: backingId,
-            content: JSON.stringify(contentFromMessage(text)),
-            ...extra,
-          }),
-        );
-        return (await ChatMessages.findOneAsync({
-          puzzle: backingId,
-          "content.children.text": text,
-        }))!;
-      };
       const node = (await card())._id;
-      const root = await send("on the card", { comment: { node, x: 1, y: 1 } });
-      await send("a reply", { parentId: root._id });
-      await send("👍", { parentId: root._id });
+      const root = await sendComment(member, "on the card", {
+        comment: { node, x: 1, y: 1 },
+      });
+      await sendComment(member, "a reply", { parentId: root._id });
+      await sendComment(member, "👍", { parentId: root._id });
       assert.equal(
         await ChatMessages.find({ thread: root._id }).countAsync(),
         2,
@@ -5217,19 +4892,8 @@ describe("whiteboard", function () {
     it("keeps delete to authors and operators", async function () {
       await setPolicy(operator, "operators");
       const other = await makeUser("other@example.com", []);
-      const comment = async (userId: string, text: string) => {
-        await asUser(userId, () =>
-          sendChatMessage.callPromise({
-            puzzleId: backingId,
-            content: JSON.stringify(contentFromMessage(text)),
-            comment: { x: 0, y: 0 },
-          }),
-        );
-        return (await ChatMessages.findOneAsync({
-          puzzle: backingId,
-          "content.children.text": text,
-        }))!._id;
-      };
+      const comment = async (userId: string, text: string) =>
+        (await sendComment(userId, text, { comment: { x: 0, y: 0 } }))._id;
       const remove = (userId: string, messageId: string) =>
         asUser(userId, () =>
           deleteWhiteboardComment.callPromise({ messageId }),
@@ -5254,16 +4918,8 @@ describe("whiteboard", function () {
       try {
         await setLive(member, theirs.connection, boardId, live);
         await setLive(operator, ours.connection, boardId, live);
-        const doc = await presenceOf(theirs.connection);
-        assert.deepEqual(doc?.cursor, live.cursor);
-        assert.isNull(doc?.drag);
-        assert.isNull(doc?.stroke);
-        assert.isNull(doc?.selection);
-        assert.isNull(doc?.editing);
-        const mine = await presenceOf(ours.connection);
-        assert.deepEqual(mine?.drag, live.drag);
-        assert.deepEqual(mine?.selection, live.selection);
-        assert.equal(mine?.editing, live.editing);
+        assertNoLiveEdits(await presenceOf(theirs.connection), live.cursor);
+        assertLiveEdits(await presenceOf(ours.connection), live);
         // Not even checked: a drag, selection or edit of something on
         // another board is dropped rather than refused.
         await setLive(member, theirs.connection, boardId, {
@@ -5284,10 +4940,7 @@ describe("whiteboard", function () {
       const { connection, close } = fakeConnection();
       try {
         await setLive(operator, connection, boardId, live);
-        const doc = await presenceOf(connection);
-        assert.deepEqual(doc?.cursor, live.cursor);
-        assert.isNull(doc?.drag);
-        assert.isNull(doc?.stroke);
+        assertNoLiveEdits(await presenceOf(connection), live.cursor);
       } finally {
         close();
       }
@@ -5354,11 +5007,7 @@ describe("whiteboard", function () {
 
         await setPolicy(operator, "operators");
         const doc = await presenceOf(theirs.connection);
-        assert.deepEqual(doc?.cursor, live.cursor);
-        assert.isNull(doc?.drag);
-        assert.isNull(doc?.stroke);
-        assert.isNull(doc?.selection);
-        assert.isNull(doc?.editing);
+        assertNoLiveEdits(doc, live.cursor);
         // They can still comment, so what they look at and follow stays
         assert.deepEqual(doc?.view, view);
         assert.equal(doc?.followedUser, operator);
@@ -5448,11 +5097,7 @@ describe("whiteboard", function () {
         await assert.isRejected(setPolicy(operator, "operators"), /archived/);
         await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
 
-        await FeatureFlags.insertAsync({
-          name: "disable.whiteboard",
-          type: "on",
-          createdBy: operator,
-        });
+        await setFlag("disable.whiteboard");
         await assert.isRejected(setPolicy(operator, "operators"), /disabled/);
         assert.isUndefined(
           (await Whiteboards.findOneAsync(boardId))?.editPolicy,
@@ -5543,13 +5188,7 @@ describe("whiteboard", function () {
             $set: { [`roles.${huntId}`]: [] },
           });
           await waitForAssertion(async () => {
-            const doc = await presenceOf(connection);
-            assert.deepEqual(doc?.cursor, live.cursor);
-            assert.isNull(doc?.drag);
-            assert.isNull(doc?.stroke);
-            assert.isNull(doc?.selection);
-            assert.isNull(doc?.editing);
-            assert.isNull(doc?.editingAt);
+            assertNoLiveEdits(await presenceOf(connection), live.cursor);
           }, 12000);
         } finally {
           close();
@@ -5600,14 +5239,9 @@ describe("whiteboard", function () {
           await waitForAssertion(async () => {
             for (const connection of [theirs.connection, ours.connection]) {
               const doc = await presenceOf(connection);
-              assert.deepEqual(doc?.cursor, live.cursor);
+              assertNoLiveEdits(doc, live.cursor);
               assert.isNull(doc?.view);
               assert.isNull(doc?.followedUser);
-              assert.isNull(doc?.drag);
-              assert.isNull(doc?.stroke);
-              assert.isNull(doc?.selection);
-              assert.isNull(doc?.editing);
-              assert.isNull(doc?.editingAt);
             }
           }, 12000);
         } finally {
@@ -5634,21 +5268,10 @@ describe("whiteboard", function () {
           );
           await Hunts.updateAsync(huntId, { $set: { defaultRoles: [] } });
           await waitForAssertion(async () => {
-            const doc = await presenceOf(theirs.connection);
-            assert.deepEqual(doc?.cursor, live.cursor);
-            assert.isNull(doc?.drag);
-            assert.isNull(doc?.stroke);
-            assert.isNull(doc?.selection);
-            assert.isNull(doc?.editing);
-            assert.isNull(doc?.editingAt);
+            assertNoLiveEdits(await presenceOf(theirs.connection), live.cursor);
           }, 12000);
           // Cleared in the same pass, so the operator's would be gone by now
-          const kept = await presenceOf(ours.connection);
-          assert.deepEqual(kept?.drag, live.drag);
-          assert.deepEqual(kept?.stroke, live.stroke);
-          assert.deepEqual(kept?.selection, live.selection);
-          assert.equal(kept?.editing, live.editing);
-          assert.deepEqual(kept?.editingAt, live.editingAt);
+          assertLiveEdits(await presenceOf(ours.connection), live);
         } finally {
           theirs.close();
           ours.close();
@@ -5656,12 +5279,7 @@ describe("whiteboard", function () {
       });
 
       it("clears a demoted user's live edits only on boards they can no longer edit", async function () {
-        const otherHunt = await createTestHunt(operator);
-        await MeteorUsers.updateAsync(operator, {
-          $addToSet: { hunts: otherHunt },
-          $set: { [`roles.${otherHunt}`]: ["operator"] },
-        });
-        const otherBoard = await ensureWhiteboard(operator, otherHunt);
+        const { board: otherBoard } = await otherHuntBoard(operator);
         await setPolicy(operator, "operators");
         await asUser(operator, () =>
           setWhiteboardEditPolicy.callPromise({
@@ -5672,7 +5290,7 @@ describe("whiteboard", function () {
         );
         const note = Random.id();
         await upsertNodes(operator, otherBoard, [
-          { _id: note, type: "sticky", position: { x: 0, y: 0 } },
+          stickyInput(0, 0, { _id: note }),
         ]);
         const here = await busy();
         const there = {
@@ -5698,11 +5316,7 @@ describe("whiteboard", function () {
           }, 12000);
           // Cleared in the same pass, so the other board's would be gone by
           // now
-          const kept = await rowOn(otherBoard);
-          assert.deepEqual(kept?.drag, there.drag);
-          assert.deepEqual(kept?.selection, there.selection);
-          assert.equal(kept?.editing, there.editing);
-          assert.deepEqual(kept?.editingAt, there.editingAt);
+          assertLiveEdits(await rowOn(otherBoard), there);
         } finally {
           close();
         }
@@ -5724,16 +5338,13 @@ describe("whiteboard", function () {
   });
 
   describe("reset and place by tags", function () {
-    let boardId: string;
     const anger = FixtureHunt.tags.find((t) => t.name === "group:anger")!;
     const joy = FixtureHunt.tags.find((t) => t.name === "group:joy")!;
     const angerMeta = FixtureHunt.tags.find(
       (t) => t.name === "meta-for:anger",
     )!;
 
-    beforeEach(async function () {
-      boardId = await ensureWhiteboard(operator, huntId);
-    });
+    beforeEach(makeBoard);
 
     const frameFor = async (tagId: string) =>
       (await WhiteboardNodes.findOneAsync({ board: boardId, tag: tagId }))!;
@@ -5783,19 +5394,9 @@ describe("whiteboard", function () {
           },
         ]),
       );
-    const comment = async (node: string, text: string) => {
-      const puzzleId = (await Whiteboards.findOneAsync(boardId))!.puzzle;
-      await asUser(member, () =>
-        sendChatMessage.callPromise({
-          puzzleId,
-          content: JSON.stringify(contentFromMessage(text)),
-          comment: { node, x: 10, y: 20 },
-        }),
-      );
-      return (await ChatMessages.findOneAsync({
-        "content.children.text": text,
-      }))!._id;
-    };
+    const comment = async (node: string, text: string) =>
+      (await sendComment(member, text, { comment: { node, x: 10, y: 20 } }))
+        ._id;
 
     it("places a dragged card back into its round and clears manual", async function () {
       const card = await angerCard();
@@ -5836,11 +5437,7 @@ describe("whiteboard", function () {
       await upsertNodes(member, boardId, [
         { _id: card._id, parent: null, position: { x: 900, y: 900 } },
       ]);
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard_versions",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard_versions");
       const before = await versions();
 
       await placeByTags(operator, [card._id]);
@@ -5859,10 +5456,7 @@ describe("whiteboard", function () {
       await upsertNodes(member, boardId, [
         { _id: card._id, position: { x: 1, y: 1 } },
       ]);
-      const sticky = Random.id();
-      await upsertNodes(member, boardId, [
-        { _id: sticky, type: "sticky", position: { x: 0, y: 0 } },
-      ]);
+      const sticky = await addSticky(member, { x: 0, y: 0 });
       const hidden = (await WhiteboardNodes.findOneAsync({
         board: boardId,
         type: "puzzle",
@@ -5882,25 +5476,9 @@ describe("whiteboard", function () {
         );
       }
       // A card on another hunt's board
-      const otherHunt = await Hunts.insertAsync({
-        name: "Another hunt",
-        openSignups: true,
-        hasGuessQueue: true,
-        createdBy: operator,
-      });
-      await MeteorUsers.updateAsync(operator, {
-        $addToSet: { hunts: otherHunt },
-        $set: { [`roles.${otherHunt}`]: ["operator"] },
-      });
-      await Puzzles.insertAsync({
-        hunt: otherHunt,
-        title: "Elsewhere",
-        tags: [],
-        answers: [],
-        expectedAnswerCount: 1,
-        createdBy: operator,
-      });
-      const otherBoard = await ensureWhiteboard(operator, otherHunt);
+      const { board: otherBoard } = await otherHuntBoard(operator, [
+        "Elsewhere",
+      ]);
       const foreign = (await WhiteboardNodes.findOneAsync({
         board: otherBoard,
         type: "puzzle",
@@ -5912,7 +5490,7 @@ describe("whiteboard", function () {
         placeByTags(operator, [foreign._id]),
         /Only cards on this board can be placed by tags/,
       );
-      assert.isTrue((await WhiteboardNodes.findOneAsync(foreign._id))?.manual);
+      assert.isTrue((await node(foreign._id))?.manual);
 
       await assert.isRejected(
         placeByTags(
@@ -5922,13 +5500,7 @@ describe("whiteboard", function () {
         /Too many/,
       );
       await assert.isRejected(placeByTags(outsider, [card._id]), /member/);
-      await asUser(operator, () =>
-        setWhiteboardEditPolicy.callPromise({
-          boardId,
-          editPolicy: "operators",
-          editors: [],
-        }),
-      );
+      await setPolicy(operator, "operators");
       await assert.isRejected(
         placeByTags(member, [card._id]),
         /Only operators can edit/,
@@ -5949,13 +5521,11 @@ describe("whiteboard", function () {
       await upsertNodes(member, boardId, [
         { _id: card._id, parent: null, position: { x: 9000, y: 9000 } },
         { _id: joyFrame._id, position: { x: 7000, y: 7000 } },
-        {
+        stickyInput(20, 30, {
           _id: note,
-          type: "sticky",
-          position: { x: 20, y: 30 },
           parent: angerFrame._id,
           text: "a note",
-        },
+        }),
         {
           _id: ink,
           type: "ink",
@@ -6061,11 +5631,7 @@ describe("whiteboard", function () {
     });
 
     it("snapshots the first edit after a reset", async function () {
-      const sticky = () =>
-        upsertNodes(member, boardId, [
-          { _id: Random.id(), type: "sticky", position: { x: 0, y: 0 } },
-        ]);
-      await sticky();
+      await addSticky(member, { x: 0, y: 0 });
       assert.lengthOf(await versions(), 1);
 
       await reset(operator);
@@ -6075,7 +5641,7 @@ describe("whiteboard", function () {
       );
 
       // Inside the member's window, but the board has been rewritten since
-      await sticky();
+      await addSticky(member, { x: 0, y: 0 });
       assert.deepEqual(
         (await versions()).map((v) => v.kind),
         ["edits", "reset", "edits"],
@@ -6093,13 +5659,13 @@ describe("whiteboard", function () {
       const hiddenAt = (await cardFor(card.puzzle)).position;
 
       await reset(member);
-      assert.isTrue((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+      assert.isTrue((await edge(arrow._id))?.hidden);
       const stillHidden = await cardFor(card.puzzle);
       assert.isTrue(stillHidden.hidden);
       assert.deepEqual(stillHidden.position, hiddenAt);
 
       await reset(member, true);
-      assert.notOk((await WhiteboardEdges.findOneAsync(arrow._id))?.hidden);
+      assert.notOk((await edge(arrow._id))?.hidden);
       const back = await cardFor(card.puzzle);
       assert.notOk(back.hidden);
       assert.equal(back.parent, (await frameFor(anger._id))._id);
@@ -6186,24 +5752,12 @@ describe("whiteboard", function () {
       };
 
       await assert.isRejected(
-        resetWhileLocked(member, () =>
-          asUser(operator, () =>
-            setWhiteboardEditPolicy.callPromise({
-              boardId,
-              editPolicy: "operators",
-              editors: [],
-            }),
-          ),
-        ),
+        resetWhileLocked(member, () => setPolicy(operator, "operators")),
         /Only operators can edit/,
       );
       await assert.isRejected(
         resetWhileLocked(operator, () =>
-          FeatureFlags.insertAsync({
-            name: "disable.whiteboard_versions",
-            type: "on",
-            createdBy: operator,
-          }),
+          setFlag("disable.whiteboard_versions"),
         ),
         /Reset layout needs board history, which is turned off/,
       );
@@ -6226,19 +5780,9 @@ describe("whiteboard", function () {
       await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
       await assert.isRejected(reset(operator), /archived/);
       await Hunts.updateAsync(huntId, { $set: { isArchived: false } });
-      await asUser(operator, () =>
-        setWhiteboardEditPolicy.callPromise({
-          boardId,
-          editPolicy: "operators",
-          editors: [],
-        }),
-      );
+      await setPolicy(operator, "operators");
       await assert.isRejected(reset(member), /Only operators can edit/);
-      await FeatureFlags.insertAsync({
-        name: "disable.whiteboard_versions",
-        type: "on",
-        createdBy: operator,
-      });
+      await setFlag("disable.whiteboard_versions");
       await assert.isRejected(
         reset(operator),
         /Reset layout needs board history, which is turned off/,
