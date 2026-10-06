@@ -28,6 +28,7 @@ files:
   - imports/client/components/whiteboard/ImageNode.tsx
   - imports/client/components/whiteboard/InkNode.tsx
   - imports/client/components/whiteboard/KeepAboveKeyboard.tsx
+  - imports/client/components/whiteboard/LinePreviews.tsx
   - imports/client/components/whiteboard/LockBadge.tsx
   - imports/client/components/whiteboard/LockLayoutButtons.tsx
   - imports/client/components/whiteboard/NodeChrome.tsx
@@ -70,6 +71,9 @@ files:
   - imports/client/hooks/useInk.ts
   - imports/client/hooks/useKeyboardInset.ts
   - imports/client/hooks/useLatest.ts
+  - imports/client/hooks/useLineEnds.ts
+  - imports/client/hooks/useLineStyle.ts
+  - imports/client/hooks/useLineTool.ts
   - imports/client/hooks/useLinkedComment.ts
   - imports/client/hooks/useLinkedTarget.ts
   - imports/client/hooks/useNotOnBoard.ts
@@ -576,17 +580,18 @@ overlays drawn over the board and the small buttons the toolbars share, and
 under the toolbar are `BoardNotices`, the Align and Distribute buttons
 `ArrangeToolbar`, the "Not on the board" panel `NotOnBoardPanel`, and a
 preview's banner, Restore this item and restore confirmation
-`PreviewChrome`. Parts of the canvas's state live in hooks in
+`PreviewChrome`, and what's drawn over the board while a line is being made
+`LinePreviews`. Parts of the canvas's state live in hooks in
 `imports/client/hooks/`: `useBoardGeometry` (where things are on the
 board), `useFrameTools`, `useBoardNotices`, `useRemoteDrags`,
 `useNotOnBoard`, `useImageTool`, `usePlaceTool`, `useInk`,
 `useTouchGestures`, `useBoardKeys`, `useBoardNavigation`,
 `useLinkedTarget`, `useBoardComments`, `useLinkedComment`,
-`useVersionPreview`, `useBoardFocus` and `useBoardClipboard`, each named
-below where what it owns is described. The canvas keeps the pointer
-handlers, the lines, the movers (a drop, a burst of nudges, Align and
-Distribute, which share a `Mover` for what to save and show and where
-things landed) and the toolbars.
+`useVersionPreview`, `useBoardFocus`, `useBoardClipboard`, `useLineEnds`,
+`useLineTool` and `useLineStyle`, each named below where what it owns is
+described. The canvas keeps the pointer handlers, the movers (a drop, a
+burst of nudges, Align and Distribute, which share a `Mover` for what to
+save and show and where things landed) and the toolbars.
 
 A read-only board's toolbar says "Viewing only", gives the reason on the line
 below, and keeps the Comment tool for anyone who can comment, and the
@@ -1034,6 +1039,14 @@ clear the next click joins something. Escape, or picking another tool, lets
 go of it, as does Cancel on a touch screen (see Tablets and touch), where a
 tap on a handle and then another joins them. A locked node's handles only end lines: a line can be drawn to it,
 but not started from it.
+
+On the client the line tool, a selected line's grips, lines from handles
+and click-to-connect are `useLineTool` (`imports/client/hooks/`), whose
+previews (the line being drawn or moved, the waiting click-to-connect line
+and the outline of what an end would attach to) are `LinePreviews`. What an
+end attaches to, how a free end is placed as a point node and the writes
+that make a line or move one of its ends are `useLineEnds`; the look new
+lines take and the restyling of selected lines are `useLineStyle`.
 
 ### Copy, paste and duplicate
 
