@@ -1,3 +1,4 @@
+import type { Point } from "./layout";
 import { MAX_FRAME_DEPTH } from "./limits";
 
 export interface ArrangeItem {
@@ -136,20 +137,10 @@ interface UnitEdge {
 export function withoutParentLoops<T extends { id: string; parentId?: string }>(
   nodes: T[],
 ): T[] {
-  const parentOf = new Map(nodes.map((n) => [n.id, n.parentId]));
-  const inLoop = (id: string) => {
-    const seen = new Set<string>();
-    for (
-      let at = parentOf.get(id);
-      at && !seen.has(at);
-      at = parentOf.get(at)
-    ) {
-      if (at === id) return true;
-      seen.add(at);
-    }
-    return false;
-  };
-  const looped = new Set(nodes.filter((n) => inLoop(n.id)).map((n) => n.id));
+  const byId = new Map(nodes.map((n) => [n.id, { parent: n.parentId }]));
+  const looped = new Set(
+    nodes.filter((n) => inParentLoop(byId, n.id)).map((n) => n.id),
+  );
   if (looped.size === 0) return nodes;
   return nodes.map((n) =>
     looped.has(n.id) ? { ...n, parentId: undefined } : n,
@@ -170,6 +161,53 @@ export function ancestorsOf(
     parent = byId.get(parent)?.parent;
   }
   return result;
+}
+
+type ParentLookup = { get(id: string): { parent?: string } | undefined };
+
+// Whether a node's frames lead back to it. Unbounded by depth, as a loop
+// is found as soon as the chain repeats.
+export function inParentLoop(byId: ParentLookup, id: string) {
+  const seen = new Set<string>();
+  for (
+    let at = byId.get(id)?.parent;
+    at && !seen.has(at);
+    at = byId.get(at)?.parent
+  ) {
+    if (at === id) return true;
+    seen.add(at);
+  }
+  return false;
+}
+
+// Whether a node's parent chain can't stand: it comes back to the node or
+// to a frame already passed, or runs on past MAX_FRAME_DEPTH frames. A
+// parent byId doesn't know ends the chain and counts for nothing.
+export function parentChainBroken(byId: ParentLookup, id: string) {
+  const seen = new Set<string>();
+  let at = byId.get(id)?.parent;
+  for (let depth = 0; at; depth++) {
+    if (at === id || seen.has(at) || depth >= MAX_FRAME_DEPTH) return true;
+    seen.add(at);
+    at = byId.get(at)?.parent;
+  }
+  return false;
+}
+
+// Where a node is on the board rather than in its frame: its position plus
+// those of the frames around it, up to MAX_FRAME_DEPTH of them.
+export function absolutePosition(
+  byId: ReadonlyMap<string, { parent?: string; position: Point }>,
+  node: { parent?: string; position: Point },
+): Point {
+  let { x, y } = node.position;
+  let parent = node.parent ? byId.get(node.parent) : undefined;
+  for (let depth = 0; parent && depth < MAX_FRAME_DEPTH; depth++) {
+    x += parent.position.x;
+    y += parent.position.y;
+    parent = parent.parent ? byId.get(parent.parent) : undefined;
+  }
+  return { x, y };
 }
 
 // Nodes in an order React Flow can take, which needs every parent before its

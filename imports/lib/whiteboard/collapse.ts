@@ -1,4 +1,4 @@
-import { ancestorsOf } from "./arrange";
+import { ancestorsOf, inParentLoop } from "./arrange";
 import { FRAME_HEADER } from "./layout";
 
 export const COLLAPSED_FRAME_HEIGHT = FRAME_HEADER;
@@ -25,7 +25,7 @@ export function foldedInto(
   const inLoop = (id: string) => {
     let looped = loops.get(id);
     if (looped === undefined) {
-      looped = ancestorsOf(byId, id).includes(id);
+      looped = inParentLoop(byId, id);
       loops.set(id, looped);
     }
     return looped;

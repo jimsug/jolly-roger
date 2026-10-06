@@ -1,5 +1,4 @@
 import { Meteor } from "meteor/meteor";
-import Flags from "../Flags";
 import Puzzles from "../lib/models/Puzzles";
 import Tags from "../lib/models/Tags";
 import WhiteboardEdges from "../lib/models/WhiteboardEdges";
@@ -20,8 +19,9 @@ import {
 } from "./whiteboard";
 import { assertMayEditBoard } from "./whiteboardShared";
 import {
+  assertHistoryEnabled,
   recordVersionBeforeEdit,
-  recordVersionBeforeRewrite,
+  recordVersionUnderLock,
   WRITES_PER_RENEWAL,
   withBoardLock,
 } from "./whiteboardVersions";
@@ -71,19 +71,8 @@ export async function placeByTags(
   await syncPuzzlesOnBoard(board.hunt, puzzleIds);
 }
 
-const needsHistory = () =>
-  new Meteor.Error(
-    403,
-    "Reset layout needs board history, which is turned off",
-  );
-
-async function assertResetAllowed(userId: string, boardId: string) {
-  const loaded = await assertMayEditBoard(userId, boardId);
-  if (await Flags.activeAsync("disable.whiteboard_versions")) {
-    throw needsHistory();
-  }
-  return loaded;
-}
+const RESET_NEEDS_HISTORY =
+  "Reset layout needs board history, which is turned off";
 
 const placementModifier = (
   placement: ResetPlacement,
@@ -103,15 +92,19 @@ export async function resetLayout(
   boardId: string,
   putBack: boolean,
 ) {
-  await assertResetAllowed(userId, boardId);
+  await assertMayEditBoard(userId, boardId);
+  await assertHistoryEnabled(RESET_NEEDS_HISTORY);
 
   await withBoardLock(boardId, async (renew) => {
     // The policy or the flags may have changed while this waited
-    const { board } = await assertResetAllowed(userId, boardId);
+    const { board } = await assertMayEditBoard(userId, boardId);
+    await assertHistoryEnabled(RESET_NEEDS_HISTORY);
 
     // Nothing has been written yet, so a failure here leaves the board as
     // it was.
-    await recordVersionBeforeRewrite(board, userId, "reset", renew);
+    await recordVersionUnderLock(board, userId, "reset", renew, {
+      required: true,
+    });
 
     const puzzles = await Puzzles.find({ hunt: board.hunt }).fetchAsync();
     const tags = await Tags.find({ hunt: board.hunt }).fetchAsync();

@@ -1,4 +1,5 @@
 import type { WhiteboardNodeType } from "../models/WhiteboardNodes";
+import { inParentLoop } from "./arrange";
 import { frameLabel } from "./layout";
 import type { RoundState } from "./rounds";
 
@@ -58,20 +59,8 @@ export function outlineTree(
 ): OutlineRow[] {
   const frames = nodes.filter((n) => n.type === "frame" && !n.hidden);
   const byId = new Map(frames.map((f) => [f._id, f]));
-  const inLoop = (id: string) => {
-    const seen = new Set<string>();
-    for (
-      let at = byId.get(id)?.parent;
-      at && byId.has(at) && !seen.has(at);
-      at = byId.get(at)?.parent
-    ) {
-      if (at === id) return true;
-      seen.add(at);
-    }
-    return false;
-  };
   const parentOf = (frame: OutlineNode) =>
-    frame.parent && byId.has(frame.parent) && !inLoop(frame._id)
+    frame.parent && byId.has(frame.parent) && !inParentLoop(byId, frame._id)
       ? frame.parent
       : undefined;
 

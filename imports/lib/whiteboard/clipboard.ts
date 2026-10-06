@@ -12,6 +12,7 @@ import {
   WhiteboardShapes,
   WhiteboardStrokeWidths,
 } from "../models/WhiteboardNodes";
+import { absolutePosition } from "./arrange";
 import { centerOf } from "./connectors";
 import type { Point, Rect, Size } from "./layout";
 import { POINT_SIZE } from "./layout";
@@ -233,21 +234,14 @@ export function copySelection<N extends SourceNode>(
     });
   });
 
-  const absoluteOf = (node: N): Point => {
-    let { x, y } = node.position;
-    let parent = node.parent ? byId.get(node.parent) : undefined;
-    for (let i = 0; parent && i < MAX_FRAME_DEPTH; i++) {
-      x += parent.position.x;
-      y += parent.position.y;
-      parent = parent.parent ? byId.get(parent.parent) : undefined;
-    }
-    return { x, y };
-  };
-
   const clipNodes = [...copied].flatMap((id): ClipNode[] => {
     const node = byId.get(id);
     if (!node || node.type === "puzzle") return [];
-    const copy: ClipNode = { id, type: node.type, ...absoluteOf(node) };
+    const copy: ClipNode = {
+      id,
+      type: node.type,
+      ...absolutePosition(byId, node),
+    };
     if (node.parent && copied.has(node.parent)) copy.parent = node.parent;
     if (node.type !== "point" && node.width !== undefined) {
       copy.width = node.width;

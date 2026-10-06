@@ -54,7 +54,7 @@ import {
 } from "./whiteboardShared";
 import {
   recordVersionBeforeEdit,
-  recordVersionBeforeLockedEdit,
+  recordVersionUnderLock,
   withBoardLock,
 } from "./whiteboardVersions";
 import withLock from "./withLock";
@@ -257,80 +257,90 @@ const sameImage = (
   b: WhiteboardNodeType["image"],
 ) => !!b && a.url === b.url && a.width === b.width && a.height === b.height;
 
-// Image nodes come with an image, nothing else has one, and an image never
-// changes once it's on the board. Returns how many images the batch adds,
-// which the caller counts against the cap under the board's lock.
+// A node of a kind (image, shape) comes with its kind's field and a size,
+// nothing else has that field, and it never changes once the node is on the
+// board: an image stays the same image, a rectangle stays a rectangle.
+// Returns the batch's new nodes of that kind.
+function assertKindField(
+  inputs: WhiteboardNodeInput[],
+  existingById: Map<string, WhiteboardNodeType>,
+  kind: "image" | "shape",
+  same: (input: WhiteboardNodeInput, existing: WhiteboardNodeType) => boolean,
+  messages: { only: string; changed: string; needs: string },
+) {
+  return inputs.filter((input) => {
+    const existing = existingById.get(input._id);
+    if (existing) {
+      if (input[kind] === undefined) return false;
+      if (existing.type !== kind) throw badRequest(messages.only);
+      if (!same(input, existing)) throw badRequest(messages.changed);
+      return false;
+    }
+    if (input.type === kind) {
+      if (
+        !input[kind] ||
+        input.width === undefined ||
+        input.height === undefined
+      ) {
+        throw badRequest(messages.needs);
+      }
+      return true;
+    }
+    if (input[kind] !== undefined) throw badRequest(messages.only);
+    return false;
+  });
+}
+
+// Returns how many images the batch adds, which the caller counts against
+// the cap under the board's lock.
 async function assertImagesAllowed(
   board: { _id: string; hunt: string },
   inputs: WhiteboardNodeInput[],
   existingById: Map<string, WhiteboardNodeType>,
 ) {
-  const added: string[] = [];
-  inputs.forEach((input) => {
-    const existing = existingById.get(input._id);
-    if (existing) {
-      if (input.image === undefined) return;
-      if (existing.type !== "image") {
-        throw badRequest("Only image nodes have an image");
-      }
-      if (!sameImage(input.image, existing.image)) {
-        throw badRequest("An image can't be changed");
-      }
-      return;
-    }
-    if (input.type === "image") {
-      if (
-        !input.image ||
-        input.width === undefined ||
-        input.height === undefined
-      ) {
-        throw badRequest("Image nodes need an image and a size");
-      }
-      added.push(input.image.url);
-    } else if (input.image !== undefined) {
-      throw badRequest("Only image nodes have an image");
-    }
-  });
-  await assertStoredImages(board.hunt, added);
+  const added = assertKindField(
+    inputs,
+    existingById,
+    "image",
+    (input, existing) =>
+      !!input.image && sameImage(input.image, existing.image),
+    {
+      only: "Only image nodes have an image",
+      changed: "An image can't be changed",
+      needs: "Image nodes need an image and a size",
+    },
+  );
+  await assertStoredImages(
+    board.hunt,
+    added.flatMap((input) => (input.image ? [input.image.url] : [])),
+  );
   return added.length;
 }
 
-// Shape nodes come with a shape and a size, nothing else has a shape, and a
-// shape never changes once it's on the board: a rectangle stays one.
 function assertShapesAllowed(
   inputs: WhiteboardNodeInput[],
   existingById: Map<string, WhiteboardNodeType>,
 ) {
-  inputs.forEach((input) => {
-    if (
-      input.shape !== undefined &&
-      !WhiteboardShapes.some((s) => s === input.shape)
-    ) {
-      throw badRequest("Unknown shape");
-    }
-    const existing = existingById.get(input._id);
-    if (existing) {
-      if (input.shape === undefined) return;
-      if (existing.type !== "shape") {
-        throw badRequest("Only shape nodes have a shape");
-      }
-      if (input.shape !== existing.shape) {
-        throw badRequest("A shape can't be changed");
-      }
-      return;
-    }
-    if (input.type === "shape") {
-      if (
-        !input.shape ||
-        input.width === undefined ||
-        input.height === undefined
-      ) {
-        throw badRequest("Shape nodes need a shape and a size");
-      }
-    } else if (input.shape !== undefined) {
-      throw badRequest("Only shape nodes have a shape");
-    }
-  });
+  if (
+    inputs.some(
+      (input) =>
+        input.shape !== undefined &&
+        !WhiteboardShapes.some((s) => s === input.shape),
+    )
+  ) {
+    throw badRequest("Unknown shape");
+  }
+  assertKindField(
+    inputs,
+    existingById,
+    "shape",
+    (input, existing) => input.shape === existing.shape,
+    {
+      only: "Only shape nodes have a shape",
+      changed: "A shape can't be changed",
+      needs: "Shape nodes need a shape and a size",
+    },
+  );
 }
 
 interface NodeUpdate {
@@ -821,7 +831,7 @@ export async function upsertNodes(
       }
       // This also checks the lock is still held: another server may have
       // taken it while this one counted.
-      await recordVersionBeforeLockedEdit(board, userId, renew);
+      await recordVersionUnderLock(board, userId, "edits", renew);
       for (const input of inserts) {
         await insertNode(userId, board, input);
       }
@@ -1104,7 +1114,7 @@ export async function upsertEdges(
       if (count + inserts.length > MAX_EDGES_PER_BOARD) {
         throw badRequest("This board has too many arrows");
       }
-      await recordVersionBeforeLockedEdit(board, userId, renew);
+      await recordVersionUnderLock(board, userId, "edits", renew);
       for (const input of inserts) {
         await WhiteboardEdges.insertAsync({
           _id: input._id,

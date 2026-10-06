@@ -8,8 +8,8 @@ import {
   tagKind,
   tagPrefixValue,
 } from "../tagNames";
+import { absolutePosition, ancestorsOf } from "./arrange";
 import { CARD_HEIGHT, FRAME_HEADER, GAP } from "./layout";
-import { MAX_FRAME_DEPTH } from "./limits";
 
 export type FeederOrder = "board" | "solveTime";
 
@@ -123,16 +123,9 @@ function boardKeys(nodes: FeederNode[]): Map<string, BoardKey> {
   // Where a node is on the board, and the frame at the top of its nesting
   // (the node itself at the top level)
   const place = (node: FeederNode) => {
-    let { x, y } = node.position;
-    let outermost = node;
-    let parent = node.parent ? byId.get(node.parent) : undefined;
-    for (let depth = 0; parent && depth < MAX_FRAME_DEPTH; depth++) {
-      x += parent.position.x;
-      y += parent.position.y;
-      outermost = parent;
-      parent = parent.parent ? byId.get(parent.parent) : undefined;
-    }
-    return { x, y, outermost };
+    const top = ancestorsOf(byId, node._id).at(-1);
+    const outermost = top === undefined ? node : byId.get(top)!;
+    return { ...absolutePosition(byId, node), outermost };
   };
 
   const keys = new Map<string, BoardKey>();

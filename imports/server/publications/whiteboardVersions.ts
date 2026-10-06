@@ -1,9 +1,7 @@
 import { check } from "meteor/check";
-import Flags from "../../Flags";
-import MeteorUsers from "../../lib/models/MeteorUsers";
-import Whiteboards from "../../lib/models/Whiteboards";
 import WhiteboardVersions from "../../lib/models/WhiteboardVersions";
 import whiteboardVersions from "../../lib/publications/whiteboardVersions";
+import { boardForMember } from "../whiteboardShared";
 import definePublication from "./definePublication";
 
 definePublication(whiteboardVersions, {
@@ -13,23 +11,12 @@ definePublication(whiteboardVersions, {
   },
 
   async run({ boardId }) {
-    if (!this.userId) {
-      return [];
-    }
-
-    const board = await Whiteboards.findOneAsync(boardId);
-    if (!board) {
-      return [];
-    }
-
-    const user = await MeteorUsers.findOneAsync(this.userId);
-    if (!user?.hunts?.includes(board.hunt)) {
-      return [];
-    }
-
     if (
-      (await Flags.activeAsync("disable.whiteboard")) ||
-      (await Flags.activeAsync("disable.whiteboard_versions"))
+      !(await boardForMember(
+        this.userId,
+        boardId,
+        "disable.whiteboard_versions",
+      ))
     ) {
       return [];
     }

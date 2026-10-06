@@ -1642,10 +1642,12 @@ Node and line edits (`upsertNodes`, `deleteNodes`, `upsertEdges`, `deleteEdges`
 and `placeByTags`) call `recordVersionBeforeEdit` in
 `imports/server/whiteboardVersions.ts` after their checks and before their first
 write. An `upsertNodes` or `upsertEdges` batch that adds anything records with
-`recordVersionBeforeLockedEdit` instead, from under the board's lock once the
+`recordVersionUnderLock` instead, from under the board's lock once the
 caps are counted (see Data model), so a batch the caps refuse records
-nothing. Restoring one item (`restoreItems`, below) records the same way from
-under the board's lock. Comments, live drags and strokes, placement from puzzle
+nothing. Restoring one item (`restoreItems`, below), a whole restore and a
+reset record with the same function, as `required`: those fail if the board
+can't be recorded, where a batch goes ahead and logs it. Comments, live
+drags and strokes, placement from puzzle
 hooks, an `upsertNodes` batch that does nothing but collapse, expand, lock or
 unlock, and Lock layout never record one. Versions hold each frame's
 `collapsed` and each node's `locked` and `lockedBy` like any other field, so
@@ -1836,7 +1838,9 @@ can hold".
 
 It's an edit, not a rewrite: it records a version of kind `edits` from under
 the board's lock, which coalesces with the same person's other edits like any
-save, and it doesn't set `lastRewrittenAt`. When nothing in the set
+save, and it doesn't set `lastRewrittenAt`. As for a batch, losing the lock
+before its first write refuses it and takes that version away again. When
+nothing in the set
 differs from the board there's nothing to write, so it records nothing and
 returns false. Comments come off nodes it hides and go back on nodes it
 brings back, as for a whole restore. After the lock, a

@@ -64,7 +64,6 @@ export const WRITES_PER_RENEWAL = 200;
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
-const historyOff = () => new Meteor.Error(403, "Board history is turned off");
 const unknownVersion = () => new Meteor.Error(404, "Unknown version");
 const unrestorable = () =>
   new Meteor.Error(
@@ -90,9 +89,11 @@ export async function withBoardLock<T>(
   }
 }
 
-async function assertHistoryEnabled() {
+export async function assertHistoryEnabled(
+  message = "Board history is turned off",
+) {
   if (await Flags.activeAsync("disable.whiteboard_versions")) {
-    throw historyOff();
+    throw new Meteor.Error(403, message);
   }
 }
 
@@ -486,50 +487,6 @@ async function recordVersionLocked(
   return versionId;
 }
 
-// Checks the lock is still held before the first write of the edit a
-// version was just recorded for. If it isn't, that edit never runs, so the
-// version is taken away again.
-async function renewKeepingVersion(
-  board: WhiteboardType,
-  versionId: string | undefined,
-  renew: () => Promise<void>,
-) {
-  try {
-    await renew();
-  } catch (error) {
-    if (versionId && error instanceof LockPreemptedError) {
-      await WhiteboardVersions.removeAsync({
-        _id: versionId,
-        board: board._id,
-      });
-      await WhiteboardVersionChunks.removeAsync({
-        board: board._id,
-        version: versionId,
-      });
-    }
-    throw error;
-  }
-}
-
-// Records the board before a rewrite (a restore or a reset) and checks the
-// lock is still held before the rewrite's first write.
-export async function recordVersionBeforeRewrite(
-  board: WhiteboardType,
-  userId: string,
-  kind: "restore" | "reset",
-  renew: () => Promise<void>,
-  extra: { restoredFromAt?: Date } = {},
-) {
-  const versionId = await recordVersionLocked(
-    board,
-    userId,
-    kind,
-    renew,
-    extra,
-  );
-  await renewKeepingVersion(board, versionId, renew);
-}
-
 // Called by every edit that can change the layout, after its checks and
 // before its first write. A missing version beats a refused edit, so this
 // never throws.
@@ -572,29 +529,52 @@ export async function recordVersionBeforeEdit(
   }
 }
 
-// recordVersionBeforeEdit for an edit that already holds the board's lock,
-// which also checks the lock is still held before the edit's first write.
-// Losing the lock stops the edit, and takes away a version recorded for it;
-// any other failure to record is logged and the edit goes ahead.
-export async function recordVersionBeforeLockedEdit(
+// Records the board for an edit that holds the board's lock, then checks
+// the lock is still held before the edit's first write. Losing the lock
+// stops the edit, and takes away the version just recorded for it, as that
+// edit never runs. A rewrite (a restore or a reset), or an edit that can't
+// go unrecorded, is `required`: it fails if the board can't be recorded.
+// Otherwise nothing is recorded while history is off, and any other failure
+// to record is logged and the edit goes ahead, as a missing version beats a
+// refused edit.
+export async function recordVersionUnderLock(
   board: WhiteboardType,
   userId: string,
+  kind: WhiteboardVersionKind,
   renew: () => Promise<void>,
+  {
+    extra = {},
+    required = false,
+  }: { extra?: { restoredFromAt?: Date }; required?: boolean } = {},
 ) {
   let versionId: string | undefined;
   try {
-    if (!(await Flags.activeAsync("disable.whiteboard_versions"))) {
-      versionId = await recordVersionLocked(board, userId, "edits", renew);
+    if (required || !(await Flags.activeAsync("disable.whiteboard_versions"))) {
+      versionId = await recordVersionLocked(board, userId, kind, renew, extra);
     }
   } catch (error) {
-    if (error instanceof LockPreemptedError) throw error;
+    if (required || error instanceof LockPreemptedError) throw error;
     Logger.warn("Couldn't record a whiteboard version", {
       board: board._id,
       user: userId,
       error,
     });
   }
-  await renewKeepingVersion(board, versionId, renew);
+  try {
+    await renew();
+  } catch (error) {
+    if (versionId && error instanceof LockPreemptedError) {
+      await WhiteboardVersions.removeAsync({
+        _id: versionId,
+        board: board._id,
+      });
+      await WhiteboardVersionChunks.removeAsync({
+        board: board._id,
+        version: versionId,
+      });
+    }
+    throw error;
+  }
 }
 
 // An export part-way through being fetched: the board as it was when its
@@ -812,6 +792,59 @@ async function livePuzzleIds(huntId: string) {
   );
 }
 
+type BoardEdit = Awaited<ReturnType<typeof assertMayEditBoard>>;
+
+// What a restore plans with: only an operator puts back the locks a version
+// has, and only cards of puzzles that aren't deleted come back.
+const planOptions = async (
+  hunt: BoardEdit["hunt"],
+  user: BoardEdit["user"],
+) => ({
+  keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
+  livePuzzles: await livePuzzleIds(hunt._id),
+});
+
+// Runs an edit from one of the board's versions under the board's lock.
+// Before the lock it refuses unless the caller may edit the board, history
+// is on and the version is this board's, then `beforeLock` checks the rest
+// of the request. Anything may have changed while it waited for the lock,
+// so the same three are checked again under it before the version is read.
+async function withVersionLocked<T>(
+  userId: string,
+  boardId: string,
+  versionId: string,
+  body: (locked: {
+    current: WhiteboardType;
+    hunt: BoardEdit["hunt"];
+    user: BoardEdit["user"];
+    version: WhiteboardVersionType;
+    target: Awaited<ReturnType<typeof readVersionLocked>>;
+    renew: () => Promise<void>;
+  }) => Promise<T>,
+  beforeLock?: () => void,
+) {
+  const { board } = await assertMayEditBoard(userId, boardId);
+  await assertHistoryEnabled();
+  const version = await WhiteboardVersions.findOneAsync({
+    _id: versionId,
+    board: boardId,
+  });
+  if (!version) throw unknownVersion();
+  beforeLock?.();
+
+  const result = await withBoardLock(boardId, async (renew) => {
+    const {
+      board: current,
+      hunt,
+      user,
+    } = await assertMayEditBoard(userId, boardId);
+    await assertHistoryEnabled();
+    const target = await readVersionLocked(version, renew);
+    return body({ current, hunt, user, version, target, renew });
+  });
+  return { board, result };
+}
+
 // Random.id()'s alphabet, which ids on the board are checked against.
 const ID_CHARS = "23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz";
 // How many derived ids are tried for one taken id before a random one.
@@ -1007,76 +1040,59 @@ export async function restoreVersion(
   boardId: string,
   versionId: string,
 ) {
-  const { board } = await assertMayEditBoard(userId, boardId);
-  await assertHistoryEnabled();
-  const version = await WhiteboardVersions.findOneAsync({
-    _id: versionId,
-    board: boardId,
-  });
-  if (!version) throw unknownVersion();
-
-  await withBoardLock(boardId, async (renew) => {
-    // Anything may have changed while this waited for the lock
-    const {
-      board: current,
-      hunt,
-      user,
-    } = await assertMayEditBoard(userId, boardId);
-    await assertHistoryEnabled();
-    const target = await readVersionLocked(version, renew);
-
-    const live = await readBoard(boardId);
-    await renew();
-    const result = planRestore(live, target, {
-      keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
-      livePuzzles: await livePuzzleIds(hunt._id),
-    });
-    if (!result.ok) {
-      throw new Meteor.Error(
-        409,
-        result.reason === "tooMuchInk"
-          ? "This version has more drawing on it than a board can hold"
-          : "This version has more on it than a board can hold",
-      );
-    }
-    const plan = await withFreeIds(boardId, version._id, result.plan);
-    await renew();
-
-    // Nothing has been written yet, so a failure here leaves the board as
-    // it was.
-    await recordVersionBeforeRewrite(current, userId, "restore", renew, {
-      restoredFromAt: version.createdAt,
-    });
-
-    try {
-      await writeRestorePlan(current, live.nodes, plan, renew);
-    } catch (error) {
-      if (error instanceof LockPreemptedError) throw error;
-      // Part of the plan is written. Planning again from the board as it was
-      // left finishes the restore rather than leaving it half done; the
-      // first plan's comments are put back too, as nodes it brought back are
-      // no longer new to the second.
-      Logger.warn("A whiteboard restore failed part-way; finishing it", {
-        board: boardId,
-        version: version._id,
-        error,
-      });
-      const left = await readBoard(boardId);
+  const { board } = await withVersionLocked(
+    userId,
+    boardId,
+    versionId,
+    async ({ current, hunt, user, version, target, renew }) => {
+      const live = await readBoard(boardId);
       await renew();
-      const again = planRestore(left, target, {
-        keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
-        livePuzzles: await livePuzzleIds(hunt._id),
-      });
-      if (!again.ok) throw error;
-      const rest = await withFreeIds(boardId, version._id, again.plan);
-      rest.reattach.push(...plan.reattach);
-      await writeRestorePlan(current, left.nodes, rest, renew);
-    }
+      const result = planRestore(live, target, await planOptions(hunt, user));
+      if (!result.ok) {
+        throw new Meteor.Error(
+          409,
+          result.reason === "tooMuchInk"
+            ? "This version has more drawing on it than a board can hold"
+            : "This version has more on it than a board can hold",
+        );
+      }
+      const plan = await withFreeIds(boardId, version._id, result.plan);
+      await renew();
 
-    await Whiteboards.updateAsync(boardId, {
-      $set: { lastRewrittenAt: new Date() },
-    });
-  });
+      // Nothing has been written yet, so a failure here leaves the board as
+      // it was.
+      await recordVersionUnderLock(current, userId, "restore", renew, {
+        extra: { restoredFromAt: version.createdAt },
+        required: true,
+      });
+
+      try {
+        await writeRestorePlan(current, live.nodes, plan, renew);
+      } catch (error) {
+        if (error instanceof LockPreemptedError) throw error;
+        // Part of the plan is written. Planning again from the board as it was
+        // left finishes the restore rather than leaving it half done; the
+        // first plan's comments are put back too, as nodes it brought back are
+        // no longer new to the second.
+        Logger.warn("A whiteboard restore failed part-way; finishing it", {
+          board: boardId,
+          version: version._id,
+          error,
+        });
+        const left = await readBoard(boardId);
+        await renew();
+        const again = planRestore(left, target, await planOptions(hunt, user));
+        if (!again.ok) throw error;
+        const rest = await withFreeIds(boardId, version._id, again.plan);
+        rest.reattach.push(...plan.reattach);
+        await writeRestorePlan(current, left.nodes, rest, renew);
+      }
+
+      await Whiteboards.updateAsync(boardId, {
+        $set: { lastRewrittenAt: new Date() },
+      });
+    },
+  );
 
   // Puts cards the version didn't have into their rounds, and redraws feeder
   // arrows. It takes the board's lock, so it can't run inside it.
@@ -1094,90 +1110,86 @@ export async function restoreItems(
   versionId: string,
   nodeIds: string[],
 ): Promise<boolean> {
-  const { board } = await assertMayEditBoard(userId, boardId);
-  await assertHistoryEnabled();
-  const version = await WhiteboardVersions.findOneAsync({
-    _id: versionId,
-    board: boardId,
-  });
-  if (!version) throw unknownVersion();
-  if (nodeIds.length === 0) throw new Meteor.Error(400, "Nothing to restore");
-  if (nodeIds.length > MAX_BATCH) {
-    throw new Meteor.Error(400, "Too many nodes at once");
-  }
+  const {
+    board,
+    result: { puzzles, restored },
+  } = await withVersionLocked(
+    userId,
+    boardId,
+    versionId,
+    async ({ current, hunt, user, version, target, renew }) => {
+      const items = restoreItemSet(target, nodeIds);
+      if (!items) throw new Meteor.Error(404, "That isn't in this version");
+      if (items.nodes.size > MAX_BATCH || items.edges.size > MAX_BATCH) {
+        throw new Meteor.Error(400, "That's too much to restore at once");
+      }
 
-  const { puzzles, restored } = await withBoardLock(boardId, async (renew) => {
-    // Anything may have changed while this waited for the lock
-    const {
-      board: current,
-      hunt,
-      user,
-    } = await assertMayEditBoard(userId, boardId);
-    await assertHistoryEnabled();
-    const target = await readVersionLocked(version, renew);
+      const live = await readBoard(boardId);
+      await renew();
+      const result = planItemRestore(
+        live,
+        target,
+        items,
+        await planOptions(hunt, user),
+      );
+      if (!result.ok) {
+        throw result.reason === "tooMuchInk"
+          ? tooMuchInkError()
+          : new Meteor.Error(400, "This board is full");
+      }
+      const plan = await withFreeIds(boardId, version._id, result.plan);
+      // Restoring an item is a person's edit, so like Place by tags it doesn't
+      // move, change or unlock anything locked, whoever asks.
+      const liveById = new Map(live.nodes.map((n) => [n._id, n]));
+      const lockedKeys = new Set<string>([
+        ...LOCKED_FIELDS,
+        "locked",
+        "lockedBy",
+      ]);
+      if (
+        plan.nodes.change.some(
+          (c) =>
+            liveById.get(c._id)?.locked &&
+            [...Object.keys(c.$set), ...Object.keys(c.$unset)].some((key) =>
+              lockedKeys.has(key),
+            ),
+        )
+      ) {
+        throw lockedError();
+      }
+      const restored =
+        plan.nodes.change.length > 0 ||
+        plan.nodes.insert.length > 0 ||
+        plan.edges.change.length > 0 ||
+        plan.edges.insert.length > 0;
+      // Nothing to write is no edit, so it isn't recorded either.
+      if (
+        !restored &&
+        plan.nodes.remove.length === 0 &&
+        plan.edges.remove.length === 0 &&
+        plan.detach.length === 0 &&
+        plan.reattach.length === 0
+      ) {
+        return { puzzles: result.puzzles, restored };
+      }
 
-    const items = restoreItemSet(target, nodeIds);
-    if (!items) throw new Meteor.Error(404, "That isn't in this version");
-    if (items.nodes.size > MAX_BATCH || items.edges.size > MAX_BATCH) {
-      throw new Meteor.Error(400, "That's too much to restore at once");
-    }
-
-    const live = await readBoard(boardId);
-    await renew();
-    // Only operators can put back the locks a version has, as for a whole
-    // restore.
-    const result = planItemRestore(live, target, items, {
-      keepLocks: !userMayWritePuzzlesForHunt(user, hunt),
-      livePuzzles: await livePuzzleIds(hunt._id),
-    });
-    if (!result.ok) {
-      throw result.reason === "tooMuchInk"
-        ? tooMuchInkError()
-        : new Meteor.Error(400, "This board is full");
-    }
-    const plan = await withFreeIds(boardId, version._id, result.plan);
-    // Restoring an item is a person's edit, so like Place by tags it doesn't
-    // move, change or unlock anything locked, whoever asks.
-    const liveById = new Map(live.nodes.map((n) => [n._id, n]));
-    const lockedKeys = new Set<string>([
-      ...LOCKED_FIELDS,
-      "locked",
-      "lockedBy",
-    ]);
-    if (
-      plan.nodes.change.some(
-        (c) =>
-          liveById.get(c._id)?.locked &&
-          [...Object.keys(c.$set), ...Object.keys(c.$unset)].some((key) =>
-            lockedKeys.has(key),
-          ),
-      )
-    ) {
-      throw lockedError();
-    }
-    const restored =
-      plan.nodes.change.length > 0 ||
-      plan.nodes.insert.length > 0 ||
-      plan.edges.change.length > 0 ||
-      plan.edges.insert.length > 0;
-    // Nothing to write is no edit, so it isn't recorded either.
-    if (
-      !restored &&
-      plan.nodes.remove.length === 0 &&
-      plan.edges.remove.length === 0 &&
-      plan.detach.length === 0 &&
-      plan.reattach.length === 0
-    ) {
+      // Nothing has been written yet, so a failure here leaves the board as
+      // it was.
+      await recordVersionUnderLock(current, userId, "edits", renew, {
+        required: true,
+      });
+      await writeRestorePlan(current, live.nodes, plan, renew);
       return { puzzles: result.puzzles, restored };
-    }
-
-    // Nothing has been written yet, so a failure here leaves the board as
-    // it was.
-    await recordVersionLocked(current, userId, "edits", renew);
-    await renew();
-    await writeRestorePlan(current, live.nodes, plan, renew);
-    return { puzzles: result.puzzles, restored };
-  });
+    },
+    () => {
+      if (nodeIds.length === 0) {
+        throw new Meteor.Error(400, "Nothing to restore");
+      }
+      if (nodeIds.length > MAX_BATCH) {
+        throw new Meteor.Error(400, "Too many nodes at once");
+      }
+    },
+  );
 
   // Puts restored cards that placement looks after into their rounds, and
   // redraws their feeder arrows. It takes the board's lock, so it can't run

@@ -1,13 +1,17 @@
 import { assert } from "chai";
 import type { ArrangeItem } from "../../../../imports/lib/whiteboard/arrange";
 import {
+  absolutePosition,
   alignItems,
   arrangeUnits,
   companionsOf,
   distributeItems,
+  inParentLoop,
+  parentChainBroken,
   sortParentsFirst,
   withoutParentLoops,
 } from "../../../../imports/lib/whiteboard/arrange";
+import { MAX_FRAME_DEPTH } from "../../../../imports/lib/whiteboard/limits";
 
 const item = (
   id: string,
@@ -384,5 +388,88 @@ describe("whiteboard sortParentsFirst", function () {
       { id: "top" },
     ]);
     assert.deepEqual(ids(sorted), ["top", "f", "g"]);
+  });
+});
+
+// f0 at the top, f1 in it and so on, with a card in the last frame
+const nested = (frames: number) => {
+  const byId = new Map<
+    string,
+    { parent?: string; position: { x: number; y: number } }
+  >();
+  for (let i = 0; i <= frames; i++) {
+    byId.set(`f${i}`, {
+      ...(i > 0 ? { parent: `f${i - 1}` } : {}),
+      position: { x: 1, y: 10 },
+    });
+  }
+  byId.set("card", { parent: `f${frames}`, position: { x: 100, y: 200 } });
+  return byId;
+};
+
+describe("whiteboard inParentLoop", function () {
+  it("finds a node in a loop, but not one below it", function () {
+    const byId = new Map([
+      ["a", { parent: "b" }],
+      ["b", { parent: "a" }],
+      ["self", { parent: "self" }],
+      ["card", { parent: "a" }],
+      ["top", {}],
+      ["lost", { parent: "gone" }],
+    ]);
+    assert.isTrue(inParentLoop(byId, "a"));
+    assert.isTrue(inParentLoop(byId, "self"));
+    assert.isFalse(inParentLoop(byId, "card"));
+    assert.isFalse(inParentLoop(byId, "top"));
+    assert.isFalse(inParentLoop(byId, "lost"));
+  });
+});
+
+describe("whiteboard parentChainBroken", function () {
+  it("allows MAX_FRAME_DEPTH frames around a node and refuses one more", function () {
+    assert.isFalse(parentChainBroken(nested(MAX_FRAME_DEPTH - 1), "card"));
+    assert.isTrue(parentChainBroken(nested(MAX_FRAME_DEPTH), "card"));
+  });
+
+  it("refuses a loop anywhere up the chain, and not a parent it doesn't know", function () {
+    const byId = new Map([
+      ["a", { parent: "b" }],
+      ["b", { parent: "a" }],
+      ["self", { parent: "self" }],
+      ["card", { parent: "a" }],
+      ["top", {}],
+      ["lost", { parent: "gone" }],
+    ]);
+    assert.isTrue(parentChainBroken(byId, "a"));
+    assert.isTrue(parentChainBroken(byId, "self"));
+    assert.isTrue(parentChainBroken(byId, "card"));
+    assert.isFalse(parentChainBroken(byId, "top"));
+    assert.isFalse(parentChainBroken(byId, "lost"));
+  });
+});
+
+describe("whiteboard absolutePosition", function () {
+  it("adds the positions of up to MAX_FRAME_DEPTH frames", function () {
+    const card = (byId: ReturnType<typeof nested>) =>
+      absolutePosition(byId, byId.get("card")!);
+    assert.deepEqual(card(nested(2)), { x: 103, y: 230 });
+    assert.deepEqual(card(nested(MAX_FRAME_DEPTH - 1)), {
+      x: 100 + MAX_FRAME_DEPTH,
+      y: 200 + 10 * MAX_FRAME_DEPTH,
+    });
+    assert.deepEqual(card(nested(MAX_FRAME_DEPTH)), {
+      x: 100 + MAX_FRAME_DEPTH,
+      y: 200 + 10 * MAX_FRAME_DEPTH,
+    });
+  });
+
+  it("leaves a node alone at the top level or under a parent it doesn't know", function () {
+    const byId = new Map([["f", { position: { x: 5, y: 5 } }]]);
+    const at = { position: { x: 1, y: 2 } };
+    assert.deepEqual(absolutePosition(byId, at), { x: 1, y: 2 });
+    assert.deepEqual(absolutePosition(byId, { ...at, parent: "gone" }), {
+      x: 1,
+      y: 2,
+    });
   });
 });

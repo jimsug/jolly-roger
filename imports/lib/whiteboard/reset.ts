@@ -1,4 +1,5 @@
 import type { WhiteboardNodeType } from "../models/WhiteboardNodes";
+import { ancestorsOf } from "./arrange";
 import type { Point, Rect, SeedNode } from "./layout";
 import {
   CARD_HEIGHT,
@@ -7,7 +8,6 @@ import {
   MIN_FRAME_WIDTH,
   topLevelSlot,
 } from "./layout";
-import { MAX_FRAME_DEPTH } from "./limits";
 
 // What Reset layout reads of each node on the board.
 export type ResetNode = Pick<
@@ -158,14 +158,8 @@ export function planReset(
     (n) => isSeededFrame(n) && !n.hidden && !matched.has(n._id),
   );
   const staleIds = new Set(stale.map((n) => n._id));
-  const insideStale = (n: ResetNode) => {
-    let parent = n.parent ? byId.get(n.parent) : undefined;
-    for (let depth = 0; parent && depth < MAX_FRAME_DEPTH; depth++) {
-      if (staleIds.has(parent._id)) return true;
-      parent = parent.parent ? byId.get(parent.parent) : undefined;
-    }
-    return false;
-  };
+  const insideStale = (n: ResetNode) =>
+    ancestorsOf(byId, n._id).some((id) => staleIds.has(id));
 
   // Below the new layout and anything else at the top level
   const placed = new Set(place.flatMap((p) => (p.node ? [p.node] : [])));

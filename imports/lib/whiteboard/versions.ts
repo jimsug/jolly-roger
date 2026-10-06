@@ -2,11 +2,10 @@ import { EJSON } from "meteor/ejson";
 import type { WhiteboardEdgeType } from "../models/WhiteboardEdges";
 import type { WhiteboardNodeType } from "../models/WhiteboardNodes";
 import type { WhiteboardVersionKind } from "../models/WhiteboardVersions";
-import { ancestorsOf } from "./arrange";
+import { absolutePosition, ancestorsOf, parentChainBroken } from "./arrange";
 import { inkPointCount } from "./ink";
 import {
   MAX_EDGES_PER_BOARD,
-  MAX_FRAME_DEPTH,
   MAX_IMAGES_PER_BOARD,
   MAX_INK_POINTS_PER_BOARD,
   MAX_NODES_PER_BOARD,
@@ -542,16 +541,8 @@ export function planRestore(
     }
   });
   [...wanted.keys()].forEach((id) => {
-    const seen = new Set<string>();
-    let at = wanted.get(id)?.parent;
-    for (let depth = 0; at; depth++) {
-      if (at === id || seen.has(at) || depth >= MAX_FRAME_DEPTH) {
-        const node = wanted.get(id)!;
-        wanted.set(id, { ...node, parent: undefined });
-        return;
-      }
-      seen.add(at);
-      at = wanted.get(at)?.parent;
+    if (parentChainBroken(wanted, id)) {
+      wanted.set(id, { ...wanted.get(id)!, parent: undefined });
     }
   });
 
@@ -594,17 +585,6 @@ export function planRestore(
   const plan = emptyPlan();
   planNodes(plan, liveNodes, wanted, targetIds);
 
-  // Where a live node is on the board, rather than in its frame
-  const absolute = (node: WhiteboardNodeType) => {
-    let { x, y } = node.position;
-    let parent = node.parent ? liveNodes.get(node.parent) : undefined;
-    for (let depth = 0; parent && depth < MAX_FRAME_DEPTH; depth++) {
-      x += parent.position.x;
-      y += parent.position.y;
-      parent = parent.parent ? liveNodes.get(parent.parent) : undefined;
-    }
-    return { x, y };
-  };
   const deletedPuzzle = (card: WhiteboardNodeType) =>
     !!livePuzzles && !livePuzzles.has(card.puzzle ?? "");
   keptCards.forEach((card) => {
@@ -612,7 +592,7 @@ export function planRestore(
       if (!card.parent || wanted.has(card.parent)) return;
       plan.nodes.change.push({
         _id: card._id,
-        $set: { position: absolute(card) },
+        $set: { position: absolutePosition(liveNodes, card) },
         $unset: { parent: "" },
       });
       return;
@@ -620,7 +600,7 @@ export function planRestore(
     if (!card.parent && !card.manual) return;
     plan.nodes.change.push({
       _id: card._id,
-      $set: { position: absolute(card) },
+      $set: { position: absolutePosition(liveNodes, card) },
       $unset: { parent: "", manual: "" },
     });
   });
@@ -791,18 +771,6 @@ export function planItemRestore(
     matchByIdentity(current.nodes, target.nodes, nodeKey),
   );
 
-  // Where a version node is on the board, rather than in its frame
-  const absoluteInVersion = (node: WhiteboardNodeType) => {
-    let { x, y } = node.position;
-    let parent = node.parent ? targetNodes.get(node.parent) : undefined;
-    for (let depth = 0; parent && depth < MAX_FRAME_DEPTH; depth++) {
-      x += parent.position.x;
-      y += parent.position.y;
-      parent = parent.parent ? targetNodes.get(parent.parent) : undefined;
-    }
-    return { x, y };
-  };
-
   const wanted = new Map<string, WhiteboardNodeType>();
   const storedAs = new Map<string, WhiteboardNodeType>();
   target.nodes.forEach((n) => {
@@ -821,23 +789,14 @@ export function planItemRestore(
     wanted.set(node._id, {
       ...node,
       parent: undefined,
-      position: absoluteInVersion(storedAs.get(node._id) ?? node),
+      position: absolutePosition(targetNodes, storedAs.get(node._id) ?? node),
     });
   };
   wanted.forEach((n) => {
     if (n.parent && after(n.parent)?.type !== "frame") toTopLevel(n);
   });
   [...wanted.values()].forEach((n) => {
-    const seen = new Set<string>();
-    let at = n.parent;
-    for (let depth = 0; at; depth++) {
-      if (at === n._id || seen.has(at) || depth >= MAX_FRAME_DEPTH) {
-        toTopLevel(n);
-        return;
-      }
-      seen.add(at);
-      at = after(at)?.parent;
-    }
+    if (parentChainBroken({ get: after }, n._id)) toTopLevel(n);
   });
 
   const wantedEdges = wantedEdgesFor(

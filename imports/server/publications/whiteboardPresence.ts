@@ -1,12 +1,9 @@
 import { check } from "meteor/check";
-import Flags from "../../Flags";
 import Logger from "../../Logger";
-import MeteorUsers from "../../lib/models/MeteorUsers";
-import Whiteboards from "../../lib/models/Whiteboards";
 import whiteboardPresence from "../../lib/publications/whiteboardPresence";
 import WhiteboardPresence from "../models/WhiteboardPresence";
 import { removePresence } from "../whiteboardLive";
-import { IdPattern } from "../whiteboardShared";
+import { boardForMember, IdPattern } from "../whiteboardShared";
 import definePublication from "./definePublication";
 
 // Everyone else's cursors, drags, strokes, selections, what they're typing
@@ -21,19 +18,9 @@ definePublication(whiteboardPresence, {
   },
 
   async run({ boardId }) {
-    if (!this.userId || !this.connection) {
-      return [];
-    }
-
-    const board = await Whiteboards.findOneAsync(boardId);
-    const user = await MeteorUsers.findOneAsync(this.userId);
-    if (!board || !user?.hunts?.includes(board.hunt)) {
-      return [];
-    }
-
     if (
-      (await Flags.activeAsync("disable.whiteboard")) ||
-      (await Flags.activeAsync("disable.whiteboard_live"))
+      !this.connection ||
+      !(await boardForMember(this.userId, boardId, "disable.whiteboard_live"))
     ) {
       return [];
     }

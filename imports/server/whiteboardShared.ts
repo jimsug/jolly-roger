@@ -1,6 +1,7 @@
 import { Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
 import Flags from "../Flags";
+import type { FlagNames } from "../lib/models/FeatureFlags";
 import Hunts from "../lib/models/Hunts";
 import MeteorUsers from "../lib/models/MeteorUsers";
 import WhiteboardNodes from "../lib/models/WhiteboardNodes";
@@ -70,14 +71,20 @@ export async function inkPointsOnBoard(boardId: string) {
 }
 
 // The board, for a publication of its contents: only for a member of its
-// hunt, and not while disable.whiteboard is on. Otherwise undefined.
-export async function boardForMember(userId: string | null, boardId: string) {
+// hunt, and not while disable.whiteboard, or the publication's own flag, is
+// on. Otherwise undefined.
+export async function boardForMember(
+  userId: string | null,
+  boardId: string,
+  alsoOff?: (typeof FlagNames)[number],
+) {
   if (!userId) return undefined;
   const board = await Whiteboards.findOneAsync(boardId);
   if (!board) return undefined;
   const user = await MeteorUsers.findOneAsync(userId);
   if (!user?.hunts?.includes(board.hunt)) return undefined;
   if (await Flags.activeAsync("disable.whiteboard")) return undefined;
+  if (alsoOff && (await Flags.activeAsync(alsoOff))) return undefined;
   return board;
 }
 
