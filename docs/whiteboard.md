@@ -9,6 +9,8 @@ files:
   - imports/client/components/OwnProfilePage.tsx
   - imports/client/components/WhiteboardPage.tsx
   - imports/client/components/tagColors.ts
+  - imports/client/components/whiteboard/ArrangeToolbar.tsx
+  - imports/client/components/whiteboard/BoardNotices.tsx
   - imports/client/components/whiteboard/BoardSearch.tsx
   - imports/client/components/whiteboard/CollapseContext.ts
   - imports/client/components/whiteboard/CommentComposer.tsx
@@ -30,6 +32,7 @@ files:
   - imports/client/components/whiteboard/LockLayoutButtons.tsx
   - imports/client/components/whiteboard/NodeChrome.tsx
   - imports/client/components/whiteboard/NodeHandles.tsx
+  - imports/client/components/whiteboard/NotOnBoardPanel.tsx
   - imports/client/components/whiteboard/OutlinePanel.tsx
   - imports/client/components/whiteboard/PeopleContext.ts
   - imports/client/components/whiteboard/PuzzleCardNode.tsx
@@ -46,15 +49,26 @@ files:
   - imports/client/components/whiteboard/WhosHere.tsx
   - imports/client/components/whiteboard/boardFiles.ts
   - imports/client/components/whiteboard/boardWrites.ts
+  - imports/client/components/whiteboard/canvasChrome.tsx
   - imports/client/components/whiteboard/frameToolBox.ts
   - imports/client/components/whiteboard/marker.ts
+  - imports/client/components/whiteboard/tools.ts
   - imports/client/components/whiteboard/touch.ts
+  - imports/client/hooks/useBoardClipboard.ts
+  - imports/client/hooks/useBoardFocus.ts
+  - imports/client/hooks/useBoardNavigation.ts
+  - imports/client/hooks/useBoardNotices.ts
   - imports/client/hooks/useChatImageUpload.ts
   - imports/client/hooks/useChatImagesEnabled.ts
   - imports/client/hooks/useEditorImageUpload.ts
+  - imports/client/hooks/useImageTool.ts
   - imports/client/hooks/useKeyboardInset.ts
+  - imports/client/hooks/useLinkedTarget.ts
+  - imports/client/hooks/useNotOnBoard.ts
   - imports/client/hooks/usePuzzleViewers.ts
+  - imports/client/hooks/usePlaceTool.ts
   - imports/client/hooks/usePuzzleViewerUsers.ts
+  - imports/client/hooks/useRemoteDrags.ts
   - imports/client/hooks/useRoundStates.ts
   - imports/client/hooks/useTagSynonyms.ts
   - imports/client/hooks/useWhiteboardLive.ts
@@ -543,6 +557,18 @@ minimised, its strip of buttons) at the pane's top left. The pane sets
 `--jr-pane-left-inset`, and the canvas starts its top-left panel, the
 toolbar, at least that far in, so the toggle never covers it.
 
+The canvas itself is `WhiteboardCanvas`
+(`imports/client/components/whiteboard/WhiteboardCanvas.tsx`). Beside it,
+`canvasChrome.tsx` holds its wrapper, the toolbars' and panels' boxes, the
+overlays drawn over the board and the small buttons the toolbars share, and
+`tools.ts` names the tools and what the placing ones put down. The alerts
+under the toolbar are `BoardNotices`, the Align and Distribute buttons
+`ArrangeToolbar` and the "Not on the board" panel `NotOnBoardPanel`. Parts
+of the canvas's state live in hooks in `imports/client/hooks/`:
+`useBoardNotices`, `useRemoteDrags`, `useNotOnBoard`, `useImageTool`,
+`usePlaceTool`, `useBoardNavigation`, `useLinkedTarget`, `useBoardFocus` and
+`useBoardClipboard`, each named below where what it owns is described.
+
 A read-only board's toolbar says "Viewing only", gives the reason on the line
 below, and keeps the Comment tool for anyone who can comment, and the
 Comments button (see Comments) and Hide ink (see Ink) for everyone. When the
@@ -603,7 +629,9 @@ listing the frames in it at the top level, as the board draws them. It
 follows the board live, and works for anyone who can see the board,
 archived hunts included.
 
-Picking a row fits the view to that frame, with a tenth of the view's room
+Picking a row fits the view to that frame (`useBoardNavigation` in
+`imports/client/hooks/`, which pans to what the search finds too), with a
+tenth of the view's room
 round it and the zoom kept within the board's limits, and pulses it as the
 search does. Beside a wide board the panel stays open, so the fit also
 leaves the panel's width clear on the right and the frame isn't left under
@@ -644,7 +672,8 @@ to load, shows what it names, and is then dropped from the address:
   the frame for this viewer first (see Collapsed rounds), and so does "Show
   on board" from chat.
 - `?puzzle=<puzzleId>` pans to that puzzle's card and marks it, or says the
-  puzzle isn't on the board.
+  puzzle isn't on the board (`useLinkedTarget` in `imports/client/hooks/`
+  follows this, `?node=` and `?v=`).
 - `?node=<nodeId>` does the same for any node. Either opens any collapsed
   frame the node is in for this viewer first, as picking it in the search
   does.
@@ -984,7 +1013,9 @@ but not started from it.
 Ctrl+C (Cmd+C) copies the selection and Ctrl+V (Cmd+V) pastes it, on the
 same board or another one, for anyone who can edit. On a touch screen the
 edit toolbar has Copy, Paste and Duplicate buttons too (see Tablets and
-touch); its Paste takes text only and lands in the middle of the view. A copy takes:
+touch); its Paste takes text only and lands in the middle of the view. All
+of this is `useBoardClipboard` (`imports/client/hooks/`), which goes by
+`useBoardFocus` for whether the board has focus. A copy takes:
 
 - the selected notes, text boxes, frames, images, shapes and ink, with
   everything inside a selected frame (folded away or not) where it is in the frame, and
@@ -1066,7 +1097,7 @@ can't hang the tab. `copySelection`, `readClip`, `clipFromText` and
 
 An image node shows a picture uploaded to the server's S3 image bucket, the
 one chat images go to. There are three ways to add one, all for people who
-can edit:
+can edit (`useImageTool` in `imports/client/hooks/` does each):
 
 - the Image tool on the toolbar (titled "Image: pick a file to add in the
   middle of the view, or paste or drop one on the board"), which opens a
@@ -1279,7 +1310,8 @@ was."
 ### Not on the board
 
 The toolbar's "Not on the board" button (with a count of everything in it)
-opens a panel in three parts, for anyone who can edit:
+opens a panel in three parts (`NotOnBoardPanel`, worked out by
+`useNotOnBoard` in `imports/client/hooks/`), for anyone who can edit:
 
 - **Puzzles**: cards someone deleted, which only hides them, and live puzzles
   with no card. "Put back" puts the card at the middle of the screen. A
@@ -1525,7 +1557,9 @@ isn't undone.
 Every write the board makes (nodes, lines, comments, replies, resolving,
 deleting, Place by tags, and undo and redo) reports a refusal from the server
 in a dismissible alert under the toolbar, "Couldn't save: " and the server's
-own reason, until it's dismissed or the next refusal replaces it. The board
+own reason, until it's dismissed or the next refusal replaces it
+(`useBoardNotices` in `imports/client/hooks/` keeps it, as it does the other
+notices under the toolbar, which `BoardNotices` draws). The board
 goes back to what the server has, except for text: a sticky note, text box,
 frame label or line label whose edit was refused keeps what was typed, with a
 Retry button. Retry sends it again; editing it back to what's saved drops it.
@@ -2258,7 +2292,8 @@ way, and likewise for something locked in a frame around it that has to
 grow up or left. Tidy works on a locked frame, since its lock doesn't cover
 what's in it, but is refused the same way when that frame, or a locked
 frame around it, would have to grow; otherwise it just goes round locked
-cards. Something another person is dragging is theirs to save: Fit to
+cards. Something another person is dragging (`useRemoteDrags` in
+`imports/client/hooks/` says which) is theirs to save: Fit to
 contents and Tidy count it where it was last saved, Tidy goes round it, and
 neither moves it. Each is one step for Undo, and a drop that grows frames
 is one step with the move. A frame grows to a size worked out from what

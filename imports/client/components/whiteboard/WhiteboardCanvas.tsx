@@ -5,7 +5,6 @@ import { faArrowPointer } from "@fortawesome/free-solid-svg-icons/faArrowPointer
 import { faCircleCheck } from "@fortawesome/free-solid-svg-icons/faCircleCheck";
 import { faClockRotateLeft } from "@fortawesome/free-solid-svg-icons/faClockRotateLeft";
 import { faClone } from "@fortawesome/free-solid-svg-icons/faClone";
-import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
 import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
 import { faCompress } from "@fortawesome/free-solid-svg-icons/faCompress";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
@@ -49,14 +48,12 @@ import {
   Background,
   ConnectionMode,
   Controls,
-  getViewportForBounds,
   MiniMap,
   NodeToolbar,
   Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
-  useInternalNode,
   useReactFlow,
   useStore,
   useStoreApi,
@@ -71,16 +68,14 @@ import React, {
   useState,
 } from "react";
 import Alert from "react-bootstrap/Alert";
-import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import ButtonGroup from "react-bootstrap/ButtonGroup";
-import FormSelect from "react-bootstrap/FormSelect";
 import Modal from "react-bootstrap/Modal";
 import Spinner from "react-bootstrap/Spinner";
 import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
-import styled, { css, useTheme } from "styled-components";
+import { useTheme } from "styled-components";
 import Flags from "../../../Flags";
 import type { ChatMessageCommentAnchorType } from "../../../lib/models/ChatMessages";
 import Hunts from "../../../lib/models/Hunts";
@@ -116,22 +111,7 @@ import {
   distributeItems,
   sortParentsFirst,
 } from "../../../lib/whiteboard/arrange";
-import type { BoardClip } from "../../../lib/whiteboard/clipboard";
-import {
-  clipFromText,
-  clipText,
-  copySelection,
-  looksLikeClip,
-  offsetToCentre,
-  pasteClip,
-  readClip,
-  withoutOtherHuntsImages,
-} from "../../../lib/whiteboard/clipboard";
-import {
-  collapsedAncestors,
-  foldEnds,
-  foldedInto,
-} from "../../../lib/whiteboard/collapse";
+import { collapsedAncestors } from "../../../lib/whiteboard/collapse";
 import {
   commentPosition,
   isUnread,
@@ -169,17 +149,10 @@ import {
   STROKE_SIZES,
   simulatedPressure,
 } from "../../../lib/whiteboard/ink";
-import {
-  CARD_HEIGHT,
-  CARD_WIDTH,
-  frameLabel,
-  POINT_SIZE,
-  roundMetas,
-} from "../../../lib/whiteboard/layout";
+import { POINT_SIZE, roundMetas } from "../../../lib/whiteboard/layout";
 import {
   MAX_BATCH,
   MAX_FRAME_DEPTH,
-  MAX_IMAGES_PER_BOARD,
   MAX_LIVE_DRAG_NODES,
   MAX_LIVE_SELECTION,
 } from "../../../lib/whiteboard/limits";
@@ -191,14 +164,7 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
 } from "../../../lib/whiteboard/links";
-import type { SeenDrag } from "../../../lib/whiteboard/liveDrags";
-import { liveDrags, seeDrags } from "../../../lib/whiteboard/liveDrags";
 import { miniMapColor } from "../../../lib/whiteboard/minimap";
-import type { MissingCard } from "../../../lib/whiteboard/notOnBoard";
-import {
-  hiddenFeederArrows,
-  missingCards,
-} from "../../../lib/whiteboard/notOnBoard";
 import { finishedFrames } from "../../../lib/whiteboard/rounds";
 import type { BoardSearchHit } from "../../../lib/whiteboard/search";
 import {
@@ -209,7 +175,6 @@ import {
 import deleteWhiteboardNodes from "../../../methods/deleteWhiteboardNodes";
 import restoreWhiteboardItems from "../../../methods/restoreWhiteboardItems";
 import restoreWhiteboardVersion from "../../../methods/restoreWhiteboardVersion";
-import type { WhiteboardLiveState } from "../../../methods/setWhiteboardLive";
 import type { WhiteboardEdgeInput } from "../../../methods/upsertWhiteboardEdges";
 import type { WhiteboardNodeInput } from "../../../methods/upsertWhiteboardNodes";
 import {
@@ -221,9 +186,15 @@ import {
   useWhiteboardShowResolvedComments,
   useWhiteboardViewport,
 } from "../../hooks/persisted-state";
-import useChatImagesEnabled from "../../hooks/useChatImagesEnabled";
-import useKeyboardInset from "../../hooks/useKeyboardInset";
-import usePuzzleViewers from "../../hooks/usePuzzleViewers";
+import useBoardClipboard from "../../hooks/useBoardClipboard";
+import useBoardFocus from "../../hooks/useBoardFocus";
+import useBoardNavigation from "../../hooks/useBoardNavigation";
+import useBoardNotices, { unannounced } from "../../hooks/useBoardNotices";
+import useImageTool from "../../hooks/useImageTool";
+import useLinkedTarget from "../../hooks/useLinkedTarget";
+import useNotOnBoard from "../../hooks/useNotOnBoard";
+import usePlaceTool from "../../hooks/usePlaceTool";
+import useRemoteDrags from "../../hooks/useRemoteDrags";
 import useRoundStates from "../../hooks/useRoundStates";
 import useTypedSubscribe from "../../hooks/useTypedSubscribe";
 import useWhiteboardComments, {
@@ -242,10 +213,9 @@ import useWhiteboardSync, {
   selectionUnits,
 } from "../../hooks/useWhiteboardSync";
 import useWhiteboardUndo from "../../hooks/useWhiteboardUndo";
-import uploadChatImage, { chatImageFailureReason } from "../../uploadChatImage";
-import WhiteboardPresence from "../../WhiteboardPresence";
 import CopyToClipboardButton from "../CopyToClipboardButton";
-import ArrangeIcon from "./ArrangeIcon";
+import ArrangeToolbar from "./ArrangeToolbar";
+import BoardNotices from "./BoardNotices";
 import BoardSearch from "./BoardSearch";
 import {
   BoardChangedError,
@@ -253,8 +223,8 @@ import {
   fetchBoardJson,
   saveBlob,
 } from "./boardFiles";
-import type { BoardWrite, Done } from "./boardWrites";
-import { chunks, sendAtOnce } from "./boardWrites";
+import type { BoardWrite, CommitOptions, Done } from "./boardWrites";
+import { sendAtOnce } from "./boardWrites";
 import ChatLoadedContext from "./ChatLoadedContext";
 import type { CollapseActions, FoldSummary } from "./CollapseContext";
 import CollapseContext from "./CollapseContext";
@@ -264,6 +234,34 @@ import CommentLayer from "./CommentLayer";
 import CommentList from "./CommentList";
 import CommentPanel from "./CommentPanel";
 import CursorLayer from "./CursorLayer";
+import {
+  AttachOutline,
+  CanvasWrapper,
+  CHANGED_CLASS,
+  CommentHint,
+  CommentPanelPlace,
+  CommentToolButton,
+  dragOnlySelected,
+  inDialog,
+  isTyping,
+  KeyboardCatcher,
+  LocalStroke,
+  NO_ESCAPE,
+  OutlineButton,
+  PlaceGhost,
+  PreviewBanner,
+  PreviewItemBox,
+  PuzzlePeopleProvider,
+  ReadOnlyButtons,
+  ReadOnlyNote,
+  ReadOnlyReason,
+  SidePanel,
+  ToolBox,
+  ToolButton,
+  ToolSelect,
+  UnreadBadge,
+  UploadPlaceholder,
+} from "./canvasChrome";
 import colors from "./colors";
 import type { DownloadKind } from "./DownloadButton";
 import DownloadButton from "./DownloadButton";
@@ -272,7 +270,6 @@ import EditPolicyModal, { EditPolicyButton } from "./EditPolicyModal";
 import FeederFocusContext from "./FeederFocusContext";
 import FrameLabelLayer from "./FrameLabelLayer";
 import FrameNode from "./FrameNode";
-import { boxOf } from "./floatingEdgeParams";
 import frameToolBox from "./frameToolBox";
 import type { VersionPreview } from "./HistoryPanel";
 import HistoryPanel, { loadVersion, versionMoment } from "./HistoryPanel";
@@ -282,11 +279,11 @@ import KeepAboveKeyboard from "./KeepAboveKeyboard";
 import LineStyleControls, { DEFAULT_LINE_STYLE } from "./LineStyleControls";
 import LineStyleIcon from "./LineStyleIcon";
 import LockLayoutButtons from "./LockLayoutButtons";
-import { MARKER_CLASS, markerBlend, strokeOpacity } from "./marker";
+import { strokeOpacity } from "./marker";
 import { MIN_SIZES } from "./NodeChrome";
 import NodePulse from "./NodePulse";
-import OutlinePanel, { OUTLINE_WIDTH } from "./OutlinePanel";
-import PeopleContext from "./PeopleContext";
+import NotOnBoardPanel from "./NotOnBoardPanel";
+import OutlinePanel from "./OutlinePanel";
 import PointNode from "./PointNode";
 import PuzzleCardNode from "./PuzzleCardNode";
 import RemoteEditingContext from "./RemoteEditingContext";
@@ -297,6 +294,8 @@ import ShapeNode from "./ShapeNode";
 import StickyNode from "./StickyNode";
 import TextNode from "./TextNode";
 import TouchTargetSize from "./TouchTargetSize";
+import type { Tool } from "./tools";
+import { isPlaceTool, PEN_WIDTH_KEYS, TOOLS_BY_KEY } from "./tools";
 import { CLICK_SLOP, LongPress, movedPastSlop, TOUCH_SLOP } from "./touch";
 import type { WhiteboardActions } from "./WhiteboardContext";
 import WhiteboardContext from "./WhiteboardContext";
@@ -316,41 +315,10 @@ const nodeTypes = {
 };
 const edgeTypes = { whiteboard: WhiteboardEdge };
 
-// For text React renders, which it escapes itself, so i18next's escaping
-// would only show entities. Goes once both i18n inits stop escaping.
-const NO_ESCAPE = { interpolation: { escapeValue: false } };
-
-type PlaceTool = "sticky" | "text" | "frame" | "shape";
-type Tool = "select" | "pen" | "eraser" | "connector" | "comment" | PlaceTool;
 // The panel at the top right, under any open thread: what isn't on the
 // board, the list of comments, History or the Outline. Only one shows at a
 // time.
 type SidePanelKind = "hidden" | "comments" | "history" | "outline";
-
-// The key that picks each tool, and the pen widths' keys.
-const TOOL_KEYS: Record<Tool, string> = {
-  select: "V",
-  pen: "P",
-  eraser: "E",
-  connector: "L",
-  sticky: "S",
-  text: "T",
-  frame: "F",
-  shape: "R",
-  comment: "C",
-};
-const TOOLS_BY_KEY = new Map(
-  (Object.entries(TOOL_KEYS) as [Tool, string][]).map(([tool, key]) => [
-    key.toLowerCase(),
-    tool,
-  ]),
-);
-const PEN_WIDTH_KEYS = new Map<string, WhiteboardStrokeWidth>([
-  ["1", "thin"],
-  ["2", "medium"],
-  ["3", "thick"],
-  ["4", "marker"],
-]);
 
 // One end of a line: attached to a node, or free at a point (inside a frame,
 // if it's drawn in one).
@@ -390,19 +358,6 @@ interface Landed {
   position: XYPosition;
 }
 
-// How an edit is saved (see commit).
-interface CommitOptions {
-  // Saves in the same group, one straight after another, undo as one.
-  group?: string;
-  // Nodes and lines shown changed before the server has it, put back as
-  // they were if it says no.
-  pendingNodes?: string[];
-  pendingEdges?: string[];
-  // Takes off what a refused save had made.
-  rollback?: () => void;
-  onDone?: Done;
-}
-
 // One input per node, later fields winning.
 function mergeInputs(inputs: WhiteboardNodeInput[]): WhiteboardNodeInput[] {
   const byId = new Map<string, WhiteboardNodeInput>();
@@ -412,16 +367,6 @@ function mergeInputs(inputs: WhiteboardNodeInput[]): WhiteboardNodeInput[] {
   return [...byId.values()];
 }
 
-const isPlaceTool = (tool: Tool): tool is PlaceTool =>
-  tool === "sticky" || tool === "text" || tool === "frame" || tool === "shape";
-
-// Size when placed with a click; dragging out a box sets the size instead.
-const DEFAULT_SIZES: Record<PlaceTool, { width: number; height: number }> = {
-  sticky: { width: 200, height: 160 },
-  text: { width: 240, height: 48 },
-  frame: { width: 2 * CARD_WIDTH + 64, height: 2 * CARD_HEIGHT + 104 },
-  shape: { width: 160, height: 120 },
-};
 // The parts of the canvas that sit over the board, where presses are the
 // controls' own rather than a tool's.
 const OVERLAYS =
@@ -439,674 +384,6 @@ const MINI_MAP_FRAMES = {
   black: colors.fill.black,
 };
 
-const isTyping = (target: EventTarget | null) =>
-  target instanceof HTMLElement &&
-  (target.isContentEditable ||
-    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
-// A dialog over the page (deleting a comment, who can edit) has its own keys.
-const inDialog = (target: EventTarget | null) =>
-  target instanceof Element && !!target.closest(".modal");
-
-// How far a duplicate lands from what it copies, right and down. Several
-// images added at once are spread out by the same.
-const DUPLICATE_OFFSET = { x: 24, y: 24 };
-
-// The widest a new image is placed, in board units. Smaller ones go in at
-// their own size in pixels.
-const MAX_IMAGE_PLACE_WIDTH = 480;
-
-// An image's size in pixels, or undefined if the browser can't show it.
-function naturalSize(
-  file: File,
-): Promise<{ width: number; height: number } | undefined> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    const done = (size: { width: number; height: number } | undefined) => {
-      URL.revokeObjectURL(url);
-      resolve(size);
-    };
-    img.addEventListener("load", () =>
-      done(
-        img.naturalWidth > 0 && img.naturalHeight > 0
-          ? { width: img.naturalWidth, height: img.naturalHeight }
-          : undefined,
-      ),
-    );
-    img.addEventListener("error", () => done(undefined));
-    img.src = url;
-  });
-}
-
-const imageFiles = (files: FileList | null | undefined) =>
-  [...(files ?? [])].filter((file) => file.type.startsWith("image/"));
-
-// Whether copied HTML is nothing but images, as a browser's Copy Image gives,
-// rather than text that brings a picture of itself along, as office apps do.
-function htmlIsOnlyImages(html: string): boolean {
-  if (!html) return false;
-  const { body } = new DOMParser().parseFromString(html, "text/html");
-  return !!body.querySelector("img") && !body.textContent.trim();
-}
-
-// Whether something is on the board itself, rather than a panel over it.
-const onTheBoard = (target: EventTarget | null) =>
-  target instanceof Element && !!target.closest(".react-flow__renderer");
-
-// An image on its way up, where it will land on the board.
-interface ImageUpload {
-  id: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-// Marks what a preview has differently from the board as it is now.
-const CHANGED_CLASS = "jr-changed";
-
-// An invisible target for a finger, `size` across, centred on the handle,
-// resize corner or grip it's the ::after of.
-const touchTarget = (size: string) => css`
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: ${size};
-  height: ${size};
-  transform: translate(-50%, -50%);
-`;
-
-const CanvasWrapper = styled.div<{
-  $tool: Tool;
-  $readOnly: boolean;
-  $whosHereHeight: number;
-  $coarse: boolean;
-  $clickConnecting: boolean;
-}>`
-  /* stylelint-disable selector-class-pattern -- React Flow's class names */
-  position: relative;
-  width: 100%;
-  height: 100%;
-  cursor: ${({ $tool }) => ($tool === "select" ? "auto" : "crosshair")};
-
-  /* The board's background, which a downloaded picture uses too. */
-  --xy-background-color: ${({ theme }) => theme.colors.whiteboardBackground};
-
-  /* While drawing, nothing on the board can be picked up, so nothing should
-     look like it can. */
-  ${({ $tool }) =>
-    $tool !== "select" &&
-    css`
-      .react-flow__pane,
-      .react-flow__node,
-      .react-flow__node * {
-        cursor: crosshair;
-      }
-    `}
-
-  /* On a read-only board React Flow stops nodes taking the pointer, since
-     they can't be selected or dragged, but their links and attribution
-     should still work. */
-  ${({ $readOnly }) =>
-    $readOnly &&
-    css`
-      .react-flow__node .nodrag {
-        pointer-events: auto;
-      }
-    `}
-
-  /* A highlighter stroke blends with what's under it (see marker.ts). */
-  .react-flow__node-ink:has(.${MARKER_CLASS}) {
-    mix-blend-mode: ${({ theme }) => markerBlend(theme)};
-  }
-
-  /* In a preview, what the version has differently from the board. */
-  .react-flow__node.${CHANGED_CLASS} {
-    outline: 3px solid ${({ theme }) => theme.colors.whiteboardPreviewChanged};
-    outline-offset: 4px;
-    border-radius: 8px;
-  }
-
-  .react-flow__edge.${CHANGED_CLASS} .react-flow__edge-path {
-    filter: drop-shadow(
-      0 0 3px ${({ theme }) => theme.colors.whiteboardPreviewChanged}
-    );
-  }
-
-  /* On a puzzle page the chat toggle sits at the pane's top left, so the
-     toolbar starts clear of it (see PuzzlePane). */
-  .react-flow__panel.top.left {
-    margin-left: max(15px, var(--jr-pane-left-inset, 0px));
-  }
-
-  /* The panels at the top right open below who's here (see WhosHere). */
-  ${({ $whosHereHeight }) =>
-    $whosHereHeight > 0 &&
-    css`
-      .react-flow__panel.top.right {
-        top: ${$whosHereHeight}px;
-      }
-    `}
-
-  /* On a phone a thread, or the Outline, opens in a sheet along the bottom,
-     as wide as the board, clear of the keyboard and short of the top of
-     both the screen and the board. */
-  .react-flow__panel.bottom.center.jr-comment-sheet {
-    left: 0;
-    right: 0;
-    display: flex;
-    flex-direction: column;
-    max-height: min(
-      60%,
-      100% - var(--kb-inset, 0px) - 8px,
-      var(--vv-height, 100dvh) - 48px
-    );
-    margin: 0;
-    transform: none;
-  }
-
-  /* Line labels, grips and attribution sit above everything, so a grip on
-     the edge of the thing a line is attached to can still be grabbed. */
-  .react-flow__edgelabel-renderer {
-    z-index: 1002;
-  }
-
-  .react-flow__handle {
-    opacity: 0;
-    width: 10px;
-    height: 10px;
-  }
-
-  .react-flow__node:hover .react-flow__handle,
-  .react-flow__node.selected .react-flow__handle,
-  .react-flow__handle.connectingfrom,
-  .react-flow__handle.connectingto {
-    opacity: 1;
-  }
-
-  /* The handle a click-to-connect line starts from, until the next click. */
-  .react-flow__handle.clickconnecting {
-    opacity: 1;
-    background: ${({ theme }) => theme.colors.primary};
-    box-shadow: 0 0 0 3px ${({ theme }) => theme.colors.background},
-      0 0 0 5px ${({ theme }) => theme.colors.primary};
-  }
-
-  /* On a touch screen, for someone who can edit, a long press on the board
-     selects rather than calling up the browser's own menu. A finger gets a
-     44px target on a selected node's handles and resize corners (sized by
-     TouchTargetSize, which allows for the zoom) and on a line's grips,
-     without them looking any bigger. There's no hover to show where a
-     click-to-connect line can end, so every handle shows until it's
-     joined. */
-  ${({ $coarse, $readOnly, $clickConnecting }) =>
-    $coarse &&
-    css`
-      ${
-        !$readOnly &&
-        css`
-        .react-flow__node,
-        .react-flow__pane {
-          -webkit-touch-callout: none;
-        }
-      `
-      }
-
-      .react-flow__node.selected .react-flow__handle::after {
-        ${touchTarget("var(--jr-touch-target, 44px)")}
-      }
-
-      .react-flow__resize-control.handle::after {
-        ${touchTarget("var(--jr-resize-target, 44px)")}
-      }
-
-      .jr-line-grip::after {
-        ${touchTarget("44px")}
-      }
-
-      ${
-        $clickConnecting &&
-        css`
-        .react-flow__handle {
-          opacity: 1;
-        }
-
-        .react-flow__handle::after {
-          ${touchTarget("var(--jr-touch-target, 44px)")}
-        }
-      `
-      }
-    `}
-`;
-
-const ToolBox = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  padding: 6px;
-  border-radius: 8px;
-  background: ${({ theme }) => theme.colors.background};
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
-`;
-
-const SidePanel = styled.div`
-  width: 260px;
-  max-height: 60vh;
-  overflow-y: auto;
-  padding: 8px;
-  border-radius: 8px;
-  background: ${({ theme }) => theme.colors.background};
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
-  font-size: 13px;
-`;
-
-const HiddenRow = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 0;
-
-  span {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-`;
-
-// The pen's width, or the Shape tool's shape, beside the tool.
-const ToolSelect = styled(FormSelect)`
-  width: auto;
-`;
-
-const HiddenSection = styled.div`
-  margin-top: 8px;
-  font-weight: 600;
-`;
-
-const HiddenNone = styled.div`
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const ReadOnlyNote = styled.div`
-  display: flex;
-  flex-direction: column;
-  padding: 0 4px;
-  font-size: 13px;
-`;
-
-const ReadOnlyReason = styled.span`
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const PreviewItemBox = styled(ToolBox)`
-  max-width: 320px;
-  font-size: 13px;
-`;
-
-// Where a thread's panel, or the Outline, goes: the top right of the board
-// or, on a phone, a sheet along its bottom that rises above the keyboard. It
-// stays the same element either way, so the screen changing size mid-reply
-// doesn't throw away what's been typed.
-const CommentPanelPlace = ({
-  compact,
-  children,
-}: {
-  compact: boolean;
-  children: React.ReactNode;
-}) => {
-  const { inset, height } = useKeyboardInset();
-  const style = useMemo(
-    () =>
-      compact
-        ? ({
-            bottom: inset,
-            "--kb-inset": `${inset}px`,
-            "--vv-height": height === undefined ? undefined : `${height}px`,
-          } as React.CSSProperties)
-        : undefined,
-    [compact, inset, height],
-  );
-  return (
-    <Panel
-      position={compact ? "bottom-center" : "top-right"}
-      className={compact ? "jr-comment-sheet" : undefined}
-      style={style}
-    >
-      {children}
-    </Panel>
-  );
-};
-
-// The Outline's toolbar button, finger-sized on a phone.
-const OutlineButton = styled(Button)<{ $compact: boolean }>`
-  ${({ $compact }) =>
-    $compact &&
-    css`
-      min-width: 44px;
-      min-height: 44px;
-    `}
-`;
-
-// The read-only toolbar's buttons, finger-sized on a phone.
-const ReadOnlyButtons = styled(ButtonGroup)<{ $compact: boolean }>`
-  ${({ $compact }) =>
-    $compact &&
-    css`
-      > .btn {
-        min-width: 44px;
-        min-height: 44px;
-      }
-    `}
-`;
-
-const CommentHint = styled.output`
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 6px 6px 6px 10px;
-  border-radius: 8px;
-  background: ${({ theme }) => theme.colors.background};
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
-
-  .btn {
-    min-height: 44px;
-  }
-`;
-
-const PreviewBanner = styled.output`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  max-width: 560px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: ${({ theme }) => theme.colors.background};
-  border: 2px solid ${({ theme }) => theme.colors.primary};
-  box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
-  font-size: 13px;
-`;
-
-const AccessNotice = styled(Alert)`
-  max-width: 320px;
-  margin: 6px 0 0;
-  padding: 6px 36px 6px 10px;
-  font-size: 13px;
-
-  .btn-close {
-    padding: 10px;
-  }
-`;
-
-const NoticeAction = styled(Button)`
-  padding: 0 0 0 6px;
-  font-size: inherit;
-  vertical-align: baseline;
-`;
-
-const PlaceGhost = styled.div<{ $tool: PlaceTool; $ellipse: boolean }>`
-  position: absolute;
-  left: 0;
-  top: 0;
-  pointer-events: none;
-  border: 2px dashed ${({ theme }) => theme.colors.primary};
-  border-radius: ${({ $tool, $ellipse }) => {
-    if ($ellipse) return "50%";
-    return $tool === "frame" ? "10px" : "2px";
-  }};
-  background: ${({ $tool }) =>
-    $tool === "sticky" ? `${colors.fill.yellow}99` : "transparent"};
-`;
-
-const UploadPlaceholder = styled.output`
-  position: absolute;
-  left: 0;
-  top: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  border: 2px dashed ${({ theme }) => theme.colors.border};
-  background: ${colors.fill.gray}99;
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const LocalStroke = styled.svg<{ $marker?: boolean }>`
-  position: absolute;
-  left: 0;
-  top: 0;
-  overflow: visible;
-  pointer-events: none;
-  ${({ $marker, theme }) =>
-    $marker &&
-    css`
-      mix-blend-mode: ${markerBlend(theme)};
-    `}
-`;
-
-// Takes focus for a moment when a tap places a note (see keyboardCatcher):
-// out of sight but still focusable, at 16px so iOS doesn't zoom in on it.
-const KeyboardCatcher = styled.input`
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  border: 0;
-  opacity: 0;
-  font-size: 16px;
-  pointer-events: none;
-`;
-
-// On a touch screen only a selected node can be dragged, so a finger on one
-// that isn't selected pans the board, as it would on the empty board (React
-// Flow keeps a draggable node's presses from panning). Each copy is kept
-// while its node is unchanged, so React Flow sees the same object.
-const notDraggable = new WeakMap<WhiteboardFlowNode, WhiteboardFlowNode>();
-const dragOnlySelected = (node: WhiteboardFlowNode) => {
-  if (node.selected || node.draggable === false) return node;
-  let copy = notDraggable.get(node);
-  if (!copy) {
-    copy = { ...node, draggable: false };
-    notDraggable.set(node, copy);
-  }
-  return copy;
-};
-
-type LiveDrag = NonNullable<WhiteboardLiveState["drag"]>[number];
-
-// Whether two lists of other people's drags would put everything in the same
-// place.
-const sameDrags = (a: LiveDrag[], b: LiveDrag[]) =>
-  a.length === b.length &&
-  a.every((drag, i) => {
-    const other = b[i];
-    return (
-      !!other &&
-      drag.node === other.node &&
-      drag.x === other.x &&
-      drag.y === other.y &&
-      (drag.parent ?? null) === (other.parent ?? null)
-    );
-  });
-
-// The dashed outline around something a line end will attach to. It follows
-// the node through React Flow's store, so it keeps up as the node moves.
-const AttachOutline = React.memo(({ id }: { id: string }) => {
-  const theme = useTheme();
-  const node = useInternalNode(id);
-  if (!node) return null;
-  const { x, y, width, height } = boxOf(node);
-  return (
-    <rect
-      x={x - 4}
-      y={y - 4}
-      width={width + 8}
-      height={height + 8}
-      rx={8}
-      fill="none"
-      stroke={theme.colors.primary}
-      strokeWidth={2}
-      strokeDasharray="6 4"
-    />
-  );
-});
-
-// A tool on the toolbar. Its title says what it does and which key picks
-// it, and names it for screen readers too.
-const ToolButton = ({
-  tool,
-  active,
-  title,
-  label = title,
-  onSelect,
-  children,
-}: {
-  tool: Tool;
-  active: boolean;
-  title: string;
-  // The name for screen readers, when it says more than the title.
-  label?: string;
-  onSelect: (tool: Tool) => void;
-  children: React.ReactNode;
-}) => {
-  const { t } = useTranslation();
-  const onClick = useCallback(() => onSelect(tool), [onSelect, tool]);
-  const withKey = t("whiteboard.toolbar.withKey", "{{title}} [{{key}}]", {
-    title,
-    key: TOOL_KEYS[tool],
-    ...NO_ESCAPE,
-  });
-  return (
-    <Button
-      variant={active ? "primary" : "outline-secondary"}
-      onClick={onClick}
-      title={withKey}
-      aria-label={label}
-      aria-keyshortcuts={TOOL_KEYS[tool]}
-      aria-pressed={active}
-    >
-      {children}
-    </Button>
-  );
-};
-
-// How many threads have something the viewer hasn't read, on the button
-// that leads to them.
-const UnreadBadge = ({ count }: { count: number }) =>
-  count > 0 ? (
-    <Badge pill bg="danger" className="ms-1 jr-unread-comments">
-      {count > 99 ? "99+" : count}
-    </Badge>
-  ) : null;
-
-// The Comment tool, on the full toolbar and on a board that can only be
-// commented on, with the count of unread threads.
-const CommentToolButton = ({
-  active,
-  unread,
-  onSelect,
-}: {
-  active: boolean;
-  unread: number;
-  onSelect: (tool: Tool) => void;
-}) => {
-  const { t } = useTranslation();
-  const title = t(
-    "whiteboard.toolbar.comment",
-    "Comment: click on something to start a thread about it",
-  );
-  return (
-    <ToolButton
-      tool="comment"
-      active={active}
-      onSelect={onSelect}
-      title={title}
-      label={
-        unread > 0
-          ? t(
-              "whiteboard.toolbar.commentUnread",
-              "{{title}} ({{count}} unread)",
-              { title, count: unread, ...NO_ESCAPE },
-            )
-          : title
-      }
-    >
-      <FontAwesomeIcon icon={faComment} />
-      <UnreadBadge count={unread} />
-    </ToolButton>
-  );
-};
-
-// Lines up or spaces out the selection one way.
-const ArrangeButton = <Kind extends AlignMode | DistributeAxis>({
-  kind,
-  title,
-  label,
-  disabled,
-  onArrange,
-}: {
-  kind: Kind;
-  title: string;
-  label: string;
-  disabled?: boolean;
-  onArrange: (kind: Kind) => void;
-}) => {
-  const onClick = useCallback(() => onArrange(kind), [onArrange, kind]);
-  return (
-    <Button
-      variant="outline-secondary"
-      title={title}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <ArrangeIcon kind={kind} />
-    </Button>
-  );
-};
-
-// A seeded frame someone removed.
-interface HiddenFrame {
-  id: string;
-  title: string;
-}
-
-// A feeder arrow someone removed, named by the puzzles it joins.
-interface HiddenArrow {
-  id: string;
-  title: string;
-}
-
-// Something in the "Not on the board" panel, with a way to put it back.
-const PutBackRow = <Item extends { title: string }>({
-  item,
-  onPutBack,
-}: {
-  item: Item;
-  onPutBack: (item: Item) => void;
-}) => {
-  const { t } = useTranslation();
-  const onClick = useCallback(() => onPutBack(item), [onPutBack, item]);
-  return (
-    <HiddenRow>
-      <span title={item.title}>{item.title}</span>
-      <Button size="sm" variant="link" onClick={onClick}>
-        {t("whiteboard.hidden.putBack", "Put back")}
-      </Button>
-    </HiddenRow>
-  );
-};
-
 interface Drawing {
   stroke: string;
   color: WhiteboardColor;
@@ -1121,16 +398,6 @@ const strokeSoFar = (state: Drawing) => ({
   color: state.color,
   strokeWidth: state.strokeWidth,
   points: [...state.segmenter.points],
-});
-
-// A box of `size` with its middle at `at`, at whole board units.
-const centeredRect = (
-  at: XYPosition,
-  size: { width: number; height: number },
-) => ({
-  x: Math.round(at.x - size.width / 2),
-  y: Math.round(at.y - size.height / 2),
-  ...size,
 });
 
 const NO_REMOTE_DRAGS = new Map<string, RemoteDrag>();
@@ -1173,30 +440,12 @@ function useTimedValue<T>(ms: number): [T | undefined, (value: T) => void] {
   return [value, show];
 }
 
-// Reasons for less access that come from the screen or the connection, not
-// from anyone's choice, and aren't announced.
-const unannounced = (reason: WhiteboardAccessReason | undefined) =>
-  reason === "narrow" || reason === "offline";
-
 // How far below the middle of the screen (as a share of the board's height)
 // the board centres on a pin on a phone, so the pin sits above the comment
 // sheet.
 const SHEET_OFFSET = 0.3;
 // How long a pin or node pulses after the board pans to it.
 const PULSE_MS = 2200;
-// The room left round a frame the Outline fits the view to, as a share of
-// the view.
-const OUTLINE_FIT_PADDING = 0.1;
-// Beside a wide board the Outline stays open at the top right, so a fit
-// leaves its width clear on that side, with the panel's margin and a gap.
-const OUTLINE_FIT_PADDING_BESIDE = {
-  top: OUTLINE_FIT_PADDING,
-  bottom: OUTLINE_FIT_PADDING,
-  left: OUTLINE_FIT_PADDING,
-  right: `${OUTLINE_WIDTH + 40}px`,
-} as const;
-// How long a note about a link that couldn't be followed stays up.
-const NOTICE_MS = 8000;
 
 // The most frames a picture of the board waits for the nodes that were out
 // of view to be drawn and measured, before it's taken anyway.
@@ -1247,20 +496,6 @@ interface CanvasProps {
   initialTarget?: BoardTarget;
   onInitialTargetShown?: () => void;
 }
-
-// Who is on each puzzle, worked out once for the board as the puzzle list
-// does it. Its own component, so the minute clock and presence changes
-// re-render only the cards whose people changed, not the whole canvas.
-const PuzzlePeopleProvider = ({
-  huntId,
-  children,
-}: {
-  huntId: string;
-  children: React.ReactNode;
-}) => {
-  const people = usePuzzleViewers(huntId, true);
-  return <PeopleContext value={people}>{children}</PeopleContext>;
-};
 
 const CanvasInner = ({
   boardId,
@@ -1316,10 +551,6 @@ const CanvasInner = ({
   const [confirmingRestore, setConfirmingRestore] = useState(false);
   const mayComment = access === "edit" || access === "comment";
   const readOnly = access !== "edit" || !!preview;
-  const readOnlyNow = useRef(readOnly);
-  useEffect(() => {
-    readOnlyNow.current = readOnly;
-  }, [readOnly]);
   const canComment = !preview && mayComment;
 
   // The hunt's puzzles and tags come from the puzzle page around the canvas,
@@ -1350,46 +581,10 @@ const CanvasInner = ({
     liveEnabled && !preview,
   );
 
-  // Cursors move constantly, but only what people are dragging matters here
-  // (CursorLayer draws the rest). Reading just that means cursor moves don't
-  // re-render the canvas, and nodes are only rebuilt when a drag changes.
-  const drags = useTracker(
-    () =>
-      liveEnabled
-        ? WhiteboardPresence.find(
-            { board: boardId },
-            { projection: { drag: 1 } },
-          )
-            .fetch()
-            .flatMap((p) => p.drag ?? [])
-        : [],
-    [boardId, liveEnabled],
-    sameDrags,
+  const { remoteDrags, isDraggedByOthers } = useRemoteDrags(
+    boardId,
+    liveEnabled,
   );
-  // Only drags that are still moving count (see LIVE_DRAG_TIMEOUT_MS), and
-  // what they show is never saved by anything done here (remoteDragged).
-  const seenDrags = useRef(new Map<string, SeenDrag>());
-  const remoteDragged = useRef(new Set<string>());
-  const [remoteDrags, setRemoteDrags] = useState(
-    () => new Map<string, RemoteDrag>(),
-  );
-  useEffect(() => {
-    let timer: number | undefined;
-    const update = () => {
-      const now = Date.now();
-      seenDrags.current = seeDrags(seenDrags.current, drags, now);
-      const { live, staleAt } = liveDrags(seenDrags.current, now);
-      remoteDragged.current = new Set(live.keys());
-      setRemoteDrags((previous) =>
-        previous.size === 0 && live.size === 0 ? previous : live,
-      );
-      if (staleAt !== undefined) {
-        timer = window.setTimeout(update, staleAt - now);
-      }
-    };
-    update();
-    return () => window.clearTimeout(timer);
-  }, [drags]);
 
   const livePuzzles = useTracker(
     () =>
@@ -1470,32 +665,7 @@ const CanvasInner = ({
   if (readOnly && tool !== "select" && !(tool === "comment" && canComment)) {
     setTool("select");
   }
-  // Says so when the viewer's edit rights come or go while the board is
-  // open. A screen becoming phone-sized (compact, see WhiteboardPage) or
-  // ceasing to be isn't news, and losing the connection has its own
-  // banner. The reason is tracked even when edit rights don't change, so a
-  // later change is judged against the current one. Time offline isn't
-  // tracked, so a change made meanwhile is announced on reconnecting.
   const mayEdit = access === "edit";
-  const [seenAccess, setSeenAccess] = useState({
-    mayEdit,
-    reason: accessReason,
-  });
-  const [accessNotice, setAccessNotice] = useState<"lost" | "gained">();
-  if (
-    accessReason !== "offline" &&
-    (seenAccess.mayEdit !== mayEdit || seenAccess.reason !== accessReason)
-  ) {
-    setSeenAccess({ mayEdit, reason: accessReason });
-    if (
-      seenAccess.mayEdit !== mayEdit &&
-      !unannounced(seenAccess.reason) &&
-      !unannounced(accessReason)
-    ) {
-      setAccessNotice(mayEdit ? "gained" : "lost");
-    }
-  }
-  const dismissAccessNotice = useCallback(() => setAccessNotice(undefined), []);
   const [editingPolicy, setEditingPolicy] = useState(false);
   const openEditPolicy = useCallback(() => setEditingPolicy(true), []);
   const closeEditPolicy = useCallback(() => setEditingPolicy(false), []);
@@ -1576,18 +746,6 @@ const CanvasInner = ({
     tool === "select"
       ? !selectingArea
       : (compact || coarse) && (tool === "comment" || isPlaceTool(tool));
-  // Takes focus in the moment a tap places a note, so a phone or tablet
-  // brings up its keyboard (which it only does for a focus inside the tap
-  // itself) and keeps it up as the note's editor takes focus over.
-  const keyboardCatcher = useRef<HTMLInputElement>(null);
-  // Anything typed before the note's editor took over isn't kept for the
-  // next tap.
-  const clearKeyboardCatcher = useCallback(
-    (event: React.FocusEvent<HTMLInputElement>) => {
-      event.currentTarget.value = "";
-    },
-    [],
-  );
   // The node a click-to-connect line starts from, and where the pointer is
   // while it waits for the next click.
   const clickConnectFrom = useRef<string | undefined>(undefined);
@@ -1596,13 +754,6 @@ const CanvasInner = ({
   const sentDraft = useRef<
     { anchor: ChatMessageCommentAnchorType; at: number } | undefined
   >(undefined);
-  // Where a sticky, text box or frame will go: the press point and the
-  // current pointer while placing, or just the pointer while hovering.
-  const [placing, setPlacing] = useState<{
-    start: XYPosition;
-    current: XYPosition;
-  }>();
-  const [hover, setHover] = useState<XYPosition>();
   // What a line end would attach to: under the pointer with the line tool
   // before pressing, or under a free end being dragged.
   const [attachPreview, setAttachPreview] = useState<string | undefined>();
@@ -1634,46 +785,17 @@ const CanvasInner = ({
   const [localStroke, setLocalStroke] =
     useState<ReturnType<typeof strokeSoFar>>();
   const spaceHeld = useRef(false);
-  // The last save the server refused, shown until dismissed or replaced. An
-  // image that couldn't be added gives its reason in words.
-  const [saveError, setSaveError] = useState<{ id: number; reason: string }>();
-  const reportRefusal = useCallback((error?: Meteor.Error | string) => {
-    if (error === undefined) return;
-    setSaveError({
-      id: Date.now(),
-      reason:
-        typeof error === "string" ? error : (error.reason ?? error.message),
-    });
-  }, []);
-  const dismissSaveError = useCallback(() => setSaveError(undefined), []);
-
-  // A short message under the toolbar, gone after a while: a link that
-  // couldn't be followed, a version that couldn't be loaded, an undo that
-  // someone else's edit got in the way of, or a restore or reset that worked.
-  // It can carry a button for what to do next.
-  const [notice, setNotice] = useState<{
-    id: number;
-    text: string;
-    variant: "warning" | "success";
-    action?: { label: string; onClick: () => void };
-  }>();
-  const showNotice = useCallback(
-    (
-      text: string,
-      variant: "warning" | "success" = "warning",
-      action?: { label: string; onClick: () => void },
-    ) => {
-      const id = Date.now();
-      setNotice({ id, text, variant, action });
-      tidyLater(
-        () =>
-          setNotice((current) => (current?.id === id ? undefined : current)),
-        NOTICE_MS,
-      );
-    },
-    [tidyLater],
-  );
-  const dismissNotice = useCallback(() => setNotice(undefined), []);
+  const {
+    notice,
+    showNotice,
+    dismissNotice,
+    followNotice,
+    saveError,
+    reportRefusal,
+    dismissSaveError,
+    accessNotice,
+    dismissAccessNotice,
+  } = useBoardNotices({ mayEdit, accessReason, tidyLater });
 
   // A download being made. While a picture is drawn the board renders every
   // node, not just those in view, and leaves out cursors, others' selections
@@ -1681,10 +803,6 @@ const CanvasInner = ({
   // selection and anything they're part-way through drawing or placing.
   const [exporting, setExporting] = useState<DownloadKind>();
   const capturing = exporting === "png";
-  const followNotice = useCallback(() => {
-    setNotice(undefined);
-    notice?.action?.onClick();
-  }, [notice]);
 
   // The viewer's own edits this visit, to undo and redo.
   const undoStale = useCallback(
@@ -1992,7 +1110,7 @@ const CanvasInner = ({
       all
         .filter((n) => n.parentId === id)
         .forEach((child) => {
-          if (remoteDragged.current.has(child.id)) {
+          if (isDraggedByOthers(child.id)) {
             draggedByOthers.push(child.id);
             return;
           }
@@ -2009,7 +1127,7 @@ const CanvasInner = ({
       updateNodes(inputs);
       markBusy([id], false);
     },
-    [flow, markPending, clearPending, updateNodes, markBusy],
+    [flow, markPending, clearPending, updateNodes, markBusy, isDraggedByOthers],
   );
 
   const clearEditOnAppear = useCallback(() => setEditOnAppear(undefined), []);
@@ -2271,21 +1389,22 @@ const CanvasInner = ({
 
   // A node's box for the frame tools. Something someone else is dragging
   // counts where it's saved: where they have it is theirs to save.
-  const toolBox = useCallback((n: WhiteboardFlowNode): Box => {
-    const found = frameToolBox(n);
-    return remoteDragged.current.has(n.id)
-      ? { ...found, ...n.data.doc.position }
-      : found;
-  }, []);
+  const toolBox = useCallback(
+    (n: WhiteboardFlowNode): Box => {
+      const found = frameToolBox(n);
+      return isDraggedByOthers(n.id)
+        ? { ...found, ...n.data.doc.position }
+        : found;
+    },
+    [isDraggedByOthers],
+  );
 
   // The frame tools' changes, less any to something someone else is
   // dragging other than the frame being worked on, which are theirs to save.
   const notDraggedByOthers = useCallback(
     (changes: BoxChange[], frameId: string) =>
-      changes.filter(
-        (c) => c.id === frameId || !remoteDragged.current.has(c.id),
-      ),
-    [],
+      changes.filter((c) => c.id === frameId || !isDraggedByOthers(c.id)),
+    [isDraggedByOthers],
   );
 
   // A frame, what's directly in it, and the frames around it (innermost
@@ -2427,7 +1546,7 @@ const CanvasInner = ({
       const createdAt = new Map(puzzles.map((p) => [p._id, +p.createdAt]));
       // A card someone else is dragging stays put like everything else
       const isCard = (n: WhiteboardFlowNode) =>
-        n.type === "puzzle" && !remoteDragged.current.has(n.id);
+        n.type === "puzzle" && !isDraggedByOthers(n.id);
       const cards = children.filter(isCard);
       const result = tidyFrame(
         toolBox(frame),
@@ -2462,6 +1581,7 @@ const CanvasInner = ({
       showBoxChanges,
       showLockRefused,
       updateNodes,
+      isDraggedByOthers,
     ],
   );
 
@@ -2476,7 +1596,7 @@ const CanvasInner = ({
     // to save
     const draggedByOthers: string[] = [];
     nudgedIds.forEach((id) => {
-      if (remoteDragged.current.has(id)) {
+      if (isDraggedByOthers(id)) {
         draggedByOthers.push(id);
         return;
       }
@@ -2523,6 +1643,7 @@ const CanvasInner = ({
     showMoves,
     growForLanded,
     updateNodes,
+    isDraggedByOthers,
   ]);
   useEffect(() => {
     saveNudgesRef.current = saveNudges;
@@ -2860,69 +1981,25 @@ const CanvasInner = ({
     });
   }, [flow]);
 
-  // Places a sticky, text box, frame or shape. If it lands inside a frame it
-  // goes into that frame. Anything but a shape opens for typing in.
-  const placeNode = useCallback(
-    (
-      type: PlaceTool,
-      rect: { x: number; y: number; width: number; height: number },
-    ) => {
-      const _id = Random.id();
-      const { parent, position } = placementFor(_id, rect, new Set());
-      updateNodes([
-        {
-          _id,
-          type,
-          position: { x: Math.round(position.x), y: Math.round(position.y) },
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-          parent: parent ?? null,
-          color: type === "sticky" ? "yellow" : undefined,
-          ...(type === "shape" ? { shape: shapeKind } : {}),
-        },
-      ]);
-      if (type === "shape") {
-        setTool("select");
-        return;
-      }
-      setEditOnAppear(_id);
-      // If the new node can't open for editing (e.g. a frame placed while
-      // zoomed right out shows no label), don't let it grab focus later, nor
-      // leave the keyboard up for it.
-      tidyLater(() => {
-        setEditOnAppear((current) => (current === _id ? undefined : current));
-        if (document.activeElement === keyboardCatcher.current) {
-          keyboardCatcher.current?.blur();
-        }
-      }, 3000);
-      setTool("select");
-    },
-    [placementFor, updateNodes, tidyLater, shapeKind],
-  );
-
-  const placementRect = useCallback(
-    (type: PlaceTool, start: XYPosition, end: XYPosition) => {
-      const dragged =
-        Math.hypot(end.x - start.x, end.y - start.y) * flow.getZoom() >=
-        CLICK_SLOP;
-      if (!dragged) {
-        const size = DEFAULT_SIZES[type];
-        return {
-          x: start.x - size.width / 2,
-          y: start.y - size.height / 2,
-          ...size,
-        };
-      }
-      const min = MIN_SIZES[type];
-      return {
-        x: Math.min(start.x, end.x),
-        y: Math.min(start.y, end.y),
-        width: Math.max(min.width, Math.abs(end.x - start.x)),
-        height: Math.max(min.height, Math.abs(end.y - start.y)),
-      };
-    },
-    [flow],
-  );
+  const {
+    placing,
+    setPlacing,
+    setHover,
+    keyboardCatcher,
+    catchKeyboard,
+    clearKeyboardCatcher,
+    placeNode,
+    placementRect,
+    placeGhost,
+  } = usePlaceTool({
+    tool,
+    shapeKind,
+    placementFor,
+    updateNodes,
+    tidyLater,
+    setTool,
+    setEditOnAppear,
+  });
 
   const selectedUnitCount = useMemo(
     () => selectionUnits(nodes, edges).size,
@@ -3016,7 +2093,7 @@ const CanvasInner = ({
         }
         members.forEach((m) => {
           // Something someone else is dragging stays theirs to save
-          if (remoteDragged.current.has(m.id)) return;
+          if (isDraggedByOthers(m.id)) return;
           // Joins or leaves a frame as a drop would (see onNodeDragStop), but
           // not a frame being arranged, since it's moving too.
           const rect = absoluteRect(m.id);
@@ -3062,126 +2139,29 @@ const CanvasInner = ({
       showMoves,
       growForLanded,
       updateNodes,
+      isDraggedByOthers,
     ],
   );
 
-  const hiddenCards = useMemo(
-    () => missingCards(livePuzzles, nodeDocs),
-    [livePuzzles, nodeDocs],
-  );
-
-  // Frames for rounds that someone removed. Only seeded frames are kept when
-  // they're removed; anything made on the board is deleted outright.
-  const tagNames = useTracker(
-    () =>
-      new Map(
-        Tags.find({ hunt: huntId }, { projection: { name: 1 } }).map((tag) => [
-          tag._id,
-          tag.name,
-        ]),
-      ),
-    [huntId],
-  );
-  const hiddenFrames = useMemo(
-    (): HiddenFrame[] =>
-      nodeDocs
-        .filter((d) => d.type === "frame" && d.hidden)
-        .map((d) => ({
-          id: d._id,
-          title:
-            frameLabel(d, d.tag ? tagNames.get(d.tag) : undefined) ??
-            t("whiteboard.frame.placeholder", "Frame"),
-        }))
-        .toSorted((a, b) => a.title.localeCompare(b.title)),
-    [nodeDocs, tagNames, t],
-  );
-
-  // Feeder arrows someone removed, between puzzles that are still live.
-  const hiddenArrowDocs = useTracker(
-    () =>
-      WhiteboardEdges.find(
-        { board: boardId, auto: true, hidden: true },
-        { projection: { feeder: 1, meta: 1 } },
-      ).fetch(),
-    [boardId],
-  );
-  const hiddenArrows = useMemo(
-    (): HiddenArrow[] =>
-      hiddenFeederArrows(livePuzzles, hiddenArrowDocs)
-        .map(({ id, feeder, meta }) => ({
-          id,
-          title: t("whiteboard.hidden.arrow", "{{feeder}} → {{meta}}", {
-            feeder,
-            meta,
-            ...NO_ESCAPE,
-          }),
-        }))
-        .toSorted((a, b) => a.title.localeCompare(b.title)),
-    [hiddenArrowDocs, livePuzzles, t],
-  );
-  const notOnBoardCount =
-    hiddenCards.length + hiddenFrames.length + hiddenArrows.length;
-
-  // Puts a card back at the middle of the screen, and says which node it is.
-  const putBack = useCallback(
-    (card: MissingCard) => {
-      const { width, height, ...position } = centeredRect(paneCenter(), {
-        width: CARD_WIDTH,
-        height: CARD_HEIGHT,
-      });
-      const _id = card.id ?? Random.id();
-      updateNodes([
-        card.id
-          ? { _id, hidden: false, parent: null, position }
-          : {
-              _id,
-              type: "puzzle",
-              puzzle: card.puzzle,
-              position,
-              width,
-              height,
-              // Does nothing on insert. Undo only hides a card, so a redo
-              // resends this to show it again.
-              hidden: false,
-            },
-      ]);
-      return _id;
-    },
-    [paneCenter, updateNodes],
-  );
-
-  // Puts a removed frame back, empty and at the top level, at the middle of
-  // the screen.
-  const putBackFrame = useCallback(
-    ({ id }: { id: string }) => {
-      const doc = nodeDocs.find((d) => d._id === id);
-      if (!doc) return;
-      const { x, y } = centeredRect(paneCenter(), {
-        width: doc.width ?? 0,
-        height: doc.height ?? 0,
-      });
-      updateNodes([
-        { _id: id, hidden: false, parent: null, position: { x, y } },
-      ]);
-    },
-    [nodeDocs, paneCenter, updateNodes],
-  );
-
-  const putBackArrows = useCallback(
-    (ids: string[]) =>
-      commit({ upsertEdges: ids.map((_id) => ({ _id, hidden: false })) }),
-    [commit],
-  );
-  const putBackArrow = useCallback(
-    (arrow: HiddenArrow) => putBackArrows([arrow.id]),
-    [putBackArrows],
-  );
-  // Only the arrows the panel lists: one between puzzles that aren't live
-  // may be on its way out, and would fail the whole batch.
-  const putBackAllArrows = useCallback(
-    () => putBackArrows(hiddenArrows.map((a) => a.id)),
-    [putBackArrows, hiddenArrows],
-  );
+  const {
+    hiddenCards,
+    hiddenFrames,
+    hiddenArrows,
+    tagNames,
+    notOnBoardCount,
+    putBack,
+    putBackFrame,
+    putBackArrow,
+    putBackAllArrows,
+  } = useNotOnBoard({
+    boardId,
+    huntId,
+    livePuzzles,
+    nodeDocs,
+    paneCenter,
+    updateNodes,
+    commit,
+  });
 
   // Ink: pointer samples become a stroke in flow coordinates. Long strokes
   // are saved in segments as they're drawn, so other people see them grow.
@@ -3516,109 +2496,30 @@ const CanvasInner = ({
     }
   }, [openThreadData, markCommentSeen]);
 
-  // Brings a point on the board to the middle of the screen, zooming in far
-  // enough to read a card.
-  const panTo = useCallback(
-    (at: XYPosition) => {
-      void flow.setCenter(at.x, at.y, {
-        zoom: Math.max(flow.getZoom(), 0.8),
-        duration: 400,
-      });
-    },
-    [flow],
-  );
-
-  // Pans to a node and marks it, if it's on the board.
-  const showNode = useCallback(
-    (id: string) => {
-      const rect = absoluteRect(id);
-      if (!rect) return false;
-      panTo(centerOf(rect));
-      pulseAt({ node: id });
-      return true;
-    },
-    [absoluteRect, panTo, pulseAt],
-  );
-
-  // Pans to the middle of a line and marks it, if it's drawn, and says
-  // whether it was.
-  const showLine = useCallback(
-    (id: string) => {
-      const edge = flow.getEdge(id);
-      const from = edge && nodeCenter(edge.source);
-      const to = edge && nodeCenter(edge.target);
-      if (!from || !to) return false;
-      const middle = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
-      panTo(middle);
-      pulseAt({ point: middle });
-      return true;
-    },
-    [flow, nodeCenter, panTo, pulseAt],
-  );
-  const outlineFitPadding = compact
-    ? OUTLINE_FIT_PADDING
-    : OUTLINE_FIT_PADDING_BESIDE;
-  // Fits the view to a frame and marks it, if it's drawn, and says whether
-  // it was. The zoom is kept within the board's own limits.
-  const fitViewToFrame = useCallback(
-    (id: string) => {
-      const rect = absoluteRect(id);
-      const wrapper = wrapperRef.current;
-      if (!rect || rect.width <= 0 || rect.height <= 0 || !wrapper) {
-        return false;
-      }
-      void flow.setViewport(
-        getViewportForBounds(
-          rect,
-          wrapper.clientWidth,
-          wrapper.clientHeight,
-          MIN_ZOOM,
-          MAX_ZOOM,
-          outlineFitPadding,
-        ),
-        { duration: 400 },
-      );
-      pulseAt({ node: id });
-      return true;
-    },
-    [absoluteRect, flow, pulseAt, outlineFitPadding],
-  );
-  // A frame picked in the Outline from inside a collapsed frame, fitted to
-  // once that frame is open for this viewer and it's drawn.
-  const [pendingFit, setPendingFit] = useState<string>();
-  useEffect(() => {
-    if (!pendingFit) return;
-    const doc = nodeDocs.find((d) => d._id === pendingFit);
-    if (!doc || doc.hidden || fitViewToFrame(pendingFit))
-      setPendingFit(undefined);
-    // nodes isn't read: it re-runs this once React Flow has drawn the frame
-    // its collapsed parent hid.
-  }, [pendingFit, nodeDocs, nodes, fitViewToFrame]);
-
-  // A line the search found inside a collapsed frame, shown once the frame
-  // is open and the line is drawn to its real ends.
-  const [pendingLine, setPendingLine] = useState<string>();
-  useEffect(() => {
-    if (!pendingLine) return;
-    if (!shownLines.has(pendingLine)) {
-      setPendingLine(undefined);
-      return;
-    }
-    if (flow.getEdge(pendingLine)?.data?.folded) return;
-    if (showLine(pendingLine)) setPendingLine(undefined);
-  }, [pendingLine, shownLines, flow, showLine, edges, nodes]);
-
-  // A ?puzzle=, ?node= or ?v= link waits, as a comment does (see
-  // pendingFocus), for the board to load and for the node it names to be
-  // laid out. So does something the search finds inside a collapsed frame.
-  const [pendingTarget, setPendingTarget] = useState(initialTarget);
-  const [linkedTarget, setLinkedTarget] = useState(
-    boardTargetKey(initialTarget),
-  );
-  if (boardTargetKey(initialTarget) !== linkedTarget) {
-    setLinkedTarget(boardTargetKey(initialTarget));
-    if (initialTarget) setPendingTarget(initialTarget);
-  }
+  // On a phone the Outline's sheet covers the bottom of the board, so picking
+  // a row closes it as the board starts to move.
+  const closeOutlineSheet = useCallback(() => {
+    if (compact) closePanel("outline");
+  }, [compact, closePanel]);
+  const {
+    showNode,
+    showLine,
+    setPendingLine,
+    showOutlineFrame,
+    fitWholeBoard,
+  } = useBoardNavigation({
+    wrapperRef,
+    compact,
+    absoluteRect,
+    nodeCenter,
+    pulseAt,
+    nodeDocs,
+    nodes,
+    edges,
+    shownLines,
+    peekAround,
+    closeOutlineSheet,
+  });
 
   // Pans to a comment and opens it, if it's on the board, and says whether
   // it was.
@@ -3641,32 +2542,6 @@ const CanvasInner = ({
     [threads, absoluteRect, panToPin, flow, closePanel, pulseComment],
   );
 
-  // What picking something the search found does: pan to it, or put a
-  // puzzle that isn't on the board back and mark it there.
-  const showSearchHit = useCallback(
-    (hit: BoardSearchHit) => {
-      if (hit.node) {
-        // Something inside a collapsed frame is shown once the frame opens.
-        if (peekAround(hit.node)) {
-          setPendingTarget({ kind: "node", id: hit.node });
-        } else {
-          showNode(hit.node);
-        }
-      } else if (hit.edge) {
-        // So is a line with an end inside one.
-        const line = WhiteboardEdges.findOne(hit.edge);
-        const opened = line
-          ? [peekAround(line.source), peekAround(line.target)].includes(true)
-          : false;
-        if (opened) {
-          setPendingLine(hit.edge);
-        } else {
-          showLine(hit.edge);
-        }
-      }
-    },
-    [peekAround, showNode, showLine],
-  );
   const putBackSearchHit = useCallback(
     (hit: BoardSearchHit) => {
       if (readOnly) return;
@@ -3787,62 +2662,46 @@ const CanvasInner = ({
     };
   }, [focusRef, focusComment]);
 
-  useEffect(() => {
-    if (!pendingTarget || !boardLoaded || !flow.viewportInitialized) return;
-    const done = () => {
-      setPendingTarget(undefined);
-      if (boardTargetKey(pendingTarget) === boardTargetKey(initialTarget)) {
-        onInitialTargetShown?.();
-      }
-    };
-    if (pendingTarget.kind === "view") {
-      void flow.setCenter(pendingTarget.x, pendingTarget.y, {
-        zoom: pendingTarget.zoom,
-      });
-      done();
-      return;
-    }
-    const doc =
-      pendingTarget.kind === "puzzle"
-        ? nodeDocs.find(
-            (d) => d.type === "puzzle" && d.puzzle === pendingTarget.id,
-          )
-        : nodeDocs.find((d) => d._id === pendingTarget.id);
-    const gone =
-      !doc ||
-      !!doc.hidden ||
-      (doc.type === "puzzle" && !livePuzzleIds.has(doc.puzzle ?? ""));
-    if (gone) {
-      showNotice(
-        pendingTarget.kind === "puzzle"
-          ? t("whiteboard.link.puzzleGone", "That puzzle isn't on the board.")
-          : t("whiteboard.link.nodeGone", "That isn't on the board any more."),
-      );
-      // The board skipped fitting itself to open here, so it does now.
-      if (!initialViewport && boardTargetKey(pendingTarget) === openedAt) {
-        void flow.fitView();
-      }
-      done();
-      return;
-    }
-    if (peekAround(doc._id)) return;
-    if (showNode(doc._id)) done();
-  }, [
-    pendingTarget,
-    boardLoaded,
-    flow,
-    peekAround,
-    nodeDocs,
-    livePuzzleIds,
-    showNode,
-    showNotice,
-    t,
+  const setPendingTarget = useLinkedTarget({
     initialTarget,
+    onInitialTargetShown,
     initialViewport,
     openedAt,
-    onInitialTargetShown,
+    boardLoaded,
+    livePuzzleIds,
+    nodeDocs,
     nodes,
-  ]);
+    peekAround,
+    showNode,
+    showNotice,
+  });
+
+  // What picking something the search found does: pan to it, or put a
+  // puzzle that isn't on the board back and mark it there.
+  const showSearchHit = useCallback(
+    (hit: BoardSearchHit) => {
+      if (hit.node) {
+        // Something inside a collapsed frame is shown once the frame opens.
+        if (peekAround(hit.node)) {
+          setPendingTarget({ kind: "node", id: hit.node });
+        } else {
+          showNode(hit.node);
+        }
+      } else if (hit.edge) {
+        // So is a line with an end inside one.
+        const line = WhiteboardEdges.findOne(hit.edge);
+        const opened = line
+          ? [peekAround(line.source), peekAround(line.target)].includes(true)
+          : false;
+        if (opened) {
+          setPendingLine(hit.edge);
+        } else {
+          showLine(hit.edge);
+        }
+      }
+    },
+    [peekAround, showNode, showLine, setPendingTarget, setPendingLine],
+  );
 
   const commentPins = useMemo(() => {
     const pins: CommentPin[] = [];
@@ -4006,7 +2865,7 @@ const CanvasInner = ({
         userSelectionActive: false,
       });
     }
-  }, [commitSegment, live, storeApi]);
+  }, [commitSegment, live, storeApi, setPlacing]);
 
   // Two fingers pan and zoom the board while a tool takes one finger for
   // itself, which React Flow won't do then: the board point that was
@@ -4217,6 +3076,7 @@ const CanvasInner = ({
       penWidth,
       frameAt,
       resolveEndpoint,
+      setPlacing,
     ],
   );
 
@@ -4372,6 +3232,8 @@ const CanvasInner = ({
       refreshAttachPreview,
       eraseAt,
       commitSegment,
+      setPlacing,
+      setHover,
     ],
   );
 
@@ -4429,7 +3291,7 @@ const CanvasInner = ({
         if (isPlaceTool(tool)) {
           // Shapes have nothing to type in
           if (tool !== "shape") {
-            keyboardCatcher.current?.focus({ preventScroll: true });
+            catchKeyboard();
           }
           placeNode(tool, placementRect(tool, press.point, press.point));
           return;
@@ -4477,6 +3339,9 @@ const CanvasInner = ({
       compact,
       panToPin,
       liftFinger,
+      catchKeyboard,
+      setPlacing,
+      setHover,
     ],
   );
 
@@ -4525,7 +3390,7 @@ const CanvasInner = ({
     setHover(undefined);
     lastPointer.current = undefined;
     setAttachPreview(undefined);
-  }, [live]);
+  }, [live, setHover]);
 
   // A line from a handle joins whatever the pointer ends on (or right by),
   // going by the same rules as the line tool, not by whichever handle React
@@ -4748,7 +3613,7 @@ const CanvasInner = ({
     setConnecting(undefined);
     setErasingStrokes(new Set());
     cancelClickConnect();
-  }, [tool, clearSelection, cancelClickConnect]);
+  }, [tool, clearSelection, cancelClickConnect, setPlacing, setHover]);
 
   // What Escape does once nothing is open: drops a comment being started, a
   // line being drawn or joined, or an erase, turns off Select area and goes
@@ -4762,484 +3627,53 @@ const CanvasInner = ({
     setTool("select");
   }, [cancelClickConnect]);
 
-  // Whether the board has focus: the last press or focus was on it.
-  const canvasActive = useRef(false);
-  useEffect(() => {
-    const track = (event: Event) => {
-      canvasActive.current =
-        event.target instanceof globalThis.Node &&
-        !!wrapperRef.current?.contains(event.target);
-    };
-    window.addEventListener("pointerdown", track, true);
-    window.addEventListener("focusin", track, true);
-    return () => {
-      window.removeEventListener("pointerdown", track, true);
-      window.removeEventListener("focusin", track, true);
-    };
-  }, []);
+  const canvasActive = useBoardFocus(wrapperRef);
 
-  // What the selection copies (see imports/lib/whiteboard/clipboard.ts),
-  // from the board as the client has it, so it takes in what's folded away
-  // in a collapsed frame.
-  const copyOfSelection = useCallback(() => {
-    const selectedNodes = flow
-      .getNodes()
-      .filter((n) => n.selected)
-      .map((n) => n.id);
-    const selectedEdges = flow
-      .getEdges()
-      .filter((e) => e.selected)
-      .map((e) => e.id);
-    return copySelection(
-      // Ink this viewer has hidden has no points here, and isn't copied.
-      WhiteboardNodes.find({ board: boardId })
-        .fetch()
-        .filter((n) => n.type !== "ink" || n.points),
-      WhiteboardEdges.find({ board: boardId }).fetch(),
-      { nodes: selectedNodes, edges: selectedEdges },
-      (frame) =>
-        frameLabel(
-          frame,
-          frame.tag ? Tags.findOne(frame.tag)?.name : undefined,
-        ),
-    );
-  }, [flow, boardId]);
+  const {
+    imagesEnabled,
+    imagesOff,
+    uploads,
+    addImages,
+    imageInput,
+    chooseImage,
+    onImageChosen,
+    onDragOver,
+    onDrop,
+  } = useImageTool({
+    boardId,
+    puzzleId,
+    readOnly,
+    paneCenter,
+    placementFor,
+    updateNodes,
+    showNotice,
+    reportRefusal,
+  });
 
-  // The selection as a copy, saying when cards were left out of it; nothing
-  // when there's nothing to copy, and why when that's because it's all cards.
-  const takeCopy = useCallback(() => {
-    const { clip, cards } = copyOfSelection();
-    if (clip.nodes.length === 0) {
-      if (cards > 0) {
-        showNotice(
-          t("whiteboard.clipboard.cards", "Puzzle cards can't be copied"),
-        );
-      }
-      return undefined;
-    }
-    if (cards > 0) {
-      showNotice(
-        t("whiteboard.clipboard.cardsLeftOut", "Puzzle cards were left out"),
-      );
-    }
-    return clip;
-  }, [copyOfSelection, showNotice, t]);
-
-  // What a paste or duplicate made, to select once it's on the board: the
-  // nodes at the top of it (a frame carries what's in it) and its lines.
-  const selectOnArrival = useRef<
-    { nodes: Set<string>; edges: Set<string>; until: number } | undefined
-  >(undefined);
-  useEffect(() => {
-    const wanted = selectOnArrival.current;
-    if (!wanted) return;
-    if (Date.now() > wanted.until) {
-      selectOnArrival.current = undefined;
-      return;
-    }
-    const nodeIds = new Set(nodes.map((n) => n.id));
-    const edgeIds = new Set(edges.map((e) => e.id));
-    if (
-      ![...wanted.nodes].every((id) => nodeIds.has(id)) ||
-      ![...wanted.edges].every((id) => edgeIds.has(id))
-    ) {
-      return;
-    }
-    selectOnArrival.current = undefined;
-    applySelection(
-      (node) => wanted.nodes.has(node.id),
-      (edge) => wanted.edges.has(edge.id),
-    );
-  }, [nodes, edges, applySelection]);
-
-  // Puts a copy on the board moved by offset, with fresh ids, as one edit to
-  // undo. Whatever is at the top of it goes into the frame a drop there
-  // would, but never a collapsed or locked one, nor a frame it was copied
-  // from or anything inside that. If any of it is refused, what got through
-  // is taken off again.
-  const pasteCopy = useCallback(
-    (copied: BoardClip, offset: XYPosition) => {
-      const { clip, leftOut } = withoutOtherHuntsImages(copied, huntId);
-      if (leftOut > 0) {
-        showNotice(
-          t(
-            "whiteboard.clipboard.otherHuntImages",
-            "Images from another hunt were left out",
-          ),
-        );
-      }
-      const frames = frameRects();
-      const copiedFrames = clip.nodes
-        .filter((n) => n.type === "frame")
-        .map((n) => n.id);
-      const exclude = (frame: string) =>
-        !!flow.getNode(frame)?.data.doc.locked ||
-        copiedFrames.some((copied) => isWithin(frame, copied));
-      const placeAt = (point: XYPosition) => {
-        const id = frameAt(point, exclude, frames);
-        const rect = id ? absoluteRect(id) : undefined;
-        return id && rect ? { id, rect } : undefined;
-      };
-      const pasted = pasteClip(clip, offset, placeAt, () => Random.id());
-      if (pasted.nodes.length === 0) return;
-      const pastedIds = new Set(pasted.nodes.map((n) => n._id));
-      // A line inside a pasted frame that's collapsed isn't drawn, so isn't
-      // waited for.
-      const folded = foldedInto(
-        pasted.nodes.map((n) => ({
-          _id: n._id,
-          parent: n.parent ?? undefined,
-          collapsed: n.collapsed,
-        })),
-        new Set(),
-      );
-      const wanted = {
-        nodes: new Set(
-          pasted.nodes
-            .filter(
-              (n) =>
-                n.type !== "point" && !(n.parent && pastedIds.has(n.parent)),
-            )
-            .map((n) => n._id),
-        ),
-        edges: new Set(
-          pasted.edges
-            .filter((e) => foldEnds(e.source, e.target, folded) !== undefined)
-            .map((e) => e._id),
-        ),
-        until: Date.now() + 10_000,
-      };
-      selectOnArrival.current = wanted;
-      commit(
-        { upsertNodes: pasted.nodes, upsertEdges: pasted.edges },
-        {
-          rollback: () => {
-            if (selectOnArrival.current === wanted) {
-              selectOnArrival.current = undefined;
-            }
-            chunks(
-              pasted.nodes.map((n) => n._id),
-              MAX_BATCH,
-            ).forEach((nodeIds) =>
-              deleteWhiteboardNodes.call({ boardId, nodeIds }),
-            );
-          },
-        },
-      );
-    },
-    [
-      flow,
-      frameRects,
-      frameAt,
-      isWithin,
-      absoluteRect,
-      boardId,
-      huntId,
-      commit,
-      showNotice,
-      t,
-    ],
-  );
-
-  // Pastes text centred on `at`: a copy from a board, or text that becomes
-  // a sticky note (or a text box, for a web address). Says whether there was
-  // anything to paste.
-  const pasteText = useCallback(
-    (text: string, at: XYPosition) => {
-      if (looksLikeClip(text)) {
-        const clip = readClip(text);
-        if (!clip) {
-          showNotice(
-            t(
-              "whiteboard.clipboard.unreadable",
-              "That copy can't be pasted here",
-            ),
-          );
-          return true;
-        }
-        pasteCopy(clip, offsetToCentre(clip, at));
-        return true;
-      }
-      const clip = clipFromText(text, DEFAULT_SIZES);
-      if (!clip) return false;
-      pasteCopy(clip, offsetToCentre(clip, at));
-      return true;
-    },
-    [pasteCopy, showNotice, t],
-  );
-
-  // A paste lands centred on the pointer while it's over the board, and
-  // otherwise on the middle of the screen.
-  const pasteCentre = useCallback(
-    () =>
-      lastPointer.current
-        ? flow.screenToFlowPosition(lastPointer.current)
-        : paneCenter(),
-    [flow, paneCenter],
-  );
-
-  // Ctrl+D (Cmd+D) and the Duplicate button copy the selection in place,
-  // a little down and to the right, leaving the clipboard alone.
-  const duplicateSelection = useCallback(() => {
-    const clip = takeCopy();
-    if (clip) pasteCopy(clip, DUPLICATE_OFFSET);
-  }, [takeCopy, pasteCopy]);
-
-  // Images go to the bucket chat images go to, uploaded for the board's
-  // backing puzzle, and can't be added when the server has none.
-  const imagesEnabled = useChatImagesEnabled();
-  const imagesOff = t(
-    "chat.images.off",
-    "Images can't be added here: this server has nowhere to store them.",
-  );
-  // Images being uploaded, drawn where they'll land. They aren't saved: the
-  // node is made once the upload is done.
-  const [uploads, setUploads] = useState<ImageUpload[]>([]);
-  // How many images are on their way up, which count towards the board's cap
-  // from the moment they're chosen.
-  const imagesUnderway = useRef(0);
-
-  // Uploads image files and puts each on the board centred on a point (the
-  // next a little down and to the right), at its size in pixels but no wider
-  // than MAX_IMAGE_PLACE_WIDTH, into the frame under its middle. Files that
-  // would take the board past its cap on images aren't uploaded.
-  const addImages = useCallback(
-    (files: File[], centre: XYPosition) => {
-      if (readOnly || files.length === 0) return;
-      if (!imagesEnabled) {
-        showNotice(imagesOff);
-        return;
-      }
-      const room =
-        MAX_IMAGES_PER_BOARD -
-        WhiteboardNodes.find({ board: boardId, type: "image" }).count() -
-        imagesUnderway.current;
-      if (files.length > room) {
-        reportRefusal(
-          t("whiteboard.image.full", "This board can't take any more images"),
-        );
-      }
-      const taken = files.slice(0, Math.max(0, room));
-      imagesUnderway.current += taken.length;
-      taken.forEach((file, i) => {
-        const at = {
-          x: centre.x + i * DUPLICATE_OFFSET.x,
-          y: centre.y + i * DUPLICATE_OFFSET.y,
-        };
-        const id = Random.id();
-        let settled = false;
-        const finished = () => {
-          if (settled) return;
-          settled = true;
-          imagesUnderway.current -= 1;
-          setUploads((current) => current.filter((u) => u.id !== id));
-        };
-        naturalSize(file)
-          .then((natural) => {
-            if (!natural) {
-              finished();
-              reportRefusal(
-                t(
-                  "whiteboard.image.unreadable",
-                  "That file isn't an image the board can show",
-                ),
-              );
-              return;
-            }
-            const scale = Math.min(1, MAX_IMAGE_PLACE_WIDTH / natural.width);
-            const width = Math.max(1, Math.round(natural.width * scale));
-            const height = Math.max(1, Math.round(natural.height * scale));
-            const rect = centeredRect(at, { width, height });
-            setUploads((current) => [...current, { id, ...rect }]);
-            uploadChatImage(
-              puzzleId,
-              file,
-              (url) => {
-                finished();
-                const { parent, position } = placementFor(id, rect, new Set());
-                updateNodes([
-                  {
-                    _id: id,
-                    type: "image",
-                    position: {
-                      x: Math.round(position.x),
-                      y: Math.round(position.y),
-                    },
-                    width,
-                    height,
-                    parent: parent ?? null,
-                    image: { url, ...natural },
-                  },
-                ]);
-              },
-              (failure) => {
-                finished();
-                const reason = chatImageFailureReason(failure, t);
-                if (reason === undefined) {
-                  showNotice(imagesOff);
-                } else {
-                  reportRefusal(reason);
-                }
-              },
-            );
-          })
-          .catch((error: unknown) => {
-            finished();
-            reportRefusal(
-              error instanceof Error ? error.message : String(error),
-            );
-          });
-      });
-    },
-    [
-      readOnly,
-      imagesEnabled,
-      imagesOff,
-      showNotice,
-      reportRefusal,
-      t,
-      boardId,
-      puzzleId,
-      placementFor,
-      updateNodes,
-    ],
-  );
-
-  // The Image tool picks files to put in the middle of the view.
-  const imageInput = useRef<HTMLInputElement>(null);
-  const chooseImage = useCallback(() => imageInput.current?.click(), []);
-  const onImageChosen = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const files = imageFiles(event.target.files);
-      event.target.value = "";
-      addImages(files, paneCenter());
-    },
-    [addImages, paneCenter],
-  );
-
-  // Image files dropped on the board land where they're dropped. A drop into
-  // something being typed in is left to it (the comment composer takes
-  // images of its own), and one on a panel over the board adds nothing. Any
-  // other file dropped here is kept from the browser, which would otherwise
-  // leave the page to show it.
-  const onDragOver = useCallback(
-    (event: React.DragEvent) => {
-      if (
-        event.defaultPrevented ||
-        !event.dataTransfer.types.includes("Files") ||
-        isTyping(event.target)
-      ) {
-        return;
-      }
-      event.preventDefault();
-      event.dataTransfer.dropEffect =
-        !readOnly && onTheBoard(event.target) ? "copy" : "none";
-    },
-    [readOnly],
-  );
-  const onDrop = useCallback(
-    (event: React.DragEvent) => {
-      if (
-        event.defaultPrevented ||
-        !event.dataTransfer.types.includes("Files")
-      ) {
-        return;
-      }
-      event.preventDefault();
-      if (isTyping(event.target) || !onTheBoard(event.target)) return;
-      addImages(
-        imageFiles(event.dataTransfer.files),
-        flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
-      );
-    },
-    [addImages, flow],
-  );
-
-  // Ctrl+C (Cmd+C) copies the selection, and Ctrl+V (Cmd+V) pastes, while
-  // the board has focus, nothing is being typed and no text is selected.
-  // Images on the clipboard, with no text beside them (or only an image's
-  // HTML), are uploaded and added at the pointer (see addImages). Text that
-  // isn't a copy from a board becomes a sticky note, or a text box if it's a
-  // web address. Only for those who can edit.
-  useEffect(() => {
-    const forTheBoard = (event: ClipboardEvent) =>
-      !readOnly &&
-      canvasActive.current &&
-      !isTyping(event.target) &&
-      !inDialog(event.target) &&
-      !event.defaultPrevented;
-    const onCopy = (event: ClipboardEvent) => {
-      if (!forTheBoard(event) || !event.clipboardData) return;
-      if (document.getSelection()?.isCollapsed === false) return;
-      const clip = takeCopy();
-      if (!clip) return;
-      event.preventDefault();
-      event.clipboardData.setData("text/plain", clipText(clip));
-    };
-    const onPaste = (event: ClipboardEvent) => {
-      if (!forTheBoard(event) || !event.clipboardData) return;
-      const text = event.clipboardData.getData("text/plain");
-      if (looksLikeClip(text)) {
-        event.preventDefault();
-        pasteText(text, pasteCentre());
-        return;
-      }
-      const images = imageFiles(event.clipboardData.files);
-      if (
-        images.length > 0 &&
-        (!text.trim() ||
-          htmlIsOnlyImages(event.clipboardData.getData("text/html")))
-      ) {
-        event.preventDefault();
-        addImages(images, pasteCentre());
-        return;
-      }
-      if (pasteText(text, pasteCentre())) event.preventDefault();
-    };
-    document.addEventListener("copy", onCopy);
-    document.addEventListener("paste", onPaste);
-    return () => {
-      document.removeEventListener("copy", onCopy);
-      document.removeEventListener("paste", onPaste);
-    };
-  }, [readOnly, takeCopy, pasteText, pasteCentre, addImages]);
-
-  // The touch screen toolbar's Copy and Paste, which go through the
-  // Clipboard API, so only show where the browser has it. Paste takes a copy
-  // from a board or text (not images) and puts it in the middle of the view.
-  // (absent outside a secure context)
-  const clipboard = navigator.clipboard as Clipboard | undefined;
-  const canCopyByButton = typeof clipboard?.writeText === "function";
-  const canPasteByButton = typeof clipboard?.readText === "function";
-  const copyByButton = useCallback(() => {
-    const clip = takeCopy();
-    if (!clip) return;
-    navigator.clipboard.writeText(clipText(clip)).catch(() => {
-      showNotice(t("whiteboard.clipboard.copyFailed", "Couldn't copy that"));
-    });
-  }, [takeCopy, showNotice, t]);
-  const pasteByButton = useCallback(() => {
-    navigator.clipboard
-      .readText()
-      .then((text) => {
-        // The browser can wait on the viewer to allow the paste, by when the
-        // board may have gone read-only (a version opened, say).
-        if (readOnlyNow.current) return;
-        if (!pasteText(text, paneCenter())) {
-          showNotice(
-            t(
-              "whiteboard.clipboard.nothing",
-              "There's nothing on the clipboard to paste",
-            ),
-          );
-        }
-      })
-      .catch(() => {
-        showNotice(
-          t("whiteboard.clipboard.pasteFailed", "Couldn't read the clipboard"),
-        );
-      });
-  }, [pasteText, paneCenter, showNotice, t]);
+  const {
+    duplicateSelection,
+    canCopyByButton,
+    canPasteByButton,
+    copyByButton,
+    pasteByButton,
+  } = useBoardClipboard({
+    boardId,
+    huntId,
+    readOnly,
+    canvasActive,
+    nodes,
+    edges,
+    applySelection,
+    frameRects,
+    frameAt,
+    isWithin,
+    absoluteRect,
+    commit,
+    showNotice,
+    lastPointer,
+    paneCenter,
+    addImages,
+  });
   // The touch screen toolbar's Delete, which leaves out anything locked, as
   // the Delete key does (see onBeforeDelete).
   const deleteSelection = useCallback(() => {
@@ -5455,6 +3889,7 @@ const CanvasInner = ({
     toggleLock,
     duplicateSelection,
     pickTool,
+    canvasActive,
   ]);
 
   // Double-clicking a card opens its puzzle, on any board, as long as nothing
@@ -5528,25 +3963,6 @@ const CanvasInner = ({
     closePanel("outline");
     outlineButtonRef.current?.focus();
   }, [closePanel]);
-  // On a phone the Outline's sheet covers the bottom of the board, so picking
-  // a row closes it as the board starts to move.
-  const closeOutlineSheet = useCallback(() => {
-    if (compact) closePanel("outline");
-  }, [compact, closePanel]);
-  const showOutlineFrame = useCallback(
-    (id: string) => {
-      // A frame inside a collapsed one is fitted to once that one is open.
-      const later = peekAround(id) || !fitViewToFrame(id);
-      setPendingFit(later ? id : undefined);
-      closeOutlineSheet();
-    },
-    [peekAround, fitViewToFrame, closeOutlineSheet],
-  );
-  const fitWholeBoard = useCallback(() => {
-    setPendingFit(undefined);
-    void flow.fitView({ padding: outlineFitPadding, duration: 400 });
-    closeOutlineSheet();
-  }, [flow, outlineFitPadding, closeOutlineSheet]);
 
   const showVersion = useCallback(
     (version: WhiteboardVersionType) => {
@@ -5831,12 +4247,6 @@ const CanvasInner = ({
     connecting && !connecting.edgeId && "node" in connecting.fixed
       ? connecting.fixed.node
       : undefined;
-  // Where a sticky, text box or frame would go.
-  const placeAt = placing ?? (hover && { start: hover, current: hover });
-  const placeGhost =
-    isPlaceTool(tool) && placeAt
-      ? placementRect(tool, placeAt.start, placeAt.current)
-      : undefined;
   // Being offline gets a banner of its own rather than a reason.
   const offlineText = t(
     "whiteboard.offline",
@@ -5860,21 +4270,18 @@ const CanvasInner = ({
       "Editing needs a wider screen. You can still comment.",
     ),
   };
-  const noticeAlert = notice ? (
-    <AccessNotice
-      variant={notice.variant}
-      dismissible
-      closeLabel={t("common.close", "Close")}
-      onClose={dismissNotice}
-    >
-      {notice.text}
-      {notice.action && (
-        <NoticeAction size="sm" variant="link" onClick={followNotice}>
-          {notice.action.label}
-        </NoticeAction>
-      )}
-    </AccessNotice>
-  ) : null;
+  const boardNotices = (
+    <BoardNotices
+      offline={accessReason === "offline"}
+      accessNotice={accessNotice}
+      onDismissAccessNotice={dismissAccessNotice}
+      saveError={saveError}
+      onDismissSaveError={dismissSaveError}
+      notice={notice}
+      onDismissNotice={dismissNotice}
+      onFollowNotice={followNotice}
+    />
+  );
   const outlineTitle = t("whiteboard.outline.title", "Outline");
   const searchTools = (
     <>
@@ -5913,36 +4320,6 @@ const CanvasInner = ({
       </CopyToClipboardButton>
     </>
   );
-  const saveErrorAlert = saveError ? (
-    <AccessNotice
-      key={saveError.id}
-      variant="danger"
-      dismissible
-      closeLabel={t("common.close", "Close")}
-      onClose={dismissSaveError}
-    >
-      {t("whiteboard.save.refused", "Couldn't save: {{reason}}", {
-        reason: saveError.reason,
-        ...NO_ESCAPE,
-      })}
-    </AccessNotice>
-  ) : null;
-  const offlineAlert =
-    accessReason === "offline" ? (
-      <AccessNotice variant="warning">{offlineText}</AccessNotice>
-    ) : null;
-  const accessNoticeAlert = accessNotice ? (
-    <AccessNotice
-      variant="info"
-      dismissible
-      closeLabel={t("common.close", "Close")}
-      onClose={dismissAccessNotice}
-    >
-      {accessNotice === "lost"
-        ? t("whiteboard.access.lost", "You can no longer edit this board.")
-        : t("whiteboard.access.gained", "You can now edit this board.")}
-    </AccessNotice>
-  ) : null;
   const showResolvedTitle = t(
     "whiteboard.toolbar.showResolved",
     "Show resolved comments",
@@ -6160,24 +4537,6 @@ const CanvasInner = ({
       "Unlock what's selected [Ctrl/⌘+L]",
     );
   }
-  const alignModes = [
-    ["left", t("whiteboard.arrange.left", "Align left edges")],
-    ["center", t("whiteboard.arrange.center", "Align centres horizontally")],
-    ["right", t("whiteboard.arrange.right", "Align right edges")],
-    ["top", t("whiteboard.arrange.top", "Align top edges")],
-    ["middle", t("whiteboard.arrange.middle", "Align centres vertically")],
-    ["bottom", t("whiteboard.arrange.bottom", "Align bottom edges")],
-  ] as const;
-  const distributeAxes = [
-    [
-      "horizontal",
-      t("whiteboard.arrange.horizontal", "Space evenly left to right"),
-    ],
-    [
-      "vertical",
-      t("whiteboard.arrange.vertical", "Space evenly top to bottom"),
-    ],
-  ] as const;
   // React Flow's own control labels and screen reader text.
   const ariaLabelConfig = useMemo((): Partial<AriaLabelConfig> => {
     const directions: Record<string, string> = {
@@ -6535,10 +4894,7 @@ const CanvasInner = ({
                             </Button>
                           </CommentHint>
                         )}
-                        {offlineAlert}
-                        {accessNoticeAlert}
-                        {saveErrorAlert}
-                        {noticeAlert}
+                        {boardNotices}
                       </Panel>
                     ) : (
                       <Panel position="top-left">
@@ -6978,10 +5334,7 @@ const CanvasInner = ({
                             />
                           )}
                         </ToolBox>
-                        {offlineAlert}
-                        {accessNoticeAlert}
-                        {saveErrorAlert}
-                        {noticeAlert}
+                        {boardNotices}
                       </Panel>
                     )}
                     {!readOnly &&
@@ -7082,53 +5435,10 @@ const CanvasInner = ({
                     {!readOnly &&
                       tool === "select" &&
                       selectedUnitCount >= 2 && (
-                        <Panel position="top-center">
-                          <ToolBox>
-                            <ButtonGroup
-                              size="sm"
-                              aria-label={t(
-                                "whiteboard.arrange.align",
-                                "Align",
-                              )}
-                            >
-                              {alignModes.map(([mode, title]) => (
-                                <ArrangeButton
-                                  key={mode}
-                                  kind={mode}
-                                  title={title}
-                                  label={title}
-                                  onArrange={arrange}
-                                />
-                              ))}
-                            </ButtonGroup>
-                            <ButtonGroup
-                              size="sm"
-                              aria-label={t(
-                                "whiteboard.arrange.distribute",
-                                "Distribute",
-                              )}
-                            >
-                              {distributeAxes.map(([axis, title]) => (
-                                <ArrangeButton
-                                  key={axis}
-                                  kind={axis}
-                                  title={
-                                    selectedUnitCount < 3
-                                      ? t(
-                                          "whiteboard.arrange.needThree",
-                                          "{{action}} (select three or more)",
-                                          { action: title, ...NO_ESCAPE },
-                                        )
-                                      : title
-                                  }
-                                  label={title}
-                                  disabled={selectedUnitCount < 3}
-                                  onArrange={arrange}
-                                />
-                              ))}
-                            </ButtonGroup>
-                          </ToolBox>
-                        </Panel>
+                        <ArrangeToolbar
+                          selectedUnitCount={selectedUnitCount}
+                          onArrange={arrange}
+                        />
                       )}
                     {preview && !compact && (
                       <Panel position="top-center">
@@ -7244,84 +5554,17 @@ const CanvasInner = ({
                       !readOnly &&
                       !draft &&
                       !openThreadData && (
-                        <Panel position="top-right">
-                          <SidePanel>
-                            <strong>{notOnBoardTitle}</strong>
-                            <HiddenSection>
-                              {t("whiteboard.hidden.puzzles", "Puzzles")}
-                            </HiddenSection>
-                            {hiddenCards.length === 0 && (
-                              <HiddenNone>
-                                {t(
-                                  "whiteboard.hidden.none",
-                                  "Every puzzle is on the board.",
-                                )}
-                              </HiddenNone>
-                            )}
-                            {hiddenCards.map((card) => (
-                              <PutBackRow
-                                key={card.puzzle}
-                                item={card}
-                                onPutBack={putBack}
-                              />
-                            ))}
-                            <HiddenSection>
-                              {t("whiteboard.hidden.frames", "Frames")}
-                            </HiddenSection>
-                            {hiddenFrames.length === 0 && (
-                              <HiddenNone>
-                                {t(
-                                  "whiteboard.hidden.noFrames",
-                                  "Every round's frame is on the board.",
-                                )}
-                              </HiddenNone>
-                            )}
-                            {hiddenFrames.map((frame) => (
-                              <PutBackRow
-                                key={frame.id}
-                                item={frame}
-                                onPutBack={putBackFrame}
-                              />
-                            ))}
-                            <HiddenSection>
-                              {t("whiteboard.hidden.arrows", "Feeder arrows")}
-                            </HiddenSection>
-                            {!showFeederArrows && hiddenArrows.length > 0 && (
-                              <HiddenNone>
-                                {t(
-                                  "whiteboard.hidden.arrowsOff",
-                                  "Feeder arrows are hidden for you; turn them on in the toolbar to see these.",
-                                )}
-                              </HiddenNone>
-                            )}
-                            {hiddenArrows.length === 0 ? (
-                              <HiddenNone>
-                                {t(
-                                  "whiteboard.hidden.noArrows",
-                                  "Every feeder arrow is on the board.",
-                                )}
-                              </HiddenNone>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="outline-secondary"
-                                onClick={putBackAllArrows}
-                              >
-                                {t(
-                                  "whiteboard.hidden.putBackAllArrows",
-                                  "Put back all feeder arrows",
-                                )}
-                              </Button>
-                            )}
-                            {hiddenArrows.map((arrow) => (
-                              <PutBackRow
-                                key={arrow.id}
-                                item={arrow}
-                                onPutBack={putBackArrow}
-                              />
-                            ))}
-                          </SidePanel>
-                        </Panel>
+                        <NotOnBoardPanel
+                          title={notOnBoardTitle}
+                          hiddenCards={hiddenCards}
+                          hiddenFrames={hiddenFrames}
+                          hiddenArrows={hiddenArrows}
+                          showFeederArrows={showFeederArrows}
+                          onPutBack={putBack}
+                          onPutBackFrame={putBackFrame}
+                          onPutBackArrow={putBackArrow}
+                          onPutBackAllArrows={putBackAllArrows}
+                        />
                       )}
                   </ReactFlow>
                 </CanvasWrapper>

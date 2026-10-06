@@ -41,6 +41,20 @@ export function chunks<T>(items: T[], size: number): T[][] {
 
 export type Done = (error?: Meteor.Error) => void;
 
+// How the canvas saves an edit (see its commit).
+export interface CommitOptions {
+  // Saves in the same group, one straight after another, undo as one.
+  group?: string;
+  // Nodes and lines shown changed before the server has it, put back as
+  // they were if it says no.
+  pendingNodes?: string[];
+  pendingEdges?: string[];
+  // Takes off what a refused save had made.
+  rollback?: () => void;
+  onDone?: Done;
+}
+export type Commit = (write: BoardWrite, options?: CommitOptions) => void;
+
 // Makes method calls together, and hears once they're all back, with the
 // first refusal if there was one.
 export function callAll(calls: ((done: Done) => void)[], onDone: Done) {
