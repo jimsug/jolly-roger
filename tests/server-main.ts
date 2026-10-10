@@ -71,6 +71,7 @@ import "./unit/imports/server/accountForGoogleInvitation";
 import "./unit/imports/server/answersUpdatedAt";
 import "./unit/imports/server/backfillHuntAdminFields";
 import "./unit/imports/server/backfillPuzzleNotifications";
+import "./unit/imports/server/board";
 import "./unit/imports/server/boardDocuments";
 import "./unit/imports/server/bulkAddHuntUsers";
 import "./unit/imports/server/chatMessageEdits";
@@ -115,6 +116,7 @@ import "./unit/imports/server/whiteboardVersions";
 import "./unit/imports/server/mergeUsers";
 
 import "./acceptance/authentication";
+import "./acceptance/board";
 import "./acceptance/chatEditing";
 import "./acceptance/chatHooks";
 import "./acceptance/chatMessages";

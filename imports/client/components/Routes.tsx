@@ -43,6 +43,7 @@ import UserInvitePage from "./UserInvitePage";
 import UsersApp from "./UsersApp";
 import VerifyEmailPage from "./VerifyEmailPage";
 
+const BoardPage = React.lazy(() => import("./BoardPage"));
 const HuntEditPage = React.lazy(() => import("./HuntEditPage"));
 const SetupPage = React.lazy(() => import("./SetupPage"));
 const RTCDebugPage = React.lazy(() => import("./RTCDebugPage"));
@@ -76,6 +77,7 @@ export const AuthenticatedRouteList: RouteObject[] = [
           { path: "tags", element: <HuntTagManagerPage /> },
           { path: "notes", element: <NotesPage /> },
           { path: "whiteboard", element: <WhiteboardPage /> },
+          { path: "board", element: <BoardPage /> },
           { path: "custom-link", element: <CustomLinkEmbedPage /> },
           { path: "more", element: <MorePage /> },
           { path: "edit", element: <HuntEditPage /> },

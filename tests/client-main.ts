@@ -96,6 +96,7 @@ import "./unit/imports/client/whiteboardSearch";
 import "./unit/imports/client/whiteboardTouch";
 
 import "./acceptance/authentication";
+import "./acceptance/board";
 import "./acceptance/chatEditing";
 import "./acceptance/chatHooks";
 import "./acceptance/chatMessages";

@@ -1,14 +1,19 @@
 import type { Meteor } from "meteor/meteor";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
+import { faDiagramProject } from "@fortawesome/free-solid-svg-icons/faDiagramProject";
 import { faFileAlt } from "@fortawesome/free-solid-svg-icons/faFileAlt";
 import { faTable } from "@fortawesome/free-solid-svg-icons/faTable";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Link, useSearchParams } from "react-router";
 import styled from "styled-components";
 import type {
+  BoardDocumentType,
   DocumentType,
   GoogleDocumentType,
 } from "../../lib/models/Documents";
+import boardToken from "../../methods/boardToken";
 
 // Google Sheets steals focus during initialization. The number of times
 // depends on the browser engine: Chromium does it twice, Firefox once, and
@@ -48,6 +53,12 @@ export const googleDocumentUrl = (
 };
 
 const StyledDeepLink = styled.a`
+  display: inline-block;
+  font-weight: bold;
+  white-space: nowrap;
+`;
+
+const StyledBoardLink = styled(Link)`
   display: inline-block;
   font-weight: bold;
   white-space: nowrap;
@@ -250,6 +261,133 @@ const GoogleDocumentDisplay = ({
   }
 };
 
+// What a link into the board page may ask it to show, passed on to the
+// board as-is
+const BOARD_PASSTHROUGH_PARAMS = ["comment", "puzzle", "node", "v"];
+
+// The board's page with the viewer's token and whatever the page's own URL
+// asks the board to show
+export const boardDocumentUrl = (
+  document: BoardDocumentType,
+  token: string,
+  params: URLSearchParams,
+) => {
+  const url = new URL(document.value.url);
+  url.searchParams.set("token", token);
+  for (const name of BOARD_PASSTHROUGH_PARAMS) {
+    const value = params.get(name);
+    if (value !== null) url.searchParams.set(name, value);
+  }
+  return url.toString();
+};
+
+const BoardDocumentDisplay = ({
+  document,
+  displayMode,
+}: Pick<DocumentDisplayProps, "displayMode"> & {
+  document: BoardDocumentType;
+}) => {
+  const { t } = useTranslation();
+  const [searchParams] = useSearchParams();
+  const { hunt, puzzle } = document;
+  const mintToken = useCallback(
+    () =>
+      boardToken.callPromise({
+        huntId: hunt,
+        ...(puzzle ? { puzzleId: puzzle } : {}),
+      }),
+    [hunt, puzzle],
+  );
+
+  // The token the iframe is opened with. Renewals go to the iframe by
+  // message instead, so its src (and so the board) never reloads.
+  const [initialToken, setInitialToken] = useState<string>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    if (displayMode !== "embed") return undefined;
+    let cancelled = false;
+    void mintToken().then(
+      (token) => {
+        if (!cancelled) setInitialToken(token);
+      },
+      (err: Meteor.Error) => {
+        if (!cancelled) setError(err.reason ?? err.message);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [displayMode, mintToken]);
+
+  // The board asks for a fresh token before its one runs out. Only the
+  // board's own origin is answered, and the answer goes back to whoever
+  // asked, at that origin.
+  const boardOrigin = useMemo(
+    () => new URL(document.value.url).origin,
+    [document.value.url],
+  );
+  useEffect(() => {
+    if (displayMode !== "embed") return undefined;
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== boardOrigin) return;
+      const data = event.data as { t?: unknown } | null;
+      if (data?.t !== "token" || !event.source) return;
+      // A cross-origin frame's window only lets us post to it
+      const source = event.source as WindowProxy;
+      void mintToken().then(
+        (token) => {
+          source.postMessage({ t: "token", token }, event.origin);
+        },
+        () => {
+          // The board shows its own "reload" notice once the token runs out
+        },
+      );
+    };
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+    };
+  }, [displayMode, boardOrigin, mintToken]);
+
+  const url = useMemo(
+    () =>
+      initialToken
+        ? boardDocumentUrl(document, initialToken, searchParams)
+        : undefined,
+    [document, initialToken, searchParams],
+  );
+
+  const title = t("board.title", "Board");
+  switch (displayMode) {
+    case "link":
+      return (
+        <StyledBoardLink to={`/hunts/${hunt}/board`}>
+          <FontAwesomeIcon icon={faDiagramProject} /> <span>{title}</span>
+        </StyledBoardLink>
+      );
+    case "embed":
+      if (error) {
+        return (
+          <DocumentMessage>
+            {t("board.openFailed", "Couldn't open the board")}: {error}
+          </DocumentMessage>
+        );
+      }
+      if (!url) {
+        return (
+          <DocumentMessage>
+            {t("board.opening", "Opening the board")}...
+          </DocumentMessage>
+        );
+      }
+      return <StyledIframe title={title} src={url} />;
+    default:
+      return (
+        <DocumentMessage>Unknown displayMode {displayMode}</DocumentMessage>
+      );
+  }
+};
+
 const DocumentDisplay = ({
   document,
   displayMode,
@@ -264,12 +402,21 @@ const DocumentDisplay = ({
           user={user}
         />
       );
-    default:
+    case "board":
+      return (
+        <BoardDocumentDisplay document={document} displayMode={displayMode} />
+      );
+    default: {
+      // Every provider is handled above; this is for a row the client's
+      // model doesn't know yet
+      const unknown: never = document;
       return (
         <DocumentMessage>
-          Unable to display document from provider {document.provider}
+          Unable to display document from provider{" "}
+          {(unknown as { provider: string }).provider}
         </DocumentMessage>
       );
+    }
   }
 };
 

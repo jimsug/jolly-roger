@@ -2,6 +2,7 @@ import { Meteor } from "meteor/meteor";
 import { useTracker } from "meteor/react-meteor-data";
 import { faBullhorn } from "@fortawesome/free-solid-svg-icons/faBullhorn";
 import { faChalkboard } from "@fortawesome/free-solid-svg-icons/faChalkboard";
+import { faDiagramProject } from "@fortawesome/free-solid-svg-icons/faDiagramProject";
 import { faDisplay } from "@fortawesome/free-solid-svg-icons/faDisplay";
 import { faEllipsisH } from "@fortawesome/free-solid-svg-icons/faEllipsisH";
 import { faExternalLinkAlt } from "@fortawesome/free-solid-svg-icons/faExternalLinkAlt";
@@ -15,9 +16,12 @@ import { useTranslation } from "react-i18next";
 import { NavLink, useParams } from "react-router";
 import styled, { css } from "styled-components";
 import Flags from "../../Flags";
+import Documents from "../../lib/models/Documents";
 import Hunts from "../../lib/models/Hunts";
+import Settings from "../../lib/models/Settings";
 import Whiteboards from "../../lib/models/Whiteboards";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
+import boardForHunt from "../../lib/publications/boardForHunt";
 import whiteboardForHunt from "../../lib/publications/whiteboardForHunt";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import { mediaBreakpointDown } from "./styling/responsive";
@@ -162,6 +166,19 @@ const HuntNav = () => {
       (canUpdate || !!Whiteboards.findOne({ hunt: huntId })),
     [canUpdate, huntId],
   );
+  useTypedSubscribe(boardForHunt, { huntId });
+  // Likewise for the board on the board service, once a service is set up
+  const showBoard = useTracker(
+    () =>
+      !Flags.active("disable.board") &&
+      (!!Documents.findOne({
+        hunt: huntId,
+        provider: "board",
+        puzzle: { $exists: false },
+      }) ||
+        (canUpdate && !!Settings.findOne({ name: "board.service" }))),
+    [canUpdate, huntId],
+  );
   const notesDisabled = useTracker(
     () => Flags.active("disable.puzzle_notes"),
     [],
@@ -247,6 +264,18 @@ const HuntNav = () => {
             <MenuIcon icon={faChalkboard} />
             <StyledPuzzleListLinkLabel>
               {t("whiteboard.title", "Whiteboard")}
+            </StyledPuzzleListLinkLabel>
+          </StyledPuzzleListLinkAnchor>
+        )}
+
+        {showBoard && (
+          <StyledPuzzleListLinkAnchor
+            to={`/hunts/${huntId}/board`}
+            title={t("board.title", "Board")}
+          >
+            <MenuIcon icon={faDiagramProject} />
+            <StyledPuzzleListLinkLabel>
+              {t("board.title", "Board")}
             </StyledPuzzleListLinkLabel>
           </StyledPuzzleListLinkAnchor>
         )}

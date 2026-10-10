@@ -2,6 +2,7 @@ import "./activitySummaryForUser";
 import "./announcementsForAnnouncementsPage";
 import "./apiKeysForSelf";
 import "./blobMappingsAll";
+import "./boardForHunt";
 import "./bookmarkNotificationsForSelf";
 import "./chatMessagesForFirehose";
 import "./chatMessagesForPuzzle";

@@ -19,6 +19,7 @@ import addPuzzleAnswer from "../../../../imports/methods/addPuzzleAnswer";
 import addPuzzleTag from "../../../../imports/methods/addPuzzleTag";
 import addUserAccountEmail from "../../../../imports/methods/addUserAccountEmail";
 import applyTagSynonyms from "../../../../imports/methods/applyTagSynonyms";
+import boardToken from "../../../../imports/methods/boardToken";
 import bookmarkPuzzle from "../../../../imports/methods/bookmarkPuzzle";
 import bulkAddHuntUsers from "../../../../imports/methods/bulkAddHuntUsers";
 import clearHuntInvitationCode from "../../../../imports/methods/clearHuntInvitationCode";
@@ -66,6 +67,7 @@ import dismissChatNotificationsForPuzzle from "../../../../imports/methods/dismi
 import dismissPendingAnnouncement from "../../../../imports/methods/dismissPendingAnnouncement";
 import dismissPuzzleNotification from "../../../../imports/methods/dismissPuzzleNotification";
 import editChatMessage from "../../../../imports/methods/editChatMessage";
+import ensureBoard from "../../../../imports/methods/ensureBoard";
 import ensurePuzzleDocument from "../../../../imports/methods/ensurePuzzleDocument";
 import exportWhiteboard from "../../../../imports/methods/exportWhiteboard";
 import fetchWhiteboardVersion from "../../../../imports/methods/fetchWhiteboardVersion";
@@ -145,6 +147,7 @@ const METHODS = {
   addPuzzleTag,
   applyTagSynonyms,
   addUserAccountEmail,
+  boardToken,
   bookmarkPuzzle,
   bulkAddHuntUsers,
   clearHuntInvitationCode,
@@ -192,6 +195,7 @@ const METHODS = {
   dismissPendingAnnouncement,
   dismissPuzzleNotification,
   editChatMessage,
+  ensureBoard,
   ensurePuzzleDocument,
   exportWhiteboard,
   fetchWhiteboardVersion,
@@ -278,6 +282,9 @@ const PUZZLE_METHODS: Record<
 > = {
   addPuzzleAnswer: ({ puzzle }) => ({ puzzleId: puzzle, answer: "X" }),
   addPuzzleTag: ({ puzzle }) => ({ puzzleId: puzzle, tagName: "x" }),
+  // A board for the hidden puzzle is pointless but harmless: an empty
+  // canvas nobody is shown
+  boardToken: "allowed",
   bookmarkPuzzle: "allowed",
   createChatImageUpload: "allowed",
   createGuess: ({ puzzle }) => ({
@@ -294,6 +301,7 @@ const PUZZLE_METHODS: Record<
   }),
   dismissChatNotificationsForPuzzle: "allowed",
   editChatMessage: "allowed",
+  ensureBoard: "allowed",
   ensurePuzzleDocument: ({ puzzle }) => ({ puzzleId: puzzle }),
   registerPuzzleInterest: ({ puzzle }) => ({ puzzleId: puzzle, score: 1 }),
   removeChatReaction: "allowed",
