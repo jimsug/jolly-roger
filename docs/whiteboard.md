@@ -179,7 +179,7 @@ files:
   - imports/server/whiteboardShared.ts
   - imports/server/whiteboardVersions.ts
   - imports/server/withLock.ts
-updated: 2026-10-11
+updated: 2026-10-11T02:00:00Z
 ---
 
 # Hunt Whiteboard
@@ -190,6 +190,9 @@ its round's frame, and an arrow from each feeder to its meta. People add
 sticky notes, text, images, rectangles and ellipses, their own frames, lines,
 freehand ink and highlighter on top, pin comment threads to anything on it,
 and see each other's cursors move.
+
+The board is also being moved out to a separate service that Jolly Roger
+embeds as a document provider; see `docs/board-provider.md`.
 
 An operator creates the board (`ensureWhiteboard` in
 `imports/server/whiteboard.ts`), which lays out every puzzle in the hunt. An
