@@ -8,6 +8,7 @@ import Settings from "../../lib/models/Settings";
 import { addUserToRole, checkAdmin } from "../../lib/permission_stubs";
 import createHunt from "../../methods/createHunt";
 import addUsersToDiscordRole from "../addUsersToDiscordRole";
+import { addServiceAccountToHunts } from "../boardServiceAccount";
 import { replenishDocumentCache } from "../documentCache";
 import { ensureHuntFolder } from "../gdrive";
 import getOrCreateTagByName from "../getOrCreateTagByName";
@@ -37,6 +38,14 @@ defineMethod(createHunt, {
 
     const huntId = await Hunts.insertAsync(hunt);
     await addUserToRole(this.userId, huntId, "operator");
+    // The board service's account is in every hunt, so its feed of the
+    // hunt's puzzles works from the hunt's first board
+    const boardService = await Settings.findOneAsync({ name: "board.service" });
+    if (boardService) {
+      await addServiceAccountToHunts(boardService.value.serviceUserId, [
+        huntId,
+      ]);
+    }
 
     const tags = initialTags ?? (await defaultTagNames());
     for (const tag of tags) {

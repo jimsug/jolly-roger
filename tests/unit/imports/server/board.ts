@@ -6,6 +6,7 @@ import { Accounts } from "meteor/accounts-base";
 import { Meteor } from "meteor/meteor";
 import { assert } from "chai";
 import { GLOBAL_SCOPE } from "../../../../imports/lib/isAdmin";
+import purgeHunt from "../../../../imports/lib/jobs/purgeHunt";
 import Documents from "../../../../imports/lib/models/Documents";
 import FeatureFlags from "../../../../imports/lib/models/FeatureFlags";
 import Hunts from "../../../../imports/lib/models/Hunts";
@@ -14,6 +15,7 @@ import Puzzles from "../../../../imports/lib/models/Puzzles";
 import Settings from "../../../../imports/lib/models/Settings";
 import { addUserToRole } from "../../../../imports/lib/permission_stubs";
 import boardToken from "../../../../imports/methods/boardToken";
+import deleteBoard from "../../../../imports/methods/deleteBoard";
 import ensureBoard from "../../../../imports/methods/ensureBoard";
 import {
   BOARD_TOKEN_LIFETIME_MS,
@@ -22,6 +24,7 @@ import {
 import asUser from "../../../lib/asUser";
 import createTestHunt from "../../../lib/createTestHunt";
 import resetDatabase from "../../../lib/resetDatabase";
+import runJob from "../../../lib/runJob";
 
 const SECRET = "a shared secret at least thirty-two characters long";
 
@@ -54,6 +57,8 @@ interface Request {
   url: string;
   authorization: string | undefined;
   body: unknown;
+  // The hunts the service account was in when the request arrived
+  serviceHunts: string[];
 }
 
 describe("boards", function () {
@@ -71,6 +76,8 @@ describe("boards", function () {
   let server: Server;
   let requests: Request[];
   let base: string;
+  // What the stub answers a DELETE with
+  let deleteStatus: number;
 
   before(async function () {
     server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -79,28 +86,36 @@ describe("boards", function () {
         raw += chunk.toString("utf8");
       });
       req.on("end", () => {
-        requests.push({
-          method: req.method ?? "",
-          url: req.url ?? "",
-          authorization: req.headers.authorization,
-          body: raw ? JSON.parse(raw) : undefined,
+        void MeteorUsers.findOneAsync(serviceUser).then((account) => {
+          requests.push({
+            method: req.method ?? "",
+            url: req.url ?? "",
+            authorization: req.headers.authorization,
+            body: raw ? JSON.parse(raw) : undefined,
+            serviceHunts: account?.hunts ?? [],
+          });
+          if (req.headers.authorization !== `Bearer ${SECRET}`) {
+            res.statusCode = 401;
+            res.end(JSON.stringify({ error: "Unauthorized" }));
+            return;
+          }
+          if (req.method === "POST" && req.url === "/boards") {
+            const { scope } = JSON.parse(raw) as {
+              scope: { hunt: string; puzzle?: string };
+            };
+            const id = scope.puzzle ? `p${scope.puzzle}` : `h${scope.hunt}`;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ id, url: `${base}/boards/${id}` }));
+            return;
+          }
+          if (req.method === "DELETE" && req.url?.startsWith("/boards/")) {
+            res.statusCode = deleteStatus;
+            res.end();
+            return;
+          }
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: "Not found" }));
         });
-        if (req.headers.authorization !== `Bearer ${SECRET}`) {
-          res.statusCode = 401;
-          res.end(JSON.stringify({ error: "Unauthorized" }));
-          return;
-        }
-        if (req.method === "POST" && req.url === "/boards") {
-          const { scope } = JSON.parse(raw) as {
-            scope: { hunt: string; puzzle?: string };
-          };
-          const id = scope.puzzle ? `p${scope.puzzle}` : `h${scope.hunt}`;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ id, url: `${base}/boards/${id}` }));
-          return;
-        }
-        res.statusCode = 404;
-        res.end(JSON.stringify({ error: "Not found" }));
       });
     });
     await new Promise<void>((resolve) => {
@@ -124,6 +139,7 @@ describe("boards", function () {
   beforeEach(async function () {
     await resetDatabase("boards");
     requests = [];
+    deleteStatus = 204;
     const user = (email: string) =>
       Accounts.createUserAsync({ email, password: "password" });
     operator = await user("operator@example.com");
@@ -136,8 +152,10 @@ describe("boards", function () {
     });
     await MeteorUsers.updateAsync(member, { $set: { displayName: "Member" } });
     huntId = await createTestHunt(admin);
+    // The service account is in the hunt as saving the setting would have
+    // put it; nothing in here is expected to change that
     await MeteorUsers.updateAsync(
-      { _id: { $in: [operator, member] } },
+      { _id: { $in: [operator, member, serviceUser] } },
       { $set: { hunts: [huntId] } },
       { multi: true },
     );
@@ -194,7 +212,27 @@ describe("boards", function () {
         url: "/boards",
         authorization: `Bearer ${SECRET}`,
         body: { scope: { hunt: huntId } },
+        serviceHunts: [huntId],
       });
+    });
+
+    it("leaves the service account's membership and roles alone", async function () {
+      const account = async () =>
+        (await MeteorUsers.findOneAsync(serviceUser))!;
+      await ensure(operator);
+      await ensure(operator, puzzleId);
+      await Settings.updateAsync(
+        { name: "board.service" },
+        { $set: { "value.url": `${base}/nowhere` } },
+      );
+      // A refusal has nothing to undo either
+      const other = await createTestHunt(admin);
+      await assert.isRejected(
+        asUser(admin, () => ensureBoard.callPromise({ huntId: other })),
+        Meteor.Error,
+      );
+      assert.deepEqual((await account()).hunts, [huntId]);
+      assert.isUndefined((await account()).roles);
     });
 
     it("gives a puzzle its own board", async function () {
@@ -257,6 +295,90 @@ describe("boards", function () {
       assert.isUndefined(
         await Documents.findOneAsync({ hunt: huntId, provider: "board" }),
       );
+    });
+  });
+
+  describe("deleteBoard", function () {
+    const remove = (userId: string, puzzle?: string) =>
+      asUser(userId, () =>
+        deleteBoard.callPromise({
+          huntId,
+          ...(puzzle ? { puzzleId: puzzle } : {}),
+        }),
+      );
+    const serviceHunts = async () =>
+      (await MeteorUsers.findOneAsync(serviceUser))?.hunts ?? [];
+
+    it("deletes the board on the service and drops the document, leaving the service account in the hunt", async function () {
+      const id = await ensure(operator);
+      const puzzleBoard = await ensure(operator, puzzleId);
+      await remove(operator);
+      assert.isUndefined(await Documents.findOneAsync(id));
+      assert.deepEqual(requests[2], {
+        method: "DELETE",
+        url: `/boards/h${huntId}`,
+        authorization: `Bearer ${SECRET}`,
+        body: undefined,
+        serviceHunts: [huntId],
+      });
+      await remove(operator, puzzleId);
+      assert.isUndefined(await Documents.findOneAsync(puzzleBoard));
+      assert.deepEqual(await serviceHunts(), [huntId]);
+      // Nothing left to delete is fine
+      await remove(operator);
+      assert.lengthOf(requests, 4);
+    });
+
+    it("keeps the document when the service won't delete", async function () {
+      const id = await ensure(operator);
+      deleteStatus = 500;
+      await assert.isRejected(remove(operator), /delete/);
+      assert.isDefined(await Documents.findOneAsync(id));
+      // A board the service has already lost is gone as far as we're
+      // concerned
+      deleteStatus = 404;
+      await remove(operator);
+      assert.isUndefined(await Documents.findOneAsync(id));
+      assert.deepEqual(await serviceHunts(), [huntId]);
+    });
+
+    it("is for operators and admins, and not on an archived hunt", async function () {
+      const id = await ensure(operator);
+      await assert.isRejected(remove(member), /operator/);
+      await Hunts.updateAsync(huntId, { $set: { isArchived: true } });
+      await assert.isRejected(remove(admin), /archived/);
+      assert.isDefined(await Documents.findOneAsync(id));
+      assert.lengthOf(requests, 1);
+    });
+  });
+
+  describe("purging the hunt", function () {
+    it("deletes every board on the service", async function () {
+      await ensure(operator);
+      await ensure(operator, puzzleId);
+      await runJob(purgeHunt, { huntId }, { userId: admin });
+      const deletes = requests.filter((r) => r.method === "DELETE");
+      assert.sameMembers(
+        deletes.map((r) => r.url),
+        [`/boards/h${huntId}`, `/boards/p${puzzleId}`],
+      );
+      assert.isEmpty(
+        await Documents.findAllowingDeleted({ hunt: huntId }).fetchAsync(),
+      );
+      // Purging leaves users as they are, the service account included
+      assert.deepEqual((await MeteorUsers.findOneAsync(serviceUser))?.hunts, [
+        huntId,
+      ]);
+    });
+
+    it("still clears the rows when there's no service to ask", async function () {
+      await ensure(operator);
+      await Settings.removeAsync({ name: "board.service" });
+      await runJob(purgeHunt, { huntId }, { userId: admin });
+      assert.isEmpty(
+        await Documents.findAllowingDeleted({ hunt: huntId }).fetchAsync(),
+      );
+      assert.lengthOf(requests, 1);
     });
   });
 

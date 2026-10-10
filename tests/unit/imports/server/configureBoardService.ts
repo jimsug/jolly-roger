@@ -2,12 +2,15 @@ import { Accounts } from "meteor/accounts-base";
 import { Meteor } from "meteor/meteor";
 import { assert } from "chai";
 import { GLOBAL_SCOPE } from "../../../../imports/lib/isAdmin";
+import type { EditableHuntType } from "../../../../imports/lib/models/Hunts";
+import Hunts from "../../../../imports/lib/models/Hunts";
 import MeteorUsers from "../../../../imports/lib/models/MeteorUsers";
 import Settings from "../../../../imports/lib/models/Settings";
 import settingsAll from "../../../../imports/lib/publications/settingsAll";
 import settingsByName from "../../../../imports/lib/publications/settingsByName";
 import configureBoardService from "../../../../imports/methods/configureBoardService";
 import configureClearBoardService from "../../../../imports/methods/configureClearBoardService";
+import createHunt from "../../../../imports/methods/createHunt";
 import rotateBoardServiceCredentials from "../../../../imports/methods/rotateBoardServiceCredentials";
 import { SERVICE_ACCOUNT_DISPLAY_NAME } from "../../../../imports/server/boardServiceAccount";
 import asUser from "../../../lib/asUser";
@@ -65,6 +68,7 @@ describe("configureBoardService", function () {
   beforeEach(async function () {
     await Settings.removeAsync({ name: "board.service" });
     await MeteorUsers.removeAsync({ serviceAccount: true });
+    await Hunts.removeAsync({ _id: { $ne: huntId } });
   });
 
   const configure = (
@@ -232,14 +236,10 @@ describe("configureBoardService", function () {
     }
   });
 
-  it("keeps the account off the profile lists of a hunt it's in", async function () {
+  it("keeps the account off the profile lists of its hunts", async function () {
     await configure(adminId, {
       url: "https://board.example.com",
       secret: "s".repeat(32),
-    });
-    const serviceUserId = (await stored())!.serviceUserId;
-    await MeteorUsers.updateAsync(serviceUserId, {
-      $addToSet: { hunts: huntId },
     });
     for (const [name, args] of [
       ["huntProfiles", huntId],
@@ -251,6 +251,68 @@ describe("configureBoardService", function () {
       assert.sameMembers([...published.keys()], [adminId, memberId], name);
       await sub.stopAsync();
     }
+  });
+
+  describe("membership", function () {
+    const huntFields: EditableHuntType = {
+      name: "Another hunt",
+      mailingLists: [],
+      openSignups: false,
+      hasGuessQueue: true,
+      defaultRoles: [],
+      allowUnlockablePuzzles: false,
+      isArchived: false,
+      customLinkEmbed: false,
+    };
+    const serviceHunts = async () =>
+      (await serviceAccount())?.hunts?.toSorted() ?? [];
+
+    it("puts the account in every hunt that isn't deleted when the setting is saved, and again on each save and rotation", async function () {
+      const second = await createTestHunt(adminId, { name: "Second" });
+      const gone = await createTestHunt(adminId, { name: "Gone" });
+      await Hunts.removeAsync(gone);
+      await configure(adminId, {
+        url: "https://board.example.com",
+        secret: "s".repeat(32),
+      });
+      assert.deepEqual(await serviceHunts(), [huntId, second].toSorted());
+      const account = (await serviceAccount())!;
+      assert.isUndefined(account.roles);
+
+      // A hunt made by hand, as a migration or a fixture would, is caught
+      // up by the next save or rotation
+      const third = await createTestHunt(adminId, { name: "Third" });
+      await configure(adminId, { url: "https://board.example.com" });
+      assert.deepEqual(
+        await serviceHunts(),
+        [huntId, second, third].toSorted(),
+      );
+      const fourth = await createTestHunt(adminId, { name: "Fourth" });
+      await rotate(adminId);
+      assert.deepEqual(
+        await serviceHunts(),
+        [huntId, second, third, fourth].toSorted(),
+      );
+    });
+
+    it("puts the account in a hunt as it's created, once there is a service", async function () {
+      const before = await asUser(adminId, () =>
+        createHunt.callPromise({ ...huntFields, initialTags: [] }),
+      );
+      await configure(adminId, {
+        url: "https://board.example.com",
+        secret: "s".repeat(32),
+      });
+      const after = await asUser(adminId, () =>
+        createHunt.callPromise({ ...huntFields, initialTags: [] }),
+      );
+      assert.deepEqual(
+        await serviceHunts(),
+        [huntId, before, after].toSorted(),
+      );
+      // Membership without the trimmings of an invitation: no role
+      assert.isUndefined((await serviceAccount())!.roles);
+    });
   });
 
   it("can be cleared by an admin, and only an admin", async function () {

@@ -1548,9 +1548,10 @@ const BoardServiceSection = () => {
         Jolly Roger can give each hunt a shared board, served by a separate
         board service and embedded the way Google documents are. Jolly Roger
         asks the service to create a board, signs short-lived tokens for the
-        people viewing it, and lets the service read hunts&apos; puzzles and
-        tags through an ordinary account of its own, which saving this
-        section creates. Nothing is enabled until this section is filled in.
+        people viewing it, and lets the service read every hunt&apos;s puzzles
+        and tags through an account of its own, which saving this section
+        creates and puts in every hunt as an ordinary member. Nothing is enabled
+        until this section is filled in.
       </p>
       {configured && (
         <p>

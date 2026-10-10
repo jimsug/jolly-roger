@@ -6,7 +6,10 @@ import Settings from "../../lib/models/Settings";
 import { userMayConfigureBoard } from "../../lib/permission_stubs";
 import { Url } from "../../lib/typedModel/regexes";
 import configureBoardService from "../../methods/configureBoardService";
-import { createBoardServiceAccount } from "../boardServiceAccount";
+import {
+  addServiceAccountToAllHunts,
+  createBoardServiceAccount,
+} from "../boardServiceAccount";
 import defineMethod from "./defineMethod";
 
 defineMethod(configureBoardService, {
@@ -61,6 +64,9 @@ defineMethod(configureBoardService, {
         },
       },
     );
+    // Every save, so a hunt that missed out (made while the setting was
+    // cleared, say) is caught up
+    await addServiceAccountToAllHunts(serviceUserId);
     return credentials;
   },
 });

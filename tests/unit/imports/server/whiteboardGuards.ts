@@ -53,6 +53,7 @@ import createGuess from "../../../../imports/methods/createGuess";
 import createHunt from "../../../../imports/methods/createHunt";
 import createPuzzle from "../../../../imports/methods/createPuzzle";
 import createWhiteboard from "../../../../imports/methods/createWhiteboard";
+import deleteBoard from "../../../../imports/methods/deleteBoard";
 import deleteChatMessage from "../../../../imports/methods/deleteChatMessage";
 import deleteWhiteboardComment from "../../../../imports/methods/deleteWhiteboardComment";
 import deleteWhiteboardEdges from "../../../../imports/methods/deleteWhiteboardEdges";
@@ -181,6 +182,7 @@ const METHODS = {
   createHunt,
   createPuzzle,
   createWhiteboard,
+  deleteBoard,
   deleteChatMessage,
   deleteWhiteboardComment,
   deleteWhiteboardEdges,
@@ -293,6 +295,7 @@ const PUZZLE_METHODS: Record<
     direction: 0,
     confidence: 50,
   }),
+  deleteBoard: "allowed",
   deleteChatMessage: "allowed",
   deleteWhiteboardComment: "allowed",
   destroyPuzzle: ({ puzzle }) => ({

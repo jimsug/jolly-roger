@@ -58,6 +58,7 @@ import Whiteboards from "../../lib/models/Whiteboards";
 import WhiteboardVersions from "../../lib/models/WhiteboardVersions";
 import type Model from "../../lib/typedModel/Model";
 import { AllModels } from "../../lib/typedModel/Model";
+import { purgeBoards } from "../board";
 import { purgeDocumentCache } from "../documentCache";
 import { deleteDocument } from "../gdrive";
 import Blobs from "../models/Blobs";
@@ -186,7 +187,7 @@ defineJob(purgeHunt, {
       return;
     }
 
-    const itemsTotal = 4 + COLLECTIONS_TO_PURGE.length;
+    const itemsTotal = 5 + COLLECTIONS_TO_PURGE.length;
     let itemsCompleted = 0;
     await setResult({ itemsTotal, itemsCompleted });
 
@@ -230,6 +231,11 @@ defineJob(purgeHunt, {
         await setTimeout(500);
       }
     }
+    itemsCompleted += 1;
+    await setResult({ itemsTotal, itemsCompleted });
+
+    // Delete the hunt's boards from the board service
+    await purgeBoards(args.huntId);
     itemsCompleted += 1;
     await setResult({ itemsTotal, itemsCompleted });
 

@@ -3,14 +3,17 @@ import { useTracker } from "meteor/react-meteor-data";
 import { useCallback, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
+import Modal from "react-bootstrap/Modal";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router";
+import styled from "styled-components";
 import Flags from "../../Flags";
 import Documents from "../../lib/models/Documents";
 import Hunts from "../../lib/models/Hunts";
 import Settings from "../../lib/models/Settings";
 import { userMayWritePuzzlesForHunt } from "../../lib/permission_stubs";
 import boardForHunt from "../../lib/publications/boardForHunt";
+import deleteBoard from "../../methods/deleteBoard";
 import ensureBoard from "../../methods/ensureBoard";
 import { useBreadcrumb } from "../hooks/breadcrumb";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
@@ -18,7 +21,79 @@ import DocumentDisplay from "./DocumentDisplay";
 import FixedLayout from "./styling/FixedLayout";
 
 // The hunt's board on the board service, embedded like a puzzle's document.
-// Operators create it; after that every member can open it.
+// Operators create it (and can remove it); after that every member can
+// open it.
+
+const BoardLayout = styled(FixedLayout)`
+  display: flex;
+  flex-direction: column;
+`;
+
+const OperatorBar = styled.div`
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px;
+`;
+
+const Frame = styled.div`
+  flex: 1 1 auto;
+  position: relative;
+`;
+
+const RemoveBoardButton = ({ huntId }: { huntId: string }) => {
+  const { t } = useTranslation();
+  const [confirming, setConfirming] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<string>();
+  const open = useCallback(() => {
+    setError(undefined);
+    setConfirming(true);
+  }, []);
+  const close = useCallback(() => setConfirming(false), []);
+  const remove = useCallback(() => {
+    setRemoving(true);
+    deleteBoard.call({ huntId }, (err) => {
+      setRemoving(false);
+      if (err) {
+        setError(err.reason ?? err.message);
+      } else {
+        setConfirming(false);
+      }
+    });
+  }, [huntId]);
+  return (
+    <>
+      <Button size="sm" variant="outline-danger" onClick={open}>
+        {t("board.remove.button", "Remove board")}
+      </Button>
+      <Modal show={confirming} onHide={close}>
+        <Modal.Header closeButton>
+          <Modal.Title>{t("board.remove.title", "Remove board")}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p>
+            {t(
+              "board.remove.confirm",
+              "Everything on this hunt's board is deleted from the board service. Operators can create a fresh one afterwards.",
+            )}
+          </p>
+          {error && <Alert variant="danger">{error}</Alert>}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="light" onClick={close} disabled={removing}>
+            {t("common.cancel", "Cancel")}
+          </Button>
+          <Button variant="danger" onClick={remove} disabled={removing}>
+            {removing
+              ? t("board.remove.removing", "Removing…")
+              : t("board.remove.button", "Remove board")}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </>
+  );
+};
 
 const EmptyBoard = ({ huntId }: { huntId: string }) => {
   const { t } = useTranslation();
@@ -120,7 +195,14 @@ const BoardPage = () => {
       }),
     [huntId],
   );
-  const user = useTracker(() => Meteor.user(), []);
+  const { user, canRemove } = useTracker(() => {
+    const current = Meteor.user();
+    const hunt = Hunts.findOne(huntId);
+    return {
+      user: current,
+      canRemove: userMayWritePuzzlesForHunt(current, hunt) && !hunt?.isArchived,
+    };
+  }, [huntId]);
 
   if (disabled) {
     return (
@@ -137,9 +219,16 @@ const BoardPage = () => {
   }
 
   return (
-    <FixedLayout>
-      <DocumentDisplay document={board} displayMode="embed" user={user} />
-    </FixedLayout>
+    <BoardLayout>
+      {canRemove && (
+        <OperatorBar>
+          <RemoveBoardButton huntId={huntId} />
+        </OperatorBar>
+      )}
+      <Frame>
+        <DocumentDisplay document={board} displayMode="embed" user={user} />
+      </Frame>
+    </BoardLayout>
   );
 };
 

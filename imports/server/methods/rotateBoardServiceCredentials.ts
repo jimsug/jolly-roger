@@ -4,7 +4,10 @@ import MeteorUsers from "../../lib/models/MeteorUsers";
 import Settings from "../../lib/models/Settings";
 import { userMayConfigureBoard } from "../../lib/permission_stubs";
 import rotateBoardServiceCredentials from "../../methods/rotateBoardServiceCredentials";
-import { rotateBoardServiceCredentials as rotate } from "../boardServiceAccount";
+import {
+  addServiceAccountToAllHunts,
+  rotateBoardServiceCredentials as rotate,
+} from "../boardServiceAccount";
 import defineMethod from "./defineMethod";
 
 defineMethod(rotateBoardServiceCredentials, {
@@ -17,6 +20,8 @@ defineMethod(rotateBoardServiceCredentials, {
     if (!service) {
       throw new Meteor.Error(400, "The board service isn't set up");
     }
-    return rotate(service.value.serviceUserId);
+    const credentials = await rotate(service.value.serviceUserId);
+    await addServiceAccountToAllHunts(service.value.serviceUserId);
+    return credentials;
   },
 });

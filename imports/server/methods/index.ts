@@ -38,6 +38,7 @@ import "./createGuess";
 import "./createHunt";
 import "./createPuzzle";
 import "./createWhiteboard";
+import "./deleteBoard";
 import "./deleteChatMessage";
 import "./deleteWhiteboardComment";
 import "./deleteWhiteboardEdges";

@@ -52,7 +52,7 @@ files:
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-11T00:00:00Z
+updated: 2026-10-11T01:00:00Z
 ---
 
 # Google Drive Integration
@@ -241,7 +241,7 @@ instead of claiming a cached document. Cached documents stay in place, ready
 for when the cache is enabled again, and purging them still works.
 
 Purging a hunt deletes its cached documents from Drive along with its
-documents. The purge job does this as its last step, under the same per-hunt
+documents (and its boards from the board service, in between). The purge job does this as its last step, under the same per-hunt
 lock, so a refill can't land between the files being deleted and the rows
 being removed; with `disable.google` set the rows are removed and the files
 left behind, as for the hunt's documents. Admins can also clear just the

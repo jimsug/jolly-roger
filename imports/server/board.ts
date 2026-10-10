@@ -15,6 +15,10 @@ import withLock from "./withLock";
 // signs short-lived tokens that say who is looking at the board and what
 // they may do. The service verifies the token and applies its own policy
 // on top; nothing of what's on the board comes back here.
+//
+// A hunt board shows the hunt's puzzles, which the service reads over DDP
+// as its own Jolly Roger account (the setting's serviceUserId), a member of
+// every hunt (see boardServiceAccount.ts); nothing here touches membership.
 
 export interface BoardScope {
   hunt: string;
@@ -157,4 +161,57 @@ export async function ensureBoard(
       value,
     });
   });
+}
+
+// Deletes the board on the service. One the service no longer has counts
+// as deleted.
+async function deleteBoard(service: BoardService, id: string) {
+  const response = await serviceRequest(
+    service,
+    "DELETE",
+    `/boards/${encodeURIComponent(id)}`,
+  );
+  if (!response.ok && response.status !== 404) {
+    Logger.warn("Board service refused to delete a board", {
+      id,
+      status: response.status,
+    });
+    throw new Meteor.Error(502, "The board service couldn't delete the board");
+  }
+}
+
+// Removes the scope's board from the service and from Documents
+export async function removeBoard(
+  hunt: Pick<HuntType, "_id">,
+  puzzleId?: string,
+): Promise<void> {
+  const service = await requireBoardService();
+  const scope = boardScope(hunt._id, puzzleId);
+  await withLock(`board:${hunt._id}:${puzzleId ?? "hunt"}`, async () => {
+    const board = await findBoard(scope);
+    if (!board) return;
+    Logger.info("Deleting board", { scope, id: board.value.id });
+    await deleteBoard(service, board.value.id);
+    await Documents.removeAsync(board._id);
+  });
+}
+
+// Purging a hunt: every board of the hunt goes from the service. Without a
+// service to ask (unset, or the feature off) the rows still go, with the
+// purge's collection sweep.
+export async function purgeBoards(huntId: string): Promise<void> {
+  const service = await boardService();
+  if (!service) {
+    Logger.info("Skipping board deletion: no board service", { huntId });
+    return;
+  }
+  const boards = await Documents.findAllowingDeleted({
+    hunt: huntId,
+    provider: "board",
+  }).fetchAsync();
+  for (const board of boards) {
+    Logger.info("Deleting board", { hunt: huntId, id: board.value.id });
+    await deleteBoard(service, board.value.id);
+    await Documents.removeAsync(board._id);
+  }
 }
