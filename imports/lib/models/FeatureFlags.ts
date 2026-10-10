@@ -4,6 +4,7 @@ import SoftDeletedModel from "../typedModel/SoftDeletedModel";
 import withCommon from "../typedModel/withCommon";
 
 export const FlagNames = [
+  "disable.board",
   "disable.dingwords",
   "disable.discord",
   "disable.gdrive_document_activity",

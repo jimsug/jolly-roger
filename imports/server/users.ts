@@ -13,6 +13,10 @@ import type { SubSubscription } from "./PublicationMerger";
 import PublicationMerger from "./PublicationMerger";
 import publishCursor from "./publications/publishCursor";
 
+// The profile lists (and the member counts and mention completions built
+// from them) leave out accounts made for services, such as the board's
+const notServiceAccounts = { serviceAccount: { $ne: true } };
+
 const profileFields: Record<ProfileFields, 1> = {
   displayName: 1,
   googleAccount: 1,
@@ -176,7 +180,7 @@ Meteor.publish("allProfiles", async function () {
     { hunts: 1 },
     (u) => {
       return MeteorUsers.find(
-        { hunts: { $in: u.hunts ?? [] } },
+        { hunts: { $in: u.hunts ?? [] }, ...notServiceAccounts },
         {
           projection: {
             "emails.address": 1,
@@ -211,7 +215,7 @@ Meteor.publish("huntProfiles", async function (huntId: unknown) {
       }
 
       return MeteorUsers.find(
-        { hunts: huntId },
+        { hunts: huntId, ...notServiceAccounts },
         {
           projection: {
             "emails.address": 1,

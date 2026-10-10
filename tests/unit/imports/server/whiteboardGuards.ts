@@ -22,6 +22,8 @@ import applyTagSynonyms from "../../../../imports/methods/applyTagSynonyms";
 import bookmarkPuzzle from "../../../../imports/methods/bookmarkPuzzle";
 import bulkAddHuntUsers from "../../../../imports/methods/bulkAddHuntUsers";
 import clearHuntInvitationCode from "../../../../imports/methods/clearHuntInvitationCode";
+import configureBoardService from "../../../../imports/methods/configureBoardService";
+import configureClearBoardService from "../../../../imports/methods/configureClearBoardService";
 import configureClearGdriveCreds from "../../../../imports/methods/configureClearGdriveCreds";
 import configureCollectGoogleAccountIds from "../../../../imports/methods/configureCollectGoogleAccountIds";
 import configureDefaultHuntTags from "../../../../imports/methods/configureDefaultHuntTags";
@@ -98,6 +100,7 @@ import renameTag from "../../../../imports/methods/renameTag";
 import resetWhiteboardLayout from "../../../../imports/methods/resetWhiteboardLayout";
 import restoreWhiteboardItems from "../../../../imports/methods/restoreWhiteboardItems";
 import restoreWhiteboardVersion from "../../../../imports/methods/restoreWhiteboardVersion";
+import rotateBoardServiceCredentials from "../../../../imports/methods/rotateBoardServiceCredentials";
 import sendChatMessage from "../../../../imports/methods/sendChatMessage";
 import sendUserVerificationEmail from "../../../../imports/methods/sendUserVerificationEmail";
 import setChatMessagePin from "../../../../imports/methods/setChatMessagePin";
@@ -145,6 +148,8 @@ const METHODS = {
   bookmarkPuzzle,
   bulkAddHuntUsers,
   clearHuntInvitationCode,
+  configureBoardService,
+  configureClearBoardService,
   configureClearGdriveCreds,
   configureCollectGoogleAccountIds,
   configureDefaultHuntTags,
@@ -221,6 +226,7 @@ const METHODS = {
   resetWhiteboardLayout,
   restoreWhiteboardItems,
   restoreWhiteboardVersion,
+  rotateBoardServiceCredentials,
   sendChatMessage,
   sendUserVerificationEmail,
   setChatMessagePin,

@@ -226,6 +226,8 @@ export async function copySheets(fromDocumentId: string, toDocumentId: string) {
     throw new Meteor.Error(404, `Cannot find document ${toDocumentId}`);
   }
   if (
+    fromDocument.provider !== "google" ||
+    toDocument.provider !== "google" ||
     fromDocument.value.type !== "spreadsheet" ||
     toDocument.value.type !== "spreadsheet"
   ) {
@@ -382,12 +384,13 @@ export async function ensureDocument(
   const hunt = await Hunts.findOneAllowingDeletedAsync(puzzle.hunt);
   const folderId = hunt ? await ensureHuntFolder(hunt) : undefined;
 
-  let doc = await Documents.findOneAsync({ puzzle: puzzle._id });
+  const google = { puzzle: puzzle._id, provider: "google" } as const;
+  let doc = await Documents.findOneAsync(google);
   if (!doc) {
     await checkClientOk();
 
     await withLock(`puzzle:${puzzle._id}:documents`, async () => {
-      doc = await Documents.findOneAsync({ puzzle: puzzle._id });
+      doc = await Documents.findOneAsync(google);
       if (!doc) {
         const name = puzzleDocumentName(puzzle.title);
 
@@ -425,7 +428,7 @@ export async function ensureDocument(
           value,
         };
         const docId = await Documents.insertAsync(newDoc);
-        doc = (await Documents.findOneAsync(docId))!;
+        doc = (await Documents.findOneAsync({ _id: docId, ...google }))!;
       }
     });
   }
@@ -435,7 +438,7 @@ export async function ensureDocument(
     await Documents.updateAsync(doc._id, {
       $set: { "value.folder": folderId },
     });
-    doc = (await Documents.findOneAsync(doc._id))!;
+    doc = (await Documents.findOneAsync({ _id: doc._id, ...google }))!;
   }
 
   return doc!;
@@ -493,7 +496,10 @@ async function renameClaimedDocument(
 // database, so a failed creation doesn't leave a stray file in Drive.
 export async function deleteUnusedDocument(puzzle: { _id: string }) {
   await withLock(`puzzle:${puzzle._id}:documents`, async () => {
-    const doc = await Documents.findOneAsync({ puzzle: puzzle._id });
+    const doc = await Documents.findOneAsync({
+      puzzle: puzzle._id,
+      provider: "google",
+    });
     if (!doc) {
       return;
     }

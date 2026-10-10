@@ -42,6 +42,9 @@ declare module "meteor/meteor" {
       // Whether new whiteboard comments on the cards of puzzles the user is
       // on or has bookmarked notify them. Unset means they do.
       boardCommentNotifications?: boolean;
+      // An account Jolly Roger made for a service (the board service), not a
+      // person: kept off profile lists and member counts
+      serviceAccount?: boolean;
       mergedInto?: string;
     }
   }
@@ -81,6 +84,7 @@ export const User = z.object({
     .optional(),
   isOffsite: z.boolean().optional(),
   boardCommentNotifications: z.boolean().optional(),
+  serviceAccount: z.boolean().optional(),
   mergedInto: foreignKey.optional(),
 });
 validateSchema(User);

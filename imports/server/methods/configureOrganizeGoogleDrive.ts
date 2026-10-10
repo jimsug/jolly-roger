@@ -40,8 +40,8 @@ defineMethod(configureOrganizeGoogleDrive, {
 
     // Finally move all existing documents into the right folder
     const puzzles = indexedById(await Puzzles.find().fetchAsync());
-    for (const d of Documents.find()) {
-      const puzzle = puzzles.get(d.puzzle);
+    for (const d of Documents.find({ provider: "google" })) {
+      const puzzle = d.puzzle ? puzzles.get(d.puzzle) : undefined;
       if (puzzle && !d.value.folder) await ensureDocument(puzzle);
     }
   },

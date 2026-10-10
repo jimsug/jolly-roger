@@ -263,6 +263,12 @@ export function userMayConfigureGdrive(
   return isAdmin(user);
 }
 
+export function userMayConfigureBoard(
+  user: Pick<Meteor.User, "roles"> | null | undefined,
+): boolean {
+  return isAdmin(user);
+}
+
 export function userMayConfigureGoogleOAuth(
   user: Pick<Meteor.User, "roles"> | null | undefined,
 ): boolean {

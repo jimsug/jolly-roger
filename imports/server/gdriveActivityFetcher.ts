@@ -28,8 +28,13 @@ async function recordDriveChanges(
   // In all likelihood, we will only have one of each of these, but for
   // completeness we'll record the full cartesian product
   for (const fileId of fileIds) {
-    const document = await Documents.findOneAsync({ "value.id": fileId });
-    if (!document) {
+    const document = await Documents.findOneAsync({
+      provider: "google",
+      "value.id": fileId,
+    });
+    // Only puzzle documents feed presence
+    const puzzle = document?.puzzle;
+    if (!document || !puzzle) {
       continue;
     }
 
@@ -56,7 +61,7 @@ async function recordDriveChanges(
           ts: time,
           document: document._id,
           hunt: document.hunt,
-          puzzle: document.puzzle,
+          puzzle,
           user: user?._id,
         }),
       );
@@ -74,7 +79,7 @@ async function recordDriveChanges(
         await recordPuzzleStatus({
           hunt: document.hunt,
           user: user._id,
-          puzzle: document.puzzle,
+          puzzle,
           status: "document",
         });
       }

@@ -92,6 +92,19 @@ describe("updatePuzzleNote API", function () {
       (await postNote(Random.id(), DOCUMENT_ID, { summary: "x" })).status,
       404,
     );
+    // A hunt board's id isn't a document with a puzzle behind it, so it
+    // mustn't fall through to some puzzle of the hunt
+    await asUser(userId, () =>
+      Documents.insertAsync({
+        hunt: huntId,
+        provider: "board",
+        value: { id: "board1", url: "https://board.example.com/boards/board1" },
+      }),
+    );
+    assert.equal(
+      (await postNote(huntId, "board1", { summary: "x" })).status,
+      404,
+    );
     assert.equal(
       (await postNote(huntId, DOCUMENT_ID, { summary: 42 })).status,
       400,

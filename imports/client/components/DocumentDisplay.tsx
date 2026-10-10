@@ -5,7 +5,10 @@ import { faTable } from "@fortawesome/free-solid-svg-icons/faTable";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "styled-components";
-import type { DocumentType } from "../../lib/models/Documents";
+import type {
+  DocumentType,
+  GoogleDocumentType,
+} from "../../lib/models/Documents";
 
 // Google Sheets steals focus during initialization. The number of times
 // depends on the browser engine: Chromium does it twice, Firefox once, and
@@ -25,7 +28,7 @@ interface DocumentDisplayProps {
 
 // The URL a document opens at, or undefined for a type we can't link to.
 export const googleDocumentUrl = (
-  document: DocumentType,
+  document: GoogleDocumentType,
   user: Meteor.User,
 ) => {
   // If the user has linked their Google account, try to force usage of that specific account.
@@ -99,7 +102,7 @@ const GoogleDocumentDisplay = ({
   document,
   displayMode,
   user,
-}: DocumentDisplayProps) => {
+}: DocumentDisplayProps & { document: GoogleDocumentType }) => {
   const isSpreadsheet = document.value.type === "spreadsheet";
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastFocusedRef = useRef<Element | null>(null);

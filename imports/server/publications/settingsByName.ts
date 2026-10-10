@@ -17,6 +17,11 @@ definePublication(settingsByName, {
       return [];
     }
 
-    return Settings.find({ name: name as any });
+    // The board service's shared secret stays on the server (fields, not
+    // projection, as in settingsAll)
+    return Settings.find(
+      { name: name as any },
+      { fields: { "value.secret": 0 } },
+    );
   },
 });

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TagSynonymRuleSchema } from "../tagNames";
 import { nonEmptyString } from "../typedModel/customTypes";
 import type { ModelType } from "../typedModel/Model";
+import { Url } from "../typedModel/regexes";
 import SoftDeletedModel from "../typedModel/SoftDeletedModel";
 import withCommon from "../typedModel/withCommon";
 
@@ -61,6 +62,18 @@ const SettingDiscriminatedUnion = z.discriminatedUnion("name", [
       scriptId: nonEmptyString,
       contentHash: nonEmptyString,
       endpointUrl: nonEmptyString.optional(),
+    }),
+  }),
+  z.object({
+    // The board service that hunt boards are created on and embedded from:
+    // where it is, the secret shared with it (it signs the tokens viewers
+    // carry and is the bearer secret on its API), and the Jolly Roger
+    // account the service reads hunts as, which configureBoardService makes.
+    name: z.literal("board.service"),
+    value: z.object({
+      url: z.string().regex(Url),
+      secret: nonEmptyString,
+      serviceUserId: nonEmptyString,
     }),
   }),
   z.object({

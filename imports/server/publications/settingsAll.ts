@@ -11,6 +11,9 @@ definePublication(settingsAll, {
       return [];
     }
 
-    return Settings.find({});
+    // The board service's shared secret stays on the server. An exclusion
+    // goes in fields: a projection would get deleted: 1 added to it and
+    // Mongo won't mix the two.
+    return Settings.find({}, { fields: { "value.secret": 0 } });
   },
 });

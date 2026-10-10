@@ -207,6 +207,7 @@ defineJob(purgeHunt, {
     } else {
       const docs = await Documents.findAllowingDeleted({
         hunt: args.huntId,
+        provider: "google",
       }).fetchAsync();
       const currentItemTotal = docs.length;
       let currentItemCompleted = 0;

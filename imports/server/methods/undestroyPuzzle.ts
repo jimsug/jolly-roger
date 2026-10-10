@@ -59,7 +59,10 @@ defineMethod(undestroyPuzzle, {
       return;
     }
 
-    const document = await Documents.findOneAsync({ puzzle: puzzleId });
+    const document = await Documents.findOneAsync({
+      puzzle: puzzleId,
+      provider: "google",
+    });
 
     if (document) {
       await makeReadWrite(document.value.id);

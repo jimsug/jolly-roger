@@ -108,7 +108,10 @@ const PuzzleDeleteModal = ({
   });
 
   const thisPuzzleHasSheets = documents.some(
-    (d) => d.puzzle === puzzle._id && d.value.type === "spreadsheet",
+    (d) =>
+      d.puzzle === puzzle._id &&
+      d.provider === "google" &&
+      d.value.type === "spreadsheet",
   );
 
   const [replacementId, setReplacementId] = useState<PuzzleSelectOption | null>(
@@ -122,7 +125,10 @@ const PuzzleDeleteModal = ({
         setReplacementHasSheets(
           v != null &&
             documents.some(
-              (d) => d.puzzle === v?.value && d.value.type === "spreadsheet",
+              (d) =>
+                d.puzzle === v?.value &&
+                d.provider === "google" &&
+                d.value.type === "spreadsheet",
             ),
         );
       }

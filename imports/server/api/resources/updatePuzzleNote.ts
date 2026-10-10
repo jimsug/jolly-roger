@@ -81,11 +81,14 @@ updatePuzzleNote.post(
       return;
     }
 
+    // Notes come from the puzzle's sheet; a board's id isn't a document
+    // this endpoint knows, and a hunt board has no puzzle to note
     const doc = await Documents.findOneAsync({
       hunt: huntId,
+      provider: "google",
       "value.id": documentId,
     });
-    if (!doc) {
+    if (!doc?.puzzle) {
       res.sendStatus(404);
       return;
     }

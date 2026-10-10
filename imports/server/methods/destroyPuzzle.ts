@@ -43,7 +43,10 @@ defineMethod(destroyPuzzle, {
       );
     }
 
-    const document = await Documents.findOneAsync({ puzzle: puzzleId });
+    const document = await Documents.findOneAsync({
+      puzzle: puzzleId,
+      provider: "google",
+    });
 
     if (replacedBy) {
       const replacedByPuzzle = await Puzzles.findOneAsync(replacedBy);
@@ -58,6 +61,7 @@ defineMethod(destroyPuzzle, {
       if (copySheetsToReplacement) {
         const otherDocument = await Documents.findOneAsync({
           puzzle: replacedBy,
+          provider: "google",
         });
 
         if (!document) {

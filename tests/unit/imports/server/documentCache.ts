@@ -354,7 +354,10 @@ describe("document cache", function () {
 
     const puzzleId = await createPuzzle("Claimed puzzle");
 
-    const doc = await Documents.findOneAsync({ puzzle: puzzleId });
+    const doc = await Documents.findOneAsync({
+      puzzle: puzzleId,
+      provider: "google",
+    });
     assert.equal(doc?.value.id, "sheet-oldest");
     assert.equal(doc?.value.type, "spreadsheet");
     assert.equal(doc?.value.folder, folderId);
@@ -395,7 +398,10 @@ describe("document cache", function () {
     assert.isDefined(call);
     assert.equal(call.args[0].requestBody.mimeType, DOC_MIME);
     const { data } = await call.returnValue;
-    const doc = await Documents.findOneAsync({ puzzle: puzzleId });
+    const doc = await Documents.findOneAsync({
+      puzzle: puzzleId,
+      provider: "google",
+    });
     assert.equal(doc?.value.id, data.id);
     assert.equal(doc?.value.type, "document");
 

@@ -4,6 +4,8 @@ import { OAuth } from "meteor/oauth";
 import { Random } from "meteor/random";
 import { useTracker } from "meteor/react-meteor-data";
 import { ServiceConfiguration } from "meteor/service-configuration";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type React from "react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
@@ -15,6 +17,7 @@ import FormControl from "react-bootstrap/FormControl";
 import FormGroup from "react-bootstrap/FormGroup";
 import FormLabel from "react-bootstrap/FormLabel";
 import FormText from "react-bootstrap/FormText";
+import InputGroup from "react-bootstrap/InputGroup";
 import Modal from "react-bootstrap/Modal";
 import Table from "react-bootstrap/Table";
 import { useTranslation } from "react-i18next";
@@ -37,6 +40,9 @@ import {
   tagSynonymRuleProblems,
 } from "../../lib/tagNames";
 import { MAX_VERSION_BYTES_PER_BOARD } from "../../lib/whiteboard/limits";
+import type { BoardServiceCredentials } from "../../methods/configureBoardService";
+import configureBoardService from "../../methods/configureBoardService";
+import configureClearBoardService from "../../methods/configureClearBoardService";
 import configureClearGdriveCreds from "../../methods/configureClearGdriveCreds";
 import configureDefaultHuntTags from "../../methods/configureDefaultHuntTags";
 import configureDiscordBot from "../../methods/configureDiscordBot";
@@ -56,6 +62,7 @@ import configureServerLanguage from "../../methods/configureServerLanguage";
 import configureTagSynonyms from "../../methods/configureTagSynonyms";
 import configureTeamName from "../../methods/configureTeamName";
 import generateUploadToken from "../../methods/generateUploadToken";
+import rotateBoardServiceCredentials from "../../methods/rotateBoardServiceCredentials";
 import setFeatureFlag from "../../methods/setFeatureFlag";
 import type { DiscordGuildType } from "../discord";
 import { useBreadcrumb } from "../hooks/breadcrumb";
@@ -64,6 +71,7 @@ import useTypedSubscribe from "../hooks/useTypedSubscribe";
 import lookupUrl from "../lookupUrl";
 import ActionButtonRow from "./ActionButtonRow";
 import ApplyTagSynonymsModal from "./ApplyTagSynonymsModal";
+import CopyToClipboardButton from "./CopyToClipboardButton";
 import TagSynonymRuleRow from "./TagSynonymRuleRow";
 
 const PageContainer = styled.div`
@@ -1319,6 +1327,260 @@ const S3ImageBucketForm = ({
         </Button>
       </ActionButtonRow>
     </form>
+  );
+};
+
+const BoardServiceForm = ({
+  initialConfig,
+  onCredentials,
+}: {
+  initialConfig?: SettingType & { name: "board.service" };
+  onCredentials: (credentials: BoardServiceCredentials) => void;
+}) => {
+  const { t } = useTranslation();
+  const [url, setUrl] = useState(initialConfig?.value.url ?? "");
+  const [secret, setSecret] = useState("");
+  const [submitState, setSubmitState] = useState(SubmitState.IDLE);
+  const [submitError, setSubmitError] = useState("");
+
+  const dismissAlert = useCallback(() => {
+    setSubmitState(SubmitState.IDLE);
+  }, []);
+
+  const onUrlChange: NonNullable<FormControlProps["onChange"]> = useCallback(
+    (e) => {
+      setUrl(e.currentTarget.value);
+    },
+    [],
+  );
+  const onSecretChange: NonNullable<FormControlProps["onChange"]> = useCallback(
+    (e) => {
+      setSecret(e.currentTarget.value);
+    },
+    [],
+  );
+
+  const onSubmit = useCallback(
+    (e: React.SubmitEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      setSubmitState(SubmitState.SUBMITTING);
+      const trimmedSecret = secret.trim();
+      configureBoardService.call(
+        {
+          url: url.trim(),
+          // Blank keeps the stored one
+          secret: trimmedSecret !== "" ? trimmedSecret : undefined,
+        },
+        (err, credentials) => {
+          if (err) {
+            setSubmitError(err.message);
+            setSubmitState(SubmitState.ERROR);
+          } else {
+            setSecret("");
+            setSubmitState(SubmitState.SUCCESS);
+            // Only the save that made the account has credentials to show
+            if (credentials) onCredentials(credentials);
+          }
+        },
+      );
+    },
+    [url, secret, onCredentials],
+  );
+
+  const shouldDisableForm = submitState === SubmitState.SUBMITTING;
+  const idPrefix = useId();
+
+  return (
+    <form onSubmit={onSubmit}>
+      {submitState === SubmitState.SUBMITTING ? (
+        <Alert variant="info">{t("common.saving", "Saving")}...</Alert>
+      ) : null}
+      {submitState === SubmitState.SUCCESS ? (
+        <Alert variant="success" dismissible onClose={dismissAlert}>
+          {t("common.saveSuccess", "Saved changes.")}
+        </Alert>
+      ) : null}
+      {submitState === SubmitState.ERROR ? (
+        <Alert variant="danger" dismissible onClose={dismissAlert}>
+          {t("common.saveFailed", "Saving failed")}: {submitError}
+        </Alert>
+      ) : null}
+      <FormGroup className="mb-3" controlId={`${idPrefix}-board-url`}>
+        <FormLabel>{t("serverSetup.board.url", "Service URL")}</FormLabel>
+        <FormControl
+          type="text"
+          value={url}
+          disabled={shouldDisableForm}
+          onChange={onUrlChange}
+          placeholder="https://board.example.com"
+        />
+      </FormGroup>
+      <FormGroup className="mb-3" controlId={`${idPrefix}-board-secret`}>
+        <FormLabel>{t("serverSetup.board.secret", "Shared secret")}</FormLabel>
+        <FormControl
+          type="password"
+          autoComplete="off"
+          value={secret}
+          disabled={shouldDisableForm}
+          onChange={onSecretChange}
+          placeholder={initialConfig ? "<configured secret not revealed>" : ""}
+        />
+        <FormText>
+          {t(
+            "serverSetup.board.secretHelp",
+            "The service's JR_SHARED_SECRET. Leave blank to keep the one already saved.",
+          )}
+        </FormText>
+      </FormGroup>
+      <ActionButtonRow>
+        <Button variant="primary" type="submit" disabled={shouldDisableForm}>
+          {t("common.save", "Save")}
+        </Button>
+      </ActionButtonRow>
+    </form>
+  );
+};
+
+// The service account's login, shown the one time it's known: when the
+// account is made, and after each rotation. Copy it into the service's
+// environment; it can't be shown again.
+const BoardServiceCredentialsPanel = ({
+  credentials,
+  onDismiss,
+}: {
+  credentials: BoardServiceCredentials;
+  onDismiss: () => void;
+}) => {
+  const { t } = useTranslation();
+  const idPrefix = useId();
+  return (
+    <Alert variant="warning" dismissible onClose={onDismiss}>
+      <p>
+        {t(
+          "serverSetup.board.credentialsShownOnce",
+          "This is the service account's login, shown once. Put it in the service's JR_SERVICE_EMAIL and JR_SERVICE_PASSWORD; if it's lost, rotate the credentials for a new password.",
+        )}
+      </p>
+      <FormGroup className="mb-2" controlId={`${idPrefix}-board-email`}>
+        <FormLabel>{t("serverSetup.board.serviceEmail", "Address")}</FormLabel>
+        <InputGroup>
+          <CopyToClipboardButton
+            variant="outline-secondary"
+            aria-label={t("common.copyToClipboard", "Copy to clipboard")}
+            text={credentials.email}
+          >
+            <FontAwesomeIcon icon={faCopy} />
+          </CopyToClipboardButton>
+          <FormControl type="text" readOnly value={credentials.email} />
+        </InputGroup>
+      </FormGroup>
+      <FormGroup controlId={`${idPrefix}-board-password`}>
+        <FormLabel>
+          {t("serverSetup.board.servicePassword", "Password")}
+        </FormLabel>
+        <InputGroup>
+          <CopyToClipboardButton
+            variant="outline-secondary"
+            aria-label={t("common.copyToClipboard", "Copy to clipboard")}
+            text={credentials.password}
+          >
+            <FontAwesomeIcon icon={faCopy} />
+          </CopyToClipboardButton>
+          <FormControl type="text" readOnly value={credentials.password} />
+        </InputGroup>
+      </FormGroup>
+    </Alert>
+  );
+};
+
+const BoardServiceSection = () => {
+  const { t } = useTranslation();
+  const enabled = useTracker(() => !Flags.active("disable.board"), []);
+  const config = useTracker(
+    () => Settings.findOne({ name: "board.service" }),
+    [],
+  );
+  const [credentials, setCredentials] = useState<BoardServiceCredentials>();
+  const clearCredentials = useCallback(() => setCredentials(undefined), []);
+  const [rotateError, setRotateError] = useState<string>();
+  const clearRotateError = useCallback(() => setRotateError(undefined), []);
+
+  const onToggleEnabled = useCallback(() => {
+    setFeatureFlag.call({
+      name: "disable.board",
+      type: enabled ? "on" : "off",
+    });
+  }, [enabled]);
+
+  const disconnect = useCallback(() => {
+    setCredentials(undefined);
+    configureClearBoardService.call();
+  }, []);
+
+  const rotate = useCallback(() => {
+    setRotateError(undefined);
+    rotateBoardServiceCredentials.call((err, rotated) => {
+      if (err) {
+        setRotateError(err.message);
+      } else {
+        setCredentials(rotated);
+      }
+    });
+  }, []);
+
+  const configured = !!config;
+  const badgeVariant = configured ? "success" : "warning";
+
+  return (
+    <Section id="board">
+      <SectionHeader>
+        <SectionHeaderLabel>
+          {t("serverSetup.board.title", "Board service")}
+        </SectionHeaderLabel>
+        <Badge bg={badgeVariant}>
+          {configured ? "Configured" : "Unconfigured"}
+        </Badge>
+        <SectionHeaderButtons>
+          <FeatureToggle enabled={enabled} onToggleEnabled={onToggleEnabled} />
+        </SectionHeaderButtons>
+      </SectionHeader>
+      <p>
+        Jolly Roger can give each hunt a shared board, served by a separate
+        board service and embedded the way Google documents are. Jolly Roger
+        asks the service to create a board, signs short-lived tokens for the
+        people viewing it, and lets the service read hunts&apos; puzzles and
+        tags through an ordinary account of its own, which saving this
+        section creates. Nothing is enabled until this section is filled in.
+      </p>
+      {configured && (
+        <p>
+          Currently pointing at <strong>{config.value.url}</strong>.{" "}
+          <Button onClick={disconnect}>
+            {t("serverSetup.board.disconnect", "Disconnect")}
+          </Button>{" "}
+          <Button variant="outline-secondary" onClick={rotate}>
+            {t("serverSetup.board.rotate", "Rotate credentials")}
+          </Button>
+        </p>
+      )}
+      {rotateError && (
+        <Alert variant="danger" dismissible onClose={clearRotateError}>
+          {t("serverSetup.board.rotateFailed", "Rotating failed")}:{" "}
+          {rotateError}
+        </Alert>
+      )}
+      {credentials && (
+        <BoardServiceCredentialsPanel
+          credentials={credentials}
+          onDismiss={clearCredentials}
+        />
+      )}
+      <BoardServiceForm
+        key={config?._id ?? "none"}
+        initialConfig={config}
+        onCredentials={setCredentials}
+      />
+    </Section>
   );
 };
 
@@ -3218,6 +3480,7 @@ const SetupPage = () => {
   return (
     <PageContainer>
       <GoogleIntegrationSection />
+      <BoardServiceSection />
       <AWSIntegrationSection />
       <EmailConfigSection />
       <DiscordIntegrationSection />

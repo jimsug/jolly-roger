@@ -52,7 +52,7 @@ files:
   - imports/server/setup.ts
   - private/google-script/cookie-test.html
   - private/google-script/main.js
-updated: 2026-10-06T14:00:00Z
+updated: 2026-10-11T00:00:00Z
 ---
 
 # Google Drive Integration
@@ -151,7 +151,11 @@ anything when it's called as part of hunt creation.
 
 Similarly, the `ensureDocument` function creates either a spreadsheet or
 document to go with a puzzle, tracked in the `Documents` collection (which,
-unlike `HuntFolders`, is published to clients). If Jolly Roger is configured
+unlike `HuntFolders`, is published to clients). `Documents` is shared with the
+board provider (`provider: "board"`, see `docs/board-provider.md`), so every
+Drive-side lookup selects `provider: "google"`: the activity fetcher, the
+purge job, `destroyPuzzle`/`undestroyPuzzle`, `copySheets` and the Drive
+reorganiser all leave board documents alone. If Jolly Roger is configured
 with a template document or spreadsheet (`configureGdriveTemplates`), new
 documents are created as copies of those templates rather than from whole cloth.
 As with `ensureHuntFolder`, this is called before operations that requires the

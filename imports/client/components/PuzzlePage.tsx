@@ -69,7 +69,10 @@ import { indexedById, sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import type { ChatMessageType } from "../../lib/models/ChatMessages";
 import ChatMessages from "../../lib/models/ChatMessages";
-import type { DocumentType } from "../../lib/models/Documents";
+import type {
+  DocumentType,
+  GoogleDocumentType,
+} from "../../lib/models/Documents";
 import Documents from "../../lib/models/Documents";
 import type { GuessType } from "../../lib/models/Guesses";
 import Guesses from "../../lib/models/Guesses";
@@ -1749,7 +1752,7 @@ const DocumentCopyLinkButton = ({
   document,
   user,
 }: {
-  document: DocumentType;
+  document: GoogleDocumentType;
   user: Meteor.User;
 }) => {
   const { t } = useTranslation();
@@ -1998,7 +2001,7 @@ const PuzzlePageMetadata = ({
       <DocumentDisplay document={document} displayMode="link" user={selfUser} />
     ) : null;
   const documentCopyLink =
-    document && isDesktop ? (
+    document?.provider === "google" && isDesktop ? (
       <DocumentCopyLinkButton document={document} user={selfUser} />
     ) : null;
 
